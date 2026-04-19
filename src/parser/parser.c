@@ -93,6 +93,16 @@ static const FengToken *parser_current(const Parser *parser) {
     return &parser->tokens[parser->current];
 }
 
+static const FengToken *parser_peek(const Parser *parser, size_t lookahead) {
+    size_t index = parser->current + lookahead;
+
+    if (index >= parser->token_count) {
+        return &parser->tokens[parser->token_count - 1U];
+    }
+
+    return &parser->tokens[index];
+}
+
 static const FengToken *parser_previous(const Parser *parser) {
     if (parser->current == 0U) {
         return &parser->tokens[0];
@@ -759,6 +769,29 @@ static FengDecl *parse_declaration(Parser *parser) {
 
     if (parser_match(parser, FENG_TOKEN_KW_EXTERN)) {
         is_extern = true;
+    }
+
+    if (annotation_count > 0U && parser_check(parser, FENG_TOKEN_SEMICOLON)) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(
+            parser,
+            "annotation must be followed immediately by a declaration; remove the trailing ';'");
+        return NULL;
+    }
+
+    if (is_extern &&
+        parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
+        parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "extern function declarations must start with 'extern fn'");
+        return NULL;
+    }
+
+    if (parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
+        parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "top-level function declarations must start with 'fn'");
+        return NULL;
     }
 
     if (parser_match(parser, FENG_TOKEN_KW_TYPE)) {

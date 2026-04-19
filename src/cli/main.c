@@ -57,39 +57,128 @@ static char *read_entire_file(const char *path, size_t *out_length) {
     return buffer;
 }
 
-static void print_escaped_slice(const char *text, size_t length) {
+static void fprint_escaped_slice(FILE *stream, const char *text, size_t length) {
     size_t index;
 
-    putchar('"');
+    fputc('"', stream);
     for (index = 0; index < length; ++index) {
         unsigned char c = (unsigned char)text[index];
 
         switch (c) {
             case '\\':
-                fputs("\\\\", stdout);
+                fputs("\\\\", stream);
                 break;
             case '"':
-                fputs("\\\"", stdout);
+                fputs("\\\"", stream);
                 break;
             case '\n':
-                fputs("\\n", stdout);
+                fputs("\\n", stream);
                 break;
             case '\r':
-                fputs("\\r", stdout);
+                fputs("\\r", stream);
                 break;
             case '\t':
-                fputs("\\t", stdout);
+                fputs("\\t", stream);
                 break;
             default:
                 if (c >= 32U && c <= 126U) {
-                    putchar((int)c);
+                    fputc((int)c, stream);
                 } else {
-                    printf("\\x%02X", c);
+                    fprintf(stream, "\\x%02X", c);
                 }
                 break;
         }
     }
-    putchar('"');
+    fputc('"', stream);
+}
+
+static void print_escaped_slice(const char *text, size_t length) {
+    fprint_escaped_slice(stdout, text, length);
+}
+
+static void fprint_token_summary(FILE *stream, const FengToken *token) {
+    if (token->kind == FENG_TOKEN_EOF) {
+        fputs("EOF", stream);
+        return;
+    }
+
+    fputs(feng_token_kind_name(token->kind), stream);
+    if (token->kind == FENG_TOKEN_ANNOTATION) {
+        fputc(' ', stream);
+        fputs(feng_annotation_kind_name(token->annotation_kind), stream);
+    }
+    if (token->length > 0U) {
+        fputc(' ', stream);
+        fprint_escaped_slice(stream, token->lexeme, token->length);
+    }
+}
+
+static unsigned int count_digits(unsigned int value) {
+    unsigned int digits = 1U;
+
+    while (value >= 10U) {
+        value /= 10U;
+        ++digits;
+    }
+
+    return digits;
+}
+
+static void print_parse_error_context(FILE *stream,
+                                      const char *source,
+                                      size_t source_length,
+                                      const FengParseError *error) {
+    size_t index;
+    size_t line_start = 0U;
+    size_t line_end = source_length;
+    unsigned int current_line = 1U;
+    unsigned int line_no = error->token.line > 0U ? error->token.line : 1U;
+    unsigned int digits = count_digits(line_no);
+
+    for (index = 0U; index < source_length; ++index) {
+        if (current_line == line_no) {
+            line_start = index;
+            break;
+        }
+        if (source[index] == '\n') {
+            ++current_line;
+            line_start = index + 1U;
+        }
+    }
+
+    line_end = line_start;
+    while (line_end < source_length && source[line_end] != '\n') {
+        ++line_end;
+    }
+    if (line_end > line_start && source[line_end - 1U] == '\r') {
+        --line_end;
+    }
+
+    fprintf(stream, "  got: ");
+    fprint_token_summary(stream, &error->token);
+    fputc('\n', stream);
+
+    fprintf(stream, "  %*u | ", digits, line_no);
+    fwrite(source + line_start, 1U, line_end - line_start, stream);
+    fputc('\n', stream);
+
+    fprintf(stream, "  %*s | ", digits, "");
+    if (error->token.kind == FENG_TOKEN_EOF) {
+        for (index = line_start; index < line_end; ++index) {
+            fputc(source[index] == '\t' ? '\t' : ' ', stream);
+        }
+    } else if (error->token.offset >= line_start && error->token.offset <= line_end) {
+        for (index = line_start; index < error->token.offset; ++index) {
+            fputc(source[index] == '\t' ? '\t' : ' ', stream);
+        }
+    } else {
+        unsigned int column = error->token.column > 0U ? error->token.column - 1U : 0U;
+
+        for (index = 0U; index < (size_t)column; ++index) {
+            fputc(' ', stream);
+        }
+    }
+    fputs("^\n", stream);
 }
 
 static void dump_token(const FengToken *token) {
@@ -174,6 +263,7 @@ static int run_parse_command(const char *path) {
                 error.token.line,
                 error.token.column,
                 error.message != NULL ? error.message : "unknown error");
+        print_parse_error_context(stderr, source, source_length, &error);
         exit_code = 1;
     } else {
         feng_program_dump(stdout, program);

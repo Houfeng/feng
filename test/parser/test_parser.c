@@ -159,11 +159,42 @@ static void test_parse_error(void) {
     ASSERT(error.message != NULL);
 }
 
+static void test_parse_error_after_annotation_semicolon(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"libc\");\n"
+        "extern fn print(msg: string): void;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "annotation_error.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "annotation must be followed immediately by a declaration") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_SEMICOLON);
+}
+
+static void test_parse_error_missing_top_level_fn_keyword(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "main(args: string[]) {}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_fn.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "top-level function declarations must start with 'fn'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
     test_member_annotations_and_constructors();
     test_parse_error();
+    test_parse_error_after_annotation_semicolon();
+    test_parse_error_missing_top_level_fn_keyword();
     puts("parser tests passed");
     return 0;
 }
