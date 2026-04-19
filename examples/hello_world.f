@@ -3,7 +3,7 @@ mod org.houfeng;
 type User {
   let name: string;
   let age: int;
-  say(msg: string): void {
+  fn say(msg: string): void {
     print(msg);
   }
 }

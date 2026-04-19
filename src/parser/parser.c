@@ -126,6 +126,22 @@ static bool parser_check(const Parser *parser, FengTokenKind kind) {
     return parser_current(parser)->kind == kind;
 }
 
+static bool parser_starts_callable_signature(const Parser *parser) {
+    return parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
+           parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN;
+}
+
+static bool parser_starts_binding_without_keyword(const Parser *parser) {
+    return parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
+           (parser_peek(parser, 1U)->kind == FENG_TOKEN_COLON ||
+            parser_peek(parser, 1U)->kind == FENG_TOKEN_ASSIGN);
+}
+
+static bool parser_starts_typed_binding_without_keyword(const Parser *parser) {
+    return parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
+           parser_peek(parser, 1U)->kind == FENG_TOKEN_COLON;
+}
+
 static bool parser_match(Parser *parser, FengTokenKind kind) {
     if (!parser_check(parser, kind)) {
         return false;
@@ -229,7 +245,7 @@ static bool parse_path(Parser *parser,
         if (!parser_expect_identifier_like(parser,
                                            &segment,
                                            false,
-                                           "expected identifier after '.'")) {
+                                           "qualified names require an identifier after '.'")) {
             free(segments);
             return false;
         }
@@ -284,7 +300,9 @@ static FengAnnotation *parse_annotations(Parser *parser, size_t *out_count) {
                 } while (parser_match(parser, FENG_TOKEN_COMMA));
             }
 
-            if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' after annotation arguments")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_RPAREN,
+                               "expected ')' to close annotation argument list")) {
                 free_annotations(annotations, count);
                 free_annotation_fields(&annotation);
                 return NULL;
@@ -331,7 +349,7 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
                     true,
                     &type_ref->as.named.segments,
                     &type_ref->as.named.segment_count,
-                    "expected type name")) {
+                    "expected a type name")) {
         free_type_ref(type_ref);
         return NULL;
     }
@@ -351,7 +369,9 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
     while (parser_match(parser, FENG_TOKEN_LBRACKET)) {
         FengTypeRef *wrapper;
 
-        if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' after '[' in type")) {
+        if (!parser_expect(parser,
+                   FENG_TOKEN_RBRACKET,
+                   "expected ']' to close array type suffix")) {
             free_type_ref(type_ref);
             return NULL;
         }
@@ -373,7 +393,7 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
     size_t count = 0U;
     size_t capacity = 0U;
 
-    if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '('")) {
+    if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '(' to start parameter list")) {
         return false;
     }
 
@@ -392,11 +412,13 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
             if (!parser_expect_identifier_like(parser,
                                                &param.name,
                                                false,
-                                               "expected parameter name")) {
+                                               "expected a parameter name")) {
                 free_parameters(params, count);
                 return false;
             }
-            if (!parser_expect(parser, FENG_TOKEN_COLON, "expected ':' after parameter name")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_COLON,
+                               "expected ':' after parameter name in parameter list")) {
                 free_parameters(params, count);
                 return false;
             }
@@ -415,7 +437,7 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
         } while (parser_match(parser, FENG_TOKEN_COMMA));
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' after parameters")) {
+    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close parameter list")) {
         free_parameters(params, count);
         return false;
     }
@@ -434,7 +456,7 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
     binding.type = NULL;
     binding.initializer = NULL;
 
-    if (!parser_expect_identifier_like(parser, &binding.name, false, "expected binding name")) {
+    if (!parser_expect_identifier_like(parser, &binding.name, false, "expected a binding name")) {
         return binding;
     }
 
@@ -444,7 +466,7 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
             return binding;
         }
     } else if (require_type) {
-        (void)parser_error_current(parser, "expected ':' after field name");
+        (void)parser_error_current(parser, "type field declarations require ':' after the field name");
         return binding;
     }
 
@@ -456,7 +478,8 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
     }
 
     if (!require_type && binding.type == NULL && binding.initializer == NULL) {
-        (void)parser_error_current(parser, "binding requires a type or initializer");
+        (void)parser_error_current(parser,
+                       "binding declarations require a type annotation or an initializer");
     }
 
     return binding;
@@ -484,7 +507,9 @@ static FengCallableSignature parse_callable_signature(Parser *parser, FengSlice 
 
     if (parser_check(parser, FENG_TOKEN_LBRACE)) {
         callable.body = parse_block(parser);
-    } else if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected function body or ';'")) {
+    } else if (!parser_expect(parser,
+                              FENG_TOKEN_SEMICOLON,
+                              "function declarations must end with ';' or provide a body '{...}'")) {
         return callable;
     }
 
@@ -533,7 +558,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
 
-    if (!parser_expect_identifier_like(parser, &type_name, false, "expected type name")) {
+    if (!parser_expect_identifier_like(parser, &type_name, false, "expected a type name")) {
         free_decl(decl);
         return NULL;
     }
@@ -547,7 +572,9 @@ static FengDecl *parse_type_declaration(Parser *parser,
             free_decl(decl);
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_COLON, "expected ':' after function type parameters")) {
+        if (!parser_expect(parser,
+                   FENG_TOKEN_COLON,
+                   "function type declarations require ':' before the return type")) {
             free_decl(decl);
             return NULL;
         }
@@ -556,14 +583,18 @@ static FengDecl *parse_type_declaration(Parser *parser,
             free_decl(decl);
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after function type declaration")) {
+        if (!parser_expect(parser,
+                   FENG_TOKEN_SEMICOLON,
+                   "function type declarations must end with ';'")) {
             free_decl(decl);
             return NULL;
         }
         return decl;
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' or '(' after type name")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "type declarations must use '{...}' for object form or '(...) : ...;' for function form")) {
         free_decl(decl);
         return NULL;
     }
@@ -586,6 +617,15 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
         member_visibility = parse_visibility(parser);
 
+        if (member_annotation_count > 0U && parser_check(parser, FENG_TOKEN_SEMICOLON)) {
+            free_annotations(member_annotations, member_annotation_count);
+            (void)parser_error_current(
+                parser,
+                "type member annotations must be followed immediately by a field or method; remove the trailing ';'");
+            free_decl(decl);
+            return NULL;
+        }
+
         if (parser_match(parser, FENG_TOKEN_KW_LET) || parser_match(parser, FENG_TOKEN_KW_VAR)) {
             FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
                                             ? FENG_MUTABILITY_LET
@@ -597,7 +637,9 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 free_decl(decl);
                 return NULL;
             }
-            if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after field declaration")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_SEMICOLON,
+                               "type field declarations must end with ';'")) {
                 free_type_ref(binding.type);
                 free_expr(binding.initializer);
                 free_annotations(member_annotations, member_annotation_count);
@@ -627,11 +669,16 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
             if (is_extern) {
                 free_annotations(member_annotations, member_annotation_count);
-                (void)parser_error_current(parser, "extern type object form cannot declare methods");
+                (void)parser_error_current(
+                    parser,
+                    "extern type object form only supports fields; methods require a non-extern type");
                 free_decl(decl);
                 return NULL;
             }
-            if (!parser_expect_identifier_like(parser, &name, false, "expected member function name")) {
+            if (!parser_expect_identifier_like(parser,
+                                               &name,
+                                               false,
+                                               "expected a method or constructor name after 'fn'")) {
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
                 return NULL;
@@ -663,7 +710,20 @@ static FengDecl *parse_type_declaration(Parser *parser,
             member->as.callable = callable;
         } else {
             free_annotations(member_annotations, member_annotation_count);
-            (void)parser_error_current(parser, "expected type member declaration");
+            if (parser_starts_callable_signature(parser)) {
+                (void)parser_error_current(parser,
+                                           "type methods and constructors must start with 'fn'");
+            } else if (parser_starts_binding_without_keyword(parser)) {
+                (void)parser_error_current(parser,
+                                           "type fields must start with 'let' or 'var'");
+            } else if (parser_check(parser, FENG_TOKEN_KW_EXTERN)) {
+                (void)parser_error_current(
+                    parser,
+                    "type members cannot start with 'extern'; use 'fn' for methods or 'let'/'var' for fields");
+            } else {
+                (void)parser_error_current(parser,
+                                           "expected type member declaration: 'let', 'var', or 'fn'");
+            }
             free_decl(decl);
             return NULL;
         }
@@ -680,7 +740,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
     }
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after type body")) {
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close type body")) {
         free_decl(decl);
         return NULL;
     }
@@ -706,7 +766,7 @@ static FengDecl *parse_function_declaration(Parser *parser,
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
 
-    if (!parser_expect_identifier_like(parser, &name, false, "expected function name")) {
+    if (!parser_expect_identifier_like(parser, &name, false, "expected a function name after 'fn'")) {
         free_decl(decl);
         return NULL;
     }
@@ -739,7 +799,7 @@ static FengDecl *parse_global_binding(Parser *parser,
         return NULL;
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after global binding")) {
+    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "top-level bindings must end with ';'")) {
         free_decl(decl);
         return NULL;
     }
@@ -779,18 +839,21 @@ static FengDecl *parse_declaration(Parser *parser) {
         return NULL;
     }
 
-    if (is_extern &&
-        parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
-        parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN) {
+    if (is_extern && parser_starts_callable_signature(parser)) {
         free_annotations(annotations, annotation_count);
         (void)parser_error_current(parser, "extern function declarations must start with 'extern fn'");
         return NULL;
     }
 
-    if (parser_check(parser, FENG_TOKEN_IDENTIFIER) &&
-        parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN) {
+    if (parser_starts_callable_signature(parser)) {
         free_annotations(annotations, annotation_count);
         (void)parser_error_current(parser, "top-level function declarations must start with 'fn'");
+        return NULL;
+    }
+
+    if (parser_starts_binding_without_keyword(parser)) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "top-level bindings must start with 'let' or 'var'");
         return NULL;
     }
 
@@ -802,7 +865,8 @@ static FengDecl *parse_declaration(Parser *parser) {
     }
 
     free_annotations(annotations, annotation_count);
-    (void)parser_error_current(parser, "expected declaration");
+    (void)parser_error_current(parser,
+                               "expected top-level declaration: 'let', 'var', 'extern fn', 'type', or 'fn'");
     return NULL;
 }
 
@@ -961,7 +1025,7 @@ static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
 
     expr->as.object_literal.target = target;
 
-    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' for object literal")) {
+    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' to start object literal")) {
         free_expr(expr);
         return NULL;
     }
@@ -970,11 +1034,16 @@ static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
         do {
             FengObjectFieldInit field;
 
-            if (!parser_expect_identifier_like(parser, &field.name, false, "expected field name")) {
+            if (!parser_expect_identifier_like(parser,
+                                               &field.name,
+                                               false,
+                                               "expected an object literal field name")) {
                 free_expr(expr);
                 return NULL;
             }
-            if (!parser_expect(parser, FENG_TOKEN_COLON, "expected ':' after field name")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_COLON,
+                               "expected ':' after object literal field name")) {
                 free_expr(expr);
                 return NULL;
             }
@@ -995,7 +1064,7 @@ static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
         } while (parser_match(parser, FENG_TOKEN_COMMA));
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after object literal")) {
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close object literal")) {
         free_expr(expr);
         return NULL;
     }
@@ -1011,7 +1080,7 @@ static FengExpr *parse_array_literal(Parser *parser) {
         return NULL;
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_LBRACKET, "expected '['")) {
+    if (!parser_expect(parser, FENG_TOKEN_LBRACKET, "expected '[' to start array literal")) {
         free_expr(expr);
         return NULL;
     }
@@ -1032,7 +1101,7 @@ static FengExpr *parse_array_literal(Parser *parser) {
         } while (parser_match(parser, FENG_TOKEN_COMMA));
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' after array literal")) {
+    if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' to close array literal")) {
         free_expr(expr);
         return NULL;
     }
@@ -1051,7 +1120,9 @@ static FengExpr *parse_lambda(Parser *parser) {
         free_expr(expr);
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_ARROW, "expected '->' after lambda parameters")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_ARROW,
+                       "lambda expressions must use '->' after the parameter list")) {
         free_expr(expr);
         return NULL;
     }
@@ -1083,13 +1154,21 @@ static FengExpr *parse_if_expression(Parser *parser) {
     }
     expr->as.if_expr.condition = condition;
 
-    if (parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' after if condition") &&
+    if (parser_expect(parser,
+                      FENG_TOKEN_LBRACE,
+                      "if expressions must use '{...}' after the condition") &&
         (expr->as.if_expr.then_expr = parse_expression(parser)) != NULL &&
-        parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after if expression branch") &&
-        parser_expect(parser, FENG_TOKEN_KW_ELSE, "expected 'else' in if expression") &&
-        parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' after else") &&
+        parser_expect(parser,
+                      FENG_TOKEN_RBRACE,
+                      "expected '}' to close the true branch of if expression") &&
+        parser_expect(parser, FENG_TOKEN_KW_ELSE, "if expressions require an 'else' branch") &&
+        parser_expect(parser,
+                      FENG_TOKEN_LBRACE,
+                      "if expression else branch must use '{...}'") &&
         (expr->as.if_expr.else_expr = parse_expression(parser)) != NULL &&
-        parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after else branch")) {
+        parser_expect(parser,
+                      FENG_TOKEN_RBRACE,
+                      "expected '}' to close the else branch of if expression")) {
         return expr;
     }
 
@@ -1105,7 +1184,9 @@ static FengExpr *parse_if_expression(Parser *parser) {
     }
     expr->as.match_expr.target = condition;
 
-    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' after match target")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "match expressions must use '{...}' after the target expression")) {
         free_expr(expr);
         return NULL;
     }
@@ -1114,7 +1195,9 @@ static FengExpr *parse_if_expression(Parser *parser) {
     size_t case_capacity = 0U;
     while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
         if (parser_match(parser, FENG_TOKEN_KW_ELSE)) {
-            if (!parser_expect(parser, FENG_TOKEN_COLON, "expected ':' after else")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_COLON,
+                               "expected ':' after else in match expression")) {
                 free_expr(expr);
                 return NULL;
             }
@@ -1131,7 +1214,9 @@ static FengExpr *parse_if_expression(Parser *parser) {
                 free_expr(expr);
                 return NULL;
             }
-            if (!parser_expect(parser, FENG_TOKEN_COLON, "expected ':' after match label")) {
+            if (!parser_expect(parser,
+                               FENG_TOKEN_COLON,
+                               "expected ':' after match case label")) {
                 free_expr(match_case.label);
                 free_expr(expr);
                 return NULL;
@@ -1161,11 +1246,11 @@ static FengExpr *parse_if_expression(Parser *parser) {
     }
 
     if (expr->as.match_expr.else_expr == NULL) {
-        (void)parser_error_current(parser, "match expression requires else branch");
+        (void)parser_error_current(parser, "match expressions require an else branch");
         free_expr(expr);
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after match expression")) {
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close match expression")) {
         free_expr(expr);
         return NULL;
     }
@@ -1185,7 +1270,7 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
             return NULL;
         }
 
-        if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '('")) {
+        if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '(' to start cast expression")) {
             free_expr(expr);
             return NULL;
         }
@@ -1206,7 +1291,9 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
         return expr;
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '('")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LPAREN,
+                       "expected '(' to start grouped expression, cast, or lambda")) {
         return NULL;
     }
 
@@ -1216,7 +1303,7 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
         if (expr == NULL) {
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' after expression")) {
+        if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close grouped expression")) {
             free_expr(expr);
             return NULL;
         }
@@ -1279,7 +1366,9 @@ static FengExpr *parse_primary(Parser *parser) {
             (void)parser_advance(parser);
             return parse_if_expression(parser);
         default:
-            (void)parser_error_current(parser, "expected expression");
+            (void)parser_error_current(
+                parser,
+                "expected expression term: identifier, literal, call, cast, lambda, or if-expression");
             return NULL;
     }
 }
@@ -1318,7 +1407,7 @@ static FengExpr *parse_postfix(Parser *parser) {
                 } while (parser_match(parser, FENG_TOKEN_COMMA));
             }
 
-            if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' after arguments")) {
+            if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close argument list")) {
                 free_expr(call);
                 return NULL;
             }
@@ -1333,7 +1422,10 @@ static FengExpr *parse_postfix(Parser *parser) {
                 free_expr(expr);
                 return NULL;
             }
-            if (!parser_expect_identifier_like(parser, &member->as.member.member, false, "expected member name")) {
+            if (!parser_expect_identifier_like(parser,
+                                               &member->as.member.member,
+                                               false,
+                                               "member access requires an identifier after '.'")) {
                 free_expr(member);
                 free_expr(expr);
                 return NULL;
@@ -1356,7 +1448,7 @@ static FengExpr *parse_postfix(Parser *parser) {
                 free_expr(index);
                 return NULL;
             }
-            if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' after index")) {
+            if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' to close index expression")) {
                 free_expr(index);
                 return NULL;
             }
@@ -1476,7 +1568,7 @@ static FengBlock *parse_block(Parser *parser) {
     if (block == NULL) {
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{'")) {
+    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "expected '{' to start block")) {
         free_block(block);
         return NULL;
     }
@@ -1495,7 +1587,7 @@ static FengBlock *parse_block(Parser *parser) {
         }
     }
 
-    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' after block")) {
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close block")) {
         free_block(block);
         return NULL;
     }
@@ -1582,7 +1674,9 @@ static FengStmt *parse_for_statement(Parser *parser) {
             return NULL;
         }
     }
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after for initializer")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_SEMICOLON,
+                       "for statements require ';' after the initializer")) {
         free_stmt(stmt);
         return NULL;
     }
@@ -1594,7 +1688,9 @@ static FengStmt *parse_for_statement(Parser *parser) {
             return NULL;
         }
     }
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after for condition")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_SEMICOLON,
+                       "for statements require ';' after the condition")) {
         free_stmt(stmt);
         return NULL;
     }
@@ -1646,7 +1742,8 @@ static FengStmt *parse_try_statement(Parser *parser) {
     }
 
     if (stmt->as.try_stmt.catch_block == NULL && stmt->as.try_stmt.finally_block == NULL) {
-        (void)parser_error_current(parser, "try statement requires catch or finally");
+        (void)parser_error_current(parser,
+                       "try statements must have at least one catch block or finally block");
         free_stmt(stmt);
         return NULL;
     }
@@ -1672,6 +1769,11 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
             return NULL;
         }
         return stmt;
+    }
+
+    if (parser_starts_typed_binding_without_keyword(parser)) {
+        (void)parser_error_current(parser, "local bindings must start with 'let' or 'var'");
+        return NULL;
     }
 
     stmt = new_stmt(parser, FENG_STMT_EXPR);
@@ -1745,7 +1847,7 @@ static FengStmt *parse_statement(Parser *parser) {
                 return NULL;
             }
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after return")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "return statements must end with ';'")) {
             free_stmt(stmt);
             return NULL;
         }
@@ -1761,7 +1863,7 @@ static FengStmt *parse_statement(Parser *parser) {
             free_stmt(stmt);
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after throw")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "throw statements must end with ';'")) {
             free_stmt(stmt);
             return NULL;
         }
@@ -1772,7 +1874,7 @@ static FengStmt *parse_statement(Parser *parser) {
         if (stmt == NULL) {
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after break")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "break statements must end with ';'")) {
             free_stmt(stmt);
             return NULL;
         }
@@ -1783,7 +1885,7 @@ static FengStmt *parse_statement(Parser *parser) {
         if (stmt == NULL) {
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after continue")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "continue statements must end with ';'")) {
             free_stmt(stmt);
             return NULL;
         }
@@ -1794,7 +1896,9 @@ static FengStmt *parse_statement(Parser *parser) {
     if (stmt == NULL) {
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after statement")) {
+    if (!parser_expect(parser,
+                       FENG_TOKEN_SEMICOLON,
+                       "expression statements and local bindings must end with ';'")) {
         free_stmt(stmt);
         return NULL;
     }
@@ -1821,11 +1925,11 @@ static FengProgram *parse_program(Parser *parser) {
                     false,
                     &program->module_segments,
                     &program->module_segment_count,
-                    "expected module path")) {
+                    "expected a module path after 'mod'")) {
         feng_program_free(program);
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after mod declaration")) {
+    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "mod declarations must end with ';'")) {
         feng_program_free(program);
         return NULL;
     }
@@ -1834,19 +1938,26 @@ static FengProgram *parse_program(Parser *parser) {
         FengUseDecl use_decl;
 
         memset(&use_decl, 0, sizeof(use_decl));
-        if (!parse_path(parser, false, &use_decl.segments, &use_decl.segment_count, "expected module path after use")) {
+        if (!parse_path(parser,
+                false,
+                &use_decl.segments,
+                &use_decl.segment_count,
+                "expected a module path after 'use'")) {
             feng_program_free(program);
             return NULL;
         }
         if (parser_match(parser, FENG_TOKEN_KW_AS)) {
             use_decl.has_alias = true;
-            if (!parser_expect_identifier_like(parser, &use_decl.alias, false, "expected alias after as")) {
+            if (!parser_expect_identifier_like(parser,
+                                               &use_decl.alias,
+                                               false,
+                                               "expected an alias name after 'as'")) {
                 free(use_decl.segments);
                 feng_program_free(program);
                 return NULL;
             }
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "expected ';' after use declaration")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "use declarations must end with ';'")) {
             free(use_decl.segments);
             feng_program_free(program);
             return NULL;

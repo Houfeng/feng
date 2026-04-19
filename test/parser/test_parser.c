@@ -188,6 +188,56 @@ static void test_parse_error_missing_top_level_fn_keyword(void) {
     ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
 }
 
+static void test_parse_error_missing_member_fn_keyword(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type User {\n"
+        "    info(): string {\n"
+        "        return self.name;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_member_fn.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "type methods and constructors must start with 'fn'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
+}
+
+static void test_parse_error_missing_member_binding_keyword(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type User {\n"
+        "    name: string;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_member_binding_kw.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "type fields must start with 'let' or 'var'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
+}
+
+static void test_parse_error_missing_local_binding_keyword(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(args: string[]) {\n"
+        "    name: string = \"Houfeng\";\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_local_binding_kw.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "local bindings must start with 'let' or 'var'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -195,6 +245,9 @@ int main(void) {
     test_parse_error();
     test_parse_error_after_annotation_semicolon();
     test_parse_error_missing_top_level_fn_keyword();
+    test_parse_error_missing_member_fn_keyword();
+    test_parse_error_missing_member_binding_keyword();
+    test_parse_error_missing_local_binding_keyword();
     puts("parser tests passed");
     return 0;
 }
