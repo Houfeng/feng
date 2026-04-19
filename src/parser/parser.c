@@ -245,7 +245,7 @@ static bool parse_path(Parser *parser,
         if (!parser_expect_identifier_like(parser,
                                            &segment,
                                            false,
-                                           "qualified names require an identifier after '.'")) {
+                                           "expected an identifier after '.' in a qualified name")) {
             free(segments);
             return false;
         }
@@ -1425,7 +1425,7 @@ static FengExpr *parse_postfix(Parser *parser) {
             if (!parser_expect_identifier_like(parser,
                                                &member->as.member.member,
                                                false,
-                                               "member access requires an identifier after '.'")) {
+                                               "expected an identifier after '.' in member access")) {
                 free_expr(member);
                 free_expr(expr);
                 return NULL;

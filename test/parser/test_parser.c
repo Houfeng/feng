@@ -238,6 +238,33 @@ static void test_parse_error_missing_local_binding_keyword(void) {
     ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
 }
 
+static void test_parse_error_missing_identifier_in_qualified_name(void) {
+    const char *source =
+        "mod demo.;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_qualified_name_part.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "expected an identifier after '.' in a qualified name") != NULL);
+}
+
+static void test_parse_error_missing_identifier_in_member_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(args: string[]) {\n"
+        "    return user.;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_member_access_name.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "expected an identifier after '.' in member access") != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -248,6 +275,8 @@ int main(void) {
     test_parse_error_missing_member_fn_keyword();
     test_parse_error_missing_member_binding_keyword();
     test_parse_error_missing_local_binding_keyword();
+    test_parse_error_missing_identifier_in_qualified_name();
+    test_parse_error_missing_identifier_in_member_access();
     puts("parser tests passed");
     return 0;
 }
