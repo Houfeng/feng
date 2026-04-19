@@ -128,54 +128,16 @@ let val = mat[1][1];
 
 ## 11 流程控制
 
-### 11.1 普通条件判断
+FC 的流程控制覆盖条件判断、模式匹配、循环与结构化异常处理。
 
-```fc
-if a > b {
-    // 逻辑代码
-} else if a == b {
-    // 逻辑代码
-} else {
-    // 逻辑代码
-}
-```
+本规范仅保留流程控制概要说明,详细的条件分支、`if` 模式匹配、循环与 `try/catch/finally` 规则已拆分到独立文档: [FC语言流程控制规范](./feng-flow.md)。
 
-### 11.2 if模式匹配
+流程控制要点:
 
-可作为表达式赋值,支持分支匹配,默认匹配 `else` 分支。
-
-```fc
-let stage = if age {
-    0: "婴儿",
-    18: "成年",
-    60: "老年",
-    else: "青年"
-};
-```
-
-### 11.3 循环语句
-
-支持 `while`、`for` 循环,搭配 `break` 跳出循环,搭配 `continue` 跳过当前循环。
-
-### 11.4 异常处理try/catch/finally
-
-- `try`: 包裹可能触发异常的代码
-- `catch`: 捕获异常并执行异常处理逻辑
-- `finally`: 无论是否发生异常、是否 `return`,均会执行
-- 常用于资源释放和收尾操作
-
-```fc
-fn test() {
-    try {
-        let arr = [1, 2, 3];
-        let num = arr[5]; // 数组越界异常
-    } catch {
-        print("程序发生异常");
-    } finally {
-        print("执行收尾操作");
-    }
-}
-```
+- 支持 `if / else if / else` 条件分支。
+- 支持 `if` 作为表达式进行模式匹配赋值。
+- 支持 `while`、`for`、`break` 和 `continue`。
+- 支持 `try / catch / finally` 结构化异常处理。
 
 ## 12 垃圾回收GC
 
