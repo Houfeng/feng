@@ -5,7 +5,7 @@ type User {
   let age: int;
 }
 
-@cdecl("libc");
+@cdecl("libc")
 extern fn print(msg: string):void;
 
 main(args: string[]) {
