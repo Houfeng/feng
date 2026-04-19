@@ -73,11 +73,13 @@ var p: Point; // C 兼容结构体自动零值初始化
 
 ## 4 Feng 原生自定义类型
 
-统一使用 `type` 定义 feng 内部对象类型,支持成员变量、构造函数、成员方法和访问控制,不可与 C 直接互通。
+统一使用 `type` 定义 feng 内部对象类型,支持成员变量、对象字面量、构造函数、成员方法和访问控制,不可与 C 直接互通。
 
 规则说明:
 
 - 成员变量必须显式添加 `var` 或 `let` 修饰。
+- 支持 `Type { field: value }` 形式的对象字面量; 未显式列出的成员按默认零值初始化。
+- 若使用对象字面量创建对象,不会自动调用构造函数; 使用 `Type(args)` 时才会执行构造函数。
 - 类型成员默认公开,也可显式通过 `pu` 或 `pr` 设置可见性。
 - 构造函数与类型同名,无返回值,无需 `new` 关键字即可实例化。
 - 支持使用 `self` 引用自身,支持成员方法封装。
@@ -142,7 +144,7 @@ type Bird {
 }
 
 // 兼容所有包含 quack() 方法的类型
-fn make_sound(obj) {
+fn make_sound(obj: Duck) {
     print(obj.quack());
 }
 ```
@@ -180,4 +182,5 @@ fn run(mapper: NumberMapper, value: int): int {
 ## 8 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、模块、函数、流程控制、异常、GC、包分发与完整示例。
+- [feng-object.md](./feng-object.md): Feng 原生 `type` 的实例创建、引用语义、成员可变性与方法规则。
 - 本文档: 类型系统细化规则,作为主规范的独立补充文档维护。

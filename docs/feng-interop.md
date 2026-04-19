@@ -1,13 +1,13 @@
 # Feng 语言 C 互操作规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的 C 互操作概要说明,聚焦 feng 语言与 C 库链接、C 兼容类型、外部函数声明和回调函数定义规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的 C 互操作概要说明,聚焦 Feng 语言与 C 库链接、C 兼容类型、外部函数声明、导出函数和回调函数定义规则。
 
 ## 1 C互操作概览
 
 - Feng 通过 `link`、`extern type` 和 `extern fn` 实现与 C 语言的安全互操作。
 - `link` 负责链接 C 标准库、第三方 C 库或 feng 编译二进制产物。
 - `extern type` 用于定义 C 兼容结构体、联合体和 C 函数指针类型。
-- `extern fn` 用于声明 C 外部函数以及定义可传给 C 的 feng 回调函数。
+- `extern fn` 用于声明 C 外部函数、定义可传给 C 的 Feng 回调函数以及定义 C ABI 兼容导出函数。
 - 支持使用 `@union` 将对象形式的 `extern type` 显式声明为 C 联合体。
 - 支持使用 `@cdecl`、`@stdcall` 和 `@fastcall` 三个内建注解显式声明 C 函数调用方式。
 
@@ -170,7 +170,29 @@ extern fn my_point_handle(p: Point) {
 }
 ```
 
-## 8 C互操作完整示例
+## 8 C ABI导出函数
+
+使用带函数体的 `pu extern fn` 可定义对外导出的 C ABI 函数。此类函数会生成可被 C 或其他兼容 C ABI 的语言直接调用的导出符号。
+
+规则说明:
+
+- 仅顶层 `pu extern fn` 会作为公开 C ABI 符号导出。
+- 导出函数的参数与返回值必须全部为 C 兼容类型。
+- 导出函数可以使用 Feng 内部实现逻辑,但不得让异常越过 ABI 边界传播。
+- 导出符号名默认等于函数声明名,当前语言版本不提供自定义符号重命名。
+- 同一编译产物中若出现重名导出符号,编译期报错。
+- `.fcp` 包中的头文件与导出清单由公开 `extern` 接口自动生成。
+
+```feng
+pu extern fn point_sum(p1: Point, p2: Point): Point {
+    return Point {
+        x: p1.x + p2.x,
+        y: p1.y + p2.y,
+    };
+}
+```
+
+## 9 C互操作完整示例
 
 ```feng
 pu mod libc.math;
@@ -193,10 +215,18 @@ extern fn point_distance(p1: Point, p2: Point): float;
 @cdecl
 extern fn run_point_operate(p: Point, cb: PointOperate);
 
-// 定义 feng 回调函数
+// 定义 Feng 回调函数
 @cdecl
 extern fn handle_point(p: Point) {
     print("Point:x=", p.x, " y=", p.y);
+}
+
+// 定义公开导出函数
+pu extern fn point_sum(p1: Point, p2: Point): Point {
+    return Point {
+        x: p1.x + p2.x,
+        y: p1.y + p2.y,
+    };
 }
 
 // feng 内部普通函数
@@ -214,7 +244,8 @@ fn main(args: string[]) {
 }
 ```
 
-## 9 与主规范的关系
+## 10 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、C 互操作概要、模块、类型、函数、流程控制、异常、GC、包分发与完整示例。
-- 本文档: C 库链接、C 兼容类型、外部函数声明和回调规则的独立补充文档。
+- [feng-exception.md](./feng-exception.md): ABI 边界上的异常传播限制。
+- 本文档: C 库链接、C 兼容类型、外部函数声明、导出函数和回调规则的独立补充文档。
