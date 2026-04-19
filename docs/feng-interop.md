@@ -1,10 +1,10 @@
-# feng语言C互操作规范
+# Feng 语言C互操作规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的 C 互操作概要说明,聚焦 feng 语言与 C 库链接、C 兼容类型、外部函数声明和回调函数定义规则。
 
 ## 1 C互操作概览
 
-- feng 通过 `link`、`extern type` 和 `extern fn` 实现与 C 语言的安全互操作。
+- Feng 通过 `link`、`extern type` 和 `extern fn` 实现与 C 语言的安全互操作。
 - `link` 负责链接 C 标准库、第三方 C 库或 feng 编译二进制产物。
 - `extern type` 用于定义 C 兼容结构体和 C 函数指针类型。
 - `extern fn` 用于声明 C 外部函数以及定义可传给 C 的 feng 回调函数。
@@ -56,7 +56,7 @@ extern fn sin(x: float): float;
 - 仅允许声明成员变量,禁止添加构造函数、成员方法
 - 成员仅支持: 基础类型、其他 `extern type` 类型、固定长度数组
 - 成员需用 `var` 或 `let` 修饰,遵循 feng 变量声明规范
-- feng 的 GC 不管理该类型内存,需通过 C 函数或手动释放
+- Feng 的 GC 不管理该类型内存,需通过 C 函数或手动释放
 - 编译器自动校验与 C 的内存兼容性
 
 定义示例:
@@ -102,7 +102,7 @@ extern fn create_point(x: int, y: int): Point;
 extern fn set_point_callback(cb: PointCallback);
 ```
 
-## 6 feng回调函数定义(extern fn)
+## 6 Feng 回调函数定义(extern fn)
 
 使用 `extern fn` 定义可作为函数指针传给 C 的 feng 回调函数。此类函数有函数体,编译器自动生成 C 兼容 ABI,并进行强制编译期检查。
 
