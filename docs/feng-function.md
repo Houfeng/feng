@@ -136,7 +136,7 @@ fn test(m: M) {
     m();
 }
 
-let u = User();
+let u = User {};
 test(u.say);
 ```
 
