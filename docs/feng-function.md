@@ -1,4 +1,4 @@
-# Feng 语言函数系统规范
+# Feng 语言函数规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的函数系统概要说明,聚焦 feng 语言的普通函数、程序入口函数、Lambda 表达式与闭包规则。
 

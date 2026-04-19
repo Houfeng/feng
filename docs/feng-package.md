@@ -1,4 +1,4 @@
-# Feng 语言包分发与二进制复用规范
+# Feng 语言包分发规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的包分发与二进制复用概要说明,聚焦 feng 自有二进制包与 C ABI 兼容包的分发模式、包格式、编译流程和使用规则。
 

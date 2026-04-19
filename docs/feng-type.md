@@ -1,4 +1,4 @@
-# Feng 语言类型系统规范
+# Feng 语言类型规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的类型系统概要说明,聚焦 feng 语言的数据类型、类型声明和类型约束细节。
 

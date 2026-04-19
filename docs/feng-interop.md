@@ -1,4 +1,4 @@
-# Feng 语言C互操作规范
+# Feng 语言 C 互操作规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的 C 互操作概要说明,聚焦 feng 语言与 C 库链接、C 兼容类型、外部函数声明和回调函数定义规则。
 

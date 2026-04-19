@@ -1,4 +1,4 @@
-# Feng 语言模块系统规范
+# Feng 语言模块规范
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的模块系统概要说明,聚焦 feng 语言的模块声明、模块导入与模块使用规则。
 
