@@ -1,25 +1,25 @@
-# FC语言函数系统规范
+# feng语言函数系统规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的函数系统概要说明,聚焦 FC 语言的普通函数、程序入口函数、Lambda 表达式与闭包规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的函数系统概要说明,聚焦 feng 语言的普通函数、程序入口函数、Lambda 表达式与闭包规则。
 
 ## 1 函数系统概览
 
-- FC 使用 `fn` 定义内部普通函数、成员方法和构造函数。
+- feng 使用 `fn` 定义内部普通函数、成员方法和构造函数。
 - 函数与成员方法支持 `pr` / `pu` 可见性控制。
 - 程序唯一入口为 `main(args: string[])`。
 - `Lambda` 是函数实现或函数字面量的一种简写形式,不是独立的函数类型定义。
 - 闭包支持捕获外部作用域变量,其可用位置和可赋值性由目标函数类型决定。
 
-## 2 FC内部普通函数
+## 2 feng内部普通函数
 
-用于 FC 内部的一般函数形式,支持闭包与变量捕获,可使用所有 FC 类型。
+用于 feng 内部的一般函数形式,支持闭包与变量捕获,可使用所有 feng 类型。
 
 规则说明:
 
 - `void` 代表空无类型; 无返回值时可省略不写,有返回值时可自动推导,也可显式声明。
 - 函数类型必须先定义,再作为参数或返回值使用。
 
-```fc
+```feng
 // 无返回值,void 省略
 fn test(x: int, var y: int) {
     y = y + 1;
@@ -41,7 +41,7 @@ fn add(a: int, b: int) {
 
 参数示例:
 
-```fc
+```feng
 fn sum(let a: int, let b: int): int {
     return a + b;
 }
@@ -62,7 +62,7 @@ fn increase(step: int, var total: int) {
 
 私有顶层函数:
 
-```fc
+```feng
 fn helper(x: int): int {
     return x + 1;
 }
@@ -70,7 +70,7 @@ fn helper(x: int): int {
 
 公开顶层函数:
 
-```fc
+```feng
 pu fn add(a: int, b: int): int {
     return a + b;
 }
@@ -78,7 +78,7 @@ pu fn add(a: int, b: int): int {
 
 成员方法可见性:
 
-```fc
+```feng
 type User {
     pu fn info(): string {
         return "user";
@@ -94,7 +94,7 @@ type User {
 
 程序唯一入口为 `main` 函数,必须接收 `string[]` 类型的 `args` 命令行参数。
 
-```fc
+```feng
 fn main(args: string[]) {
     // 程序执行入口
 }
@@ -107,7 +107,7 @@ fn main(args: string[]) {
 - `Lambda` 参数必须显式标注类型。
 - 支持捕获外部作用域变量,形成闭包,GC 自动管理闭包内存。
 
-```fc
+```feng
 // 单行 Lambda
 let func = (x: int) -> x * 2;
 

@@ -1,10 +1,10 @@
-# FC语言流程控制规范
+# feng语言流程控制规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的流程控制概要说明,聚焦 FC 语言的条件判断、模式匹配、循环与异常处理规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的流程控制概要说明,聚焦 feng 语言的条件判断、模式匹配、循环与异常处理规则。
 
 ## 1 流程控制概览
 
-- FC 提供条件分支、模式匹配、循环和结构化异常处理。
+- feng 提供条件分支、模式匹配、循环和结构化异常处理。
 - 条件判断支持 `if / else if / else` 形式。
 - `if` 支持作为表达式使用,用于分支匹配赋值。
 - 循环支持 `while`、`for`、`break` 和 `continue`。
@@ -12,7 +12,7 @@
 
 ## 2 普通条件判断
 
-```fc
+```feng
 if a > b {
     // 逻辑代码
 } else if a == b {
@@ -26,7 +26,7 @@ if a > b {
 
 `if` 可作为表达式赋值,支持分支匹配,默认匹配 `else` 分支。
 
-```fc
+```feng
 let stage = if age {
     0: "婴儿",
     18: "成年",
@@ -48,7 +48,7 @@ let stage = if age {
 - `finally`: 无论是否发生异常、是否 `return`,均会执行。
 - 常用于资源释放和收尾操作。
 
-```fc
+```feng
 fn test() {
     try {
         let arr = [1, 2, 3];

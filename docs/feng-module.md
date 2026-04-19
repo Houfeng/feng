@@ -1,14 +1,14 @@
-# FC语言模块系统规范
+# feng语言模块系统规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的模块系统概要说明,聚焦 FC 语言的模块声明、模块导入与模块使用规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的模块系统概要说明,聚焦 feng 语言的模块声明、模块导入与模块使用规则。
 
 ## 1 模块系统概览
 
-- FC 使用 `mod` 进行文件级模块声明,使用 `use` 导入外部模块或二进制包。
+- feng 使用 `mod` 进行文件级模块声明,使用 `use` 导入外部模块或二进制包。
 - 模块系统支持多级命名空间,通过 `.` 进行层级分隔。
 - 模块声明与模块导入在文件内有固定位置约束。
 - 模块具备可见性控制,默认包外不可见,需显式声明公开访问权限后才可被外部导入。
-- 模块既可用于源码组织,也可用于 FC 自有二进制包和 C ABI 兼容包的导入。
+- 模块既可用于源码组织,也可用于 feng 自有二进制包和 C ABI 兼容包的导入。
 
 ## 2 模块声明规则
 
@@ -26,25 +26,25 @@
 
 默认私有模块:
 
-```fc
+```feng
 mod app.internal.cache;
 ```
 
 显式私有模块:
 
-```fc
+```feng
 pr mod app.internal.cache;
 ```
 
 公开模块:
 
-```fc
+```feng
 pu mod app.api.user;
 ```
 
 导入公开模块:
 
-```fc
+```feng
 use app.api.user;
 ```
 
@@ -52,7 +52,7 @@ use app.api.user;
 
 - `use` 必须位于模块声明之后、类型与函数定义之前。
 - 调用外部成员格式: `模块名.成员名`。
-- 支持导入源码模块、FC 自有二进制包、C ABI 兼容包。
+- 支持导入源码模块、feng 自有二进制包、C ABI 兼容包。
 
 ## 5 书写顺序与格式建议
 
@@ -62,14 +62,14 @@ use app.api.user;
 
 书写示例:
 
-```fc
+```feng
 pu mod my.app.user;
 
 use my.utils;
 use my.core;
 
 type User {
-	pu var name: string;
+    pu var name: string;
 }
 ```
 
