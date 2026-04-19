@@ -64,14 +64,15 @@ Feng 的模块系统负责源码组织、命名空间划分以及外部模块与
 
 ## 6 C库链接与互操作规范
 
-C 互操作负责 C 库链接、C 兼容类型映射、外部函数声明与 feng 回调定义,核心关键字为 `link`、`extern type` 和 `extern fn`。
+C 互操作负责 C 库链接、C 兼容类型映射、外部函数声明与 feng 回调定义,核心关键字为 `link`、`extern type`、`extern fn` 以及调用方式注解。
 
-本规范仅保留 C 互操作概要说明,详细的 C 库链接规则、C 兼容结构体/函数指针定义、外部函数声明与完整示例已拆分到独立文档: [Feng 语言C互操作规范](./feng-interop.md)。
+本规范仅保留 C 互操作概要说明,详细的 C 库链接规则、C 兼容结构体/函数指针定义、调用方式注解、外部函数声明与完整示例已拆分到独立文档: [Feng 语言 C 互操作规范](./feng-interop.md)。
 
 C 互操作要点:
 
 - 使用 `link` 链接 C 标准库、第三方 C 库和相关二进制产物。
 - 使用 `extern type` 定义 C 兼容结构体和 C 函数指针类型。
+- 支持使用 `@cdecl`、`@stdcall` 和 `@fastcall` 显式声明 C 函数调用方式; 未显式标注时默认使用 `cdecl`。
 - 使用 `extern fn` 声明 C 外部函数,以及定义可传给 C 的 feng 回调函数。
 - 编译器对 C 互操作相关声明执行 ABI 与类型安全检查。
 
@@ -248,6 +249,7 @@ fn main(args: string[]) {
 ### 15.2 C互操作与分发约束
 
 - `extern type`: 定义 C 兼容结构体和 C 函数指针类型
+- `@cdecl` / `@stdcall` / `@fastcall`: 声明 C 函数调用方式,未显式标注时默认使用 `cdecl`
 - `extern fn`: 声明 C 外部函数或定义可传 C 的 feng 回调
 - 编译器对 `extern` 标记内容做 C ABI 编译期检查
 - Feng 普通 `fn` 与 C ABI 完全隔离,保障安全

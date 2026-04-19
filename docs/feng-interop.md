@@ -8,6 +8,7 @@
 - `link` 负责链接 C 标准库、第三方 C 库或 feng 编译二进制产物。
 - `extern type` 用于定义 C 兼容结构体和 C 函数指针类型。
 - `extern fn` 用于声明 C 外部函数以及定义可传给 C 的 feng 回调函数。
+- 支持使用 `@cdecl`、`@stdcall` 和 `@fastcall` 三个内建注解显式声明 C 函数调用方式。
 
 ## 2 C库链接指令(link)
 
@@ -78,7 +79,7 @@ extern type Rect {
 
 ## 4 C函数指针类型定义(extern type)
 
-使用 `extern type` 定义与 C 函数指针完全兼容的函数类型,用于 C 回调函数传递,签名需与 C 侧完全一致。
+使用 `extern type` 定义与 C 函数指针完全兼容的函数类型,用于 C 回调函数传递,签名需与 C 侧完全一致。函数指针类型本身不使用调用方式注解,调用方式由与之匹配的 `extern fn` 声明或回调定义负责标注。
 
 ```feng
 // 定义 C 兼容的比较函数指针类型
@@ -88,9 +89,36 @@ extern type CmpFunc(a: int, b: int): int;
 extern type PointCallback(p: Point);
 ```
 
-## 5 C外部函数声明(extern fn)
+## 5 C函数调用方式注解
 
-使用 `extern fn` 声明 C 语言实现的外部函数,仅声明函数签名、无函数体,用于调用 C 库函数。参数和返回值需为 C 兼容类型,如基础类型、`extern type` 类型和指针。
+Feng 提供 `@cdecl`、`@stdcall` 和 `@fastcall` 三个内建注解,用于显式声明 C ABI 函数的调用方式。调用方式注解可用于 `extern fn` 声明和 `extern fn` 回调定义。
+
+规则说明:
+
+- `@cdecl`: 声明使用 C 默认调用方式。
+- `@stdcall`: 声明使用 `stdcall` 调用方式。
+- `@fastcall`: 声明使用 `fastcall` 调用方式。
+- 每个声明最多只能使用一个调用方式注解。
+- 调用方式注解仅适用于 `extern fn`,不适用于 `extern type` 声明。
+- 在 `extern fn` 上,调用方式注解通常单独写在声明或定义的上一行,以保持书写清晰。
+- 外部函数声明、回调函数定义与其对应的 C 侧声明之间的调用方式必须保持一致。
+- 未显式标注时,默认按 `cdecl` 处理。
+
+调用方式示例:
+
+```feng
+@cdecl
+extern fn sin(x: float): float;
+
+@stdcall
+extern fn create_point(x: int, y: int): Point;
+
+extern type PointCallback(p: Point);
+```
+
+## 6 C外部函数声明(extern fn)
+
+使用 `extern fn` 声明 C 语言实现的外部函数,仅声明函数签名、无函数体,用于调用 C 库函数。参数和返回值需为 C 兼容类型,如基础类型、`extern type` 类型和指针。若需显式指定调用方式,可在声明前添加第 5 节中的内建注解; 未显式指定时默认使用 `cdecl`。调用方式注解通常单独写在 `extern fn` 声明的上一行。
 
 ```feng
 // 声明 C 标准库数学函数
@@ -98,13 +126,15 @@ extern fn sin(x: float): float;
 extern fn sqrt(x: float): float;
 
 // 声明操作 C 兼容结构体的 C 函数
+@stdcall
 extern fn create_point(x: int, y: int): Point;
+
 extern fn set_point_callback(cb: PointCallback);
 ```
 
-## 6 Feng 回调函数定义(extern fn)
+## 7 Feng 回调函数定义(extern fn)
 
-使用 `extern fn` 定义可作为函数指针传给 C 的 feng 回调函数。此类函数有函数体,编译器自动生成 C 兼容 ABI,并进行强制编译期检查。
+使用 `extern fn` 定义可作为函数指针传给 C 的 feng 回调函数。此类函数有函数体,编译器自动生成 C 兼容 ABI,并进行强制编译期检查。若需显式指定调用方式,可在定义前添加第 5 节中的内建注解; 未显式指定时默认使用 `cdecl`。调用方式注解通常单独写在 `extern fn` 定义的上一行。
 
 约束规则:
 
@@ -112,20 +142,23 @@ extern fn set_point_callback(cb: PointCallback);
 - 禁止使用闭包
 - 仅支持 C 兼容类型作为参数和返回值
 - 不可使用 feng GC 托管类型,如 `string`、动态数组、原生 `type` 对象
+- 调用方式必须与目标回调签名对应的 C 侧声明保持一致
 
 ```feng
 // 可传给 C 的比较回调函数
+@cdecl
 extern fn my_int_cmp(a: int, b: int): int {
     return a - b;
 }
 
 // 可传给 C 的结构体回调函数
+@cdecl
 extern fn my_point_handle(p: Point) {
     print(p.x, p.y);
 }
 ```
 
-## 7 C互操作完整示例
+## 8 C互操作完整示例
 
 ```feng
 pu mod libc.math;
@@ -142,10 +175,14 @@ extern type Point {
 extern type PointOperate(p: Point);
 
 // 声明 C 外部函数
+@cdecl
 extern fn point_distance(p1: Point, p2: Point): float;
+
+@cdecl
 extern fn run_point_operate(p: Point, cb: PointOperate);
 
 // 定义 feng 回调函数
+@cdecl
 extern fn handle_point(p: Point) {
     print("Point:x=", p.x, " y=", p.y);
 }
@@ -165,7 +202,7 @@ fn main(args: string[]) {
 }
 ```
 
-## 8 与主规范的关系
+## 9 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、C 互操作概要、模块、类型、函数、流程控制、异常、GC、包分发与完整示例。
 - 本文档: C 库链接、C 兼容类型、外部函数声明和回调规则的独立补充文档。
