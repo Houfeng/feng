@@ -4,10 +4,12 @@
 #include <string.h>
 
 #include "lexer/lexer.h"
+#include "parser/parser.h"
 
 static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s lex <file>\n", program);
+    fprintf(stderr, "  %s parse <file>\n", program);
 }
 
 static char *read_entire_file(const char *path, size_t *out_length) {
@@ -153,6 +155,35 @@ static int run_lex_command(const char *path) {
     return exit_code;
 }
 
+static int run_parse_command(const char *path) {
+    size_t source_length = 0;
+    char *source = read_entire_file(path, &source_length);
+    FengProgram *program = NULL;
+    FengParseError error;
+    int exit_code = 0;
+
+    if (source == NULL) {
+        fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    if (!feng_parse_source(source, source_length, path, &program, &error)) {
+        fprintf(stderr,
+                "%s:%u:%u: parse error: %s\n",
+                path,
+                error.token.line,
+                error.token.column,
+                error.message != NULL ? error.message : "unknown error");
+        exit_code = 1;
+    } else {
+        feng_program_dump(stdout, program);
+    }
+
+    feng_program_free(program);
+    free(source);
+    return exit_code;
+}
+
 int main(int argc, char **argv) {
     if (argc != 3) {
         print_usage(argv[0]);
@@ -161,6 +192,9 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "lex") == 0) {
         return run_lex_command(argv[2]);
+    }
+    if (strcmp(argv[1], "parse") == 0) {
+        return run_parse_command(argv[2]);
     }
 
     fprintf(stderr, "unknown command: %s\n", argv[1]);

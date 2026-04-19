@@ -1,0 +1,334 @@
+#ifndef FENG_PARSER_PARSER_H
+#define FENG_PARSER_PARSER_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "lexer/token.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* FENG_PARSER_H */
+
+
+
+typedef struct FengSlice {
+    const char *data;
+    size_t length;
+} FengSlice;
+
+typedef enum FengVisibility {
+    FENG_VISIBILITY_DEFAULT = 0,
+    FENG_VISIBILITY_PRIVATE,
+    FENG_VISIBILITY_PUBLIC
+} FengVisibility;
+
+typedef enum FengMutability {
+    FENG_MUTABILITY_DEFAULT = 0,
+    FENG_MUTABILITY_LET,
+    FENG_MUTABILITY_VAR
+} FengMutability;
+
+typedef enum FengTypeRefKind {
+    FENG_TYPE_REF_NAMED = 0,
+    FENG_TYPE_REF_POINTER,
+    FENG_TYPE_REF_ARRAY
+} FengTypeRefKind;
+
+typedef struct FengTypeRef FengTypeRef;
+typedef struct FengExpr FengExpr;
+typedef struct FengStmt FengStmt;
+typedef struct FengBlock FengBlock;
+typedef struct FengDecl FengDecl;
+typedef struct FengTypeMember FengTypeMember;
+
+typedef struct FengParameter {
+    FengMutability mutability;
+    FengSlice name;
+    FengTypeRef *type;
+} FengParameter;
+
+typedef struct FengAnnotation {
+    FengSlice name;
+    FengAnnotationKind builtin_kind;
+    FengExpr **args;
+    size_t arg_count;
+} FengAnnotation;
+
+struct FengTypeRef {
+    FengTypeRefKind kind;
+    union {
+        struct {
+            FengSlice *segments;
+            size_t segment_count;
+        } named;
+        FengTypeRef *inner;
+    } as;
+};
+
+typedef struct FengObjectFieldInit {
+    FengSlice name;
+    FengExpr *value;
+} FengObjectFieldInit;
+
+typedef struct FengMatchCase {
+    FengExpr *label;
+    FengExpr *value;
+} FengMatchCase;
+
+typedef enum FengExprKind {
+    FENG_EXPR_IDENTIFIER = 0,
+    FENG_EXPR_SELF,
+    FENG_EXPR_BOOL,
+    FENG_EXPR_INTEGER,
+    FENG_EXPR_FLOAT,
+    FENG_EXPR_STRING,
+    FENG_EXPR_ARRAY_LITERAL,
+    FENG_EXPR_OBJECT_LITERAL,
+    FENG_EXPR_CALL,
+    FENG_EXPR_MEMBER,
+    FENG_EXPR_INDEX,
+    FENG_EXPR_UNARY,
+    FENG_EXPR_BINARY,
+    FENG_EXPR_LAMBDA,
+    FENG_EXPR_CAST,
+    FENG_EXPR_IF,
+    FENG_EXPR_MATCH
+} FengExprKind;
+
+struct FengExpr {
+    FengExprKind kind;
+    union {
+        FengSlice identifier;
+        bool boolean;
+        int64_t integer;
+        double floating;
+        FengSlice string;
+        struct {
+            FengExpr **items;
+            size_t count;
+        } array_literal;
+        struct {
+            FengExpr *target;
+            FengObjectFieldInit *fields;
+            size_t field_count;
+        } object_literal;
+        struct {
+            FengExpr *callee;
+            FengExpr **args;
+            size_t arg_count;
+        } call;
+        struct {
+            FengExpr *object;
+            FengSlice member;
+        } member;
+        struct {
+            FengExpr *object;
+            FengExpr *index;
+        } index;
+        struct {
+            FengTokenKind op;
+            FengExpr *operand;
+        } unary;
+        struct {
+            FengTokenKind op;
+            FengExpr *left;
+            FengExpr *right;
+        } binary;
+        struct {
+            FengParameter *params;
+            size_t param_count;
+            FengExpr *body;
+        } lambda;
+        struct {
+            FengTypeRef *type;
+            FengExpr *value;
+        } cast;
+        struct {
+            FengExpr *condition;
+            FengExpr *then_expr;
+            FengExpr *else_expr;
+        } if_expr;
+        struct {
+            FengExpr *target;
+            FengMatchCase *cases;
+            size_t case_count;
+            FengExpr *else_expr;
+        } match_expr;
+    } as;
+};
+
+typedef struct FengBinding {
+    FengMutability mutability;
+    FengSlice name;
+    FengTypeRef *type;
+    FengExpr *initializer;
+} FengBinding;
+
+typedef struct FengIfClause {
+    FengExpr *condition;
+    FengBlock *block;
+} FengIfClause;
+
+typedef enum FengStmtKind {
+    FENG_STMT_BLOCK = 0,
+    FENG_STMT_BINDING,
+    FENG_STMT_ASSIGN,
+    FENG_STMT_EXPR,
+    FENG_STMT_IF,
+    FENG_STMT_WHILE,
+    FENG_STMT_FOR,
+    FENG_STMT_TRY,
+    FENG_STMT_RETURN,
+    FENG_STMT_THROW,
+    FENG_STMT_BREAK,
+    FENG_STMT_CONTINUE
+} FengStmtKind;
+
+struct FengBlock {
+    FengStmt **statements;
+    size_t statement_count;
+};
+
+struct FengStmt {
+    FengStmtKind kind;
+    union {
+        FengBlock *block;
+        FengBinding binding;
+        struct {
+            FengExpr *target;
+            FengExpr *value;
+        } assign;
+        FengExpr *expr;
+        struct {
+            FengIfClause *clauses;
+            size_t clause_count;
+            FengBlock *else_block;
+        } if_stmt;
+        struct {
+            FengExpr *condition;
+            FengBlock *body;
+        } while_stmt;
+        struct {
+            FengStmt *init;
+            FengExpr *condition;
+            FengStmt *update;
+            FengBlock *body;
+        } for_stmt;
+        struct {
+            FengBlock *try_block;
+            FengBlock *catch_block;
+            FengBlock *finally_block;
+        } try_stmt;
+        FengExpr *return_value;
+        FengExpr *throw_value;
+    } as;
+};
+
+typedef enum FengTypeMemberKind {
+    FENG_TYPE_MEMBER_FIELD = 0,
+    FENG_TYPE_MEMBER_METHOD,
+    FENG_TYPE_MEMBER_CONSTRUCTOR
+} FengTypeMemberKind;
+
+typedef struct FengCallableSignature {
+    FengSlice name;
+    FengParameter *params;
+    size_t param_count;
+    FengTypeRef *return_type;
+    FengBlock *body;
+} FengCallableSignature;
+
+struct FengTypeMember {
+    FengTypeMemberKind kind;
+    FengVisibility visibility;
+    FengAnnotation *annotations;
+    size_t annotation_count;
+    union {
+        struct {
+            FengMutability mutability;
+            FengSlice name;
+            FengTypeRef *type;
+            FengExpr *initializer;
+        } field;
+        FengCallableSignature callable;
+    } as;
+};
+
+typedef enum FengDeclKind {
+    FENG_DECL_GLOBAL_BINDING = 0,
+    FENG_DECL_TYPE,
+    FENG_DECL_FUNCTION
+} FengDeclKind;
+
+typedef enum FengTypeDeclForm {
+    FENG_TYPE_DECL_OBJECT = 0,
+    FENG_TYPE_DECL_FUNCTION
+} FengTypeDeclForm;
+
+typedef struct FengUseDecl {
+    FengSlice *segments;
+    size_t segment_count;
+    FengSlice alias;
+    bool has_alias;
+} FengUseDecl;
+
+struct FengDecl {
+    FengDeclKind kind;
+    FengVisibility visibility;
+    bool is_extern;
+    FengAnnotation *annotations;
+    size_t annotation_count;
+    union {
+        FengBinding binding;
+        struct {
+            FengSlice name;
+            FengTypeDeclForm form;
+            union {
+                struct {
+                    FengTypeMember **members;
+                    size_t member_count;
+                } object;
+                struct {
+                    FengParameter *params;
+                    size_t param_count;
+                    FengTypeRef *return_type;
+                } function;
+            } as;
+        } type_decl;
+        FengCallableSignature function_decl;
+    } as;
+};
+
+typedef struct FengProgram {
+    const char *path;
+    FengVisibility module_visibility;
+    FengSlice *module_segments;
+    size_t module_segment_count;
+    FengUseDecl *uses;
+    size_t use_count;
+    FengDecl **declarations;
+    size_t declaration_count;
+} FengProgram;
+
+typedef struct FengParseError {
+    const char *message;
+    FengToken token;
+} FengParseError;
+
+bool feng_parse_source(const char *source,
+                       size_t length,
+                       const char *path,
+                       FengProgram **out_program,
+                       FengParseError *out_error);
+
+void feng_program_free(FengProgram *program);
+void feng_program_dump(FILE *stream, const FengProgram *program);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
