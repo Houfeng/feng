@@ -95,6 +95,7 @@ user.name = "admin";
 - 成员方法通过 `obj.method(args)` 调用。
 - 编译器在成员方法中隐式提供 `self`,指向当前对象实例。
 - 构造函数中的 `self` 与成员方法中的 `self` 指向当前正在初始化或调用的对象。
+- `self` 只在定义于 `type` 中的成员 `fn` 或构造函数内合法; 无论该 `fn` 是直接调用还是以 `obj.method` 形式作为函数值传递,`self` 都始终稳定绑定到对应的类型实例,而未定义在 `type` 中的普通 `fn` 或 `Lambda` 若直接使用 `self`,则编译期报错。
 
 ```feng
 type Counter {
@@ -105,6 +106,23 @@ type Counter {
     }
 }
 ```
+
+```feng
+type User {
+    fn say() {}
+}
+
+type M(): void;
+
+fn test(m: M) {
+    m();
+}
+
+let u = User();
+test(u.say);
+```
+
+上例中,`u.say` 在作为参数传给 `test` 时,传递的是一个已绑定到 `u` 所引用实例的方法值; `test` 内部执行 `m()` 时,`say` 中的 `self` 仍然指向该 `User` 实例,不会因为被当作普通函数值传递而改变。
 
 ## 6 对象身份与相等性
 

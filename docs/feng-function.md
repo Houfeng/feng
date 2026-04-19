@@ -108,6 +108,7 @@ fn main(args: string[]) {
 - 仅单行 `Lambda` 使用 `->` 连接参数与表达式,省略 `{}` 和 `return`。
 - `Lambda` 参数必须显式标注类型。
 - 支持捕获外部作用域变量,形成闭包,GC 自动管理闭包内存。
+- `self` 只在定义于 `type` 中的成员 `fn` 或构造函数内合法; 这类方法即使通过 `obj.method` 形式作为函数值使用,`self` 也仍稳定绑定到取值时的对象实例,而未定义在 `type` 中的普通 `fn` 或 `Lambda` 若直接使用 `self`,则编译期报错。
 
 ```feng
 // 单行 Lambda
@@ -121,6 +122,25 @@ fn make_adder(base: int): IntToInt {
     return (x: int) -> base + x;
 }
 ```
+
+方法值示例:
+
+```feng
+type User {
+    fn say() {}
+}
+
+type M(): void;
+
+fn test(m: M) {
+    m();
+}
+
+let u = User();
+test(u.say);
+```
+
+上例中,`u.say` 与普通 `Lambda` 或顶层函数不同,它在取值时已经把 `self` 绑定到 `u` 所引用的实例; 因此传入 `test` 后执行 `m()` 时,不会重新决定 `self`。
 
 ## 7 与主规范的关系
 
