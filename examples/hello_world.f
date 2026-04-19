@@ -11,7 +11,7 @@ type User {
 @cdecl("libc")
 extern fn print(msg: string):void;
 
-fn main(args: string[]) {
+ main(args: string[]) {
   let user = User {
     name: "Houfeng",
     age: 18

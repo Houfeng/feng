@@ -2,9 +2,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+
+#define FENG_COLOR_RED "\x1b[31m"
+#define FENG_COLOR_RESET "\x1b[0m"
+
+static bool stream_supports_color(FILE *stream) {
+    const char *force_color = getenv("CLICOLOR_FORCE");
+    const char *no_color = getenv("NO_COLOR");
+
+    if (no_color != NULL && no_color[0] != '\0') {
+        return false;
+    }
+    if (force_color != NULL && force_color[0] != '\0' && strcmp(force_color, "0") != 0) {
+        return true;
+    }
+
+    return isatty(fileno(stream)) != 0;
+}
+
+static void set_stream_color(FILE *stream, bool enabled, const char *color) {
+    if (enabled) {
+        fputs(color, stream);
+    }
+}
+
+static void reset_stream_color(FILE *stream, bool enabled) {
+    if (enabled) {
+        fputs(FENG_COLOR_RESET, stream);
+    }
+}
 
 static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
@@ -134,6 +164,7 @@ static void print_parse_error_context(FILE *stream,
     unsigned int current_line = 1U;
     unsigned int line_no = error->token.line > 0U ? error->token.line : 1U;
     unsigned int digits = count_digits(line_no);
+    bool use_color = stream_supports_color(stream);
 
     for (index = 0U; index < source_length; ++index) {
         if (current_line == line_no) {
@@ -158,10 +189,13 @@ static void print_parse_error_context(FILE *stream,
     fprint_token_summary(stream, &error->token);
     fputc('\n', stream);
 
+    set_stream_color(stream, use_color, FENG_COLOR_RED);
     fprintf(stream, "  %*u | ", digits, line_no);
     fwrite(source + line_start, 1U, line_end - line_start, stream);
+    reset_stream_color(stream, use_color);
     fputc('\n', stream);
 
+    set_stream_color(stream, use_color, FENG_COLOR_RED);
     fprintf(stream, "  %*s | ", digits, "");
     if (error->token.kind == FENG_TOKEN_EOF) {
         for (index = line_start; index < line_end; ++index) {
@@ -178,7 +212,9 @@ static void print_parse_error_context(FILE *stream,
             fputc(' ', stream);
         }
     }
-    fputs("^\n", stream);
+    fputc('^', stream);
+    reset_stream_color(stream, use_color);
+    fputc('\n', stream);
 }
 
 static void dump_token(const FengToken *token) {
@@ -250,6 +286,7 @@ static int run_parse_command(const char *path) {
     FengProgram *program = NULL;
     FengParseError error;
     int exit_code = 0;
+    bool use_color = stream_supports_color(stderr);
 
     if (source == NULL) {
         fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
@@ -257,12 +294,13 @@ static int run_parse_command(const char *path) {
     }
 
     if (!feng_parse_source(source, source_length, path, &program, &error)) {
+        fprintf(stderr, "%s:", path);
+        set_stream_color(stderr, use_color, FENG_COLOR_RED);
+        fprintf(stderr, "%u:%u", error.token.line, error.token.column);
+        reset_stream_color(stderr, use_color);
         fprintf(stderr,
-                "%s:%u:%u: parse error: %s\n",
-                path,
-                error.token.line,
-                error.token.column,
-                error.message != NULL ? error.message : "unknown error");
+            ": parse error: %s\n",
+            error.message != NULL ? error.message : "unknown error");
         print_parse_error_context(stderr, source, source_length, &error);
         exit_code = 1;
     } else {
