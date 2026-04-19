@@ -1,12 +1,12 @@
 mod org.houfeng;
 
 type User {
-  name: string;
-  age: int;
+  let name: string;
+  let age: int;
 }
 
 @cdecl("libc");
-extern func printf(msg: string);
+extern fn print(msg: string):void;
 
 main(args: string[]) {
   let user = User {
@@ -14,4 +14,4 @@ main(args: string[]) {
     age: 18
   };
   print("Hello World: " + user.name);
-} 
+}
