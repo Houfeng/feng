@@ -3,6 +3,7 @@
     "cdecl",
     "fastcall",
     "feng",
+    "libc",
     "venv"
   ]
 }

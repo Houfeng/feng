@@ -6,8 +6,9 @@
 
 - Feng 通过 `link`、`extern type` 和 `extern fn` 实现与 C 语言的安全互操作。
 - `link` 负责链接 C 标准库、第三方 C 库或 feng 编译二进制产物。
-- `extern type` 用于定义 C 兼容结构体和 C 函数指针类型。
+- `extern type` 用于定义 C 兼容结构体、联合体和 C 函数指针类型。
 - `extern fn` 用于声明 C 外部函数以及定义可传给 C 的 feng 回调函数。
+- 支持使用 `@union` 将对象形式的 `extern type` 显式声明为 C 联合体。
 - 支持使用 `@cdecl`、`@stdcall` 和 `@fastcall` 三个内建注解显式声明 C 函数调用方式。
 
 ## 2 C库链接指令(link)
@@ -48,15 +49,19 @@ link "m";
 extern fn sin(x: float): float;
 ```
 
-## 3 C兼容结构体定义(extern type)
+## 3 C兼容结构体与联合体定义(extern type)
 
-使用 `extern type` 定义可与 C 直接映射的结构体,无需 C 侧额外声明。其内存布局、字节序、内存对齐与 C 语言完全一致,可直接在 feng 与 C 之间按值或按指针传递,并直接读写成员。
+使用对象形式的 `extern type` 可定义可与 C 直接映射的结构体或联合体,无需 C 侧额外声明。未显式标注时,`extern type Name { ... }` 默认按 C 结构体处理; 若需声明为 C 联合体,可在 `extern type` 上一行添加 `@union` 注解。其内存布局、字节序和内存对齐与 C 语言保持一致,可直接在 feng 与 C 之间按值或按指针传递。
 
 语法规则:
 
 - 仅允许声明成员变量,禁止添加构造函数、成员方法
 - 成员仅支持: 基础类型、其他 `extern type` 类型、固定长度数组
 - 成员需用 `var` 或 `let` 修饰,遵循 feng 变量声明规范
+- `@union` 仅适用于对象形式的 `extern type`,不适用于函数指针形式的 `extern type`
+- 在对象形式的 `extern type` 上,`@union` 通常单独写在声明的上一行
+- 未显式标注 `@union` 时,对象形式的 `extern type` 默认按 C 结构体处理
+- 联合体的所有成员共享同一块内存,其有效成员语义与 C 联合体保持一致
 - Feng 的 GC 不管理该类型内存,需通过 C 函数或手动释放
 - 编译器自动校验与 C 的内存兼容性
 
@@ -75,11 +80,18 @@ extern type Rect {
     var p2: Point;
     var area: float;
 }
+
+// 定义与 C 完全兼容的联合体
+@union
+extern type IntOrFloat {
+    var i: int;
+    var f: float;
+}
 ```
 
 ## 4 C函数指针类型定义(extern type)
 
-使用 `extern type` 定义与 C 函数指针完全兼容的函数类型,用于 C 回调函数传递,签名需与 C 侧完全一致。函数指针类型本身不使用调用方式注解,调用方式由与之匹配的 `extern fn` 声明或回调定义负责标注。
+使用 `extern type` 定义与 C 函数指针完全兼容的函数类型,用于 C 回调函数传递,签名需与 C 侧完全一致。函数指针类型本身不使用 `@union` 或调用方式注解,调用方式由与之匹配的 `extern fn` 声明或回调定义负责标注。
 
 ```feng
 // 定义 C 兼容的比较函数指针类型
