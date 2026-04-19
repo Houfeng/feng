@@ -143,19 +143,21 @@ type Counter {
 ```feng
 type User {
     fn say() {}
+    fn say(msg: string) {}
 }
 
-type M(): void;
+type M0(): void;
 
-fn test(m: M) {
+fn test(m: M0) {
     m();
 }
 
 let u = User {};
 test(u.say);
+let s = u.say; // 错误: say 存在多个重载,当前上下文无法推导 s 的函数类型
 ```
 
-上例中,`u.say` 在作为参数传给 `test` 时,传递的是一个已绑定到 `u` 所引用实例的方法值; `test` 内部执行 `m()` 时,`say` 中的 `self` 仍然指向该 `User` 实例,不会因为被当作普通函数值传递而改变。
+上例中,`u.say` 在作为参数传给 `test` 时,传递的是一个已绑定到 `u` 所引用实例的方法值; 由于目标类型 `M0` 能唯一确定无参重载,`test` 内部执行 `m()` 时,`say` 中的 `self` 仍然指向该 `User` 实例,不会因为被当作普通函数值传递而改变。`let s = u.say;` 则因为缺少足以唯一选定重载的目标函数类型,必须在编译期报错。
 
 ## 6 对象身份与相等性
 
