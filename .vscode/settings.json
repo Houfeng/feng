@@ -4,6 +4,7 @@
     "fastcall",
     "feng",
     "libc",
+    "libname",
     "venv"
   ]
 }
