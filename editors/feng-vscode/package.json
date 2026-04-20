@@ -1,0 +1,50 @@
+{
+  "name": "feng-language",
+  "displayName": "Feng Language",
+  "description": "Syntax highlighting and document formatting support for the Feng language.",
+  "version": "0.1.0",
+  "publisher": "houfeng",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "scripts": {
+    "test": "node ./test/formatter.test.js"
+  },
+  "main": "./extension.js",
+  "keywords": [
+    "feng",
+    "language",
+    "formatter",
+    "syntax"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "feng",
+        "aliases": [
+          "Feng",
+          "feng"
+        ],
+        "extensions": [
+          ".ff",
+          ".feng",
+          ".f",
+          ".fi"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "feng",
+        "scopeName": "source.feng",
+        "path": "./syntaxes/feng.tmLanguage.json"
+      }
+    ]
+  }
+}

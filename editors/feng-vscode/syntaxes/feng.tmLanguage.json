@@ -1,0 +1,214 @@
+{
+  "name": "Feng",
+  "scopeName": "source.feng",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#functionDefinitions"
+    },
+    {
+      "include": "#typeDefinitions"
+    },
+    {
+      "include": "#modulePaths"
+    },
+    {
+      "include": "#aliases"
+    },
+    {
+      "include": "#builtinTypes"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#selfReference"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#typeNames"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.feng",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.feng",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.feng",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.feng",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "entity.name.annotation.feng",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "functionDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(fn)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.feng"
+            },
+            "3": {
+              "name": "entity.name.function.feng"
+            }
+          }
+        }
+      ]
+    },
+    "typeDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(type)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.type.feng"
+            },
+            "3": {
+              "name": "entity.name.type.feng"
+            }
+          }
+        }
+      ]
+    },
+    "modulePaths": {
+      "patterns": [
+        {
+          "match": "\\b(mod|use)(\\s+)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.feng"
+            },
+            "3": {
+              "name": "entity.name.namespace.feng"
+            }
+          }
+        }
+      ]
+    },
+    "aliases": {
+      "patterns": [
+        {
+          "match": "\\b(as)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.feng"
+            },
+            "3": {
+              "name": "entity.name.namespace.alias.feng"
+            }
+          }
+        }
+      ]
+    },
+    "builtinTypes": {
+      "patterns": [
+        {
+          "name": "support.type.builtin.feng",
+          "match": "\\b(?:bool|string|int|float|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|void)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.feng",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.feng",
+          "match": "\\b(?:true|false)\\b"
+        }
+      ]
+    },
+    "selfReference": {
+      "patterns": [
+        {
+          "name": "variable.language.self.feng",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.feng",
+          "match": "\\b(?:extern|let|var|pu|pr|mod|use|as|if|else|while|for|break|continue|try|catch|finally|throw|return)\\b"
+        }
+      ]
+    },
+    "typeNames": {
+      "patterns": [
+        {
+          "name": "support.type.user.feng",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.feng",
+          "match": "->|&&|\\|\\||==|!=|<=|>=|=|\\+|-|\\*|/|%|<|>|!"
+        },
+        {
+          "name": "punctuation.separator.feng",
+          "match": "[,:;.]"
+        },
+        {
+          "name": "punctuation.section.block.begin.feng",
+          "match": "[\\{\\(\\[]"
+        },
+        {
+          "name": "punctuation.section.block.end.feng",
+          "match": "[\\}\\)\\]]"
+        }
+      ]
+    }
+  }
+}
