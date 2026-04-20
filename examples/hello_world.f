@@ -9,12 +9,13 @@ type User {
 }
 
 @cdecl("libc")
-extern fn print(msg: string):void;
+extern fn print(msg: string): void;
 
- main(args: string[]) {
-  let user = User {
-    name: "Houfeng",
-    age: 18
+/* main function */
+fn main(args: string[]): void {
+  let user = User { 
+    name: "Houfeng", 
+    age: 18 
   };
   print("Hello World: " + user.name);
 }
