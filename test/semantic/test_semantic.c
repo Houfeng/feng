@@ -918,6 +918,148 @@ static void test_object_literal_field_value_rejects_non_matching_type(void) {
     feng_program_free(program);
 }
 
+static void test_local_let_assignment_rejects_non_writable_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let count: int = 0;\n"
+        "    count = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("local_let_assign_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "local_let_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_default_parameter_assignment_rejects_non_writable_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(total: int) {\n"
+        "    total = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("default_param_assign_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "default_param_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_var_parameter_assignment_is_writable(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(var total: int) {\n"
+        "    total = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("var_param_assign_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_let_assignment_rejects_non_writable_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "let count: int = 0;\n"
+        "fn run() {\n"
+        "    count = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("top_level_let_assign_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "top_level_let_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_instance_let_member_assignment_rejects_non_writable_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int = 0;\n"
+        "}\n"
+        "fn set(var user: User) {\n"
+        "    user.id = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("instance_let_member_assign_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "instance_let_member_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_alias_public_let_binding_assignment_rejects_non_writable_target(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu let count: int = 0;\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn run() {\n"
+        "    base.count = 1;\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_assign_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_assign_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_assign_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1877,6 +2019,12 @@ int main(void) {
     test_local_assignment_rejects_non_matching_type();
     test_member_assignment_rejects_non_matching_type();
     test_object_literal_field_value_rejects_non_matching_type();
+    test_local_let_assignment_rejects_non_writable_target();
+    test_default_parameter_assignment_rejects_non_writable_target();
+    test_var_parameter_assignment_is_writable();
+    test_top_level_let_assignment_rejects_non_writable_target();
+    test_instance_let_member_assignment_rejects_non_writable_target();
+    test_alias_public_let_binding_assignment_rejects_non_writable_target();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();

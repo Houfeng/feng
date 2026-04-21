@@ -825,6 +825,7 @@ static FengDecl *parse_function_declaration(Parser *parser,
 }
 
 static FengDecl *parse_global_binding(Parser *parser,
+                                      FengVisibility visibility,
                                       FengMutability mutability,
                                       FengAnnotation *annotations,
                                       size_t annotation_count) {
@@ -839,6 +840,7 @@ static FengDecl *parse_global_binding(Parser *parser,
 
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
+    decl->visibility = visibility;
     decl->as.binding = parse_binding_core(parser, mutability, false);
     if (parser->error.message != NULL) {
         free_decl(decl);
@@ -867,10 +869,12 @@ static FengDecl *parse_declaration(Parser *parser) {
     visibility = parse_visibility(parser);
 
     if (parser_match(parser, FENG_TOKEN_KW_LET)) {
-        return parse_global_binding(parser, FENG_MUTABILITY_LET, annotations, annotation_count);
+        return parse_global_binding(
+            parser, visibility, FENG_MUTABILITY_LET, annotations, annotation_count);
     }
     if (parser_match(parser, FENG_TOKEN_KW_VAR)) {
-        return parse_global_binding(parser, FENG_MUTABILITY_VAR, annotations, annotation_count);
+        return parse_global_binding(
+            parser, visibility, FENG_MUTABILITY_VAR, annotations, annotation_count);
     }
 
     if (parser_match(parser, FENG_TOKEN_KW_EXTERN)) {
