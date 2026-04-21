@@ -2,6 +2,8 @@
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的异常处理概要说明,聚焦 Feng 语言中的 `throw`、异常传播、`try/catch/finally` 与 C ABI 边界规则。
 
+> **设计原则基础**: `extern fn` 的限制属于语法层; `@fixed` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
+
 ## 1 异常模型概览
 
 - Feng 支持结构化异常处理,使用 `throw` 触发异常,使用 `try/catch/finally` 处理异常。
@@ -17,7 +19,7 @@
 
 - `throw` 后必须跟一个非 `void` 表达式。
 - 可抛出的值限于 Feng 可管理的普通值,如基础类型、`string`、数组或 Feng 原生 `type` 对象。
-- `extern type`、`*T` 指针以及其他 C 侧非托管值不可直接作为异常值抛出。
+- `@fixed type`、`@fixed @union type`、`*T` 指针以及其他 C 侧非托管值不可直接作为异常值抛出。
 - `throw` 本身会终止当前执行路径,其后的同级语句不可达。
 
 ```feng
@@ -68,14 +70,14 @@ fn read_value() {
 
 ## 5 与 C ABI 的边界约束
 
-- 异常不得穿过 `extern fn` 边界传播到 C 调用方。
-- Feng 回调函数和 C ABI 导出函数内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回值或错误码。
-- 若未捕获异常到达 `extern fn` 的 ABI 边界,运行时直接终止当前进程,不得向 C 侧继续返回未定义状态。
-- C 外部函数声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
+- 异常不得穿过 `@fixed` ABI 边界传播到 C 调用方。
+- `@fixed fn` 回调函数、`@fixed` 方法和 `pu @fixed fn` 导出函数内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回值或错误码。
+- 若未捕获异常到达 `@fixed` 的 ABI 边界,运行时直接终止当前进程,不得向 C 侧继续返回未定义状态。
+- `extern fn` 导入声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
 
 ## 6 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch/finally` 的控制流关系。
-- [feng-interop.md](./feng-interop.md): `extern fn` 的 ABI 规则与异常边界。
+- [feng-interop.md](./feng-interop.md): `extern fn` 导入规则、`@fixed` 的 ABI 规则与异常边界。
 - 本文档: `throw`、传播模型、`finally` 执行语义与 C ABI 边界限制。

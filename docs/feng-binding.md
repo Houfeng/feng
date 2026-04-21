@@ -7,7 +7,7 @@
 - `let` 用于声明不可变绑定,声明后不可再次赋值。
 - `var` 用于声明可变绑定,声明后允许在当前作用域内修改其值。
 - 函数参数必须显式标注类型,但可省略 `let` / `var`; 省略时默认按 `let` 不可变参数处理。
-- 模块内变量、函数内局部变量和 `type` / `extern type` 的成员变量必须显式书写 `let` 或 `var`,不可省略。
+- 模块内变量、函数内局部变量和 `type` / `@fixed type` 的成员变量必须显式书写 `let` 或 `var`,不可省略。
 - `let` 与 `var` 都遵循块作用域规则,子级块中的同名变量会优先屏蔽上层块中的绑定。
 
 ## 2 `let` 与 `var` 的基本语义
@@ -81,7 +81,7 @@ fn visit(let name: string) {
 
 ### 3.3 类型成员
 
-`type` 与对象形式的 `extern type` 成员变量都必须显式写出 `let` 或 `var`,不可省略。成员的可变性由成员自身的 `let` / `var` 决定,可与 `pu` / `pr` 访问控制组合使用。
+`type` 与对象形式的 `@fixed type` 成员变量都必须显式写出 `let` 或 `var`,不可省略。成员的可变性由成员自身的 `let` / `var` 决定,可与 `pu` / `pr` 访问控制组合使用。
 
 ```feng
 type User {
@@ -89,7 +89,8 @@ type User {
     pr let id: int;
 }
 
-extern type Point {
+@fixed
+type Point {
     var x: int;
     var y: int;
 }

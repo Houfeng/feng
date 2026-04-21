@@ -109,7 +109,7 @@ dependency:base@^1.0.0
 - Feng 源码中,一个模块可以分散在多个 `.f` 文件中,源文件路径与模块名无关。编译器在生成 `.fi` 时负责将同一模块的所有公开声明合并,每个公开模块恰好输出一个 `.fi` 文件。
 - `.fi` 文件路径由模块名唯一决定,与源文件分布无关: 模块 `mylib.user` 固定输出到 `mod/mylib/user.fi`。编译器按此规则输出,使用方按此规则定位,无需额外索引。
 - `use` 仍然以模块名为导入目标; 编译器按模块名推导路径、定位对应 `.fi`,解析其公有声明后根据声明关键字决定链接目标,最后将公开 `type` 与公开顶层 `fn` 引入当前模块作用域。
-- 一个 `.fi` 文件中可以同时包含 `type`/`fn` 声明和 `extern type`/`extern fn` 声明,编译器按关键字区分链接目标,两者语义不冲突。
+- 一个 `.fi` 文件中可以同时包含普通 `type`/`fn` 声明、带 `@fixed` 的 ABI 声明以及 `extern fn` 导入声明。编译器按声明关键字与注解元信息共同确定链接目标和 ABI 语义。
 
 ### 5.2 `.fi` 文件示例
 
@@ -126,13 +126,16 @@ pu type User {
 
 pu fn add_user(u: User): bool;
 
-pu extern type Buffer {
-    pu var data: *byte;
+@fixed
+pu type Buffer {
     pu var size: int;
 }
 
+@fixed
+pu fn buf_alloc(size: int): Buffer;
+
 @cdecl("mylib")
-pu extern fn buf_alloc(size: int): Buffer;
+pu extern fn buf_free(buf: Buffer);
 ```
 
 ### 5.3 初始化元信息要求
@@ -176,15 +179,15 @@ pu type User {
 
 1. 编译器扫描所有 `.f` 源文件,按 `mod` 声明分组,将同一模块的全部公开声明合并
 2. 按模块名层级将每个模块的公有接口输出为对应路径的 `.fi` 文件,放入 `mod/` 目录
-3. 将 feng 非 `extern` 实现编译为 C → 生成静态库,放入 `lib/` 对应平台子目录（若 `abi` 含 `feng`）
-4. 将 `extern` 接口编译为 C ABI 兼容代码 → 生成动态库/静态库和 C 头文件,放入 `clib/` 与 `include/`（若 `abi` 含 `c`）
+3. 将 feng 普通 `type` / `fn` 实现编译为 C → 生成静态库,放入 `lib/` 对应平台子目录（若 `abi` 含 `feng`）
+4. 将公开的 `@fixed` 接口编译为 C ABI 兼容代码 → 生成动态库/静态库和 C 头文件,放入 `clib/` 与 `include/`（若 `abi` 含 `c`）; 公开 `extern fn` 导入声明则保留其原生库来源与调用方式元信息
 5. 生成 `feng.fm`,打包为 `.fb`
 
 ### 6.2 feng 使用方流程
 
 1. `use` 公开模块名 → 编译器按模块名推导路径,定位 `mod/` 下对应 `.fi`
-2. 解析 `.fi` 中公有声明,将公开 `type` 与公开顶层 `fn` 引入当前模块作用域
-3. 根据声明关键字自动选择链接目标: `type`/`fn` 链 `lib/`,`extern type`/`extern fn` 链 `clib/`
+2. 解析 `.fi` 中公有声明及其注解元信息,将公开 `type` 与公开顶层 `fn` 引入当前模块作用域
+3. 根据声明关键字与 `@fixed` / `extern` 元信息自动选择链接目标: 普通 `type`/`fn` 链 `lib/`,公开 `@fixed` 接口链 `clib/`,公开 `extern fn` 导入声明则补充所需原生库链接信息
 4. 使用方无需手写带参 `@cdecl` / `@stdcall` / `@fastcall`,包内 `.fi` 已携带对应原生库来源与调用方式元信息
 
 ### 6.3 外部语言使用方流程
@@ -197,8 +200,8 @@ pu type User {
 
 - `mod/` 下的 `.fi` 文件和 `include/` 下的头文件均属编译器自动生成的接口描述产物,不得手动修改; 一旦其内容与包内真实实现不一致,后续编译、链接或运行行为均不再受语言规范保证,可能表现为编译失败、链接失败、ABI 不匹配或不可预期的运行时异常
 - `abi` 字段声明必须与包内实际目录结构一致: 声明了 `feng` 则 `lib/` 必须存在,声明了 `c` 则 `clib/` 和 `include/` 必须存在,否则该包非法
-- C ABI 层（`clib/`）仅支持 C 兼容类型,禁止使用 GC 托管类型（如 `string` 和动态数组）; `extern` 函数禁止捕获变量、使用闭包
-- 公开导出到 `clib/` 的接口以 `pu extern` 声明为准,头文件内容由其自动生成; 若公开 `extern fn` 属于导入型外部函数声明,生成的 `.fi` 必须保留其带参 `@cdecl` / `@stdcall` / `@fastcall` 元信息,以便使用方无需手写这些注解即可完成编译与链接
+- C ABI 层（`clib/`）仅支持 ABI 稳定类型,禁止使用托管类型（如 `string`、动态数组和普通 `type` 对象）; 进入 ABI 边界的 `@fixed fn` / `@fixed` 方法禁止捕获变量、使用闭包
+- 公开导出到 `clib/` 的接口以 `pu @fixed` 声明为准,头文件内容由其自动生成; 若公开 `extern fn` 属于导入型外部函数声明,生成的 `.fi` 必须保留其带参 `@cdecl` / `@stdcall` / `@fastcall` 元信息,以便使用方无需手写这些注解即可完成编译与链接
 - 不同 feng 编译器版本编译的包不兼容
 - 若包中公开 `type` 包含 `let` 成员,则编译产物必须按 `@bounded` 规则携带其显式绑定状态相关元信息,以保证使用方仍可在编译期完成对象字面量与构造路径的重复绑定检查
 - 私有成员（`pr`）不写入接口文件,完全隐藏

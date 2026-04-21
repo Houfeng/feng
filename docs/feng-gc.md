@@ -2,11 +2,13 @@
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的 GC 概要说明,聚焦 Feng 语言中的托管对象范围、可达性规则、C 互操作边界与资源管理约束。
 
+> **设计原则基础**: 普通 `type` 是托管对象,运行时最终可采用 RC、GC 或等价策略; `@fixed` ABI 值不受该机制管理。详见 [Feng 语言设计原则](./feng-principles.md)。
+
 ## 1 GC 模型概览
 
-- Feng 采用全自动垃圾回收机制,语言层只规定对象存活语义,不限定具体收集算法。
+- Feng 对托管对象采用自动内存管理语义,语言层只规定对象存活语义,不限定最终运行时采用 GC、RC 还是等价策略。
 - 运行时通过可达性判断对象是否存活,而不是通过手动释放。
-- GC 负责管理 Feng 原生对象图; C 侧对象与原始内存不由 GC 接管。
+- 自动内存管理机制负责 Feng 原生对象图; `@fixed` ABI 值、C 侧对象与原始内存不由该机制接管。
 
 ## 2 托管对象与非托管对象
 
@@ -19,7 +21,7 @@
 
 ### 2.2 非托管对象
 
-- `extern type` 定义的 C 兼容值
+- `@fixed type` 与 `@fixed @union type` 定义的 ABI 兼容值
 - `*T` 指针
 - 由 C 库分配的原始内存
 - 文件句柄、套接字、数据库连接等外部资源本体
@@ -48,8 +50,8 @@
 
 ## 5 C 互操作边界
 
-- GC 托管对象不得直接出现在 `extern fn` 的参数、返回值和 `extern type` 成员中。
-- 需要与 C 交换数据时,必须通过 `extern type`、`*T` 或其他 C 兼容中间表示完成。
+- 托管对象不得直接出现在 `@fixed fn` 的参数、返回值、`@fixed type` 成员或 `@fixed` 函数类型签名中。
+- 需要与 C 交换数据时,必须通过 `@fixed` 兼容类型、`extern fn` 导入声明允许的 C 兼容表示或其他约定的中间表示完成。
 - 当前语言版本不提供内建 pin、borrow 或裸引用导出机制。
 - 将 GC 托管对象暴露给 C 侧长期持有属于未定义行为,语言层面禁止此类接口。
 
@@ -70,5 +72,5 @@
 
 - [feng-language.md](./feng-language.md): 语言总体规范、GC 概要、对象模型、异常、类型与 C 互操作。
 - [feng-object.md](./feng-object.md): Feng 原生对象的引用语义与实例创建方式。
-- [feng-interop.md](./feng-interop.md): `extern` 边界上的非托管内存与 ABI 约束。
+- [feng-interop.md](./feng-interop.md): `@fixed` ABI 边界上的非托管内存与 ABI 约束。
 - 本文档: GC 可达性、根集合、托管范围和 C 边界限制。
