@@ -720,6 +720,159 @@ static void test_object_literal_reports_inaccessible_imported_constructor(void) 
     feng_program_free(main_program);
 }
 
+static void test_object_literal_rejects_decl_bound_let_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int = 1;\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User { id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_decl_object_literal_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_decl_object_literal_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "declaration initializer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_rejects_decl_bound_let_member_assignment(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int = 1;\n"
+        "    fn User() {\n"
+        "        self.id = 2;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_decl_ctor_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_decl_ctor_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "declaration initializer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_rejects_repeated_let_member_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "    fn User() {\n"
+        "        self.id = 1;\n"
+        "        self.id = 2;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_repeat_ctor_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_repeat_ctor_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "more than once in constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_method_rejects_let_member_assignment(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "    fn set() {\n"
+        "        self.id = 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_method_assign_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_method_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "cannot be directly assigned outside constructors") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_rejects_ctor_bound_let_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "    fn User() {\n"
+        "        self.id = 1;\n"
+        "    }\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User() { id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_ctor_object_literal_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_ctor_object_literal_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message, "already completed by constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_allows_unbound_let_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User { id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_object_literal_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -748,6 +901,12 @@ int main(void) {
     test_constructor_call_reports_missing_zero_arg_constructor();
     test_constructor_call_rejects_function_type();
     test_object_literal_reports_inaccessible_imported_constructor();
+    test_object_literal_rejects_decl_bound_let_member();
+    test_constructor_rejects_decl_bound_let_member_assignment();
+    test_constructor_rejects_repeated_let_member_binding();
+    test_method_rejects_let_member_assignment();
+    test_object_literal_rejects_ctor_bound_let_member();
+    test_object_literal_allows_unbound_let_member();
     puts("semantic tests passed");
     return 0;
 }
