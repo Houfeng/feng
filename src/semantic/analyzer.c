@@ -28,6 +28,36 @@ typedef struct VisibleValueEntry {
     bool is_function;
 } VisibleValueEntry;
 
+typedef struct AliasEntry {
+    FengSlice alias;
+    const FengSemanticModule *target_module;
+    const FengUseDecl *use_decl;
+} AliasEntry;
+
+typedef struct ScopeFrame {
+    FengSlice *names;
+    size_t name_count;
+    size_t name_capacity;
+} ScopeFrame;
+
+typedef struct ResolveContext {
+    const FengSemanticAnalysis *analysis;
+    const FengSemanticModule *module;
+    const FengProgram *program;
+    const VisibleTypeEntry *visible_types;
+    size_t visible_type_count;
+    const VisibleValueEntry *visible_values;
+    size_t visible_value_count;
+    const AliasEntry *aliases;
+    size_t alias_count;
+    ScopeFrame *scopes;
+    size_t scope_count;
+    size_t scope_capacity;
+    FengSemanticError **errors;
+    size_t *error_count;
+    size_t *error_capacity;
+} ResolveContext;
+
 static bool slice_equals(FengSlice left, FengSlice right) {
     return left.length == right.length && memcmp(left.data, right.data, left.length) == 0;
 }
@@ -295,6 +325,198 @@ static bool append_slice(FengSlice **items, size_t *count, size_t *capacity, Fen
     return append_raw((void **)items, count, capacity, sizeof(value), &value);
 }
 
+static bool is_builtin_type_name(FengSlice name) {
+    static const char *builtin_names[] = {
+        "i8",   "i16",  "i32",  "i64",  "int",
+        "u8",   "u16",  "u32",  "u64",
+        "f32",  "f64",  "float",
+        "bool", "string", "void"};
+    size_t index;
+
+    for (index = 0U; index < sizeof(builtin_names) / sizeof(builtin_names[0]); ++index) {
+        if (slice_equals_cstr(name, builtin_names[index])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool module_is_visible_from(const FengSemanticModule *from, const FengSemanticModule *target) {
+    return from == target || target->visibility == FENG_VISIBILITY_PUBLIC;
+}
+
+static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries,
+                                                 size_t count,
+                                                 FengSlice name) {
+    size_t index = find_visible_type_index(entries, count, name);
+
+    return index < count ? &entries[index] : NULL;
+}
+
+static const VisibleValueEntry *find_visible_value(const VisibleValueEntry *entries,
+                                                   size_t count,
+                                                   FengSlice name) {
+    size_t index = find_visible_value_index(entries, count, name);
+
+    return index < count ? &entries[index] : NULL;
+}
+
+static size_t find_alias_index(const AliasEntry *entries, size_t count, FengSlice alias) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (slice_equals(entries[index].alias, alias)) {
+            return index;
+        }
+    }
+
+    return count;
+}
+
+static const AliasEntry *find_alias(const AliasEntry *entries, size_t count, FengSlice alias) {
+    size_t index = find_alias_index(entries, count, alias);
+
+    return index < count ? &entries[index] : NULL;
+}
+
+static bool module_exports_public_type(const FengSemanticModule *module, FengSlice name) {
+    size_t program_index;
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_TYPE && decl_is_public(decl) &&
+                slice_equals(decl->as.type_decl.name, name)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool module_exports_public_value(const FengSemanticModule *module, FengSlice name) {
+    size_t program_index;
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (!decl_is_public(decl)) {
+                continue;
+            }
+
+            if (decl->kind == FENG_DECL_FUNCTION && slice_equals(decl->as.function_decl.name, name)) {
+                return true;
+            }
+            if (decl->kind == FENG_DECL_GLOBAL_BINDING && slice_equals(decl->as.binding.name, name)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool module_exports_public_name(const FengSemanticModule *module,
+                                       FengSlice name,
+                                       bool *is_type,
+                                       bool *is_value) {
+    bool found_type = module_exports_public_type(module, name);
+    bool found_value = module_exports_public_value(module, name);
+
+    if (is_type != NULL) {
+        *is_type = found_type;
+    }
+    if (is_value != NULL) {
+        *is_value = found_value;
+    }
+
+    return found_type || found_value;
+}
+
+static bool append_error(FengSemanticError **errors,
+                         size_t *error_count,
+                         size_t *error_capacity,
+                         const char *path,
+                         FengToken token,
+                         char *message);
+
+static bool resolver_append_error(ResolveContext *context, FengToken token, char *message) {
+    return append_error(context->errors,
+                        context->error_count,
+                        context->error_capacity,
+                        context->program->path,
+                        token,
+                        message);
+}
+
+static bool resolver_push_scope(ResolveContext *context) {
+    ScopeFrame frame;
+
+    memset(&frame, 0, sizeof(frame));
+    return append_raw((void **)&context->scopes,
+                      &context->scope_count,
+                      &context->scope_capacity,
+                      sizeof(frame),
+                      &frame);
+}
+
+static void resolver_pop_scope(ResolveContext *context) {
+    ScopeFrame *frame;
+
+    if (context->scope_count == 0U) {
+        return;
+    }
+
+    frame = &context->scopes[context->scope_count - 1U];
+    free(frame->names);
+    --context->scope_count;
+}
+
+static bool resolver_add_local_name(ResolveContext *context, FengSlice name) {
+    ScopeFrame *frame;
+
+    if (context->scope_count == 0U && !resolver_push_scope(context)) {
+        return false;
+    }
+
+    frame = &context->scopes[context->scope_count - 1U];
+    return append_slice(&frame->names, &frame->name_count, &frame->name_capacity, name);
+}
+
+static bool resolver_has_local_name(const ResolveContext *context, FengSlice name) {
+    size_t scope_index = context->scope_count;
+
+    while (scope_index > 0U) {
+        const ScopeFrame *frame = &context->scopes[scope_index - 1U];
+
+        if (find_slice_index(frame->names, frame->name_count, name) < frame->name_count) {
+            return true;
+        }
+        --scope_index;
+    }
+
+    return false;
+}
+
+static void resolver_free_scopes(ResolveContext *context) {
+    while (context->scope_count > 0U) {
+        resolver_pop_scope(context);
+    }
+    free(context->scopes);
+    context->scopes = NULL;
+    context->scope_capacity = 0U;
+}
+
 static bool append_error(FengSemanticError **errors,
                          size_t *error_count,
                          size_t *error_capacity,
@@ -487,6 +709,582 @@ static bool import_public_names(const FengSemanticModule *target_module,
     free(module_name);
     free(seen_type_names);
     free(seen_value_names);
+    return ok;
+}
+
+static bool build_program_aliases(const FengSemanticAnalysis *analysis,
+                                  const FengProgram *program,
+                                  AliasEntry **aliases,
+                                  size_t *alias_count,
+                                  size_t *alias_capacity) {
+    size_t use_index;
+
+    for (use_index = 0U; use_index < program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+        size_t target_index;
+        AliasEntry entry;
+
+        if (!use_decl->has_alias) {
+            continue;
+        }
+        if (find_alias_index(*aliases, *alias_count, use_decl->alias) < *alias_count) {
+            continue;
+        }
+
+        target_index = find_module_index_by_path(analysis, use_decl->segments, use_decl->segment_count);
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+
+        entry.alias = use_decl->alias;
+        entry.target_module = &analysis->modules[target_index];
+        entry.use_decl = use_decl;
+        if (!append_raw((void **)aliases,
+                        alias_count,
+                        alias_capacity,
+                        sizeof(entry),
+                        &entry)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void);
+static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
+static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool allow_self);
+static bool resolve_block_contents(ResolveContext *context,
+                                   const FengBlock *block,
+                                   bool allow_self);
+
+static bool resolve_named_type_ref(ResolveContext *context,
+                                   const FengTypeRef *type_ref,
+                                   bool allow_void) {
+    const FengSlice *segments = type_ref->as.named.segments;
+    size_t segment_count = type_ref->as.named.segment_count;
+    FengSlice name;
+    char *qualified_name;
+
+    if (segment_count == 0U) {
+        return true;
+    }
+
+    name = segments[segment_count - 1U];
+    if (segment_count == 1U) {
+        if (is_builtin_type_name(name)) {
+            if (!allow_void && slice_equals_cstr(name, "void")) {
+                return resolver_append_error(
+                    context,
+                    type_ref->token,
+                    format_message("type 'void' is only valid as a function return type"));
+            }
+            return true;
+        }
+
+        if (find_visible_type(context->visible_types, context->visible_type_count, name) != NULL) {
+            return true;
+        }
+
+        if (find_alias(context->aliases, context->alias_count, name) != NULL) {
+            return resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("module alias '%.*s' cannot be used as a type by itself; use '%.*s.Name'",
+                               (int)name.length,
+                               name.data,
+                               (int)name.length,
+                               name.data));
+        }
+    } else {
+        const AliasEntry *alias = find_alias(context->aliases, context->alias_count, segments[0]);
+
+        if (alias != NULL && segment_count == 2U &&
+            module_exports_public_type(alias->target_module, segments[1])) {
+            return true;
+        }
+
+        if (alias == NULL) {
+            size_t module_index =
+                find_module_index_by_path(context->analysis, segments, segment_count - 1U);
+
+            if (module_index < context->analysis->module_count &&
+                module_is_visible_from(context->module, &context->analysis->modules[module_index]) &&
+                module_exports_public_type(&context->analysis->modules[module_index], name)) {
+                return true;
+            }
+        }
+    }
+
+    qualified_name = format_module_name(segments, segment_count);
+    if (!resolver_append_error(context,
+                               type_ref->token,
+                               format_message("unknown type '%s'",
+                                              qualified_name != NULL ? qualified_name : "<unknown>"))) {
+        free(qualified_name);
+        return false;
+    }
+
+    free(qualified_name);
+    return true;
+}
+
+static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void) {
+    if (type_ref == NULL) {
+        return true;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            return resolve_named_type_ref(context, type_ref, allow_void);
+        case FENG_TYPE_REF_POINTER:
+            return resolve_type_ref(context, type_ref->as.inner, true);
+        case FENG_TYPE_REF_ARRAY:
+            return resolve_type_ref(context, type_ref->as.inner, false);
+    }
+
+    return true;
+}
+
+static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *expr) {
+    const FengExpr *object;
+    FengSlice alias_name;
+    const AliasEntry *alias;
+    char *module_name;
+
+    if (expr->kind != FENG_EXPR_MEMBER) {
+        return false;
+    }
+
+    object = expr->as.member.object;
+    if (object == NULL || object->kind != FENG_EXPR_IDENTIFIER) {
+        return false;
+    }
+
+    alias_name = object->as.identifier;
+    if (resolver_has_local_name(context, alias_name) ||
+        find_visible_value(context->visible_values, context->visible_value_count, alias_name) != NULL ||
+        find_visible_type(context->visible_types, context->visible_type_count, alias_name) != NULL) {
+        return false;
+    }
+
+    alias = find_alias(context->aliases, context->alias_count, alias_name);
+    if (alias == NULL) {
+        return false;
+    }
+
+    if (module_exports_public_name(alias->target_module, expr->as.member.member, NULL, NULL)) {
+        return true;
+    }
+
+    module_name = format_module_name(alias->use_decl->segments, alias->use_decl->segment_count);
+    if (!resolver_append_error(
+            context,
+            expr->token,
+            format_message("module alias '%.*s' does not export public name '%.*s' from module '%s'",
+                           (int)alias_name.length,
+                           alias_name.data,
+                           (int)expr->as.member.member.length,
+                           expr->as.member.member.data,
+                           module_name != NULL ? module_name : "<unknown>"))) {
+        free(module_name);
+        return false;
+    }
+
+    free(module_name);
+    return true;
+}
+
+static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
+    size_t param_index;
+    bool ok;
+
+    for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
+        if (!resolve_type_ref(context, expr->as.lambda.params[param_index].type, false)) {
+            return false;
+        }
+    }
+
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+
+    ok = true;
+    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
+        ok = resolver_add_local_name(context, expr->as.lambda.params[param_index].name);
+    }
+    if (ok) {
+        ok = resolve_expr(context, expr->as.lambda.body, false);
+    }
+
+    resolver_pop_scope(context);
+    return ok;
+}
+
+static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self) {
+    size_t index;
+
+    if (expr == NULL) {
+        return true;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            if (resolver_has_local_name(context, expr->as.identifier) ||
+                find_visible_value(context->visible_values, context->visible_value_count, expr->as.identifier) != NULL ||
+                find_visible_type(context->visible_types, context->visible_type_count, expr->as.identifier) != NULL) {
+                return true;
+            }
+
+            if (find_alias(context->aliases, context->alias_count, expr->as.identifier) != NULL) {
+                return resolver_append_error(
+                    context,
+                    expr->token,
+                    format_message("module alias '%.*s' must be accessed as '%.*s.name'",
+                                   (int)expr->as.identifier.length,
+                                   expr->as.identifier.data,
+                                   (int)expr->as.identifier.length,
+                                   expr->as.identifier.data));
+            }
+
+            return resolver_append_error(context,
+                                         expr->token,
+                                         format_message("undefined identifier '%.*s'",
+                                                        (int)expr->as.identifier.length,
+                                                        expr->as.identifier.data));
+
+        case FENG_EXPR_SELF:
+            if (allow_self) {
+                return true;
+            }
+
+            return resolver_append_error(context,
+                                         expr->token,
+                                         format_message("'self' is only available inside type methods and constructors"));
+
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (!resolve_expr(context, expr->as.array_literal.items[index], allow_self)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!resolve_expr(context, expr->as.object_literal.target, allow_self)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                if (!resolve_expr(context, expr->as.object_literal.fields[index].value, allow_self)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_CALL:
+            if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                if (!resolve_expr(context, expr->as.call.args[index], allow_self)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_MEMBER:
+            if (resolve_alias_member_expr(context, expr)) {
+                return true;
+            }
+            return resolve_expr(context, expr->as.member.object, allow_self);
+
+        case FENG_EXPR_INDEX:
+            return resolve_expr(context, expr->as.index.object, allow_self) &&
+                   resolve_expr(context, expr->as.index.index, allow_self);
+
+        case FENG_EXPR_UNARY:
+            return resolve_expr(context, expr->as.unary.operand, allow_self);
+
+        case FENG_EXPR_BINARY:
+            return resolve_expr(context, expr->as.binary.left, allow_self) &&
+                   resolve_expr(context, expr->as.binary.right, allow_self);
+
+        case FENG_EXPR_LAMBDA:
+            return resolve_lambda_expr(context, expr);
+
+        case FENG_EXPR_CAST:
+            return resolve_type_ref(context, expr->as.cast.type, false) &&
+                   resolve_expr(context, expr->as.cast.value, allow_self);
+
+        case FENG_EXPR_IF:
+            return resolve_expr(context, expr->as.if_expr.condition, allow_self) &&
+                   resolve_expr(context, expr->as.if_expr.then_expr, allow_self) &&
+                   resolve_expr(context, expr->as.if_expr.else_expr, allow_self);
+
+        case FENG_EXPR_MATCH:
+            if (!resolve_expr(context, expr->as.match_expr.target, allow_self)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
+                if (!resolve_expr(context, expr->as.match_expr.cases[index].label, allow_self) ||
+                    !resolve_expr(context, expr->as.match_expr.cases[index].value, allow_self)) {
+                    return false;
+                }
+            }
+            return resolve_expr(context, expr->as.match_expr.else_expr, allow_self);
+    }
+
+    return true;
+}
+
+static bool resolve_binding(ResolveContext *context,
+                            const FengBinding *binding,
+                            bool allow_self,
+                            bool add_to_scope) {
+    if (!resolve_type_ref(context, binding->type, false)) {
+        return false;
+    }
+    if (!resolve_expr(context, binding->initializer, allow_self)) {
+        return false;
+    }
+    if (add_to_scope) {
+        return resolver_add_local_name(context, binding->name);
+    }
+    return true;
+}
+
+static bool resolve_block(ResolveContext *context, const FengBlock *block, bool allow_self) {
+    bool ok;
+
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+
+    ok = resolve_block_contents(context, block, allow_self);
+    resolver_pop_scope(context);
+    return ok;
+}
+
+static bool resolve_block_contents(ResolveContext *context,
+                                   const FengBlock *block,
+                                   bool allow_self) {
+    size_t stmt_index;
+
+    if (block == NULL) {
+        return true;
+    }
+
+    for (stmt_index = 0U; stmt_index < block->statement_count; ++stmt_index) {
+        if (!resolve_stmt(context, block->statements[stmt_index], allow_self)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool allow_self) {
+    size_t clause_index;
+
+    if (stmt == NULL) {
+        return true;
+    }
+
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return resolve_block(context, stmt->as.block, allow_self);
+
+        case FENG_STMT_BINDING:
+            return resolve_binding(context, &stmt->as.binding, allow_self, true);
+
+        case FENG_STMT_ASSIGN:
+            return resolve_expr(context, stmt->as.assign.target, allow_self) &&
+                   resolve_expr(context, stmt->as.assign.value, allow_self);
+
+        case FENG_STMT_EXPR:
+            return resolve_expr(context, stmt->as.expr, allow_self);
+
+        case FENG_STMT_IF:
+            for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
+                if (!resolve_expr(context, stmt->as.if_stmt.clauses[clause_index].condition, allow_self) ||
+                    !resolve_block(context, stmt->as.if_stmt.clauses[clause_index].block, allow_self)) {
+                    return false;
+                }
+            }
+            return resolve_block(context, stmt->as.if_stmt.else_block, allow_self);
+
+        case FENG_STMT_WHILE:
+            return resolve_expr(context, stmt->as.while_stmt.condition, allow_self) &&
+                   resolve_block(context, stmt->as.while_stmt.body, allow_self);
+
+        case FENG_STMT_FOR: {
+            bool ok;
+
+            if (!resolver_push_scope(context)) {
+                return false;
+            }
+
+            ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&
+                 resolve_expr(context, stmt->as.for_stmt.condition, allow_self) &&
+                 resolve_stmt(context, stmt->as.for_stmt.update, allow_self) &&
+                 resolve_block(context, stmt->as.for_stmt.body, allow_self);
+
+            resolver_pop_scope(context);
+            return ok;
+        }
+
+        case FENG_STMT_TRY:
+            return resolve_block(context, stmt->as.try_stmt.try_block, allow_self) &&
+                   resolve_block(context, stmt->as.try_stmt.catch_block, allow_self) &&
+                   resolve_block(context, stmt->as.try_stmt.finally_block, allow_self);
+
+        case FENG_STMT_RETURN:
+            return resolve_expr(context, stmt->as.return_value, allow_self);
+
+        case FENG_STMT_THROW:
+            return resolve_expr(context, stmt->as.throw_value, allow_self);
+
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+
+    return true;
+}
+
+static bool resolve_callable(ResolveContext *context,
+                             const FengCallableSignature *callable,
+                             bool allow_self) {
+    size_t param_index;
+    bool ok;
+
+    if (!resolve_type_ref(context, callable->return_type, true)) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < callable->param_count; ++param_index) {
+        if (!resolve_type_ref(context, callable->params[param_index].type, false)) {
+            return false;
+        }
+    }
+
+    if (callable->body == NULL) {
+        return true;
+    }
+
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+
+    ok = true;
+    for (param_index = 0U; param_index < callable->param_count && ok; ++param_index) {
+        ok = resolver_add_local_name(context, callable->params[param_index].name);
+    }
+    if (ok) {
+        ok = resolve_block_contents(context, callable->body, allow_self);
+    }
+
+    resolver_pop_scope(context);
+    return ok;
+}
+
+static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
+    size_t index;
+
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return resolve_binding(context, &decl->as.binding, false, false);
+
+        case FENG_DECL_TYPE:
+            if (decl->as.type_decl.form == FENG_TYPE_DECL_FUNCTION) {
+                if (!resolve_type_ref(context, decl->as.type_decl.as.function.return_type, true)) {
+                    return false;
+                }
+                for (index = 0U; index < decl->as.type_decl.as.function.param_count; ++index) {
+                    if (!resolve_type_ref(context,
+                                          decl->as.type_decl.as.function.params[index].type,
+                                          false)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            for (index = 0U; index < decl->as.type_decl.as.object.member_count; ++index) {
+                const FengTypeMember *member = decl->as.type_decl.as.object.members[index];
+
+                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (!resolve_type_ref(context, member->as.field.type, false) ||
+                        !resolve_expr(context, member->as.field.initializer, false)) {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (!resolve_callable(context, &member->as.callable, true)) {
+                    return false;
+                }
+            }
+
+            return true;
+
+        case FENG_DECL_FUNCTION:
+            return resolve_callable(context, &decl->as.function_decl, false);
+    }
+
+    return true;
+}
+
+static bool resolve_program_names(const FengSemanticAnalysis *analysis,
+                                  const FengSemanticModule *module,
+                                  const FengProgram *program,
+                                  const VisibleTypeEntry *visible_types,
+                                  size_t visible_type_count,
+                                  const VisibleValueEntry *visible_values,
+                                  size_t visible_value_count,
+                                  FengSemanticError **errors,
+                                  size_t *error_count,
+                                  size_t *error_capacity) {
+    ResolveContext context;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    size_t decl_index;
+    bool ok;
+
+    memset(&context, 0, sizeof(context));
+    context.analysis = analysis;
+    context.module = module;
+    context.program = program;
+    context.visible_types = visible_types;
+    context.visible_type_count = visible_type_count;
+    context.visible_values = visible_values;
+    context.visible_value_count = visible_value_count;
+    context.errors = errors;
+    context.error_count = error_count;
+    context.error_capacity = error_capacity;
+
+    ok = build_program_aliases(analysis, program, &aliases, &alias_count, &alias_capacity);
+    if (!ok) {
+        free(aliases);
+        return false;
+    }
+
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+
+    for (decl_index = 0U; decl_index < program->declaration_count && ok; ++decl_index) {
+        ok = resolve_declaration(&context, program->declarations[decl_index]);
+    }
+
+    resolver_free_scopes(&context);
+    free(aliases);
     return ok;
 }
 
@@ -749,6 +1547,19 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                      error_count,
                                      error_capacity);
         }
+    }
+
+    for (program_index = 0U; program_index < module->program_count && ok; ++program_index) {
+        ok = resolve_program_names(analysis,
+                                   module,
+                                   module->programs[program_index],
+                                   visible_types,
+                                   visible_type_count,
+                                   visible_values,
+                                   visible_value_count,
+                                   errors,
+                                   error_count,
+                                   error_capacity);
     }
 
     free(visible_types);

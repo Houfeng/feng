@@ -319,6 +319,209 @@ static void test_duplicate_use_alias_in_same_file(void) {
     feng_program_free(main_program);
 }
 
+static void test_undefined_identifier_in_function_body(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(): int {\n"
+        "    return missing;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("undefined_identifier.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "undefined_identifier.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "undefined identifier 'missing'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unknown_type_reference_in_function_signature(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(value: Missing): int {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unknown_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unknown_type.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "unknown type 'Missing'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_self_is_valid_inside_type_method(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "    fn read(): int {\n"
+        "        return self.id;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("self_method_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_self_is_invalid_outside_type_method(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(): int {\n"
+        "    return self.id;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("self_top_level_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "self_top_level_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "'self' is only available") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_self_is_invalid_inside_lambda(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "    fn read(): int {\n"
+        "        let thunk = () -> self.id;\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("self_lambda_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "self_lambda_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "'self' is only available") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_alias_member_access_resolves_public_names(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn make(): base.User {\n"
+        "    return base.User {};\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_member_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_member_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_alias_member_access_reports_missing_public_name(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn load(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn main(): int {\n"
+        "    return base.store();\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_missing_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_missing_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_missing_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not export public name 'store'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_alias_identifier_requires_member_access(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn load(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn main() {\n"
+        "    base;\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_ident_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_ident_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_ident_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "module alias 'base' must be accessed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -331,6 +534,14 @@ int main(void) {
     test_imported_name_conflicts_between_modules();
     test_alias_import_does_not_inject_short_names();
     test_duplicate_use_alias_in_same_file();
+    test_undefined_identifier_in_function_body();
+    test_unknown_type_reference_in_function_signature();
+    test_self_is_valid_inside_type_method();
+    test_self_is_invalid_outside_type_method();
+    test_self_is_invalid_inside_lambda();
+    test_alias_member_access_resolves_public_names();
+    test_alias_member_access_reports_missing_public_name();
+    test_alias_identifier_requires_member_access();
     puts("semantic tests passed");
     return 0;
 }
