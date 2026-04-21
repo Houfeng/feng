@@ -2416,7 +2416,10 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         }
 
         case FENG_EXPR_INDEX:
-            return true;
+            return resolver_append_error(
+                context,
+                target->token,
+                format_message("indexed assignment targets are not supported yet"));
 
         default:
             return append_assignment_target_not_writable_error(context, target);

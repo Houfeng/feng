@@ -1060,6 +1060,29 @@ static void test_alias_public_let_binding_assignment_rejects_non_writable_target
     feng_program_free(main_program);
 }
 
+static void test_index_assignment_rejects_unsupported_writable_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items = [1, 2, 3];\n"
+        "    items[0] = 4;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_assign_unsupported_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "index_assign_unsupported_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "indexed assignment targets are not supported yet") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2025,6 +2048,7 @@ int main(void) {
     test_top_level_let_assignment_rejects_non_writable_target();
     test_instance_let_member_assignment_rejects_non_writable_target();
     test_alias_public_let_binding_assignment_rejects_non_writable_target();
+    test_index_assignment_rejects_unsupported_writable_target();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
