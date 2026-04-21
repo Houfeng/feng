@@ -15,6 +15,19 @@ typedef struct FunctionEntry {
     const FengDecl *decl;
 } FunctionEntry;
 
+typedef struct VisibleTypeEntry {
+    FengSlice name;
+    const FengSemanticModule *provider_module;
+    const FengDecl *decl;
+} VisibleTypeEntry;
+
+typedef struct VisibleValueEntry {
+    FengSlice name;
+    const FengSemanticModule *provider_module;
+    const FengDecl *decl;
+    bool is_function;
+} VisibleValueEntry;
+
 static bool slice_equals(FengSlice left, FengSlice right) {
     return left.length == right.length && memcmp(left.data, right.data, left.length) == 0;
 }
@@ -217,21 +230,69 @@ static bool parameters_equal(const FengCallableSignature *left, const FengCallab
     return true;
 }
 
-static size_t find_module_index(const FengSemanticAnalysis *analysis, const FengProgram *program) {
+static bool decl_is_public(const FengDecl *decl) {
+    return decl->visibility == FENG_VISIBILITY_PUBLIC;
+}
+
+static size_t find_module_index_by_path(const FengSemanticAnalysis *analysis,
+                                        const FengSlice *segments,
+                                        size_t segment_count) {
     size_t index;
 
     for (index = 0U; index < analysis->module_count; ++index) {
         const FengSemanticModule *module = &analysis->modules[index];
 
-        if (path_equals(module->segments,
-                        module->segment_count,
-                        program->module_segments,
-                        program->module_segment_count)) {
+        if (path_equals(module->segments, module->segment_count, segments, segment_count)) {
             return index;
         }
     }
 
     return analysis->module_count;
+}
+
+static size_t find_module_index(const FengSemanticAnalysis *analysis, const FengProgram *program) {
+    return find_module_index_by_path(
+        analysis, program->module_segments, program->module_segment_count);
+}
+
+static size_t find_visible_type_index(const VisibleTypeEntry *entries, size_t count, FengSlice name) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (slice_equals(entries[index].name, name)) {
+            return index;
+        }
+    }
+
+    return count;
+}
+
+static size_t find_visible_value_index(const VisibleValueEntry *entries, size_t count, FengSlice name) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (slice_equals(entries[index].name, name)) {
+            return index;
+        }
+    }
+
+    return count;
+}
+
+static size_t find_slice_index(const FengSlice *items, size_t count, FengSlice name) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (slice_equals(items[index], name)) {
+            return index;
+        }
+    }
+
+    return count;
+}
+
+static bool append_slice(FengSlice **items, size_t *count, size_t *capacity, FengSlice value) {
+    return append_raw((void **)items, count, capacity, sizeof(value), &value);
 }
 
 static bool append_error(FengSemanticError **errors,
@@ -298,18 +359,150 @@ static bool add_module(FengSemanticAnalysis *analysis, const FengProgram *progra
     return true;
 }
 
-static bool check_symbol_conflicts(const FengSemanticModule *module,
+static bool import_public_names(const FengSemanticModule *target_module,
+                                const FengProgram *program,
+                                const FengUseDecl *use_decl,
+                                VisibleTypeEntry **visible_types,
+                                size_t *visible_type_count,
+                                size_t *visible_type_capacity,
+                                VisibleValueEntry **visible_values,
+                                size_t *visible_value_count,
+                                size_t *visible_value_capacity,
+                                FengSemanticError **errors,
+                                size_t *error_count,
+                                size_t *error_capacity) {
+    FengSlice *seen_type_names = NULL;
+    FengSlice *seen_value_names = NULL;
+    size_t seen_type_count = 0U;
+    size_t seen_value_count = 0U;
+    size_t seen_type_capacity = 0U;
+    size_t seen_value_capacity = 0U;
+    char *module_name = format_module_name(target_module->segments, target_module->segment_count);
+    size_t program_index;
+    bool ok = true;
+
+    for (program_index = 0U; program_index < target_module->program_count && ok; ++program_index) {
+        const FengProgram *target_program = target_module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < target_program->declaration_count && ok; ++decl_index) {
+            const FengDecl *decl = target_program->declarations[decl_index];
+            FengSlice name;
+            size_t index;
+
+            if (!decl_is_public(decl)) {
+                continue;
+            }
+
+            switch (decl->kind) {
+                case FENG_DECL_TYPE: {
+                    VisibleTypeEntry entry;
+
+                    name = decl->as.type_decl.name;
+                    if (find_slice_index(seen_type_names, seen_type_count, name) < seen_type_count) {
+                        break;
+                    }
+                    if (!append_slice(&seen_type_names, &seen_type_count, &seen_type_capacity, name)) {
+                        ok = false;
+                        break;
+                    }
+
+                    index = find_visible_type_index(*visible_types, *visible_type_count, name);
+                    if (index < *visible_type_count) {
+                        if ((*visible_types)[index].provider_module == target_module) {
+                            break;
+                        }
+                        ok = append_error(
+                            errors,
+                            error_count,
+                            error_capacity,
+                            program->path,
+                            use_decl->token,
+                            format_message(
+                                "imported type '%.*s' from module '%s' conflicts with an existing visible type name",
+                                (int)name.length,
+                                name.data,
+                                module_name != NULL ? module_name : "<unknown>"));
+                        break;
+                    }
+
+                    entry.name = name;
+                    entry.provider_module = target_module;
+                    entry.decl = decl;
+                    ok = append_raw((void **)visible_types,
+                                    visible_type_count,
+                                    visible_type_capacity,
+                                    sizeof(entry),
+                                    &entry);
+                    break;
+                }
+
+                case FENG_DECL_GLOBAL_BINDING:
+                case FENG_DECL_FUNCTION: {
+                    VisibleValueEntry entry;
+
+                    name = (decl->kind == FENG_DECL_FUNCTION) ? decl->as.function_decl.name : decl->as.binding.name;
+                    if (find_slice_index(seen_value_names, seen_value_count, name) < seen_value_count) {
+                        break;
+                    }
+                    if (!append_slice(&seen_value_names, &seen_value_count, &seen_value_capacity, name)) {
+                        ok = false;
+                        break;
+                    }
+
+                    index = find_visible_value_index(*visible_values, *visible_value_count, name);
+                    if (index < *visible_value_count) {
+                        if ((*visible_values)[index].provider_module == target_module) {
+                            break;
+                        }
+                        ok = append_error(
+                            errors,
+                            error_count,
+                            error_capacity,
+                            program->path,
+                            use_decl->token,
+                            format_message(
+                                "imported name '%.*s' from module '%s' conflicts with an existing visible value name",
+                                (int)name.length,
+                                name.data,
+                                module_name != NULL ? module_name : "<unknown>"));
+                        break;
+                    }
+
+                    entry.name = name;
+                    entry.provider_module = target_module;
+                    entry.decl = decl;
+                    entry.is_function = (decl->kind == FENG_DECL_FUNCTION);
+                    ok = append_raw((void **)visible_values,
+                                    visible_value_count,
+                                    visible_value_capacity,
+                                    sizeof(entry),
+                                    &entry);
+                    break;
+                }
+            }
+        }
+    }
+
+    free(module_name);
+    free(seen_type_names);
+    free(seen_value_names);
+    return ok;
+}
+
+static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
+                                   const FengSemanticModule *module,
                                    FengSemanticError **errors,
                                    size_t *error_count,
                                    size_t *error_capacity) {
-    SymbolEntry *types = NULL;
-    SymbolEntry *bindings = NULL;
+    VisibleTypeEntry *visible_types = NULL;
+    VisibleValueEntry *visible_values = NULL;
     FunctionEntry *functions = NULL;
-    size_t type_count = 0U;
-    size_t binding_count = 0U;
+    size_t visible_type_count = 0U;
+    size_t visible_value_count = 0U;
     size_t function_count = 0U;
-    size_t type_capacity = 0U;
-    size_t binding_capacity = 0U;
+    size_t visible_type_capacity = 0U;
+    size_t visible_value_capacity = 0U;
     size_t function_capacity = 0U;
     size_t program_index;
     bool ok = true;
@@ -324,70 +517,74 @@ static bool check_symbol_conflicts(const FengSemanticModule *module,
 
             switch (decl->kind) {
                 case FENG_DECL_TYPE: {
-                    SymbolEntry entry;
+                    VisibleTypeEntry entry;
 
-                    for (index = 0U; index < type_count; ++index) {
-                        if (slice_equals(types[index].name, decl->as.type_decl.name)) {
-                            char *message = format_message("duplicate type declaration '%.*s'",
-                                                           (int)decl->as.type_decl.name.length,
-                                                           decl->as.type_decl.name.data);
+                    index = find_visible_type_index(visible_types, visible_type_count, decl->as.type_decl.name);
+                    if (index < visible_type_count) {
+                        char *message = format_message("duplicate type declaration '%.*s'",
+                                                       (int)decl->as.type_decl.name.length,
+                                                       decl->as.type_decl.name.data);
 
-                            ok = append_error(errors,
-                                              error_count,
-                                              error_capacity,
-                                              program->path,
-                                              *decl_token(decl),
-                                              message);
-                            break;
-                        }
+                        ok = append_error(errors,
+                                          error_count,
+                                          error_capacity,
+                                          program->path,
+                                          *decl_token(decl),
+                                          message);
+                        break;
                     }
                     if (!ok) {
                         break;
                     }
-                    if (index < type_count) {
-                        break;
-                    }
 
                     entry.name = decl->as.type_decl.name;
+                    entry.provider_module = module;
                     entry.decl = decl;
-                    ok = append_raw((void **)&types,
-                                    &type_count,
-                                    &type_capacity,
+                    ok = append_raw((void **)&visible_types,
+                                    &visible_type_count,
+                                    &visible_type_capacity,
                                     sizeof(entry),
                                     &entry);
                     break;
                 }
 
                 case FENG_DECL_GLOBAL_BINDING: {
-                    SymbolEntry entry;
+                    VisibleValueEntry entry;
 
-                    for (index = 0U; index < binding_count; ++index) {
-                        if (slice_equals(bindings[index].name, decl->as.binding.name)) {
-                            char *message = format_message("duplicate top-level binding '%.*s'",
-                                                           (int)decl->as.binding.name.length,
-                                                           decl->as.binding.name.data);
+                    index = find_visible_value_index(visible_values, visible_value_count, decl->as.binding.name);
+                    if (index < visible_value_count) {
+                        char *message;
 
-                            ok = append_error(errors,
-                                              error_count,
-                                              error_capacity,
-                                              program->path,
-                                              decl->as.binding.token,
-                                              message);
-                            break;
+                        if (visible_values[index].is_function) {
+                            message = format_message(
+                                "top-level binding '%.*s' conflicts with an existing top-level function",
+                                (int)decl->as.binding.name.length,
+                                decl->as.binding.name.data);
+                        } else {
+                            message = format_message("duplicate top-level binding '%.*s'",
+                                                     (int)decl->as.binding.name.length,
+                                                     decl->as.binding.name.data);
                         }
+
+                        ok = append_error(errors,
+                                          error_count,
+                                          error_capacity,
+                                          program->path,
+                                          decl->as.binding.token,
+                                          message);
+                        break;
                     }
                     if (!ok) {
                         break;
                     }
-                    if (index < binding_count) {
-                        break;
-                    }
 
                     entry.name = decl->as.binding.name;
+                    entry.provider_module = module;
                     entry.decl = decl;
-                    ok = append_raw((void **)&bindings,
-                                    &binding_count,
-                                    &binding_capacity,
+                    entry.is_function = false;
+                    ok = append_raw((void **)&visible_values,
+                                    &visible_value_count,
+                                    &visible_value_capacity,
                                     sizeof(entry),
                                     &entry);
                     break;
@@ -395,6 +592,23 @@ static bool check_symbol_conflicts(const FengSemanticModule *module,
 
                 case FENG_DECL_FUNCTION: {
                     FunctionEntry entry;
+                    size_t value_index =
+                        find_visible_value_index(visible_values, visible_value_count, decl->as.function_decl.name);
+
+                    if (value_index < visible_value_count && !visible_values[value_index].is_function) {
+                        char *message = format_message(
+                            "top-level function '%.*s' conflicts with an existing top-level binding",
+                            (int)decl->as.function_decl.name.length,
+                            decl->as.function_decl.name.data);
+
+                        ok = append_error(errors,
+                                          error_count,
+                                          error_capacity,
+                                          program->path,
+                                          decl->as.function_decl.token,
+                                          message);
+                        break;
+                    }
 
                     for (index = 0U; index < function_count; ++index) {
                         const FengCallableSignature *existing = &functions[index].decl->as.function_decl;
@@ -439,6 +653,23 @@ static bool check_symbol_conflicts(const FengSemanticModule *module,
                         break;
                     }
 
+                    if (value_index == visible_value_count) {
+                        VisibleValueEntry value_entry;
+
+                        value_entry.name = decl->as.function_decl.name;
+                        value_entry.provider_module = module;
+                        value_entry.decl = decl;
+                        value_entry.is_function = true;
+                        ok = append_raw((void **)&visible_values,
+                                        &visible_value_count,
+                                        &visible_value_capacity,
+                                        sizeof(value_entry),
+                                        &value_entry);
+                        if (!ok) {
+                            break;
+                        }
+                    }
+
                     entry.name = decl->as.function_decl.name;
                     entry.decl = decl;
                     ok = append_raw((void **)&functions,
@@ -452,8 +683,76 @@ static bool check_symbol_conflicts(const FengSemanticModule *module,
         }
     }
 
-    free(types);
-    free(bindings);
+    for (program_index = 0U; program_index < module->program_count && ok; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t use_index;
+
+        for (use_index = 0U; use_index < program->use_count && ok; ++use_index) {
+            const FengUseDecl *use_decl = &program->uses[use_index];
+            size_t prior_index;
+            size_t target_index;
+
+            if (use_decl->has_alias) {
+                for (prior_index = 0U; prior_index < use_index; ++prior_index) {
+                    if (program->uses[prior_index].has_alias &&
+                        slice_equals(program->uses[prior_index].alias, use_decl->alias)) {
+                        ok = append_error(errors,
+                                          error_count,
+                                          error_capacity,
+                                          program->path,
+                                          use_decl->token,
+                                          format_message("duplicate use alias '%.*s' in the same file",
+                                                         (int)use_decl->alias.length,
+                                                         use_decl->alias.data));
+                        break;
+                    }
+                }
+                if (!ok) {
+                    break;
+                }
+            }
+
+            target_index =
+                find_module_index_by_path(analysis, use_decl->segments, use_decl->segment_count);
+            if (target_index == analysis->module_count) {
+                char *module_name = format_module_name(use_decl->segments, use_decl->segment_count);
+
+                ok = append_error(
+                    errors,
+                    error_count,
+                    error_capacity,
+                    program->path,
+                    use_decl->token,
+                    format_message("use target module '%s' was not found in current compilation input",
+                                   module_name != NULL ? module_name : "<unknown>"));
+                free(module_name);
+                if (!ok) {
+                    break;
+                }
+                continue;
+            }
+
+            if (use_decl->has_alias) {
+                continue;
+            }
+
+            ok = import_public_names(&analysis->modules[target_index],
+                                     program,
+                                     use_decl,
+                                     &visible_types,
+                                     &visible_type_count,
+                                     &visible_type_capacity,
+                                     &visible_values,
+                                     &visible_value_count,
+                                     &visible_value_capacity,
+                                     errors,
+                                     error_count,
+                                     error_capacity);
+        }
+    }
+
+    free(visible_types);
+    free(visible_values);
     free(functions);
     return ok;
 }
@@ -507,7 +806,8 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
     }
 
     for (program_index = 0U; program_index < analysis->module_count && ok; ++program_index) {
-        ok = check_symbol_conflicts(&analysis->modules[program_index],
+        ok = check_symbol_conflicts(analysis,
+                                    &analysis->modules[program_index],
                                     &errors,
                                     &error_count,
                                     &error_capacity);
