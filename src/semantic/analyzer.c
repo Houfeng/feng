@@ -1198,6 +1198,9 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
 static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget target;
     char *target_name;
+    FengSlice *seen_field_names = NULL;
+    size_t seen_field_count = 0U;
+    size_t seen_field_capacity = 0U;
     size_t field_index;
 
     target = resolve_type_target_expr(context, expr->as.object_literal.target, true);
@@ -1212,6 +1215,7 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                            target_name != NULL ? target_name : "<expression>"));
 
         free(target_name);
+        free(seen_field_names);
         return ok;
     }
 
@@ -1222,13 +1226,36 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                          target.provider_module,
                                          0U)) {
         free(target_name);
+        free(seen_field_names);
         return false;
     }
 
     for (field_index = 0U; field_index < expr->as.object_literal.field_count; ++field_index) {
         const FengObjectFieldInit *field = &expr->as.object_literal.fields[field_index];
+        const FengTypeMember *field_member;
 
-        if (find_type_field_member(target.type_decl, field->name) == NULL) {
+        if (find_slice_index(seen_field_names, seen_field_count, field->name) < seen_field_count) {
+            bool ok = resolver_append_error(
+                context,
+                field->token,
+                format_message("duplicate object literal field '%.*s' for type '%.*s'",
+                               (int)field->name.length,
+                               field->name.data,
+                               (int)target.type_decl->as.type_decl.name.length,
+                               target.type_decl->as.type_decl.name.data));
+
+            free(target_name);
+            free(seen_field_names);
+            return ok;
+        }
+        if (!append_slice(&seen_field_names, &seen_field_count, &seen_field_capacity, field->name)) {
+            free(target_name);
+            free(seen_field_names);
+            return false;
+        }
+
+        field_member = find_type_field_member(target.type_decl, field->name);
+        if (field_member == NULL) {
             bool ok = resolver_append_error(
                 context,
                 field->token,
@@ -1239,6 +1266,22 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                target.type_decl->as.type_decl.name.data));
 
             free(target_name);
+            free(seen_field_names);
+            return ok;
+        }
+
+        if (!type_member_is_accessible_from(context, target.provider_module, field_member)) {
+            bool ok = resolver_append_error(
+                context,
+                field->token,
+                format_message("object literal field '%.*s' is not accessible for type '%.*s'",
+                               (int)field->name.length,
+                               field->name.data,
+                               (int)target.type_decl->as.type_decl.name.length,
+                               target.type_decl->as.type_decl.name.data));
+
+            free(target_name);
+            free(seen_field_names);
             return ok;
         }
 
@@ -1248,11 +1291,13 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                                        expr->as.object_literal.target,
                                                        field)) {
             free(target_name);
+            free(seen_field_names);
             return false;
         }
     }
 
     free(target_name);
+    free(seen_field_names);
     return true;
 }
 

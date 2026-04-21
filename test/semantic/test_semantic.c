@@ -873,6 +873,91 @@ static void test_object_literal_allows_unbound_let_member(void) {
     feng_program_free(program);
 }
 
+static void test_object_literal_rejects_duplicate_fields(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User { id: 1, id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_literal_duplicate_field_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_duplicate_field_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "duplicate object literal field 'id'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_rejects_inaccessible_private_field(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {\n"
+        "    pr var secret: int;\n"
+        "    pu fn User() {}\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn make(): User {\n"
+        "    return User { secret: 1 };\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("object_literal_private_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("object_literal_private_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_private_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not accessible for type 'User'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_object_literal_allows_private_field_inside_same_module(void) {
+    const char *source_a =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    pr var secret: int;\n"
+        "    fn User() {}\n"
+        "}\n";
+    const char *source_b =
+        "mod demo.main;\n"
+        "fn make(): User {\n"
+        "    return User { secret: 1 };\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("object_literal_same_module_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("object_literal_same_module_b.f", source_b);
+    const FengProgram *programs[] = {program_a, program_b};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -907,6 +992,9 @@ int main(void) {
     test_method_rejects_let_member_assignment();
     test_object_literal_rejects_ctor_bound_let_member();
     test_object_literal_allows_unbound_let_member();
+    test_object_literal_rejects_duplicate_fields();
+    test_object_literal_rejects_inaccessible_private_field();
+    test_object_literal_allows_private_field_inside_same_module();
     puts("semantic tests passed");
     return 0;
 }
