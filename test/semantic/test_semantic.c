@@ -667,6 +667,83 @@ static void test_constructor_call_reports_missing_zero_arg_constructor(void) {
     feng_program_free(program);
 }
 
+static void test_constructor_call_selects_overload_by_literal_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn User(id: i64) {}\n"
+        "    fn User(name: string) {}\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_overload_literal_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_constructor_call_selects_overload_by_inferred_local_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn User(id: i64) {}\n"
+        "    fn User(name: string) {}\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    let id = 1;\n"
+        "    return User(id);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_overload_local_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_constructor_call_reports_type_mismatch(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn User(id: int) {}\n"
+        "    fn User(name: string) {}\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User(true);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_type_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_type_mismatch.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "no accessible constructor accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_constructor_call_rejects_function_type(void) {
     const char *source =
         "mod demo.main;\n"
@@ -849,6 +926,38 @@ static void test_object_literal_rejects_ctor_bound_let_member(void) {
     feng_program_free(program);
 }
 
+static void test_object_literal_rejects_ctor_bound_let_member_for_selected_overload(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "    fn User(id: int) {\n"
+        "        self.id = id;\n"
+        "    }\n"
+        "    fn User(name: string) {}\n"
+        "}\n"
+        "fn make_ok(): User {\n"
+        "    return User(\"ok\") { id: 1 };\n"
+        "}\n"
+        "fn make_bad(): User {\n"
+        "    return User(1) { id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("let_ctor_selected_overload_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "let_ctor_selected_overload_error.f") == 0);
+    ASSERT(errors[0].token.line == 13U);
+    ASSERT(strstr(errors[0].message, "already completed by constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_object_literal_allows_unbound_let_member(void) {
     const char *source =
         "mod demo.main;\n"
@@ -984,6 +1093,9 @@ int main(void) {
     test_object_literal_accepts_constructor_call_target();
     test_constructor_call_uses_implicit_default_constructor();
     test_constructor_call_reports_missing_zero_arg_constructor();
+    test_constructor_call_selects_overload_by_literal_type();
+    test_constructor_call_selects_overload_by_inferred_local_binding();
+    test_constructor_call_reports_type_mismatch();
     test_constructor_call_rejects_function_type();
     test_object_literal_reports_inaccessible_imported_constructor();
     test_object_literal_rejects_decl_bound_let_member();
@@ -991,6 +1103,7 @@ int main(void) {
     test_constructor_rejects_repeated_let_member_binding();
     test_method_rejects_let_member_assignment();
     test_object_literal_rejects_ctor_bound_let_member();
+    test_object_literal_rejects_ctor_bound_let_member_for_selected_overload();
     test_object_literal_allows_unbound_let_member();
     test_object_literal_rejects_duplicate_fields();
     test_object_literal_rejects_inaccessible_private_field();
