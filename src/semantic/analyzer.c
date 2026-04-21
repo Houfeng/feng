@@ -2389,8 +2389,6 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
             }
 
             if (context->current_type_decl != NULL &&
-                context->current_callable_member != NULL &&
-                context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
                 find_direct_self_let_target_member(context->current_type_decl, target) != NULL) {
                 return true;
             }
