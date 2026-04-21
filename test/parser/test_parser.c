@@ -151,6 +151,45 @@ static void test_member_annotations_and_constructors(void) {
     feng_program_free(program);
 }
 
+static void test_ast_source_tokens(void) {
+    const char *source =
+        "pu mod demo.main;\n"
+        "use demo.base;\n"
+        "@bounded\n"
+        "fn main(arg: int) {\n"
+        "    let answer: int = 42;\n"
+        "    return answer;\n"
+        "}\n"
+        "type User {\n"
+        "    pu let id: int = 1;\n"
+        "    fn User(value: int) {\n"
+        "        self.id = value;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "tokens.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_token.line == 1U);
+    ASSERT(program->uses[0].token.line == 2U);
+    ASSERT(program->declarations[0]->annotations[0].token.line == 3U);
+    ASSERT(program->declarations[0]->token.line == 4U);
+    ASSERT(program->declarations[0]->as.function_decl.token.line == 4U);
+    ASSERT(program->declarations[0]->as.function_decl.params[0].token.line == 4U);
+    ASSERT(program->declarations[0]->as.function_decl.body->token.line == 4U);
+    ASSERT(program->declarations[0]->as.function_decl.body->statements[0]->token.line == 5U);
+    ASSERT(program->declarations[0]->as.function_decl.body->statements[1]->token.line == 6U);
+    ASSERT(program->declarations[1]->token.line == 8U);
+    ASSERT(program->declarations[1]->as.type_decl.as.object.members[0]->token.line == 9U);
+    ASSERT(program->declarations[1]->as.type_decl.as.object.members[0]->as.field.initializer->token.line == 9U);
+    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->token.line == 10U);
+    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->as.callable.params[0].token.line == 10U);
+    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->as.callable.body->token.line == 10U);
+
+    feng_program_free(program);
+}
+
 static void test_parse_error(void) {
     const char *source = "fn main(args: string[]) {}\n";
     FengProgram *program = NULL;
@@ -362,6 +401,7 @@ int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
     test_member_annotations_and_constructors();
+    test_ast_source_tokens();
     test_parse_error();
     test_parse_error_after_annotation_semicolon();
     test_parse_error_top_level_fn_missing_body();

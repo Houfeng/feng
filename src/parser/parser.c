@@ -111,6 +111,14 @@ static const FengToken *parser_previous(const Parser *parser) {
     return &parser->tokens[parser->current - 1U];
 }
 
+static FengToken parser_current_token(const Parser *parser) {
+    return *parser_current(parser);
+}
+
+static FengToken parser_previous_token(const Parser *parser) {
+    return *parser_previous(parser);
+}
+
 static bool parser_is_at_end(const Parser *parser) {
     return parser_current(parser)->kind == FENG_TOKEN_EOF;
 }
@@ -269,6 +277,7 @@ static FengAnnotation *parse_annotations(Parser *parser, size_t *out_count) {
         FengAnnotation annotation;
         FengToken token = *parser_current(parser);
 
+        annotation.token = token;
         annotation.name = (FengSlice){token.lexeme + 1, token.length - 1U};
         annotation.builtin_kind = token.annotation_kind;
         annotation.args = NULL;
@@ -320,7 +329,7 @@ static FengAnnotation *parse_annotations(Parser *parser, size_t *out_count) {
     return annotations;
 }
 
-static FengTypeRef *new_type_ref(Parser *parser, FengTypeRefKind kind) {
+static FengTypeRef *new_type_ref(Parser *parser, FengTypeRefKind kind, FengToken token) {
     FengTypeRef *type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
 
     if (type_ref == NULL) {
@@ -328,19 +337,21 @@ static FengTypeRef *new_type_ref(Parser *parser, FengTypeRefKind kind) {
         return NULL;
     }
 
+    type_ref->token = token;
     type_ref->kind = kind;
     return type_ref;
 }
 
 static FengTypeRef *parse_type_ref(Parser *parser) {
     FengTypeRef *type_ref;
+    FengToken start_token = parser_current_token(parser);
     size_t pointer_count = 0U;
 
     while (parser_match(parser, FENG_TOKEN_STAR)) {
         ++pointer_count;
     }
 
-    type_ref = new_type_ref(parser, FENG_TYPE_REF_NAMED);
+    type_ref = new_type_ref(parser, FENG_TYPE_REF_NAMED, start_token);
     if (type_ref == NULL) {
         return NULL;
     }
@@ -355,7 +366,7 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
     }
 
     while (pointer_count > 0U) {
-        FengTypeRef *wrapper = new_type_ref(parser, FENG_TYPE_REF_POINTER);
+        FengTypeRef *wrapper = new_type_ref(parser, FENG_TYPE_REF_POINTER, start_token);
 
         if (wrapper == NULL) {
             free_type_ref(type_ref);
@@ -376,7 +387,7 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
             return NULL;
         }
 
-        wrapper = new_type_ref(parser, FENG_TYPE_REF_ARRAY);
+        wrapper = new_type_ref(parser, FENG_TYPE_REF_ARRAY, start_token);
         if (wrapper == NULL) {
             free_type_ref(type_ref);
             return NULL;
@@ -400,7 +411,9 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
     if (!parser_check(parser, FENG_TOKEN_RPAREN)) {
         do {
             FengParameter param;
+            FengToken name_token;
 
+            param.token = parser_current_token(parser);
             param.mutability = FENG_MUTABILITY_DEFAULT;
             param.type = NULL;
             if (parser_match(parser, FENG_TOKEN_KW_LET)) {
@@ -408,6 +421,9 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
             } else if (parser_match(parser, FENG_TOKEN_KW_VAR)) {
                 param.mutability = FENG_MUTABILITY_VAR;
             }
+
+            name_token = parser_current_token(parser);
+            param.token = name_token;
 
             if (!parser_expect_identifier_like(parser,
                                                &param.name,
@@ -450,6 +466,7 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
 static FengBinding parse_binding_core(Parser *parser, FengMutability mutability, bool require_type) {
     FengBinding binding;
 
+    binding.token = parser_current_token(parser);
     binding.mutability = mutability;
     binding.name.data = NULL;
     binding.name.length = 0U;
@@ -486,11 +503,13 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
 }
 
 static FengCallableSignature parse_callable_signature(Parser *parser,
+                                                     FengToken token,
                                                      FengSlice name,
                                                      bool require_body,
                                                      const char *body_rule_message) {
     FengCallableSignature callable;
 
+    callable.token = token;
     callable.name = name;
     callable.params = NULL;
     callable.param_count = 0U;
@@ -525,7 +544,7 @@ static FengCallableSignature parse_callable_signature(Parser *parser,
     return callable;
 }
 
-static FengDecl *new_decl(Parser *parser, FengDeclKind kind) {
+static FengDecl *new_decl(Parser *parser, FengDeclKind kind, FengToken token) {
     FengDecl *decl = (FengDecl *)calloc(1U, sizeof(*decl));
 
     if (decl == NULL) {
@@ -533,11 +552,12 @@ static FengDecl *new_decl(Parser *parser, FengDeclKind kind) {
         return NULL;
     }
 
+    decl->token = token;
     decl->kind = kind;
     return decl;
 }
 
-static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind) {
+static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind, FengToken token) {
     FengTypeMember *member = (FengTypeMember *)calloc(1U, sizeof(*member));
 
     if (member == NULL) {
@@ -545,6 +565,7 @@ static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind) 
         return NULL;
     }
 
+    member->token = token;
     member->kind = kind;
     return member;
 }
@@ -554,7 +575,8 @@ static FengDecl *parse_type_declaration(Parser *parser,
                                         bool is_extern,
                                         FengAnnotation *annotations,
                                         size_t annotation_count) {
-    FengDecl *decl = new_decl(parser, FENG_DECL_TYPE);
+    FengToken name_token = parser_current_token(parser);
+    FengDecl *decl = new_decl(parser, FENG_DECL_TYPE, name_token);
     FengSlice type_name;
 
     if (decl == NULL) {
@@ -656,7 +678,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
 
-            member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD);
+            member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD, binding.token);
             if (member == NULL) {
                 free_type_ref(binding.type);
                 free_expr(binding.initializer);
@@ -674,6 +696,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
         } else if (parser_match(parser, FENG_TOKEN_KW_FN)) {
             FengCallableSignature callable;
             FengSlice name;
+            FengToken member_name_token = parser_current_token(parser);
             FengTypeMemberKind member_kind = FENG_TYPE_MEMBER_METHOD;
 
             if (is_extern) {
@@ -695,6 +718,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
             callable = parse_callable_signature(
                 parser,
+                member_name_token,
                 name,
                 true,
                 "type methods and constructors must provide a body '{...}'");
@@ -708,7 +732,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
             }
 
-            member = new_type_member(parser, member_kind);
+            member = new_type_member(parser, member_kind, callable.token);
             if (member == NULL) {
                 free_parameters(callable.params, callable.param_count);
                 free_type_ref(callable.return_type);
@@ -766,7 +790,8 @@ static FengDecl *parse_function_declaration(Parser *parser,
                                             bool is_extern,
                                             FengAnnotation *annotations,
                                             size_t annotation_count) {
-    FengDecl *decl = new_decl(parser, FENG_DECL_FUNCTION);
+    FengToken name_token = parser_current_token(parser);
+    FengDecl *decl = new_decl(parser, FENG_DECL_FUNCTION, name_token);
     FengSlice name;
 
     if (decl == NULL) {
@@ -786,6 +811,7 @@ static FengDecl *parse_function_declaration(Parser *parser,
 
     decl->as.function_decl = parse_callable_signature(
         parser,
+        name_token,
         name,
         !is_extern,
         is_extern ? "extern function declarations must end with ';' and cannot have a body '{...}'"
@@ -802,7 +828,9 @@ static FengDecl *parse_global_binding(Parser *parser,
                                       FengMutability mutability,
                                       FengAnnotation *annotations,
                                       size_t annotation_count) {
-    FengDecl *decl = new_decl(parser, FENG_DECL_GLOBAL_BINDING);
+    FengDecl *decl = new_decl(parser,
+                              FENG_DECL_GLOBAL_BINDING,
+                              parser_current_token(parser));
 
     if (decl == NULL) {
         free_annotations(annotations, annotation_count);
@@ -888,33 +916,37 @@ static FengDecl *parse_declaration(Parser *parser) {
     return NULL;
 }
 
-static FengExpr *new_expr(Parser *parser, FengExprKind kind) {
+static FengExpr *new_expr(Parser *parser, FengExprKind kind, FengToken token) {
     FengExpr *expr = (FengExpr *)calloc(1U, sizeof(*expr));
 
     if (expr == NULL) {
         (void)parser_error_current(parser, "out of memory");
         return NULL;
     }
+    expr->token = token;
     expr->kind = kind;
     return expr;
 }
 
-static FengStmt *new_stmt(Parser *parser, FengStmtKind kind) {
+static FengStmt *new_stmt(Parser *parser, FengStmtKind kind, FengToken token) {
     FengStmt *stmt = (FengStmt *)calloc(1U, sizeof(*stmt));
 
     if (stmt == NULL) {
         (void)parser_error_current(parser, "out of memory");
         return NULL;
     }
+    stmt->token = token;
     stmt->kind = kind;
     return stmt;
 }
 
-static FengBlock *new_block(Parser *parser) {
+static FengBlock *new_block(Parser *parser, FengToken token) {
     FengBlock *block = (FengBlock *)calloc(1U, sizeof(*block));
 
     if (block == NULL) {
         (void)parser_error_current(parser, "out of memory");
+    } else {
+        block->token = token;
     }
     return block;
 }
@@ -1033,7 +1065,7 @@ static bool looks_like_object_literal(const Parser *parser) {
 static FengExpr *parse_primary(Parser *parser);
 
 static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
-    FengExpr *expr = new_expr(parser, FENG_EXPR_OBJECT_LITERAL);
+    FengExpr *expr = new_expr(parser, FENG_EXPR_OBJECT_LITERAL, parser_current_token(parser));
     size_t field_capacity = 0U;
 
     if (expr == NULL) {
@@ -1052,6 +1084,7 @@ static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
         do {
             FengObjectFieldInit field;
 
+            field.token = parser_current_token(parser);
             if (!parser_expect_identifier_like(parser,
                                                &field.name,
                                                false,
@@ -1091,7 +1124,7 @@ static FengExpr *parse_object_literal_suffix(Parser *parser, FengExpr *target) {
 }
 
 static FengExpr *parse_array_literal(Parser *parser) {
-    FengExpr *expr = new_expr(parser, FENG_EXPR_ARRAY_LITERAL);
+    FengExpr *expr = new_expr(parser, FENG_EXPR_ARRAY_LITERAL, parser_current_token(parser));
     size_t capacity = 0U;
 
     if (expr == NULL) {
@@ -1128,7 +1161,7 @@ static FengExpr *parse_array_literal(Parser *parser) {
 }
 
 static FengExpr *parse_lambda(Parser *parser) {
-    FengExpr *expr = new_expr(parser, FENG_EXPR_LAMBDA);
+    FengExpr *expr = new_expr(parser, FENG_EXPR_LAMBDA, parser_current_token(parser));
 
     if (expr == NULL) {
         return NULL;
@@ -1154,7 +1187,7 @@ static FengExpr *parse_lambda(Parser *parser) {
     return expr;
 }
 
-static FengExpr *parse_if_expression(Parser *parser) {
+static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
     FengExpr *condition = parse_expression(parser);
     size_t mark;
     FengExpr *expr;
@@ -1165,7 +1198,7 @@ static FengExpr *parse_if_expression(Parser *parser) {
 
     mark = parser->current;
 
-    expr = new_expr(parser, FENG_EXPR_IF);
+    expr = new_expr(parser, FENG_EXPR_IF, if_token);
     if (expr == NULL) {
         free_expr(condition);
         return NULL;
@@ -1195,7 +1228,7 @@ static FengExpr *parse_if_expression(Parser *parser) {
     parser->current = mark;
     parser->error.message = NULL;
 
-    expr = new_expr(parser, FENG_EXPR_MATCH);
+    expr = new_expr(parser, FENG_EXPR_MATCH, if_token);
     if (expr == NULL) {
         free_expr(condition);
         return NULL;
@@ -1232,6 +1265,7 @@ static FengExpr *parse_if_expression(Parser *parser) {
                 free_expr(expr);
                 return NULL;
             }
+            match_case.token = match_case.label->token;
             if (!parser_expect(parser,
                                FENG_TOKEN_COLON,
                                "expected ':' after match case label")) {
@@ -1282,7 +1316,7 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
     }
 
     if (looks_like_cast(parser)) {
-        FengExpr *expr = new_expr(parser, FENG_EXPR_CAST);
+        FengExpr *expr = new_expr(parser, FENG_EXPR_CAST, parser_current_token(parser));
 
         if (expr == NULL) {
             return NULL;
@@ -1335,42 +1369,42 @@ static FengExpr *parse_primary(Parser *parser) {
 
     switch (token.kind) {
         case FENG_TOKEN_IDENTIFIER:
-            expr = new_expr(parser, FENG_EXPR_IDENTIFIER);
+            expr = new_expr(parser, FENG_EXPR_IDENTIFIER, token);
             if (expr != NULL) {
                 expr->as.identifier = slice_from_token(&token);
                 (void)parser_advance(parser);
             }
             return expr;
         case FENG_TOKEN_KW_SELF:
-            expr = new_expr(parser, FENG_EXPR_SELF);
+            expr = new_expr(parser, FENG_EXPR_SELF, token);
             if (expr != NULL) {
                 expr->as.identifier = slice_from_token(&token);
                 (void)parser_advance(parser);
             }
             return expr;
         case FENG_TOKEN_BOOL:
-            expr = new_expr(parser, FENG_EXPR_BOOL);
+            expr = new_expr(parser, FENG_EXPR_BOOL, token);
             if (expr != NULL) {
                 expr->as.boolean = token.value.boolean;
                 (void)parser_advance(parser);
             }
             return expr;
         case FENG_TOKEN_INTEGER:
-            expr = new_expr(parser, FENG_EXPR_INTEGER);
+            expr = new_expr(parser, FENG_EXPR_INTEGER, token);
             if (expr != NULL) {
                 expr->as.integer = token.value.integer;
                 (void)parser_advance(parser);
             }
             return expr;
         case FENG_TOKEN_FLOAT:
-            expr = new_expr(parser, FENG_EXPR_FLOAT);
+            expr = new_expr(parser, FENG_EXPR_FLOAT, token);
             if (expr != NULL) {
                 expr->as.floating = token.value.floating;
                 (void)parser_advance(parser);
             }
             return expr;
         case FENG_TOKEN_STRING:
-            expr = new_expr(parser, FENG_EXPR_STRING);
+            expr = new_expr(parser, FENG_EXPR_STRING, token);
             if (expr != NULL) {
                 expr->as.string = slice_from_token(&token);
                 (void)parser_advance(parser);
@@ -1382,7 +1416,7 @@ static FengExpr *parse_primary(Parser *parser) {
             return parse_group_or_cast(parser);
         case FENG_TOKEN_KW_IF:
             (void)parser_advance(parser);
-            return parse_if_expression(parser);
+            return parse_if_expression(parser, token);
         default:
             (void)parser_error_current(
                 parser,
@@ -1400,7 +1434,7 @@ static FengExpr *parse_postfix(Parser *parser) {
 
     for (;;) {
         if (parser_match(parser, FENG_TOKEN_LPAREN)) {
-            FengExpr *call = new_expr(parser, FENG_EXPR_CALL);
+            FengExpr *call = new_expr(parser, FENG_EXPR_CALL, expr->token);
             size_t arg_capacity = 0U;
 
             if (call == NULL) {
@@ -1434,7 +1468,8 @@ static FengExpr *parse_postfix(Parser *parser) {
         }
 
         if (parser_match(parser, FENG_TOKEN_DOT)) {
-            FengExpr *member = new_expr(parser, FENG_EXPR_MEMBER);
+            FengToken member_token = parser_current_token(parser);
+            FengExpr *member = new_expr(parser, FENG_EXPR_MEMBER, member_token);
 
             if (member == NULL) {
                 free_expr(expr);
@@ -1454,7 +1489,7 @@ static FengExpr *parse_postfix(Parser *parser) {
         }
 
         if (parser_match(parser, FENG_TOKEN_LBRACKET)) {
-            FengExpr *index = new_expr(parser, FENG_EXPR_INDEX);
+            FengExpr *index = new_expr(parser, FENG_EXPR_INDEX, expr->token);
 
             if (index == NULL) {
                 free_expr(expr);
@@ -1487,7 +1522,7 @@ static FengExpr *parse_postfix(Parser *parser) {
 
 static FengExpr *parse_unary(Parser *parser) {
     if (parser_match(parser, FENG_TOKEN_NOT) || parser_match(parser, FENG_TOKEN_MINUS)) {
-        FengExpr *expr = new_expr(parser, FENG_EXPR_UNARY);
+        FengExpr *expr = new_expr(parser, FENG_EXPR_UNARY, parser_previous_token(parser));
 
         if (expr == NULL) {
             return NULL;
@@ -1520,7 +1555,7 @@ static FengExpr *parse_binary_series(Parser *parser,
 
         for (index = 0U; index < operator_count; ++index) {
             if (parser_match(parser, operators[index])) {
-                FengExpr *binary = new_expr(parser, FENG_EXPR_BINARY);
+                FengExpr *binary = new_expr(parser, FENG_EXPR_BINARY, parser_previous_token(parser));
 
                 if (binary == NULL) {
                     free_expr(expr);
@@ -1580,7 +1615,7 @@ static FengExpr *parse_expression(Parser *parser) {
 }
 
 static FengBlock *parse_block(Parser *parser) {
-    FengBlock *block = new_block(parser);
+    FengBlock *block = new_block(parser, parser_current_token(parser));
     size_t capacity = 0U;
 
     if (block == NULL) {
@@ -1613,7 +1648,7 @@ static FengBlock *parse_block(Parser *parser) {
 }
 
 static FengStmt *parse_if_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_IF);
+    FengStmt *stmt = new_stmt(parser, FENG_STMT_IF, parser_previous_token(parser));
     size_t capacity = 0U;
 
     if (stmt == NULL) {
@@ -1628,6 +1663,7 @@ static FengStmt *parse_if_statement(Parser *parser) {
             free_stmt(stmt);
             return NULL;
         }
+        clause.token = clause.condition->token;
         clause.block = parse_block(parser);
         if (clause.block == NULL) {
             free_expr(clause.condition);
@@ -1660,7 +1696,7 @@ static FengStmt *parse_if_statement(Parser *parser) {
 }
 
 static FengStmt *parse_while_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_WHILE);
+    FengStmt *stmt = new_stmt(parser, FENG_STMT_WHILE, parser_previous_token(parser));
 
     if (stmt == NULL) {
         return NULL;
@@ -1679,7 +1715,7 @@ static FengStmt *parse_while_statement(Parser *parser) {
 }
 
 static FengStmt *parse_for_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_FOR);
+    FengStmt *stmt = new_stmt(parser, FENG_STMT_FOR, parser_previous_token(parser));
 
     if (stmt == NULL) {
         return NULL;
@@ -1731,7 +1767,7 @@ static FengStmt *parse_for_statement(Parser *parser) {
 }
 
 static FengStmt *parse_try_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_TRY);
+    FengStmt *stmt = new_stmt(parser, FENG_STMT_TRY, parser_previous_token(parser));
 
     if (stmt == NULL) {
         return NULL;
@@ -1777,7 +1813,7 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
                                         ? FENG_MUTABILITY_LET
                                         : FENG_MUTABILITY_VAR;
 
-        stmt = new_stmt(parser, FENG_STMT_BINDING);
+        stmt = new_stmt(parser, FENG_STMT_BINDING, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1794,7 +1830,7 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
         return NULL;
     }
 
-    stmt = new_stmt(parser, FENG_STMT_EXPR);
+    stmt = new_stmt(parser, FENG_STMT_EXPR, parser_current_token(parser));
     if (stmt == NULL) {
         return NULL;
     }
@@ -1806,7 +1842,7 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
     }
 
     if (terminator != FENG_TOKEN_EOF && parser_match(parser, FENG_TOKEN_ASSIGN)) {
-        FengStmt *assign = new_stmt(parser, FENG_STMT_ASSIGN);
+        FengStmt *assign = new_stmt(parser, FENG_STMT_ASSIGN, stmt->token);
 
         if (assign == NULL) {
             free_stmt(stmt);
@@ -1829,7 +1865,7 @@ static FengStmt *parse_statement(Parser *parser) {
     FengStmt *stmt;
 
     if (parser_check(parser, FENG_TOKEN_LBRACE)) {
-        stmt = new_stmt(parser, FENG_STMT_BLOCK);
+        stmt = new_stmt(parser, FENG_STMT_BLOCK, parser_current_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1854,7 +1890,7 @@ static FengStmt *parse_statement(Parser *parser) {
         return parse_try_statement(parser);
     }
     if (parser_match(parser, FENG_TOKEN_KW_RETURN)) {
-        stmt = new_stmt(parser, FENG_STMT_RETURN);
+        stmt = new_stmt(parser, FENG_STMT_RETURN, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1872,7 +1908,7 @@ static FengStmt *parse_statement(Parser *parser) {
         return stmt;
     }
     if (parser_match(parser, FENG_TOKEN_KW_THROW)) {
-        stmt = new_stmt(parser, FENG_STMT_THROW);
+        stmt = new_stmt(parser, FENG_STMT_THROW, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1888,7 +1924,7 @@ static FengStmt *parse_statement(Parser *parser) {
         return stmt;
     }
     if (parser_match(parser, FENG_TOKEN_KW_BREAK)) {
-        stmt = new_stmt(parser, FENG_STMT_BREAK);
+        stmt = new_stmt(parser, FENG_STMT_BREAK, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1899,7 +1935,7 @@ static FengStmt *parse_statement(Parser *parser) {
         return stmt;
     }
     if (parser_match(parser, FENG_TOKEN_KW_CONTINUE)) {
-        stmt = new_stmt(parser, FENG_STMT_CONTINUE);
+        stmt = new_stmt(parser, FENG_STMT_CONTINUE, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
         }
@@ -1939,6 +1975,7 @@ static FengProgram *parse_program(Parser *parser) {
         feng_program_free(program);
         return NULL;
     }
+    program->module_token = parser_current_token(parser);
     if (!parse_path(parser,
                     false,
                     &program->module_segments,
@@ -1956,6 +1993,7 @@ static FengProgram *parse_program(Parser *parser) {
         FengUseDecl use_decl;
 
         memset(&use_decl, 0, sizeof(use_decl));
+        use_decl.token = parser_current_token(parser);
         if (!parse_path(parser,
                 false,
                 &use_decl.segments,

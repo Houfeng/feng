@@ -45,12 +45,14 @@ typedef struct FengDecl FengDecl;
 typedef struct FengTypeMember FengTypeMember;
 
 typedef struct FengParameter {
+    FengToken token;
     FengMutability mutability;
     FengSlice name;
     FengTypeRef *type;
 } FengParameter;
 
 typedef struct FengAnnotation {
+    FengToken token;
     FengSlice name;
     FengAnnotationKind builtin_kind;
     FengExpr **args;
@@ -58,6 +60,7 @@ typedef struct FengAnnotation {
 } FengAnnotation;
 
 struct FengTypeRef {
+    FengToken token;
     FengTypeRefKind kind;
     union {
         struct {
@@ -69,11 +72,13 @@ struct FengTypeRef {
 };
 
 typedef struct FengObjectFieldInit {
+    FengToken token;
     FengSlice name;
     FengExpr *value;
 } FengObjectFieldInit;
 
 typedef struct FengMatchCase {
+    FengToken token;
     FengExpr *label;
     FengExpr *value;
 } FengMatchCase;
@@ -99,6 +104,7 @@ typedef enum FengExprKind {
 } FengExprKind;
 
 struct FengExpr {
+    FengToken token;
     FengExprKind kind;
     union {
         FengSlice identifier;
@@ -161,6 +167,7 @@ struct FengExpr {
 };
 
 typedef struct FengBinding {
+    FengToken token;
     FengMutability mutability;
     FengSlice name;
     FengTypeRef *type;
@@ -168,6 +175,7 @@ typedef struct FengBinding {
 } FengBinding;
 
 typedef struct FengIfClause {
+    FengToken token;
     FengExpr *condition;
     FengBlock *block;
 } FengIfClause;
@@ -188,11 +196,13 @@ typedef enum FengStmtKind {
 } FengStmtKind;
 
 struct FengBlock {
+    FengToken token;
     FengStmt **statements;
     size_t statement_count;
 };
 
 struct FengStmt {
+    FengToken token;
     FengStmtKind kind;
     union {
         FengBlock *block;
@@ -234,6 +244,7 @@ typedef enum FengTypeMemberKind {
 } FengTypeMemberKind;
 
 typedef struct FengCallableSignature {
+    FengToken token;
     FengSlice name;
     FengParameter *params;
     size_t param_count;
@@ -242,6 +253,7 @@ typedef struct FengCallableSignature {
 } FengCallableSignature;
 
 struct FengTypeMember {
+    FengToken token;
     FengTypeMemberKind kind;
     FengVisibility visibility;
     FengAnnotation *annotations;
@@ -269,6 +281,7 @@ typedef enum FengTypeDeclForm {
 } FengTypeDeclForm;
 
 typedef struct FengUseDecl {
+    FengToken token;
     FengSlice *segments;
     size_t segment_count;
     FengSlice alias;
@@ -276,6 +289,7 @@ typedef struct FengUseDecl {
 } FengUseDecl;
 
 struct FengDecl {
+    FengToken token;
     FengDeclKind kind;
     FengVisibility visibility;
     bool is_extern;
@@ -304,6 +318,7 @@ struct FengDecl {
 
 typedef struct FengProgram {
     const char *path;
+    FengToken module_token;
     FengVisibility module_visibility;
     FengSlice *module_segments;
     size_t module_segment_count;

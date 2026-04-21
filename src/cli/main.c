@@ -6,6 +6,7 @@
 
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+#include "semantic/semantic.h"
 
 #define FENG_COLOR_RED "\x1b[31m"
 #define FENG_COLOR_RESET "\x1b[0m"
@@ -40,7 +41,15 @@ static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s lex <file>\n", program);
     fprintf(stderr, "  %s parse <file>\n", program);
+    fprintf(stderr, "  %s semantic <file> [more files...]\n", program);
 }
+
+typedef struct LoadedSource {
+    const char *path;
+    char *source;
+    size_t source_length;
+    FengProgram *program;
+} LoadedSource;
 
 static char *read_entire_file(const char *path, size_t *out_length) {
     FILE *file = fopen(path, "rb");
@@ -154,15 +163,15 @@ static unsigned int count_digits(unsigned int value) {
     return digits;
 }
 
-static void print_parse_error_context(FILE *stream,
-                                      const char *source,
-                                      size_t source_length,
-                                      const FengParseError *error) {
+static void print_error_context(FILE *stream,
+                                const char *source,
+                                size_t source_length,
+                                const FengToken *token) {
     size_t index;
     size_t line_start = 0U;
     size_t line_end = source_length;
     unsigned int current_line = 1U;
-    unsigned int line_no = error->token.line > 0U ? error->token.line : 1U;
+    unsigned int line_no = token->line > 0U ? token->line : 1U;
     unsigned int digits = count_digits(line_no);
     bool use_color = stream_supports_color(stream);
 
@@ -186,7 +195,7 @@ static void print_parse_error_context(FILE *stream,
     }
 
     fprintf(stream, "  got: ");
-    fprint_token_summary(stream, &error->token);
+    fprint_token_summary(stream, token);
     fputc('\n', stream);
 
     set_stream_color(stream, use_color, FENG_COLOR_RED);
@@ -197,16 +206,16 @@ static void print_parse_error_context(FILE *stream,
 
     set_stream_color(stream, use_color, FENG_COLOR_RED);
     fprintf(stream, "  %*s | ", digits, "");
-    if (error->token.kind == FENG_TOKEN_EOF) {
+    if (token->kind == FENG_TOKEN_EOF) {
         for (index = line_start; index < line_end; ++index) {
             fputc(source[index] == '\t' ? '\t' : ' ', stream);
         }
-    } else if (error->token.offset >= line_start && error->token.offset <= line_end) {
-        for (index = line_start; index < error->token.offset; ++index) {
+    } else if (token->offset >= line_start && token->offset <= line_end) {
+        for (index = line_start; index < token->offset; ++index) {
             fputc(source[index] == '\t' ? '\t' : ' ', stream);
         }
     } else {
-        unsigned int column = error->token.column > 0U ? error->token.column - 1U : 0U;
+        unsigned int column = token->column > 0U ? token->column - 1U : 0U;
 
         for (index = 0U; index < (size_t)column; ++index) {
             fputc(' ', stream);
@@ -215,6 +224,54 @@ static void print_parse_error_context(FILE *stream,
     fputc('^', stream);
     reset_stream_color(stream, use_color);
     fputc('\n', stream);
+}
+
+static void print_diagnostic(FILE *stream,
+                             const char *path,
+                             const char *kind,
+                             const char *message,
+                             const FengToken *token,
+                             const char *source,
+                             size_t source_length) {
+    bool use_color = stream_supports_color(stream);
+
+    fprintf(stream, "%s:", path);
+    set_stream_color(stream, use_color, FENG_COLOR_RED);
+    fprintf(stream, "%u:%u", token->line, token->column);
+    reset_stream_color(stream, use_color);
+    fprintf(stream, ": %s: %s\n", kind, message != NULL ? message : "unknown error");
+
+    if (source != NULL) {
+        print_error_context(stream, source, source_length, token);
+    }
+}
+
+static const LoadedSource *find_loaded_source(const LoadedSource *sources,
+                                              size_t source_count,
+                                              const char *path) {
+    size_t index;
+
+    for (index = 0U; index < source_count; ++index) {
+        if (sources[index].path != NULL && strcmp(sources[index].path, path) == 0) {
+            return &sources[index];
+        }
+    }
+
+    return NULL;
+}
+
+static void free_loaded_sources(LoadedSource *sources, size_t source_count) {
+    size_t index;
+
+    if (sources == NULL) {
+        return;
+    }
+
+    for (index = 0U; index < source_count; ++index) {
+        feng_program_free(sources[index].program);
+        free(sources[index].source);
+    }
+    free(sources);
 }
 
 static void dump_token(const FengToken *token) {
@@ -286,7 +343,6 @@ static int run_parse_command(const char *path) {
     FengProgram *program = NULL;
     FengParseError error;
     int exit_code = 0;
-    bool use_color = stream_supports_color(stderr);
 
     if (source == NULL) {
         fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
@@ -294,14 +350,13 @@ static int run_parse_command(const char *path) {
     }
 
     if (!feng_parse_source(source, source_length, path, &program, &error)) {
-        fprintf(stderr, "%s:", path);
-        set_stream_color(stderr, use_color, FENG_COLOR_RED);
-        fprintf(stderr, "%u:%u", error.token.line, error.token.column);
-        reset_stream_color(stderr, use_color);
-        fprintf(stderr,
-            ": parse error: %s\n",
-            error.message != NULL ? error.message : "unknown error");
-        print_parse_error_context(stderr, source, source_length, &error);
+        print_diagnostic(stderr,
+                         path,
+                         "parse error",
+                         error.message,
+                         &error.token,
+                         source,
+                         source_length);
         exit_code = 1;
     } else {
         feng_program_dump(stdout, program);
@@ -312,17 +367,115 @@ static int run_parse_command(const char *path) {
     return exit_code;
 }
 
+static int run_semantic_command(int path_count, char **paths) {
+    LoadedSource *sources = NULL;
+    const FengProgram **programs = NULL;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    int exit_code = 0;
+    int path_index;
+
+    sources = (LoadedSource *)calloc((size_t)path_count, sizeof(*sources));
+    programs = (const FengProgram **)calloc((size_t)path_count, sizeof(*programs));
+    if (sources == NULL || programs == NULL) {
+        fprintf(stderr, "out of memory\n");
+        free_loaded_sources(sources, (size_t)path_count);
+        free(programs);
+        return 1;
+    }
+
+    for (path_index = 0; path_index < path_count; ++path_index) {
+        FengParseError error;
+
+        sources[path_index].path = paths[path_index];
+        sources[path_index].source = read_entire_file(paths[path_index], &sources[path_index].source_length);
+        if (sources[path_index].source == NULL) {
+            fprintf(stderr, "failed to read %s: %s\n", paths[path_index], strerror(errno));
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        if (!feng_parse_source(sources[path_index].source,
+                               sources[path_index].source_length,
+                               paths[path_index],
+                               &sources[path_index].program,
+                               &error)) {
+            print_diagnostic(stderr,
+                             paths[path_index],
+                             "parse error",
+                             error.message,
+                             &error.token,
+                             sources[path_index].source,
+                             sources[path_index].source_length);
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        programs[path_index] = sources[path_index].program;
+    }
+
+    if (!feng_semantic_analyze(programs,
+                               (size_t)path_count,
+                               &analysis,
+                               &errors,
+                               &error_count)) {
+        size_t error_index;
+
+        if (error_count == 0U) {
+            fprintf(stderr, "semantic analysis failed\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        for (error_index = 0U; error_index < error_count; ++error_index) {
+            const LoadedSource *source = find_loaded_source(sources, (size_t)path_count, errors[error_index].path);
+
+            if (error_index > 0U) {
+                fputc('\n', stderr);
+            }
+
+            print_diagnostic(stderr,
+                             errors[error_index].path,
+                             "semantic error",
+                             errors[error_index].message,
+                             &errors[error_index].token,
+                             source != NULL ? source->source : NULL,
+                             source != NULL ? source->source_length : 0U);
+        }
+        exit_code = 1;
+    }
+
+cleanup:
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    free(programs);
+    free_loaded_sources(sources, (size_t)path_count);
+    return exit_code;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 3) {
+    if (argc < 3) {
         print_usage(argv[0]);
         return 1;
     }
 
     if (strcmp(argv[1], "lex") == 0) {
+        if (argc != 3) {
+            print_usage(argv[0]);
+            return 1;
+        }
         return run_lex_command(argv[2]);
     }
     if (strcmp(argv[1], "parse") == 0) {
+        if (argc != 3) {
+            print_usage(argv[0]);
+            return 1;
+        }
         return run_parse_command(argv[2]);
+    }
+    if (strcmp(argv[1], "semantic") == 0) {
+        return run_semantic_command(argc - 2, argv + 2);
     }
 
     fprintf(stderr, "unknown command: %s\n", argv[1]);
