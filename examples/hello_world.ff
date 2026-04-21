@@ -9,7 +9,7 @@ type User {
 }
 
 @cdecl("libc")
-extern fn print(msg: string): void;
+fn print(msg: string): int;
 
 /* main function */
 fn main(args: string[]): void {

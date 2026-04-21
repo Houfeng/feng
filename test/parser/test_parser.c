@@ -190,6 +190,34 @@ static void test_parse_error_top_level_fn_missing_body(void) {
     ASSERT(error.token.kind == FENG_TOKEN_SEMICOLON);
 }
 
+static void test_parse_error_top_level_fn_missing_body_without_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn print(msg: string);\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_fn_body_no_return.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "function declarations must provide a body '{...}'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_SEMICOLON);
+}
+
+static void test_parse_error_top_level_fn_missing_body_with_void_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn print(msg: string): void;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_fn_body_void_return.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "function declarations must provide a body '{...}'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_SEMICOLON);
+}
+
 static void test_parse_error_extern_fn_with_body(void) {
     const char *source =
         "mod demo.main;\n"
@@ -337,6 +365,8 @@ int main(void) {
     test_parse_error();
     test_parse_error_after_annotation_semicolon();
     test_parse_error_top_level_fn_missing_body();
+    test_parse_error_top_level_fn_missing_body_without_return_type();
+    test_parse_error_top_level_fn_missing_body_with_void_return();
     test_parse_error_extern_fn_with_body();
     test_parse_error_member_fn_missing_body();
     test_parse_error_extern_fn_inside_type();
