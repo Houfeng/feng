@@ -59,6 +59,11 @@ typedef struct ResolveContext {
     size_t *error_capacity;
 } ResolveContext;
 
+typedef struct ResolvedTypeTarget {
+    const FengDecl *type_decl;
+    const FengSemanticModule *provider_module;
+} ResolvedTypeTarget;
+
 static bool slice_equals(FengSlice left, FengSlice right) {
     return left.length == right.length && memcmp(left.data, right.data, left.length) == 0;
 }
@@ -621,6 +626,66 @@ static const FengTypeMember *find_instance_member(const FengDecl *type_decl, Fen
     return NULL;
 }
 
+static bool type_member_is_public(const FengTypeMember *member) {
+    return member != NULL && member->visibility != FENG_VISIBILITY_PRIVATE;
+}
+
+static bool type_member_is_accessible_from(const ResolveContext *context,
+                                           const FengSemanticModule *provider_module,
+                                           const FengTypeMember *member) {
+    return member != NULL &&
+           (provider_module == NULL || provider_module == context->module ||
+            type_member_is_public(member));
+}
+
+static size_t count_declared_constructors(const FengDecl *type_decl) {
+    size_t member_index;
+    size_t count = 0U;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return 0U;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        if (type_decl->as.type_decl.as.object.members[member_index]->kind ==
+            FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
+static size_t count_accessible_constructors_with_arity(const ResolveContext *context,
+                                                       const FengDecl *type_decl,
+                                                       const FengSemanticModule *provider_module,
+                                                       size_t arg_count) {
+    size_t member_index;
+    size_t count = 0U;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return 0U;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            continue;
+        }
+        if (!type_member_is_accessible_from(context, provider_module, member)) {
+            continue;
+        }
+        if (member->as.callable.param_count == arg_count) {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
 static char *format_expr_target_name(const FengExpr *expr) {
     if (expr == NULL) {
         return duplicate_cstr("<expression>");
@@ -663,17 +728,29 @@ static char *format_expr_target_name(const FengExpr *expr) {
     }
 }
 
-static const FengDecl *resolve_object_literal_target_type(const ResolveContext *context,
-                                                          const FengExpr *target_expr) {
+static ResolvedTypeTarget resolve_type_target_expr(const ResolveContext *context,
+                                                   const FengExpr *target_expr,
+                                                   bool follow_call_callee) {
+    ResolvedTypeTarget result;
+
+    memset(&result, 0, sizeof(result));
     if (target_expr == NULL) {
-        return NULL;
+        return result;
     }
 
     switch (target_expr->kind) {
-        case FENG_EXPR_IDENTIFIER:
-            return find_visible_type_decl(context->visible_types,
-                                          context->visible_type_count,
-                                          target_expr->as.identifier);
+        case FENG_EXPR_IDENTIFIER: {
+            const VisibleTypeEntry *entry =
+                find_visible_type(context->visible_types,
+                                  context->visible_type_count,
+                                  target_expr->as.identifier);
+
+            if (entry != NULL) {
+                result.type_decl = entry->decl;
+                result.provider_module = entry->provider_module;
+            }
+            return result;
+        }
 
         case FENG_EXPR_MEMBER:
             if (target_expr->as.member.object != NULL &&
@@ -682,30 +759,106 @@ static const FengDecl *resolve_object_literal_target_type(const ResolveContext *
                     find_unshadowed_alias(context, target_expr->as.member.object->as.identifier);
 
                 if (alias != NULL) {
-                    return find_module_public_type_decl(alias->target_module,
-                                                        target_expr->as.member.member);
+                    result.type_decl =
+                        find_module_public_type_decl(alias->target_module, target_expr->as.member.member);
+                    result.provider_module = result.type_decl != NULL ? alias->target_module : NULL;
                 }
             }
-            return NULL;
+            return result;
 
         case FENG_EXPR_CALL:
-            return resolve_object_literal_target_type(context, target_expr->as.call.callee);
+            if (follow_call_callee) {
+                return resolve_type_target_expr(context, target_expr->as.call.callee, true);
+            }
+            return result;
 
         default:
-            return NULL;
+            return result;
     }
 }
 
+static bool validate_constructor_invocation(ResolveContext *context,
+                                            const FengExpr *target_expr,
+                                            const FengDecl *type_decl,
+                                            const FengSemanticModule *provider_module,
+                                            size_t arg_count) {
+    char *target_name = format_expr_target_name(target_expr);
+    size_t declared_constructor_count;
+    size_t accessible_match_count;
+
+    if (type_decl == NULL) {
+        free(target_name);
+        return true;
+    }
+
+    if (type_decl->kind != FENG_DECL_TYPE || type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        bool ok = resolver_append_error(
+            context,
+            target_expr != NULL ? target_expr->token : context->program->module_token,
+            format_message("type '%.*s' is not an object type and cannot be constructed",
+                           type_decl->kind == FENG_DECL_TYPE ? (int)type_decl->as.type_decl.name.length : 0,
+                           type_decl->kind == FENG_DECL_TYPE ? type_decl->as.type_decl.name.data : ""));
+
+        free(target_name);
+        return ok;
+    }
+
+    declared_constructor_count = count_declared_constructors(type_decl);
+    if (declared_constructor_count == 0U) {
+        free(target_name);
+        if (arg_count == 0U) {
+            return true;
+        }
+
+        return resolver_append_error(
+            context,
+            target_expr != NULL ? target_expr->token : context->program->module_token,
+            format_message("type '%.*s' has no constructor accepting %zu argument(s)",
+                           (int)type_decl->as.type_decl.name.length,
+                           type_decl->as.type_decl.name.data,
+                           arg_count));
+    }
+
+    accessible_match_count = count_accessible_constructors_with_arity(
+        context, type_decl, provider_module, arg_count);
+    free(target_name);
+    if (accessible_match_count > 0U) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        target_expr != NULL ? target_expr->token : context->program->module_token,
+        format_message("type '%.*s' has no accessible constructor accepting %zu argument(s)",
+                       (int)type_decl->as.type_decl.name.length,
+                       type_decl->as.type_decl.name.data,
+                       arg_count));
+}
+
+static bool validate_constructor_call_expr(ResolveContext *context, const FengExpr *expr) {
+    ResolvedTypeTarget target = resolve_type_target_expr(context, expr->as.call.callee, false);
+
+    if (target.type_decl == NULL) {
+        return true;
+    }
+
+    return validate_constructor_invocation(context,
+                                           expr->as.call.callee,
+                                           target.type_decl,
+                                           target.provider_module,
+                                           expr->as.call.arg_count);
+}
+
 static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
-    const FengDecl *type_decl;
+    ResolvedTypeTarget target;
     char *target_name;
     size_t field_index;
 
-    type_decl = resolve_object_literal_target_type(context, expr->as.object_literal.target);
+    target = resolve_type_target_expr(context, expr->as.object_literal.target, true);
     target_name = format_expr_target_name(expr->as.object_literal.target);
 
-    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
-        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+    if (target.type_decl == NULL || target.type_decl->kind != FENG_DECL_TYPE ||
+        target.type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
         bool ok = resolver_append_error(
             context,
             expr->token,
@@ -716,18 +869,28 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
         return ok;
     }
 
+    if (expr->as.object_literal.target->kind != FENG_EXPR_CALL &&
+        !validate_constructor_invocation(context,
+                                         expr->as.object_literal.target,
+                                         target.type_decl,
+                                         target.provider_module,
+                                         0U)) {
+        free(target_name);
+        return false;
+    }
+
     for (field_index = 0U; field_index < expr->as.object_literal.field_count; ++field_index) {
         const FengObjectFieldInit *field = &expr->as.object_literal.fields[field_index];
 
-        if (find_type_field_member(type_decl, field->name) == NULL) {
+        if (find_type_field_member(target.type_decl, field->name) == NULL) {
             bool ok = resolver_append_error(
                 context,
                 field->token,
                 format_message("object literal field '%.*s' is not a field of type '%.*s'",
                                (int)field->name.length,
                                field->name.data,
-                               (int)type_decl->as.type_decl.name.length,
-                               type_decl->as.type_decl.name.data));
+                               (int)target.type_decl->as.type_decl.name.length,
+                               target.type_decl->as.type_decl.name.data));
 
             free(target_name);
             return ok;
@@ -1225,7 +1388,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            return true;
+            return validate_constructor_call_expr(context, expr);
 
         case FENG_EXPR_MEMBER:
             if (resolve_alias_member_expr(context, expr)) {

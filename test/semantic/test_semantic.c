@@ -620,6 +620,106 @@ static void test_object_literal_accepts_constructor_call_target(void) {
     feng_program_free(program);
 }
 
+static void test_constructor_call_uses_implicit_default_constructor(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {}\n"
+        "fn make(): User {\n"
+        "    return User();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_implicit_default_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_constructor_call_reports_missing_zero_arg_constructor(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn User(name: string) {}\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_missing_zero_arg.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_missing_zero_arg.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "no accessible constructor accepting 0 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_call_rejects_function_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Factory(): int;\n"
+        "fn make() {\n"
+        "    Factory();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_non_object_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_non_object_type.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not an object type and cannot be constructed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_reports_inaccessible_imported_constructor(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {\n"
+        "    pr fn User() {}\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn make(): User {\n"
+        "    return User {};\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("ctor_import_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("ctor_import_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_import_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "no accessible constructor accepting 0 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -644,6 +744,10 @@ int main(void) {
     test_object_literal_reports_unknown_field();
     test_object_literal_requires_object_type_target();
     test_object_literal_accepts_constructor_call_target();
+    test_constructor_call_uses_implicit_default_constructor();
+    test_constructor_call_reports_missing_zero_arg_constructor();
+    test_constructor_call_rejects_function_type();
+    test_object_literal_reports_inaccessible_imported_constructor();
     puts("semantic tests passed");
     return 0;
 }
