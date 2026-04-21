@@ -28,6 +28,7 @@ typedef struct VisibleValueEntry {
     FengSlice name;
     const FengSemanticModule *provider_module;
     const FengDecl *decl;
+    FengMutability mutability;
     bool is_function;
 } VisibleValueEntry;
 
@@ -54,6 +55,7 @@ typedef struct InferredExprType {
 typedef struct LocalNameEntry {
     FengSlice name;
     InferredExprType type;
+    FengMutability mutability;
 } LocalNameEntry;
 
 typedef struct ScopeFrame {
@@ -759,6 +761,14 @@ static const FengDecl *find_module_public_binding_decl(const FengSemanticModule 
     return NULL;
 }
 
+static FengMutability normalize_mutability(FengMutability mutability) {
+    return mutability == FENG_MUTABILITY_VAR ? FENG_MUTABILITY_VAR : FENG_MUTABILITY_LET;
+}
+
+static bool mutability_is_writable(FengMutability mutability) {
+    return normalize_mutability(mutability) == FENG_MUTABILITY_VAR;
+}
+
 static const FengDecl *find_module_public_function_decl(const FengSemanticModule *module, FengSlice name) {
     size_t program_index;
 
@@ -893,7 +903,8 @@ static void resolver_pop_scope(ResolveContext *context) {
 
 static bool resolver_add_local_entry(ResolveContext *context,
                                      FengSlice name,
-                                     InferredExprType type) {
+                                     InferredExprType type,
+                                     FengMutability mutability) {
     ScopeFrame *frame;
     LocalNameEntry entry;
 
@@ -904,6 +915,7 @@ static bool resolver_add_local_entry(ResolveContext *context,
     frame = &context->scopes[context->scope_count - 1U];
     entry.name = name;
     entry.type = type;
+    entry.mutability = normalize_mutability(mutability);
     return append_raw((void **)&frame->locals,
                       &frame->local_count,
                       &frame->local_capacity,
@@ -913,8 +925,9 @@ static bool resolver_add_local_entry(ResolveContext *context,
 
 static bool resolver_add_local_typed_name(ResolveContext *context,
                                           FengSlice name,
-                                          InferredExprType type) {
-    return resolver_add_local_entry(context, name, type);
+                                          InferredExprType type,
+                                          FengMutability mutability) {
+    return resolver_add_local_entry(context, name, type, mutability);
 }
 
 static const LocalNameEntry *resolver_find_local_name_entry(const ResolveContext *context,
@@ -1846,7 +1859,8 @@ static InferredExprType infer_lambda_call_expr_type(ResolveContext *context,
         ok = resolver_add_local_typed_name(
             context,
             callee->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(callee->as.lambda.params[param_index].type));
+            inferred_expr_type_from_type_ref(callee->as.lambda.params[param_index].type),
+            callee->as.lambda.params[param_index].mutability);
     }
     if (ok) {
         body_type = infer_expr_type(context, callee->as.lambda.body);
@@ -2309,6 +2323,108 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
     return resolver_current_constructor_add_bound_name(context, field_member->as.field.name);
 }
 
+static bool append_assignment_target_not_writable_error(ResolveContext *context,
+                                                        const FengExpr *target) {
+    char *target_name = format_expr_target_name(target);
+    bool ok = resolver_append_error(
+        context,
+        target->token,
+        format_message("assignment target '%s' is not writable",
+                       target_name != NULL ? target_name : "<expression>"));
+
+    free(target_name);
+    return ok;
+}
+
+static bool validate_assignment_target_writable(ResolveContext *context, const FengExpr *target) {
+    if (target == NULL) {
+        return true;
+    }
+
+    switch (target->kind) {
+        case FENG_EXPR_IDENTIFIER: {
+            const LocalNameEntry *local_entry =
+                resolver_find_local_name_entry(context, target->as.identifier);
+
+            if (local_entry != NULL) {
+                return mutability_is_writable(local_entry->mutability)
+                           ? true
+                           : append_assignment_target_not_writable_error(context, target);
+            }
+
+            {
+                const VisibleValueEntry *visible_value =
+                    find_visible_value(context->visible_values,
+                                       context->visible_value_count,
+                                       target->as.identifier);
+
+                if (visible_value != NULL && !visible_value->is_function &&
+                    visible_value->decl != NULL &&
+                    visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                    mutability_is_writable(visible_value->mutability)) {
+                    return true;
+                }
+            }
+
+            return append_assignment_target_not_writable_error(context, target);
+        }
+
+        case FENG_EXPR_MEMBER: {
+            const FengExpr *object = target->as.member.object;
+
+            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+
+                if (alias != NULL) {
+                    const FengDecl *binding_decl =
+                        find_module_public_binding_decl(alias->target_module, target->as.member.member);
+
+                    if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                        mutability_is_writable(binding_decl->as.binding.mutability)) {
+                        return true;
+                    }
+
+                    return append_assignment_target_not_writable_error(context, target);
+                }
+            }
+
+            if (context->current_type_decl != NULL &&
+                context->current_callable_member != NULL &&
+                context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
+                find_direct_self_let_target_member(context->current_type_decl, target) != NULL) {
+                return true;
+            }
+
+            {
+                const FengDecl *owner_type_decl = resolve_inferred_expr_type_decl(
+                    context, infer_expr_type(context, target->as.member.object));
+
+                if (owner_type_decl != NULL) {
+                    const FengTypeMember *member =
+                        find_instance_member(owner_type_decl, target->as.member.member);
+
+                    if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
+                        member->as.field.mutability == FENG_MUTABILITY_VAR) {
+                        return true;
+                    }
+
+                    if (member != NULL) {
+                        return append_assignment_target_not_writable_error(context, target);
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        case FENG_EXPR_INDEX:
+            return true;
+
+        default:
+            return append_assignment_target_not_writable_error(context, target);
+    }
+}
+
 static char *format_expr_target_name(const FengExpr *expr) {
     if (expr == NULL) {
         return duplicate_cstr("<expression>");
@@ -2623,7 +2739,8 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
         ok = resolver_add_local_typed_name(
             context,
             expr->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type));
+            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
+            expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
         body_type = infer_expr_type(context, expr->as.lambda.body);
@@ -3566,6 +3683,9 @@ static bool import_public_names(const FengSemanticModule *target_module,
                         entry.name = name;
                         entry.provider_module = target_module;
                         entry.decl = decl;
+                        entry.mutability = decl->kind == FENG_DECL_GLOBAL_BINDING
+                                               ? decl->as.binding.mutability
+                                               : FENG_MUTABILITY_DEFAULT;
                         entry.is_function = (decl->kind == FENG_DECL_FUNCTION);
                         ok = append_raw((void **)visible_values,
                                         visible_value_count,
@@ -3776,7 +3896,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         ok = resolver_add_local_typed_name(
             context,
             expr->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type));
+            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
+            expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
         ok = resolve_expr(context, expr->as.lambda.body, false);
@@ -3954,7 +4075,8 @@ static bool resolve_binding(ResolveContext *context,
     if (add_to_scope) {
         binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
                                              : infer_expr_type(context, binding->initializer);
-        return resolver_add_local_typed_name(context, binding->name, binding_type);
+        return resolver_add_local_typed_name(
+            context, binding->name, binding_type, binding->mutability);
     }
     return true;
 }
@@ -4008,6 +4130,9 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 return false;
             }
             if (!validate_self_let_assignment(context, stmt)) {
+                return false;
+            }
+            if (!validate_assignment_target_writable(context, stmt->as.assign.target)) {
                 return false;
             }
             if (!resolve_expr(context, stmt->as.assign.value, allow_self)) {
@@ -4122,7 +4247,8 @@ static bool resolve_callable(ResolveContext *context,
         ok = resolver_add_local_typed_name(
             context,
             callable->params[param_index].name,
-            inferred_expr_type_from_type_ref(callable->params[param_index].type));
+            inferred_expr_type_from_type_ref(callable->params[param_index].type),
+            callable->params[param_index].mutability);
     }
     if (ok) {
         ok = resolve_block_contents(context, callable->body, allow_self);
@@ -4336,6 +4462,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                     entry.name = decl->as.binding.name;
                     entry.provider_module = module;
                     entry.decl = decl;
+                    entry.mutability = decl->as.binding.mutability;
                     entry.is_function = false;
                     ok = append_raw((void **)&visible_values,
                                     &visible_value_count,
@@ -4432,6 +4559,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         value_entry.name = decl->as.function_decl.name;
                         value_entry.provider_module = module;
                         value_entry.decl = decl;
+                        value_entry.mutability = FENG_MUTABILITY_DEFAULT;
                         value_entry.is_function = true;
                         ok = append_raw((void **)&visible_values,
                                         &visible_value_count,
