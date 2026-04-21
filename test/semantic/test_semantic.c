@@ -741,6 +741,110 @@ static void test_method_value_argument_rejects_non_matching_target_type(void) {
     feng_program_free(program);
 }
 
+static void test_function_typed_call_result_rejects_non_matching_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntPicker(a: int): int;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let picker: IntPicker = pick;\n"
+        "    let flag: bool = picker(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("call_result_binding_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "call_result_binding_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_call_result_rejects_non_matching_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let flag: bool = pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("top_level_call_result_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "top_level_call_result_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_call_result_rejects_non_matching_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run(): bool {\n"
+        "    return pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("top_level_call_result_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "top_level_call_result_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_method_call_result_rejects_non_matching_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn pick(a: int): int {\n"
+        "        return a;\n"
+        "    }\n"
+        "}\n"
+        "fn run(user: User) {\n"
+        "    let flag: bool = user.pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_call_result_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "method_call_result_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1693,6 +1797,10 @@ int main(void) {
     test_method_value_requires_explicit_type_when_overloaded();
     test_alias_function_value_argument_rejects_non_matching_target_type();
     test_method_value_argument_rejects_non_matching_target_type();
+    test_function_typed_call_result_rejects_non_matching_binding_type();
+    test_top_level_call_result_rejects_non_matching_binding_type();
+    test_top_level_call_result_rejects_non_matching_return_type();
+    test_method_call_result_rejects_non_matching_binding_type();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
