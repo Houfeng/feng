@@ -142,6 +142,89 @@ static void test_valid_function_overload_by_parameter_type(void) {
     feng_program_free(program);
 }
 
+static void test_top_level_function_call_selects_overload_by_literal_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("call_overload_literal_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_call_selects_overload_by_inferred_local_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let value = 1;\n"
+        "    return pick(value);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("call_overload_local_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_call_reports_type_mismatch(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    pick(true);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("call_overload_type_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "call_overload_type_mismatch.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message, "top-level function 'pick' has no overload accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1073,6 +1156,9 @@ int main(void) {
     test_function_return_only_overload_error();
     test_module_visibility_conflict();
     test_valid_function_overload_by_parameter_type();
+    test_top_level_function_call_selects_overload_by_literal_type();
+    test_top_level_function_call_selects_overload_by_inferred_local_binding();
+    test_top_level_function_call_reports_type_mismatch();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();

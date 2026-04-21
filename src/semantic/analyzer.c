@@ -10,10 +10,12 @@ typedef struct SymbolEntry {
     const FengDecl *decl;
 } SymbolEntry;
 
-typedef struct FunctionEntry {
+typedef struct FunctionOverloadSetEntry {
     FengSlice name;
-    const FengDecl *decl;
-} FunctionEntry;
+    const FengDecl **decls;
+    size_t decl_count;
+    size_t decl_capacity;
+} FunctionOverloadSetEntry;
 
 typedef struct VisibleTypeEntry {
     FengSlice name;
@@ -70,6 +72,17 @@ typedef struct ConstructorResolution {
     const FengTypeMember *constructor;
 } ConstructorResolution;
 
+typedef enum FunctionCallResolutionKind {
+    FENG_FUNCTION_CALL_RESOLUTION_NONE = 0,
+    FENG_FUNCTION_CALL_RESOLUTION_UNIQUE,
+    FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS
+} FunctionCallResolutionKind;
+
+typedef struct FunctionCallResolution {
+    FunctionCallResolutionKind kind;
+    const FengDecl *decl;
+} FunctionCallResolution;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -78,6 +91,8 @@ typedef struct ResolveContext {
     size_t visible_type_count;
     const VisibleValueEntry *visible_values;
     size_t visible_value_count;
+    const FunctionOverloadSetEntry *function_sets;
+    size_t function_set_count;
     const AliasEntry *aliases;
     size_t alias_count;
     ScopeFrame *scopes;
@@ -502,6 +517,50 @@ static const VisibleValueEntry *find_visible_value(const VisibleValueEntry *entr
     size_t index = find_visible_value_index(entries, count, name);
 
     return index < count ? &entries[index] : NULL;
+}
+
+static size_t find_function_overload_set_index(const FunctionOverloadSetEntry *entries,
+                                               size_t count,
+                                               FengSlice name) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (slice_equals(entries[index].name, name)) {
+            return index;
+        }
+    }
+
+    return count;
+}
+
+static const FunctionOverloadSetEntry *find_function_overload_set(
+    const FunctionOverloadSetEntry *entries,
+    size_t count,
+    FengSlice name) {
+    size_t index = find_function_overload_set_index(entries, count, name);
+
+    return index < count ? &entries[index] : NULL;
+}
+
+static bool append_function_overload_decl(FunctionOverloadSetEntry *entry, const FengDecl *decl) {
+    return append_raw((void **)&entry->decls,
+                      &entry->decl_count,
+                      &entry->decl_capacity,
+                      sizeof(entry->decls[0]),
+                      &decl);
+}
+
+static void free_function_overload_sets(FunctionOverloadSetEntry *entries, size_t count) {
+    size_t index;
+
+    if (entries == NULL) {
+        return;
+    }
+
+    for (index = 0U; index < count; ++index) {
+        free(entries[index].decls);
+    }
+    free(entries);
 }
 
 static size_t find_alias_index(const AliasEntry *entries, size_t count, FengSlice alias) {
@@ -1030,10 +1089,10 @@ static size_t count_declared_constructors(const FengDecl *type_decl) {
     return count;
 }
 
-static bool constructor_parameters_match_args(ResolveContext *context,
-                                              const FengCallableSignature *callable,
-                                              FengExpr *const *args,
-                                              size_t arg_count) {
+static bool callable_parameters_match_args(ResolveContext *context,
+                                           const FengCallableSignature *callable,
+                                           FengExpr *const *args,
+                                           size_t arg_count) {
     size_t arg_index;
 
     if (callable->param_count != arg_count) {
@@ -1081,7 +1140,7 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         if (!type_member_is_accessible_from(context, provider_module, member)) {
             continue;
         }
-        if (!constructor_parameters_match_args(
+        if (!callable_parameters_match_args(
                 context, &member->as.callable, args, arg_count)) {
             continue;
         }
@@ -1094,6 +1153,45 @@ static ConstructorResolution resolve_accessible_constructor_overload(
 
         result.kind = FENG_CONSTRUCTOR_RESOLUTION_AMBIGUOUS;
         result.constructor = NULL;
+    }
+
+    return result;
+}
+
+static FunctionCallResolution resolve_top_level_function_overload(
+    ResolveContext *context,
+    const FunctionOverloadSetEntry *overload_set,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t decl_index;
+    FunctionCallResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (overload_set == NULL) {
+        return result;
+    }
+
+    for (decl_index = 0U; decl_index < overload_set->decl_count; ++decl_index) {
+        const FengDecl *decl = overload_set->decls[decl_index];
+
+        if (decl == NULL || decl->kind != FENG_DECL_FUNCTION) {
+            continue;
+        }
+        if (!callable_parameters_match_args(context,
+                                            &decl->as.function_decl,
+                                            args,
+                                            arg_count)) {
+            continue;
+        }
+
+        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+            result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+            result.decl = decl;
+            continue;
+        }
+
+        result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+        result.decl = NULL;
     }
 
     return result;
@@ -1722,6 +1820,81 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
                                            expr->as.call.arg_count);
 }
 
+static bool validate_function_call_expr(ResolveContext *context, const FengExpr *expr) {
+    const FengExpr *callee = expr->as.call.callee;
+
+    if (callee == NULL || callee->kind != FENG_EXPR_IDENTIFIER) {
+        return true;
+    }
+
+    if (resolver_find_local_name_entry(context, callee->as.identifier) != NULL) {
+        return true;
+    }
+
+    {
+        const FunctionOverloadSetEntry *overload_set =
+            find_function_overload_set(context->function_sets,
+                                      context->function_set_count,
+                                      callee->as.identifier);
+
+        if (overload_set != NULL) {
+            FunctionCallResolution resolution =
+                resolve_top_level_function_overload(context,
+                                                    overload_set,
+                                                    expr->as.call.args,
+                                                    expr->as.call.arg_count);
+
+            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                return true;
+            }
+            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+                return resolver_append_error(
+                    context,
+                    callee->token,
+                    format_message("top-level function '%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                   (int)callee->as.identifier.length,
+                                   callee->as.identifier.data,
+                                   expr->as.call.arg_count));
+            }
+
+            return resolver_append_error(
+                context,
+                callee->token,
+                format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
+                               (int)callee->as.identifier.length,
+                               callee->as.identifier.data,
+                               expr->as.call.arg_count));
+        }
+    }
+
+    {
+        const VisibleValueEntry *visible_value =
+            find_visible_value(context->visible_values,
+                               context->visible_value_count,
+                               callee->as.identifier);
+
+        if (visible_value != NULL && visible_value->is_function && visible_value->decl != NULL &&
+            visible_value->decl->kind == FENG_DECL_FUNCTION) {
+            if (callable_parameters_match_args(context,
+                                              &visible_value->decl->as.function_decl,
+                                              expr->as.call.args,
+                                              expr->as.call.arg_count)) {
+                return true;
+            }
+
+            return resolver_append_error(
+                context,
+                callee->token,
+                format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
+                               (int)callee->as.identifier.length,
+                               callee->as.identifier.data,
+                               expr->as.call.arg_count));
+        }
+    }
+
+    return true;
+}
+
 static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget target;
     char *target_name;
@@ -2319,7 +2492,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            return validate_constructor_call_expr(context, expr);
+            return validate_constructor_call_expr(context, expr) &&
+                   validate_function_call_expr(context, expr);
 
         case FENG_EXPR_MEMBER:
             if (resolve_alias_member_expr(context, expr)) {
@@ -2606,6 +2780,8 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   size_t visible_type_count,
                                   const VisibleValueEntry *visible_values,
                                   size_t visible_value_count,
+                                  const FunctionOverloadSetEntry *function_sets,
+                                  size_t function_set_count,
                                   FengSemanticError **errors,
                                   size_t *error_count,
                                   size_t *error_capacity) {
@@ -2624,6 +2800,8 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.visible_type_count = visible_type_count;
     context.visible_values = visible_values;
     context.visible_value_count = visible_value_count;
+    context.function_sets = function_sets;
+    context.function_set_count = function_set_count;
     context.errors = errors;
     context.error_count = error_count;
     context.error_capacity = error_capacity;
@@ -2653,13 +2831,13 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    size_t *error_capacity) {
     VisibleTypeEntry *visible_types = NULL;
     VisibleValueEntry *visible_values = NULL;
-    FunctionEntry *functions = NULL;
+    FunctionOverloadSetEntry *function_sets = NULL;
     size_t visible_type_count = 0U;
     size_t visible_value_count = 0U;
-    size_t function_count = 0U;
+    size_t function_set_count = 0U;
     size_t visible_type_capacity = 0U;
     size_t visible_value_capacity = 0U;
-    size_t function_capacity = 0U;
+    size_t function_set_capacity = 0U;
     size_t program_index;
     bool ok = true;
 
@@ -2747,9 +2925,10 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                 }
 
                 case FENG_DECL_FUNCTION: {
-                    FunctionEntry entry;
                     size_t value_index =
                         find_visible_value_index(visible_values, visible_value_count, decl->as.function_decl.name);
+                    size_t function_set_index = find_function_overload_set_index(
+                        function_sets, function_set_count, decl->as.function_decl.name);
 
                     if (value_index < visible_value_count && !visible_values[value_index].is_function) {
                         char *message = format_message(
@@ -2766,47 +2945,63 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         break;
                     }
 
-                    for (index = 0U; index < function_count; ++index) {
-                        const FengCallableSignature *existing = &functions[index].decl->as.function_decl;
+                    if (function_set_index < function_set_count) {
+                        const FunctionOverloadSetEntry *function_set = &function_sets[function_set_index];
 
-                        if (!slice_equals(functions[index].name, decl->as.function_decl.name)) {
-                            continue;
+                        for (index = 0U; index < function_set->decl_count; ++index) {
+                            const FengCallableSignature *existing =
+                                &function_set->decls[index]->as.function_decl;
+
+                            if (!parameters_equal(existing, &decl->as.function_decl)) {
+                                continue;
+                            }
+
+                            if (return_type_equals(existing->return_type, decl->as.function_decl.return_type)) {
+                                char *message = format_message("duplicate function signature '%.*s'",
+                                                               (int)decl->as.function_decl.name.length,
+                                                               decl->as.function_decl.name.data);
+
+                                ok = append_error(errors,
+                                                  error_count,
+                                                  error_capacity,
+                                                  program->path,
+                                                  decl->as.function_decl.token,
+                                                  message);
+                            } else {
+                                char *message = format_message(
+                                    "function overloads cannot differ only by return type: '%.*s'",
+                                    (int)decl->as.function_decl.name.length,
+                                    decl->as.function_decl.name.data);
+
+                                ok = append_error(errors,
+                                                  error_count,
+                                                  error_capacity,
+                                                  program->path,
+                                                  decl->as.function_decl.token,
+                                                  message);
+                            }
+                            break;
                         }
-                        if (!parameters_equal(existing, &decl->as.function_decl)) {
-                            continue;
+                        if (!ok) {
+                            break;
                         }
-
-                        if (return_type_equals(existing->return_type, decl->as.function_decl.return_type)) {
-                            char *message = format_message("duplicate function signature '%.*s'",
-                                                           (int)decl->as.function_decl.name.length,
-                                                           decl->as.function_decl.name.data);
-
-                            ok = append_error(errors,
-                                              error_count,
-                                              error_capacity,
-                                              program->path,
-                                              decl->as.function_decl.token,
-                                              message);
-                        } else {
-                            char *message = format_message(
-                                "function overloads cannot differ only by return type: '%.*s'",
-                                (int)decl->as.function_decl.name.length,
-                                decl->as.function_decl.name.data);
-
-                            ok = append_error(errors,
-                                              error_count,
-                                              error_capacity,
-                                              program->path,
-                                              decl->as.function_decl.token,
-                                              message);
+                        if (index < function_set->decl_count) {
+                            break;
                         }
-                        break;
-                    }
-                    if (!ok) {
-                        break;
-                    }
-                    if (index < function_count) {
-                        break;
+                    } else {
+                        FunctionOverloadSetEntry entry;
+
+                        memset(&entry, 0, sizeof(entry));
+                        entry.name = decl->as.function_decl.name;
+                        ok = append_raw((void **)&function_sets,
+                                        &function_set_count,
+                                        &function_set_capacity,
+                                        sizeof(entry),
+                                        &entry);
+                        if (!ok) {
+                            break;
+                        }
+                        function_set_index = function_set_count - 1U;
                     }
 
                     if (value_index == visible_value_count) {
@@ -2826,13 +3021,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         }
                     }
 
-                    entry.name = decl->as.function_decl.name;
-                    entry.decl = decl;
-                    ok = append_raw((void **)&functions,
-                                    &function_count,
-                                    &function_capacity,
-                                    sizeof(entry),
-                                    &entry);
+                    ok = append_function_overload_decl(&function_sets[function_set_index], decl);
                     break;
                 }
             }
@@ -2915,6 +3104,8 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    visible_type_count,
                                    visible_values,
                                    visible_value_count,
+                                   function_sets,
+                                   function_set_count,
                                    errors,
                                    error_count,
                                    error_capacity);
@@ -2922,7 +3113,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
     free(visible_types);
     free(visible_values);
-    free(functions);
+    free_function_overload_sets(function_sets, function_set_count);
     return ok;
 }
 
