@@ -16,12 +16,6 @@ typedef struct Parser {
     FengParseError error;
 } Parser;
 
-typedef enum FengCallableBodyPolicy {
-    FENG_CALLABLE_BODY_OPTIONAL = 0,
-    FENG_CALLABLE_BODY_REQUIRED,
-    FENG_CALLABLE_BODY_FORBIDDEN
-} FengCallableBodyPolicy;
-
 #define APPEND_VALUE(parser, items, count, capacity, value) \
     append_raw((parser), (void **)&(items), &(count), &(capacity), sizeof(*(items)), &(value))
 
@@ -493,7 +487,8 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
 
 static FengCallableSignature parse_callable_signature(Parser *parser,
                                                      FengSlice name,
-                                                     FengCallableBodyPolicy body_policy) {
+                                                     bool require_body,
+                                                     const char *body_rule_message) {
     FengCallableSignature callable;
 
     callable.name = name;
@@ -513,24 +508,18 @@ static FengCallableSignature parse_callable_signature(Parser *parser,
         }
     }
 
-    if (body_policy == FENG_CALLABLE_BODY_REQUIRED) {
+    if (require_body) {
         if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
-            (void)parser_error_current(parser, "function declarations must provide a body '{...}'");
+            (void)parser_error_current(parser, body_rule_message);
             return callable;
         }
         callable.body = parse_block(parser);
-    } else if (body_policy == FENG_CALLABLE_BODY_FORBIDDEN) {
+    } else {
         if (!parser_expect(parser,
                            FENG_TOKEN_SEMICOLON,
-                           "extern function declarations must end with ';' and cannot have a body '{...}'")) {
+                           body_rule_message)) {
             return callable;
         }
-    } else if (parser_check(parser, FENG_TOKEN_LBRACE)) {
-        callable.body = parse_block(parser);
-    } else if (!parser_expect(parser,
-                              FENG_TOKEN_SEMICOLON,
-                              "function declarations must end with ';' or provide a body '{...}'")) {
-        return callable;
     }
 
     return callable;
@@ -704,7 +693,11 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
 
-            callable = parse_callable_signature(parser, name, FENG_CALLABLE_BODY_OPTIONAL);
+            callable = parse_callable_signature(
+                parser,
+                name,
+                true,
+                "type methods and constructors must provide a body '{...}'");
             if (parser->error.message != NULL) {
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
@@ -739,7 +732,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             } else if (parser_check(parser, FENG_TOKEN_KW_EXTERN)) {
                 (void)parser_error_current(
                     parser,
-                    "type members cannot start with 'extern'; use 'fn' for methods or 'let'/'var' for fields");
+                    "type members cannot use 'extern fn'; use 'fn' for methods or 'let'/'var' for fields");
             } else {
                 (void)parser_error_current(parser,
                                            "expected type member declaration: 'let', 'var', or 'fn'");
@@ -794,7 +787,9 @@ static FengDecl *parse_function_declaration(Parser *parser,
     decl->as.function_decl = parse_callable_signature(
         parser,
         name,
-        is_extern ? FENG_CALLABLE_BODY_FORBIDDEN : FENG_CALLABLE_BODY_REQUIRED);
+        !is_extern,
+        is_extern ? "extern function declarations must end with ';' and cannot have a body '{...}'"
+                  : "function declarations must provide a body '{...}'");
     if (parser->error.message != NULL) {
         free_decl(decl);
         return NULL;

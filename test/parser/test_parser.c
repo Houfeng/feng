@@ -124,7 +124,7 @@ static void test_member_annotations_and_constructors(void) {
         "    pu let id: int;\n"
         "    pu let created_at: int;\n"
         "    @bounded(created_at)\n"
-        "    fn User(ts: int);\n"
+        "    fn User(ts: int) {}\n"
         "    pu fn info(): string {\n"
         "        return self.name;\n"
         "    }\n"
@@ -144,7 +144,9 @@ static void test_member_annotations_and_constructors(void) {
     ASSERT(decl->as.type_decl.as.object.members[3]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
     ASSERT(decl->as.type_decl.as.object.members[3]->annotation_count == 1U);
     ASSERT(decl->as.type_decl.as.object.members[3]->annotations[0].arg_count == 1U);
+    ASSERT(decl->as.type_decl.as.object.members[3]->as.callable.body != NULL);
     ASSERT(decl->as.type_decl.as.object.members[4]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(decl->as.type_decl.as.object.members[4]->as.callable.body != NULL);
 
     feng_program_free(program);
 }
@@ -203,6 +205,38 @@ static void test_parse_error_extern_fn_with_body(void) {
     ASSERT(strstr(error.message,
                   "extern function declarations must end with ';' and cannot have a body '{...}'") != NULL);
     ASSERT(error.token.kind == FENG_TOKEN_LBRACE);
+}
+
+static void test_parse_error_member_fn_missing_body(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type User {\n"
+        "    fn info(): string;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "missing_member_fn_body.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "type methods and constructors must provide a body '{...}'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_SEMICOLON);
+}
+
+static void test_parse_error_extern_fn_inside_type(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type User {\n"
+        "    extern fn info(): string;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "extern_fn_in_type.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "type members cannot use 'extern fn'") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_KW_EXTERN);
 }
 
 static void test_parse_error_missing_top_level_fn_keyword(void) {
@@ -304,6 +338,8 @@ int main(void) {
     test_parse_error_after_annotation_semicolon();
     test_parse_error_top_level_fn_missing_body();
     test_parse_error_extern_fn_with_body();
+    test_parse_error_member_fn_missing_body();
+    test_parse_error_extern_fn_inside_type();
     test_parse_error_missing_top_level_fn_keyword();
     test_parse_error_missing_member_fn_keyword();
     test_parse_error_missing_member_binding_keyword();
