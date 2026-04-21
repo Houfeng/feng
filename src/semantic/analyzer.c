@@ -12,6 +12,7 @@ typedef struct SymbolEntry {
 
 typedef struct FunctionOverloadSetEntry {
     FengSlice name;
+    const FengSemanticModule *provider_module;
     const FengDecl **decls;
     size_t decl_count;
     size_t decl_capacity;
@@ -383,6 +384,33 @@ static size_t find_module_index(const FengSemanticAnalysis *analysis, const Feng
         analysis, program->module_segments, program->module_segment_count);
 }
 
+static const FengSemanticModule *find_decl_provider_module(const FengSemanticAnalysis *analysis,
+                                                           const FengDecl *decl) {
+    size_t module_index;
+
+    if (analysis == NULL || decl == NULL) {
+        return NULL;
+    }
+
+    for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                if (program->declarations[decl_index] == decl) {
+                    return module;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
 static size_t find_visible_type_index(const VisibleTypeEntry *entries, size_t count, FengSlice name) {
     size_t index;
 
@@ -543,11 +571,41 @@ static const FunctionOverloadSetEntry *find_function_overload_set(
 }
 
 static bool append_function_overload_decl(FunctionOverloadSetEntry *entry, const FengDecl *decl) {
+    size_t index;
+
+    for (index = 0U; index < entry->decl_count; ++index) {
+        if (entry->decls[index] == decl) {
+            return true;
+        }
+    }
+
     return append_raw((void **)&entry->decls,
                       &entry->decl_count,
                       &entry->decl_capacity,
                       sizeof(entry->decls[0]),
                       &decl);
+}
+
+static bool append_visible_function_overload(FunctionOverloadSetEntry **entries,
+                                             size_t *count,
+                                             size_t *capacity,
+                                             const FengSemanticModule *provider_module,
+                                             const FengDecl *decl) {
+    size_t index = find_function_overload_set_index(*entries, *count, decl->as.function_decl.name);
+
+    if (index == *count) {
+        FunctionOverloadSetEntry entry;
+
+        memset(&entry, 0, sizeof(entry));
+        entry.name = decl->as.function_decl.name;
+        entry.provider_module = provider_module;
+        if (!append_raw((void **)entries, count, capacity, sizeof(entry), &entry)) {
+            return false;
+        }
+        index = *count - 1U;
+    }
+
+    return append_function_overload_decl(&(*entries)[index], decl);
 }
 
 static void free_function_overload_sets(FunctionOverloadSetEntry *entries, size_t count) {
@@ -593,6 +651,46 @@ static const FengDecl *find_module_public_type_decl(const FengSemanticModule *mo
 
             if (decl->kind == FENG_DECL_TYPE && decl_is_public(decl) &&
                 slice_equals(decl->as.type_decl.name, name)) {
+                return decl;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static const FengDecl *find_module_public_binding_decl(const FengSemanticModule *module, FengSlice name) {
+    size_t program_index;
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_GLOBAL_BINDING && decl_is_public(decl) &&
+                slice_equals(decl->as.binding.name, name)) {
+                return decl;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static const FengDecl *find_module_public_function_decl(const FengSemanticModule *module, FengSlice name) {
+    size_t program_index;
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_FUNCTION && decl_is_public(decl) &&
+                slice_equals(decl->as.function_decl.name, name)) {
                 return decl;
             }
         }
@@ -750,6 +848,7 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
+static char *format_expr_target_name(const FengExpr *expr);
 
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
@@ -1197,6 +1296,294 @@ static FunctionCallResolution resolve_top_level_function_overload(
     return result;
 }
 
+static bool function_type_parameters_match_args(ResolveContext *context,
+                                                const FengDecl *type_decl,
+                                                FengExpr *const *args,
+                                                size_t arg_count) {
+    size_t arg_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        return false;
+    }
+    if (type_decl->as.type_decl.as.function.param_count != arg_count) {
+        return false;
+    }
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        InferredExprType arg_type = infer_expr_type(context, args[arg_index]);
+
+        if (!inferred_expr_type_is_known(arg_type)) {
+            continue;
+        }
+        if (!inferred_expr_type_matches_type_ref(context,
+                                                 arg_type,
+                                                 type_decl->as.type_decl.as.function.params[arg_index].type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static FunctionCallResolution resolve_module_public_function_overload(
+    ResolveContext *context,
+    const FengSemanticModule *module,
+    FengSlice name,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t program_index;
+    FunctionCallResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (module == NULL) {
+        return result;
+    }
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind != FENG_DECL_FUNCTION || !decl_is_public(decl) ||
+                !slice_equals(decl->as.function_decl.name, name)) {
+                continue;
+            }
+            if (!callable_parameters_match_args(context,
+                                                &decl->as.function_decl,
+                                                args,
+                                                arg_count)) {
+                continue;
+            }
+
+            if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+                result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                result.decl = decl;
+                continue;
+            }
+
+            result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+            result.decl = NULL;
+        }
+    }
+
+    return result;
+}
+
+static const FengTypeMember *find_type_method_member(const FengDecl *type_decl, FengSlice name) {
+    size_t member_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return NULL;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind == FENG_TYPE_MEMBER_METHOD && slice_equals(member->as.callable.name, name)) {
+            return member;
+        }
+    }
+
+    return NULL;
+}
+
+static const FengTypeMember *find_accessible_type_field_member(ResolveContext *context,
+                                                               const FengDecl *type_decl,
+                                                               const FengSemanticModule *provider_module,
+                                                               FengSlice name) {
+    const FengTypeMember *member = find_type_field_member(type_decl, name);
+
+    return type_member_is_accessible_from(context, provider_module, member) ? member : NULL;
+}
+
+static const FengTypeMember *find_accessible_type_method_member(ResolveContext *context,
+                                                                const FengDecl *type_decl,
+                                                                const FengSemanticModule *provider_module,
+                                                                FengSlice name) {
+    const FengTypeMember *member = find_type_method_member(type_decl, name);
+
+    return type_member_is_accessible_from(context, provider_module, member) ? member : NULL;
+}
+
+static FunctionCallResolution resolve_accessible_method_overload(
+    ResolveContext *context,
+    const FengDecl *type_decl,
+    const FengSemanticModule *provider_module,
+    FengSlice name,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t member_index;
+    FunctionCallResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return result;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+            !slice_equals(member->as.callable.name, name) ||
+            !type_member_is_accessible_from(context, provider_module, member) ||
+            !callable_parameters_match_args(context, &member->as.callable, args, arg_count)) {
+            continue;
+        }
+
+        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+            result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+            result.decl = NULL;
+            continue;
+        }
+
+        result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+    }
+
+    return result;
+}
+
+static InferredExprType resolve_expr_owner_type(ResolveContext *context,
+                                                const FengExpr *expr,
+                                                const FengDecl **out_type_decl,
+                                                const FengSemanticModule **out_provider_module) {
+    InferredExprType owner_type = infer_expr_type(context, expr);
+    const FengDecl *type_decl = resolve_inferred_expr_type_decl(context, owner_type);
+
+    if (out_type_decl != NULL) {
+        *out_type_decl = type_decl;
+    }
+    if (out_provider_module != NULL) {
+        *out_provider_module = find_decl_provider_module(context->analysis, type_decl);
+    }
+
+    return owner_type;
+}
+
+static bool validate_callable_typed_expr_call(ResolveContext *context,
+                                              const FengExpr *callee,
+                                              FengExpr *const *args,
+                                              size_t arg_count) {
+    InferredExprType callee_type = infer_expr_type(context, callee);
+    const FengDecl *callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
+    char *target_name = NULL;
+
+    if (callee_type_decl != NULL && callee_type_decl->kind == FENG_DECL_TYPE &&
+        callee_type_decl->as.type_decl.form == FENG_TYPE_DECL_FUNCTION) {
+        if (function_type_parameters_match_args(context, callee_type_decl, args, arg_count)) {
+            return true;
+        }
+
+        target_name = format_expr_target_name(callee);
+        if (!resolver_append_error(
+                context,
+                callee->token,
+                format_message("call target '%s' has no function type overload accepting %zu argument(s)",
+                               target_name != NULL ? target_name : "<expression>",
+                               arg_count))) {
+            free(target_name);
+            return false;
+        }
+
+        free(target_name);
+        return true;
+    }
+
+    if (!inferred_expr_type_is_known(callee_type)) {
+        return true;
+    }
+
+    target_name = format_expr_target_name(callee);
+    if (!resolver_append_error(context,
+                               callee->token,
+                               format_message("expression '%s' is not callable",
+                                              target_name != NULL ? target_name : "<expression>"))) {
+        free(target_name);
+        return false;
+    }
+
+    free(target_name);
+    return true;
+}
+
+static bool validate_instance_member_expr(ResolveContext *context, const FengExpr *expr) {
+    const FengDecl *owner_type_decl = NULL;
+    const FengSemanticModule *provider_module = NULL;
+    const FengTypeMember *member;
+    InferredExprType owner_type;
+    const char *builtin_name;
+
+    owner_type = resolve_expr_owner_type(context,
+                                         expr->as.member.object,
+                                         &owner_type_decl,
+                                         &provider_module);
+    if (!inferred_expr_type_is_known(owner_type)) {
+        return true;
+    }
+
+    if (owner_type_decl == NULL) {
+        builtin_name = inferred_expr_type_builtin_canonical_name(owner_type);
+        if (builtin_name == NULL) {
+            return true;
+        }
+
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("type '%s' has no member '%.*s'",
+                           builtin_name,
+                           (int)expr->as.member.member.length,
+                           expr->as.member.member.data));
+    }
+
+    if (owner_type_decl->kind != FENG_DECL_TYPE ||
+        owner_type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("type '%.*s' has no member '%.*s'",
+                           owner_type_decl->kind == FENG_DECL_TYPE
+                               ? (int)owner_type_decl->as.type_decl.name.length
+                               : 0,
+                           owner_type_decl->kind == FENG_DECL_TYPE
+                               ? owner_type_decl->as.type_decl.name.data
+                               : "",
+                           (int)expr->as.member.member.length,
+                           expr->as.member.member.data));
+    }
+
+    member = find_instance_member(owner_type_decl, expr->as.member.member);
+    if (member == NULL) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("type '%.*s' has no member '%.*s'",
+                           (int)owner_type_decl->as.type_decl.name.length,
+                           owner_type_decl->as.type_decl.name.data,
+                           (int)expr->as.member.member.length,
+                           expr->as.member.member.data));
+    }
+
+    if (type_member_is_accessible_from(context, provider_module, member)) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        expr->token,
+        format_message("member '%.*s' of type '%.*s' is not accessible from the current module",
+                       member->kind == FENG_TYPE_MEMBER_FIELD ? (int)member->as.field.name.length
+                                                              : (int)member->as.callable.name.length,
+                       member->kind == FENG_TYPE_MEMBER_FIELD ? member->as.field.name.data
+                                                              : member->as.callable.name.data,
+                       (int)owner_type_decl->as.type_decl.name.length,
+                       owner_type_decl->as.type_decl.name.data));
+}
+
 static bool append_unique_slice(FengSlice **items, size_t *count, size_t *capacity, FengSlice value) {
     if (find_slice_index(*items, *count, value) < *count) {
         return true;
@@ -1586,6 +1973,23 @@ static InferredExprType infer_identifier_expr_type(ResolveContext *context, Feng
 }
 
 static InferredExprType infer_member_expr_type(ResolveContext *context, const FengExpr *expr) {
+    if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+        const AliasEntry *alias =
+            find_unshadowed_alias(context, expr->as.member.object->as.identifier);
+
+        if (alias != NULL) {
+            const FengDecl *binding_decl =
+                find_module_public_binding_decl(alias->target_module, expr->as.member.member);
+
+            if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                binding_decl->as.binding.type != NULL) {
+                return inferred_expr_type_from_type_ref(binding_decl->as.binding.type);
+            }
+
+            return inferred_expr_type_unknown();
+        }
+    }
+
     const FengDecl *owner_type_decl =
         resolve_inferred_expr_type_decl(context, infer_expr_type(context, expr->as.member.object));
     const FengTypeMember *field_member;
@@ -1823,26 +2227,81 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
 static bool validate_function_call_expr(ResolveContext *context, const FengExpr *expr) {
     const FengExpr *callee = expr->as.call.callee;
 
-    if (callee == NULL || callee->kind != FENG_EXPR_IDENTIFIER) {
+    if (callee == NULL) {
         return true;
     }
 
-    if (resolver_find_local_name_entry(context, callee->as.identifier) != NULL) {
-        return true;
-    }
+    if (callee->kind == FENG_EXPR_MEMBER) {
+        const FengExpr *object = callee->as.member.object;
+        const FengDecl *owner_type_decl = NULL;
+        const FengSemanticModule *provider_module = NULL;
+        FunctionCallResolution resolution;
 
-    {
-        const FunctionOverloadSetEntry *overload_set =
-            find_function_overload_set(context->function_sets,
-                                      context->function_set_count,
-                                      callee->as.identifier);
+        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+            const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
 
-        if (overload_set != NULL) {
-            FunctionCallResolution resolution =
-                resolve_top_level_function_overload(context,
-                                                    overload_set,
-                                                    expr->as.call.args,
-                                                    expr->as.call.arg_count);
+            if (alias != NULL) {
+                resolution = resolve_module_public_function_overload(context,
+                                                                    alias->target_module,
+                                                                    callee->as.member.member,
+                                                                    expr->as.call.args,
+                                                                    expr->as.call.arg_count);
+
+                if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    return true;
+                }
+                if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+                    return resolver_append_error(
+                        context,
+                        callee->token,
+                        format_message("function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                       (int)object->as.identifier.length,
+                                       object->as.identifier.data,
+                                       (int)callee->as.member.member.length,
+                                       callee->as.member.member.data,
+                                       expr->as.call.arg_count));
+                }
+                if (find_module_public_function_decl(alias->target_module, callee->as.member.member) != NULL) {
+                    return resolver_append_error(
+                        context,
+                        callee->token,
+                        format_message("function '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                                       (int)object->as.identifier.length,
+                                       object->as.identifier.data,
+                                       (int)callee->as.member.member.length,
+                                       callee->as.member.member.data,
+                                       expr->as.call.arg_count));
+                }
+
+                return validate_callable_typed_expr_call(context,
+                                                         callee,
+                                                         expr->as.call.args,
+                                                         expr->as.call.arg_count);
+            }
+        }
+
+        resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+        if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_TYPE &&
+            owner_type_decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
+            const FengTypeMember *accessible_method =
+                find_accessible_type_method_member(context,
+                                                   owner_type_decl,
+                                                   provider_module,
+                                                   callee->as.member.member);
+            const FengTypeMember *field_member =
+                find_type_field_member(owner_type_decl, callee->as.member.member);
+            const FengTypeMember *accessible_field =
+                find_accessible_type_field_member(context,
+                                                  owner_type_decl,
+                                                  provider_module,
+                                                  callee->as.member.member);
+
+            resolution = resolve_accessible_method_overload(context,
+                                                            owner_type_decl,
+                                                            provider_module,
+                                                            callee->as.member.member,
+                                                            expr->as.call.args,
+                                                            expr->as.call.arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 return true;
@@ -1851,48 +2310,98 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 return resolver_append_error(
                     context,
                     callee->token,
-                    format_message("top-level function '%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                    format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                   (int)owner_type_decl->as.type_decl.name.length,
+                                   owner_type_decl->as.type_decl.name.data,
+                                   (int)callee->as.member.member.length,
+                                   callee->as.member.member.data,
+                                   expr->as.call.arg_count));
+            }
+            if (accessible_method != NULL) {
+                return resolver_append_error(
+                    context,
+                    callee->token,
+                    format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                                   (int)owner_type_decl->as.type_decl.name.length,
+                                   owner_type_decl->as.type_decl.name.data,
+                                   (int)callee->as.member.member.length,
+                                   callee->as.member.member.data,
+                                   expr->as.call.arg_count));
+            }
+            if (field_member != NULL && accessible_field == NULL) {
+                return true;
+            }
+            if (find_type_method_member(owner_type_decl, callee->as.member.member) != NULL) {
+                return true;
+            }
+            if (accessible_field != NULL) {
+                return validate_callable_typed_expr_call(context,
+                                                         callee,
+                                                         expr->as.call.args,
+                                                         expr->as.call.arg_count);
+            }
+        }
+
+        return validate_callable_typed_expr_call(context,
+                                                 callee,
+                                                 expr->as.call.args,
+                                                 expr->as.call.arg_count);
+    }
+
+    if (callee->kind == FENG_EXPR_IDENTIFIER) {
+        if (resolver_find_local_name_entry(context, callee->as.identifier) != NULL) {
+            return validate_callable_typed_expr_call(context,
+                                                     callee,
+                                                     expr->as.call.args,
+                                                     expr->as.call.arg_count);
+        }
+
+        {
+            const FunctionOverloadSetEntry *overload_set =
+                find_function_overload_set(context->function_sets,
+                                           context->function_set_count,
+                                           callee->as.identifier);
+
+            if (overload_set != NULL) {
+                FunctionCallResolution resolution =
+                    resolve_top_level_function_overload(context,
+                                                        overload_set,
+                                                        expr->as.call.args,
+                                                        expr->as.call.arg_count);
+
+                if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    return true;
+                }
+                if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+                    return resolver_append_error(
+                        context,
+                        callee->token,
+                        format_message("top-level function '%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                       (int)callee->as.identifier.length,
+                                       callee->as.identifier.data,
+                                       expr->as.call.arg_count));
+                }
+
+                return resolver_append_error(
+                    context,
+                    callee->token,
+                    format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
                                    (int)callee->as.identifier.length,
                                    callee->as.identifier.data,
                                    expr->as.call.arg_count));
             }
-
-            return resolver_append_error(
-                context,
-                callee->token,
-                format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
-                               (int)callee->as.identifier.length,
-                               callee->as.identifier.data,
-                               expr->as.call.arg_count));
         }
+
+        return validate_callable_typed_expr_call(context,
+                                                 callee,
+                                                 expr->as.call.args,
+                                                 expr->as.call.arg_count);
     }
 
-    {
-        const VisibleValueEntry *visible_value =
-            find_visible_value(context->visible_values,
-                               context->visible_value_count,
-                               callee->as.identifier);
-
-        if (visible_value != NULL && visible_value->is_function && visible_value->decl != NULL &&
-            visible_value->decl->kind == FENG_DECL_FUNCTION) {
-            if (callable_parameters_match_args(context,
-                                              &visible_value->decl->as.function_decl,
-                                              expr->as.call.args,
-                                              expr->as.call.arg_count)) {
-                return true;
-            }
-
-            return resolver_append_error(
-                context,
-                callee->token,
-                format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
-                               (int)callee->as.identifier.length,
-                               callee->as.identifier.data,
-                               expr->as.call.arg_count));
-        }
-    }
-
-    return true;
+    return validate_callable_typed_expr_call(context,
+                                             callee,
+                                             expr->as.call.args,
+                                             expr->as.call.arg_count);
 }
 
 static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
@@ -2102,6 +2611,9 @@ static bool import_public_names(const FengSemanticModule *target_module,
                                 VisibleValueEntry **visible_values,
                                 size_t *visible_value_count,
                                 size_t *visible_value_capacity,
+                                FunctionOverloadSetEntry **function_sets,
+                                size_t *function_set_count,
+                                size_t *function_set_capacity,
                                 FengSemanticError **errors,
                                 size_t *error_count,
                                 size_t *error_capacity) {
@@ -2174,44 +2686,62 @@ static bool import_public_names(const FengSemanticModule *target_module,
                 case FENG_DECL_GLOBAL_BINDING:
                 case FENG_DECL_FUNCTION: {
                     VisibleValueEntry entry;
+                    bool should_append_visible_value = true;
 
                     name = (decl->kind == FENG_DECL_FUNCTION) ? decl->as.function_decl.name : decl->as.binding.name;
                     if (find_slice_index(seen_value_names, seen_value_count, name) < seen_value_count) {
-                        break;
+                        should_append_visible_value = false;
                     }
-                    if (!append_slice(&seen_value_names, &seen_value_count, &seen_value_capacity, name)) {
+                    if (should_append_visible_value &&
+                        !append_slice(&seen_value_names, &seen_value_count, &seen_value_capacity, name)) {
                         ok = false;
                         break;
                     }
 
-                    index = find_visible_value_index(*visible_values, *visible_value_count, name);
-                    if (index < *visible_value_count) {
-                        if ((*visible_values)[index].provider_module == target_module) {
-                            break;
+                    if (should_append_visible_value) {
+                        index = find_visible_value_index(*visible_values, *visible_value_count, name);
+                        if (index < *visible_value_count) {
+                            if ((*visible_values)[index].provider_module == target_module) {
+                                should_append_visible_value = false;
+                            } else {
+                                ok = append_error(
+                                    errors,
+                                    error_count,
+                                    error_capacity,
+                                    program->path,
+                                    use_decl->token,
+                                    format_message(
+                                        "imported name '%.*s' from module '%s' conflicts with an existing visible value name",
+                                        (int)name.length,
+                                        name.data,
+                                        module_name != NULL ? module_name : "<unknown>"));
+                                break;
+                            }
                         }
-                        ok = append_error(
-                            errors,
-                            error_count,
-                            error_capacity,
-                            program->path,
-                            use_decl->token,
-                            format_message(
-                                "imported name '%.*s' from module '%s' conflicts with an existing visible value name",
-                                (int)name.length,
-                                name.data,
-                                module_name != NULL ? module_name : "<unknown>"));
-                        break;
                     }
 
-                    entry.name = name;
-                    entry.provider_module = target_module;
-                    entry.decl = decl;
-                    entry.is_function = (decl->kind == FENG_DECL_FUNCTION);
-                    ok = append_raw((void **)visible_values,
-                                    visible_value_count,
-                                    visible_value_capacity,
-                                    sizeof(entry),
-                                    &entry);
+                    if (should_append_visible_value) {
+                        entry.name = name;
+                        entry.provider_module = target_module;
+                        entry.decl = decl;
+                        entry.is_function = (decl->kind == FENG_DECL_FUNCTION);
+                        ok = append_raw((void **)visible_values,
+                                        visible_value_count,
+                                        visible_value_capacity,
+                                        sizeof(entry),
+                                        &entry);
+                        if (!ok) {
+                            break;
+                        }
+                    }
+
+                    if (decl->kind == FENG_DECL_FUNCTION) {
+                        ok = append_visible_function_overload(function_sets,
+                                                              function_set_count,
+                                                              function_set_capacity,
+                                                              target_module,
+                                                              decl);
+                    }
                     break;
                 }
             }
@@ -2502,7 +3032,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_SELF) {
                 return resolve_self_member_expr(context, expr, allow_self);
             }
-            return resolve_expr(context, expr->as.member.object, allow_self);
+            return resolve_expr(context, expr->as.member.object, allow_self) &&
+                   validate_instance_member_expr(context, expr);
 
         case FENG_EXPR_INDEX:
             return resolve_expr(context, expr->as.index.object, allow_self) &&
@@ -2993,6 +3524,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                         memset(&entry, 0, sizeof(entry));
                         entry.name = decl->as.function_decl.name;
+                        entry.provider_module = module;
                         ok = append_raw((void **)&function_sets,
                                         &function_set_count,
                                         &function_set_capacity,
@@ -3021,7 +3553,11 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         }
                     }
 
-                    ok = append_function_overload_decl(&function_sets[function_set_index], decl);
+                    ok = append_visible_function_overload(&function_sets,
+                                                          &function_set_count,
+                                                          &function_set_capacity,
+                                                          module,
+                                                          decl);
                     break;
                 }
             }
@@ -3090,6 +3626,9 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                      &visible_values,
                                      &visible_value_count,
                                      &visible_value_capacity,
+                                     &function_sets,
+                                     &function_set_count,
+                                     &function_set_capacity,
                                      errors,
                                      error_count,
                                      error_capacity);

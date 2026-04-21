@@ -225,6 +225,177 @@ static void test_top_level_function_call_reports_type_mismatch(void) {
     feng_program_free(program);
 }
 
+static void test_imported_function_call_selects_overload_by_literal_type(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "pu fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn run(): int {\n"
+        "    return pick(1);\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("imported_call_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("imported_call_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_alias_function_call_selects_overload_by_literal_type(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "pu fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn run(): int {\n"
+        "    return base.pick(1);\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_call_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_call_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_method_call_selects_overload_by_literal_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn pick(a: int): int {\n"
+        "        return a;\n"
+        "    }\n"
+        "    fn pick(a: string): string {\n"
+        "        return a;\n"
+        "    }\n"
+        "}\n"
+        "fn run(user: User): int {\n"
+        "    return user.pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_call_overload_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_function_typed_local_binding_is_callable(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Picker(a: int): int;\n"
+        "fn run(): int {\n"
+        "    let pick: Picker = (a: int) -> a;\n"
+        "    return pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_typed_local_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_non_callable_local_binding_reports_error(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value = 1;\n"
+        "    value(2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("non_callable_local_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "non_callable_local_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "expression 'value' is not callable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_private_method_is_inaccessible_across_modules(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {\n"
+        "    pr fn secret(): int {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn run(user: User): int {\n"
+        "    return user.secret();\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("private_method_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("private_method_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "private_method_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "member 'secret' of type 'User' is not accessible") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1159,6 +1330,12 @@ int main(void) {
     test_top_level_function_call_selects_overload_by_literal_type();
     test_top_level_function_call_selects_overload_by_inferred_local_binding();
     test_top_level_function_call_reports_type_mismatch();
+    test_imported_function_call_selects_overload_by_literal_type();
+    test_alias_function_call_selects_overload_by_literal_type();
+    test_method_call_selects_overload_by_literal_type();
+    test_function_typed_local_binding_is_callable();
+    test_non_callable_local_binding_reports_error();
+    test_private_method_is_inaccessible_across_modules();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
