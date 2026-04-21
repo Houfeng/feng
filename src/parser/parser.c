@@ -16,6 +16,12 @@ typedef struct Parser {
     FengParseError error;
 } Parser;
 
+typedef enum FengCallableBodyPolicy {
+    FENG_CALLABLE_BODY_OPTIONAL = 0,
+    FENG_CALLABLE_BODY_REQUIRED,
+    FENG_CALLABLE_BODY_FORBIDDEN
+} FengCallableBodyPolicy;
+
 #define APPEND_VALUE(parser, items, count, capacity, value) \
     append_raw((parser), (void **)&(items), &(count), &(capacity), sizeof(*(items)), &(value))
 
@@ -485,7 +491,9 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
     return binding;
 }
 
-static FengCallableSignature parse_callable_signature(Parser *parser, FengSlice name) {
+static FengCallableSignature parse_callable_signature(Parser *parser,
+                                                     FengSlice name,
+                                                     FengCallableBodyPolicy body_policy) {
     FengCallableSignature callable;
 
     callable.name = name;
@@ -505,7 +513,19 @@ static FengCallableSignature parse_callable_signature(Parser *parser, FengSlice 
         }
     }
 
-    if (parser_check(parser, FENG_TOKEN_LBRACE)) {
+    if (body_policy == FENG_CALLABLE_BODY_REQUIRED) {
+        if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
+            (void)parser_error_current(parser, "function declarations must provide a body '{...}'");
+            return callable;
+        }
+        callable.body = parse_block(parser);
+    } else if (body_policy == FENG_CALLABLE_BODY_FORBIDDEN) {
+        if (!parser_expect(parser,
+                           FENG_TOKEN_SEMICOLON,
+                           "extern function declarations must end with ';' and cannot have a body '{...}'")) {
+            return callable;
+        }
+    } else if (parser_check(parser, FENG_TOKEN_LBRACE)) {
         callable.body = parse_block(parser);
     } else if (!parser_expect(parser,
                               FENG_TOKEN_SEMICOLON,
@@ -684,7 +704,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
 
-            callable = parse_callable_signature(parser, name);
+            callable = parse_callable_signature(parser, name, FENG_CALLABLE_BODY_OPTIONAL);
             if (parser->error.message != NULL) {
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
@@ -771,7 +791,10 @@ static FengDecl *parse_function_declaration(Parser *parser,
         return NULL;
     }
 
-    decl->as.function_decl = parse_callable_signature(parser, name);
+    decl->as.function_decl = parse_callable_signature(
+        parser,
+        name,
+        is_extern ? FENG_CALLABLE_BODY_FORBIDDEN : FENG_CALLABLE_BODY_REQUIRED);
     if (parser->error.message != NULL) {
         free_decl(decl);
         return NULL;
