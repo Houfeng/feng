@@ -2323,6 +2323,25 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
     return resolver_current_constructor_add_bound_name(context, field_member->as.field.name);
 }
 
+static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext *context,
+                                                                 const FengExpr *object_expr) {
+    InferredExprType object_type;
+
+    if (object_expr == NULL) {
+        return NULL;
+    }
+
+    object_type = infer_expr_type(context, object_expr);
+    if (object_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF || object_type.type_ref == NULL) {
+        return NULL;
+    }
+    if (object_type.type_ref->kind != FENG_TYPE_REF_ARRAY) {
+        return NULL;
+    }
+
+    return object_type.type_ref->as.inner;
+}
+
 static bool append_assignment_target_not_writable_error(ResolveContext *context,
                                                         const FengExpr *target) {
     char *target_name = format_expr_target_name(target);
@@ -2416,10 +2435,12 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         }
 
         case FENG_EXPR_INDEX:
-            return resolver_append_error(
-                context,
-                target->token,
-                format_message("indexed assignment targets are not supported yet"));
+            return resolve_indexed_array_element_type_ref(context, target->as.index.object) != NULL
+                       ? true
+                       : resolver_append_error(
+                             context,
+                             target->token,
+                             format_message("indexed assignment targets are not supported yet"));
 
         default:
             return append_assignment_target_not_writable_error(context, target);
@@ -2602,9 +2623,16 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return inferred_expr_type_builtin("string");
 
         case FENG_EXPR_ARRAY_LITERAL:
-        case FENG_EXPR_INDEX:
         case FENG_EXPR_LAMBDA:
             return inferred_expr_type_unknown();
+
+        case FENG_EXPR_INDEX: {
+            const FengTypeRef *element_type_ref =
+                resolve_indexed_array_element_type_ref(context, expr->as.index.object);
+
+            return element_type_ref != NULL ? inferred_expr_type_from_type_ref(element_type_ref)
+                                            : inferred_expr_type_unknown();
+        }
 
         case FENG_EXPR_OBJECT_LITERAL: {
             ResolvedTypeTarget target =
