@@ -2907,6 +2907,67 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
     return true;
 }
 
+static char *format_inferred_expr_type_name(InferredExprType type) {
+    switch (type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN: {
+            const char *builtin_name = canonical_builtin_type_name(type.builtin_name);
+
+            return duplicate_cstr(builtin_name != NULL ? builtin_name : "<type>");
+        }
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return format_type_ref_name(type.type_ref);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE) {
+                return format_module_name(&type.type_decl->as.type_decl.name, 1U);
+            }
+            return duplicate_cstr("<type>");
+
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return duplicate_cstr("<type>");
+    }
+
+    return duplicate_cstr("<type>");
+}
+
+static bool validate_expr_against_expected_inferred_type(ResolveContext *context,
+                                                         const FengExpr *expr,
+                                                         InferredExprType expected_type) {
+    InferredExprType expr_type;
+    char *expr_name;
+    char *type_name;
+
+    if (expr == NULL || !inferred_expr_type_is_known(expected_type)) {
+        return true;
+    }
+    if (expected_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        return validate_expr_against_expected_type(context, expr, expected_type.type_ref);
+    }
+
+    expr_type = infer_expr_type(context, expr);
+    if (!inferred_expr_type_is_known(expr_type) ||
+        inferred_expr_types_equal(context, expr_type, expected_type)) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(expr);
+    type_name = format_inferred_expr_type_name(expected_type);
+    if (!resolver_append_error(context,
+                               expr->token,
+                               format_message("expression '%s' does not match expected type '%s'",
+                                              expr_name != NULL ? expr_name : "<expression>",
+                                              type_name != NULL ? type_name : "<type>"))) {
+        free(expr_name);
+        free(type_name);
+        return false;
+    }
+
+    free(expr_name);
+    free(type_name);
+    return true;
+}
+
 static bool validate_untyped_callable_value_expr(ResolveContext *context, const FengExpr *expr) {
     char *expr_name;
 
@@ -3781,18 +3842,34 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             return true;
 
         case FENG_EXPR_OBJECT_LITERAL:
-            if (!resolve_expr(context, expr->as.object_literal.target, allow_self)) {
-                return false;
-            }
-            if (!validate_object_literal_expr(context, expr)) {
-                return false;
-            }
-            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
-                if (!resolve_expr(context, expr->as.object_literal.fields[index].value, allow_self)) {
+            {
+                ResolvedTypeTarget target;
+
+                if (!resolve_expr(context, expr->as.object_literal.target, allow_self)) {
                     return false;
                 }
+                if (!validate_object_literal_expr(context, expr)) {
+                    return false;
+                }
+
+                target = resolve_type_target_expr(context, expr->as.object_literal.target, true);
+                for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                    const FengObjectFieldInit *field = &expr->as.object_literal.fields[index];
+                    const FengTypeMember *field_member =
+                        target.type_decl != NULL ? find_type_field_member(target.type_decl, field->name) : NULL;
+
+                    if (!resolve_expr(context, field->value, allow_self)) {
+                        return false;
+                    }
+                    if (field_member != NULL &&
+                        !validate_expr_against_expected_type(context,
+                                                            field->value,
+                                                            field_member->as.field.type)) {
+                        return false;
+                    }
+                }
+                return true;
             }
-            return true;
 
         case FENG_EXPR_CALL:
             if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
@@ -3933,7 +4010,13 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (!validate_self_let_assignment(context, stmt)) {
                 return false;
             }
-            return resolve_expr(context, stmt->as.assign.value, allow_self);
+            if (!resolve_expr(context, stmt->as.assign.value, allow_self)) {
+                return false;
+            }
+            return validate_expr_against_expected_inferred_type(
+                context,
+                stmt->as.assign.value,
+                infer_expr_type(context, stmt->as.assign.target));
 
         case FENG_STMT_EXPR:
             return resolve_expr(context, stmt->as.expr, allow_self);

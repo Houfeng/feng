@@ -845,6 +845,79 @@ static void test_method_call_result_rejects_non_matching_binding_type(void) {
     feng_program_free(program);
 }
 
+static void test_local_assignment_rejects_non_matching_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var flag: bool = true;\n"
+        "    flag = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("local_assign_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "local_assign_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_member_assignment_rejects_non_matching_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var flag: bool;\n"
+        "    fn set() {\n"
+        "        self.flag = 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("member_assign_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "member_assign_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_field_value_rejects_non_matching_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var flag: bool;\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User { flag: 1 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_literal_field_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_field_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1801,6 +1874,9 @@ int main(void) {
     test_top_level_call_result_rejects_non_matching_binding_type();
     test_top_level_call_result_rejects_non_matching_return_type();
     test_method_call_result_rejects_non_matching_binding_type();
+    test_local_assignment_rejects_non_matching_type();
+    test_member_assignment_rejects_non_matching_type();
+    test_object_literal_field_value_rejects_non_matching_type();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
