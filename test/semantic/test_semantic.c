@@ -522,6 +522,104 @@ static void test_alias_identifier_requires_member_access(void) {
     feng_program_free(main_program);
 }
 
+static void test_self_reports_unknown_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "    fn read(): int {\n"
+        "        return self.name;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("self_unknown_member.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "self_unknown_member.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "has no member 'name'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_reports_unknown_field(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User { name: 1 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_literal_unknown_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_unknown_field.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "object literal field 'name'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_requires_object_type_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Factory(): int;\n"
+        "fn make() {\n"
+        "    Factory {};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_literal_non_object_target.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_non_object_target.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "must resolve to an object type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_literal_accepts_constructor_call_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "    fn User() {}\n"
+        "}\n"
+        "fn make(): User {\n"
+        "    return User() { id: 1 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_literal_ctor_target_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -542,6 +640,10 @@ int main(void) {
     test_alias_member_access_resolves_public_names();
     test_alias_member_access_reports_missing_public_name();
     test_alias_identifier_requires_member_access();
+    test_self_reports_unknown_member();
+    test_object_literal_reports_unknown_field();
+    test_object_literal_requires_object_type_target();
+    test_object_literal_accepts_constructor_call_target();
     puts("semantic tests passed");
     return 0;
 }

@@ -53,6 +53,7 @@ typedef struct ResolveContext {
     ScopeFrame *scopes;
     size_t scope_count;
     size_t scope_capacity;
+    const FengDecl *current_type_decl;
     FengSemanticError **errors;
     size_t *error_count;
     size_t *error_capacity;
@@ -354,6 +355,14 @@ static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries
     return index < count ? &entries[index] : NULL;
 }
 
+static const FengDecl *find_visible_type_decl(const VisibleTypeEntry *entries,
+                                              size_t count,
+                                              FengSlice name) {
+    const VisibleTypeEntry *entry = find_visible_type(entries, count, name);
+
+    return entry != NULL ? entry->decl : NULL;
+}
+
 static const VisibleValueEntry *find_visible_value(const VisibleValueEntry *entries,
                                                    size_t count,
                                                    FengSlice name) {
@@ -380,7 +389,7 @@ static const AliasEntry *find_alias(const AliasEntry *entries, size_t count, Fen
     return index < count ? &entries[index] : NULL;
 }
 
-static bool module_exports_public_type(const FengSemanticModule *module, FengSlice name) {
+static const FengDecl *find_module_public_type_decl(const FengSemanticModule *module, FengSlice name) {
     size_t program_index;
 
     for (program_index = 0U; program_index < module->program_count; ++program_index) {
@@ -392,12 +401,16 @@ static bool module_exports_public_type(const FengSemanticModule *module, FengSli
 
             if (decl->kind == FENG_DECL_TYPE && decl_is_public(decl) &&
                 slice_equals(decl->as.type_decl.name, name)) {
-                return true;
+                return decl;
             }
         }
     }
 
-    return false;
+    return NULL;
+}
+
+static bool module_exports_public_type(const FengSemanticModule *module, FengSlice name) {
+    return find_module_public_type_decl(module, name) != NULL;
 }
 
 static bool module_exports_public_value(const FengSemanticModule *module, FengSlice name) {
@@ -515,6 +528,241 @@ static void resolver_free_scopes(ResolveContext *context) {
     free(context->scopes);
     context->scopes = NULL;
     context->scope_capacity = 0U;
+}
+
+static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
+
+static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
+    if (resolver_has_local_name(context, alias_name) ||
+        find_visible_value(context->visible_values, context->visible_value_count, alias_name) != NULL ||
+        find_visible_type(context->visible_types, context->visible_type_count, alias_name) != NULL) {
+        return NULL;
+    }
+
+    return find_alias(context->aliases, context->alias_count, alias_name);
+}
+
+static const FengDecl *find_named_type_decl(const ResolveContext *context,
+                                            const FengSlice *segments,
+                                            size_t segment_count) {
+    FengSlice name;
+
+    if (segment_count == 0U) {
+        return NULL;
+    }
+
+    name = segments[segment_count - 1U];
+    if (segment_count == 1U) {
+        if (is_builtin_type_name(name)) {
+            return NULL;
+        }
+
+        return find_visible_type_decl(context->visible_types, context->visible_type_count, name);
+    }
+
+    if (segment_count == 2U) {
+        const AliasEntry *alias = find_alias(context->aliases, context->alias_count, segments[0]);
+
+        if (alias != NULL) {
+            return find_module_public_type_decl(alias->target_module, segments[1]);
+        }
+    }
+
+    {
+        size_t module_index = find_module_index_by_path(context->analysis, segments, segment_count - 1U);
+
+        if (module_index < context->analysis->module_count &&
+            module_is_visible_from(context->module, &context->analysis->modules[module_index])) {
+            return find_module_public_type_decl(&context->analysis->modules[module_index], name);
+        }
+    }
+
+    return NULL;
+}
+
+static const FengTypeMember *find_type_field_member(const FengDecl *type_decl, FengSlice name) {
+    size_t member_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return NULL;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind == FENG_TYPE_MEMBER_FIELD && slice_equals(member->as.field.name, name)) {
+            return member;
+        }
+    }
+
+    return NULL;
+}
+
+static const FengTypeMember *find_instance_member(const FengDecl *type_decl, FengSlice name) {
+    size_t member_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return NULL;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind == FENG_TYPE_MEMBER_FIELD && slice_equals(member->as.field.name, name)) {
+            return member;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_METHOD && slice_equals(member->as.callable.name, name)) {
+            return member;
+        }
+    }
+
+    return NULL;
+}
+
+static char *format_expr_target_name(const FengExpr *expr) {
+    if (expr == NULL) {
+        return duplicate_cstr("<expression>");
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return format_module_name(&expr->as.identifier, 1U);
+
+        case FENG_EXPR_MEMBER: {
+            char *object_name = format_expr_target_name(expr->as.member.object);
+            size_t object_length = object_name != NULL ? strlen(object_name) : 12U;
+            const char *fallback = "<expression>";
+            char *buffer = (char *)malloc(object_length + 1U + expr->as.member.member.length + 1U);
+
+            if (buffer == NULL) {
+                free(object_name);
+                return NULL;
+            }
+
+            if (object_name != NULL) {
+                memcpy(buffer, object_name, object_length);
+            } else {
+                memcpy(buffer, fallback, object_length);
+            }
+            buffer[object_length] = '.';
+            memcpy(buffer + object_length + 1U,
+                   expr->as.member.member.data,
+                   expr->as.member.member.length);
+            buffer[object_length + 1U + expr->as.member.member.length] = '\0';
+            free(object_name);
+            return buffer;
+        }
+
+        case FENG_EXPR_CALL:
+            return format_expr_target_name(expr->as.call.callee);
+
+        default:
+            return duplicate_cstr("<expression>");
+    }
+}
+
+static const FengDecl *resolve_object_literal_target_type(const ResolveContext *context,
+                                                          const FengExpr *target_expr) {
+    if (target_expr == NULL) {
+        return NULL;
+    }
+
+    switch (target_expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return find_visible_type_decl(context->visible_types,
+                                          context->visible_type_count,
+                                          target_expr->as.identifier);
+
+        case FENG_EXPR_MEMBER:
+            if (target_expr->as.member.object != NULL &&
+                target_expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias =
+                    find_unshadowed_alias(context, target_expr->as.member.object->as.identifier);
+
+                if (alias != NULL) {
+                    return find_module_public_type_decl(alias->target_module,
+                                                        target_expr->as.member.member);
+                }
+            }
+            return NULL;
+
+        case FENG_EXPR_CALL:
+            return resolve_object_literal_target_type(context, target_expr->as.call.callee);
+
+        default:
+            return NULL;
+    }
+}
+
+static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
+    const FengDecl *type_decl;
+    char *target_name;
+    size_t field_index;
+
+    type_decl = resolve_object_literal_target_type(context, expr->as.object_literal.target);
+    target_name = format_expr_target_name(expr->as.object_literal.target);
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message("object literal target '%s' must resolve to an object type",
+                           target_name != NULL ? target_name : "<expression>"));
+
+        free(target_name);
+        return ok;
+    }
+
+    for (field_index = 0U; field_index < expr->as.object_literal.field_count; ++field_index) {
+        const FengObjectFieldInit *field = &expr->as.object_literal.fields[field_index];
+
+        if (find_type_field_member(type_decl, field->name) == NULL) {
+            bool ok = resolver_append_error(
+                context,
+                field->token,
+                format_message("object literal field '%.*s' is not a field of type '%.*s'",
+                               (int)field->name.length,
+                               field->name.data,
+                               (int)type_decl->as.type_decl.name.length,
+                               type_decl->as.type_decl.name.data));
+
+            free(target_name);
+            return ok;
+        }
+    }
+
+    free(target_name);
+    return true;
+}
+
+static bool resolve_self_member_expr(ResolveContext *context,
+                                     const FengExpr *expr,
+                                     bool allow_self) {
+    if (expr->kind != FENG_EXPR_MEMBER || expr->as.member.object == NULL ||
+        expr->as.member.object->kind != FENG_EXPR_SELF) {
+        return false;
+    }
+
+    if (!allow_self || context->current_type_decl == NULL) {
+        return resolve_expr(context, expr->as.member.object, allow_self);
+    }
+
+    if (find_instance_member(context->current_type_decl, expr->as.member.member) != NULL) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        expr->token,
+        format_message("type '%.*s' has no member '%.*s'",
+                       context->current_type_decl != NULL ? (int)context->current_type_decl->as.type_decl.name.length
+                                                         : 0,
+                       context->current_type_decl != NULL ? context->current_type_decl->as.type_decl.name.data : "",
+                       (int)expr->as.member.member.length,
+                       expr->as.member.member.data));
 }
 
 static bool append_error(FengSemanticError **errors,
@@ -782,7 +1030,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return true;
         }
 
-        if (find_visible_type(context->visible_types, context->visible_type_count, name) != NULL) {
+        if (find_named_type_decl(context, segments, segment_count) != NULL) {
             return true;
         }
 
@@ -796,24 +1044,8 @@ static bool resolve_named_type_ref(ResolveContext *context,
                                (int)name.length,
                                name.data));
         }
-    } else {
-        const AliasEntry *alias = find_alias(context->aliases, context->alias_count, segments[0]);
-
-        if (alias != NULL && segment_count == 2U &&
-            module_exports_public_type(alias->target_module, segments[1])) {
-            return true;
-        }
-
-        if (alias == NULL) {
-            size_t module_index =
-                find_module_index_by_path(context->analysis, segments, segment_count - 1U);
-
-            if (module_index < context->analysis->module_count &&
-                module_is_visible_from(context->module, &context->analysis->modules[module_index]) &&
-                module_exports_public_type(&context->analysis->modules[module_index], name)) {
-                return true;
-            }
-        }
+    } else if (find_named_type_decl(context, segments, segment_count) != NULL) {
+        return true;
     }
 
     qualified_name = format_module_name(segments, segment_count);
@@ -862,13 +1094,7 @@ static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *e
     }
 
     alias_name = object->as.identifier;
-    if (resolver_has_local_name(context, alias_name) ||
-        find_visible_value(context->visible_values, context->visible_value_count, alias_name) != NULL ||
-        find_visible_type(context->visible_types, context->visible_type_count, alias_name) != NULL) {
-        return false;
-    }
-
-    alias = find_alias(context->aliases, context->alias_count, alias_name);
+    alias = find_unshadowed_alias(context, alias_name);
     if (alias == NULL) {
         return false;
     }
@@ -980,6 +1206,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (!resolve_expr(context, expr->as.object_literal.target, allow_self)) {
                 return false;
             }
+            if (!validate_object_literal_expr(context, expr)) {
+                return false;
+            }
             for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
                 if (!resolve_expr(context, expr->as.object_literal.fields[index].value, allow_self)) {
                     return false;
@@ -1001,6 +1230,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         case FENG_EXPR_MEMBER:
             if (resolve_alias_member_expr(context, expr)) {
                 return true;
+            }
+            if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_SELF) {
+                return resolve_self_member_expr(context, expr, allow_self);
             }
             return resolve_expr(context, expr->as.member.object, allow_self);
 
@@ -1218,6 +1450,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
 
             for (index = 0U; index < decl->as.type_decl.as.object.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.as.object.members[index];
+                const FengDecl *previous_type_decl = context->current_type_decl;
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!resolve_type_ref(context, member->as.field.type, false) ||
@@ -1227,9 +1460,12 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     continue;
                 }
 
+                context->current_type_decl = decl;
                 if (!resolve_callable(context, &member->as.callable, true)) {
+                    context->current_type_decl = previous_type_decl;
                     return false;
                 }
+                context->current_type_decl = previous_type_decl;
             }
 
             return true;
