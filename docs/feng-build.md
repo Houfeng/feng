@@ -51,7 +51,7 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 1. 查内部模块索引,定位对应 `.fb`
 2. 按模块名层级推导 `.fi` 路径（`net.http` → `mod/net/http.fi`）
-3. 解析 `.fi` 中公有声明,引入当前作用域
+3. 解析 `.fi` 中公有声明,将公开 `type`、公开顶层 `fn` 与公开模块级 `let` / `var` 引入当前作用域
 
 整个过程 O(1),无需遍历搜索。
 
@@ -75,7 +75,7 @@ extern fn ssl_connect(fd: int): int;
 
 编译器根据 `.fi` 中的声明关键字、`@fixed` / `extern` 元信息和 `.fb` 内 `feng.fm` 的 `abi` 字段，自动确定链接目标:
 
-- 普通 `pu type` / `pu fn` 声明 → 链接 `lib/` 下对应平台静态库
+- 普通 `pu type` / `pu fn` / `pu let` / `pu var` 声明 → 链接 `lib/` 下对应平台静态库
 - 带 `@fixed` 的公开 ABI 声明 → 链接 `clib/` 下对应平台库文件
 - 公开 `extern fn` 导入声明 → 追加所需原生库链接信息
 
@@ -130,7 +130,7 @@ feng compile src/*.f   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/
 构建工具驱动完整发布流程:
 
 1. 调用编译器扫描源文件、生成 `.fi` 文件到 `mod/` 目录
-2. 调用编译器将普通 `type` / `fn` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
+2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
 3. 调用编译器将公开 `@fixed` 接口编译为 C ABI 库和头文件，放入 `clib/` 与 `include/`（若 `abi` 含 `c`）; 公开 `extern fn` 导入声明则保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
 5. 打包为 `.fb` ZIP 归档
