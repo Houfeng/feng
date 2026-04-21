@@ -84,6 +84,16 @@ typedef struct FunctionCallResolution {
     const FengDecl *decl;
 } FunctionCallResolution;
 
+typedef enum CallableValueResolutionKind {
+    FENG_CALLABLE_VALUE_RESOLUTION_NONE = 0,
+    FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE,
+    FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS
+} CallableValueResolutionKind;
+
+typedef struct CallableValueResolution {
+    CallableValueResolutionKind kind;
+} CallableValueResolution;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -101,6 +111,7 @@ typedef struct ResolveContext {
     size_t scope_capacity;
     const FengDecl *current_type_decl;
     const FengTypeMember *current_callable_member;
+    const FengCallableSignature *current_callable_signature;
     FengSlice *current_constructor_bound_names;
     size_t current_constructor_bound_count;
     size_t current_constructor_bound_capacity;
@@ -151,6 +162,8 @@ static bool path_equals(const FengSlice *left,
 
     return true;
 }
+
+static char *format_module_name(const FengSlice *segments, size_t segment_count);
 
 static InferredExprType inferred_expr_type_unknown(void) {
     InferredExprType type;
@@ -221,6 +234,63 @@ static char *duplicate_cstr(const char *text) {
 
     memcpy(copy, text, length);
     return copy;
+}
+
+static char *format_type_ref_name(const FengTypeRef *type_ref) {
+    char *inner_name;
+    size_t inner_length;
+    char *buffer;
+
+    if (type_ref == NULL) {
+        return duplicate_cstr("void");
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            return format_module_name(type_ref->as.named.segments,
+                                      type_ref->as.named.segment_count);
+
+        case FENG_TYPE_REF_POINTER:
+            inner_name = format_type_ref_name(type_ref->as.inner);
+            if (inner_name == NULL) {
+                return NULL;
+            }
+
+            inner_length = strlen(inner_name);
+            buffer = (char *)malloc(inner_length + 2U);
+            if (buffer == NULL) {
+                free(inner_name);
+                return NULL;
+            }
+
+            memcpy(buffer, inner_name, inner_length);
+            buffer[inner_length] = '*';
+            buffer[inner_length + 1U] = '\0';
+            free(inner_name);
+            return buffer;
+
+        case FENG_TYPE_REF_ARRAY:
+            inner_name = format_type_ref_name(type_ref->as.inner);
+            if (inner_name == NULL) {
+                return NULL;
+            }
+
+            inner_length = strlen(inner_name);
+            buffer = (char *)malloc(inner_length + 3U);
+            if (buffer == NULL) {
+                free(inner_name);
+                return NULL;
+            }
+
+            memcpy(buffer, inner_name, inner_length);
+            buffer[inner_length] = '[';
+            buffer[inner_length + 1U] = ']';
+            buffer[inner_length + 2U] = '\0';
+            free(inner_name);
+            return buffer;
+    }
+
+    return duplicate_cstr("<unknown>");
 }
 
 static char *format_message(const char *format, ...) {
@@ -699,6 +769,32 @@ static const FengDecl *find_module_public_function_decl(const FengSemanticModule
     return NULL;
 }
 
+static size_t count_module_public_function_overloads(const FengSemanticModule *module,
+                                                     FengSlice name) {
+    size_t program_index;
+    size_t count = 0U;
+
+    if (module == NULL) {
+        return 0U;
+    }
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_FUNCTION && decl_is_public(decl) &&
+                slice_equals(decl->as.function_decl.name, name)) {
+                ++count;
+            }
+        }
+    }
+
+    return count;
+}
+
 static bool module_exports_public_type(const FengSemanticModule *module, FengSlice name) {
     return find_module_public_type_decl(module, name) != NULL;
 }
@@ -849,6 +945,9 @@ static void resolver_free_scopes(ResolveContext *context) {
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static char *format_expr_target_name(const FengExpr *expr);
+static bool expr_matches_expected_type_ref(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *expected_type_ref);
 
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
@@ -1033,6 +1132,69 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
     return false;
 }
 
+static const FengDecl *resolve_function_type_decl(const ResolveContext *context,
+                                                  const FengTypeRef *type_ref) {
+    const FengDecl *type_decl = resolve_type_ref_decl(context, type_ref);
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        return NULL;
+    }
+
+    return type_decl;
+}
+
+static bool function_type_decl_return_matches_type_ref(const ResolveContext *context,
+                                                       const FengDecl *function_type_decl,
+                                                       const FengTypeRef *return_type) {
+    const FengTypeRef *expected_return_type;
+    bool expected_is_void;
+    bool actual_is_void;
+
+    if (function_type_decl == NULL || function_type_decl->kind != FENG_DECL_TYPE ||
+        function_type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        return false;
+    }
+
+    expected_return_type = function_type_decl->as.type_decl.as.function.return_type;
+    expected_is_void = expected_return_type == NULL || type_ref_is_void(expected_return_type);
+    actual_is_void = return_type == NULL || type_ref_is_void(return_type);
+    if (expected_is_void || actual_is_void) {
+        return expected_is_void && actual_is_void;
+    }
+
+    return type_refs_semantically_equal(context, expected_return_type, return_type);
+}
+
+static bool function_type_decl_matches_callable_signature(const ResolveContext *context,
+                                                          const FengDecl *function_type_decl,
+                                                          const FengCallableSignature *callable) {
+    size_t param_index;
+
+    if (function_type_decl == NULL || callable == NULL ||
+        function_type_decl->kind != FENG_DECL_TYPE ||
+        function_type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        return false;
+    }
+    if (function_type_decl->as.type_decl.as.function.param_count != callable->param_count) {
+        return false;
+    }
+
+    for (param_index = 0U;
+         param_index < function_type_decl->as.type_decl.as.function.param_count;
+         ++param_index) {
+        if (!type_refs_semantically_equal(context,
+                                          function_type_decl->as.type_decl.as.function.params[param_index].type,
+                                          callable->params[param_index].type)) {
+            return false;
+        }
+    }
+
+    return function_type_decl_return_matches_type_ref(context,
+                                                      function_type_decl,
+                                                      callable->return_type);
+}
+
 static const char *inferred_expr_type_builtin_canonical_name(InferredExprType expr_type) {
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
@@ -1199,14 +1361,9 @@ static bool callable_parameters_match_args(ResolveContext *context,
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        InferredExprType arg_type = infer_expr_type(context, args[arg_index]);
-
-        if (!inferred_expr_type_is_known(arg_type)) {
-            continue;
-        }
-        if (!inferred_expr_type_matches_type_ref(context,
-                                                 arg_type,
-                                                 callable->params[arg_index].type)) {
+        if (!expr_matches_expected_type_ref(context,
+                                            args[arg_index],
+                                            callable->params[arg_index].type)) {
             return false;
         }
     }
@@ -1291,6 +1448,117 @@ static FunctionCallResolution resolve_top_level_function_overload(
 
         result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
         result.decl = NULL;
+    }
+
+    return result;
+}
+
+static CallableValueResolution resolve_top_level_function_value_overload(
+    ResolveContext *context,
+    const FunctionOverloadSetEntry *overload_set,
+    const FengDecl *function_type_decl) {
+    size_t decl_index;
+    CallableValueResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (overload_set == NULL || function_type_decl == NULL) {
+        return result;
+    }
+
+    for (decl_index = 0U; decl_index < overload_set->decl_count; ++decl_index) {
+        const FengDecl *decl = overload_set->decls[decl_index];
+
+        if (decl == NULL || decl->kind != FENG_DECL_FUNCTION ||
+            !function_type_decl_matches_callable_signature(context,
+                                                           function_type_decl,
+                                                           &decl->as.function_decl)) {
+            continue;
+        }
+
+        if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+            result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            continue;
+        }
+
+        result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+    }
+
+    return result;
+}
+
+static CallableValueResolution resolve_module_public_function_value_overload(
+    ResolveContext *context,
+    const FengSemanticModule *module,
+    FengSlice name,
+    const FengDecl *function_type_decl) {
+    size_t program_index;
+    CallableValueResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (module == NULL || function_type_decl == NULL) {
+        return result;
+    }
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind != FENG_DECL_FUNCTION || !decl_is_public(decl) ||
+                !slice_equals(decl->as.function_decl.name, name) ||
+                !function_type_decl_matches_callable_signature(context,
+                                                               function_type_decl,
+                                                               &decl->as.function_decl)) {
+                continue;
+            }
+
+            if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                continue;
+            }
+
+            result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+        }
+    }
+
+    return result;
+}
+
+static CallableValueResolution resolve_accessible_method_value_overload(
+    ResolveContext *context,
+    const FengDecl *type_decl,
+    const FengSemanticModule *provider_module,
+    FengSlice name,
+    const FengDecl *function_type_decl) {
+    size_t member_index;
+    CallableValueResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (type_decl == NULL || function_type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return result;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+            !slice_equals(member->as.callable.name, name) ||
+            !type_member_is_accessible_from(context, provider_module, member) ||
+            !function_type_decl_matches_callable_signature(context,
+                                                           function_type_decl,
+                                                           &member->as.callable)) {
+            continue;
+        }
+
+        if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+            result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            continue;
+        }
+
+        result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
     }
 
     return result;
@@ -1407,6 +1675,31 @@ static const FengTypeMember *find_accessible_type_method_member(ResolveContext *
     const FengTypeMember *member = find_type_method_member(type_decl, name);
 
     return type_member_is_accessible_from(context, provider_module, member) ? member : NULL;
+}
+
+static size_t count_accessible_method_overloads(ResolveContext *context,
+                                                const FengDecl *type_decl,
+                                                const FengSemanticModule *provider_module,
+                                                FengSlice name) {
+    size_t member_index;
+    size_t count = 0U;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.form != FENG_TYPE_DECL_OBJECT) {
+        return 0U;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.as.object.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.as.object.members[member_index];
+
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            slice_equals(member->as.callable.name, name) &&
+            type_member_is_accessible_from(context, provider_module, member)) {
+            ++count;
+        }
+    }
+
+    return count;
 }
 
 static FunctionCallResolution resolve_accessible_method_overload(
@@ -2144,6 +2437,303 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         default:
             return inferred_expr_type_unknown();
     }
+}
+
+static bool lambda_expr_matches_function_type(ResolveContext *context,
+                                              const FengExpr *expr,
+                                              const FengDecl *function_type_decl) {
+    size_t param_index;
+    bool ok = true;
+    InferredExprType body_type = inferred_expr_type_unknown();
+
+    if (expr == NULL || expr->kind != FENG_EXPR_LAMBDA || function_type_decl == NULL ||
+        function_type_decl->kind != FENG_DECL_TYPE ||
+        function_type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        return false;
+    }
+    if (expr->as.lambda.param_count != function_type_decl->as.type_decl.as.function.param_count) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
+        if (!type_refs_semantically_equal(context,
+                                          expr->as.lambda.params[param_index].type,
+                                          function_type_decl->as.type_decl.as.function.params[param_index].type)) {
+            return false;
+        }
+    }
+
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
+        ok = resolver_add_local_typed_name(
+            context,
+            expr->as.lambda.params[param_index].name,
+            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type));
+    }
+    if (ok) {
+        body_type = infer_expr_type(context, expr->as.lambda.body);
+    }
+
+    resolver_pop_scope(context);
+    if (!ok) {
+        return false;
+    }
+    if (!inferred_expr_type_is_known(body_type)) {
+        return true;
+    }
+
+    return inferred_expr_type_matches_type_ref(context,
+                                               body_type,
+                                               function_type_decl->as.type_decl.as.function.return_type);
+}
+
+static CallableValueResolution resolve_expr_callable_value(ResolveContext *context,
+                                                           const FengExpr *expr,
+                                                           const FengTypeRef *expected_type_ref) {
+    CallableValueResolution result;
+    const FengDecl *function_type_decl;
+
+    memset(&result, 0, sizeof(result));
+    function_type_decl = resolve_function_type_decl(context, expected_type_ref);
+    if (expr == NULL || function_type_decl == NULL) {
+        return result;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER: {
+            const LocalNameEntry *local_entry =
+                resolver_find_local_name_entry(context, expr->as.identifier);
+            const FunctionOverloadSetEntry *overload_set;
+            InferredExprType expr_type;
+
+            if (local_entry != NULL) {
+                if (inferred_expr_type_matches_type_ref(context, local_entry->type, expected_type_ref)) {
+                    result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                }
+                return result;
+            }
+
+            overload_set = find_function_overload_set(context->function_sets,
+                                                      context->function_set_count,
+                                                      expr->as.identifier);
+            if (overload_set != NULL) {
+                return resolve_top_level_function_value_overload(context,
+                                                                 overload_set,
+                                                                 function_type_decl);
+            }
+
+            expr_type = infer_identifier_expr_type(context, expr->as.identifier);
+            if (inferred_expr_type_is_known(expr_type) &&
+                inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            }
+            return result;
+        }
+
+        case FENG_EXPR_MEMBER: {
+            const FengExpr *object = expr->as.member.object;
+            InferredExprType expr_type;
+
+            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+
+                if (alias != NULL) {
+                    result = resolve_module_public_function_value_overload(context,
+                                                                          alias->target_module,
+                                                                          expr->as.member.member,
+                                                                          function_type_decl);
+                    if (result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+                        return result;
+                    }
+
+                    expr_type = infer_member_expr_type(context, expr);
+                    if (inferred_expr_type_is_known(expr_type) &&
+                        inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
+                        result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                    }
+                    return result;
+                }
+            }
+
+            {
+                const FengDecl *owner_type_decl = NULL;
+                const FengSemanticModule *provider_module = NULL;
+
+                resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+                if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_TYPE &&
+                    owner_type_decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
+                    result = resolve_accessible_method_value_overload(context,
+                                                                      owner_type_decl,
+                                                                      provider_module,
+                                                                      expr->as.member.member,
+                                                                      function_type_decl);
+                    if (result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+                        return result;
+                    }
+                }
+            }
+
+            expr_type = infer_member_expr_type(context, expr);
+            if (inferred_expr_type_is_known(expr_type) &&
+                inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            }
+            return result;
+        }
+
+        case FENG_EXPR_LAMBDA:
+            if (lambda_expr_matches_function_type(context, expr, function_type_decl)) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            }
+            return result;
+
+        default: {
+            InferredExprType expr_type = infer_expr_type(context, expr);
+
+            if (inferred_expr_type_is_known(expr_type) &&
+                inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            }
+            return result;
+        }
+    }
+}
+
+static bool expr_matches_expected_type_ref(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *expected_type_ref) {
+    const FengDecl *function_type_decl = resolve_function_type_decl(context, expected_type_ref);
+    InferredExprType expr_type;
+
+    if (function_type_decl != NULL) {
+        return resolve_expr_callable_value(context, expr, expected_type_ref).kind ==
+               FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+    }
+
+    expr_type = infer_expr_type(context, expr);
+    if (!inferred_expr_type_is_known(expr_type)) {
+        return true;
+    }
+
+    return inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref);
+}
+
+static bool expr_requires_explicit_function_type_context(ResolveContext *context,
+                                                         const FengExpr *expr) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER: {
+            const FunctionOverloadSetEntry *overload_set;
+
+            if (resolver_find_local_name_entry(context, expr->as.identifier) != NULL) {
+                return false;
+            }
+
+            overload_set = find_function_overload_set(context->function_sets,
+                                                      context->function_set_count,
+                                                      expr->as.identifier);
+            return overload_set != NULL && overload_set->decl_count > 1U;
+        }
+
+        case FENG_EXPR_MEMBER: {
+            const FengExpr *object = expr->as.member.object;
+
+            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+
+                if (alias != NULL) {
+                    return count_module_public_function_overloads(alias->target_module,
+                                                                  expr->as.member.member) > 1U;
+                }
+            }
+
+            {
+                const FengDecl *owner_type_decl = NULL;
+                const FengSemanticModule *provider_module = NULL;
+
+                resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+                return count_accessible_method_overloads(context,
+                                                         owner_type_decl,
+                                                         provider_module,
+                                                         expr->as.member.member) > 1U;
+            }
+        }
+
+        default:
+            return false;
+    }
+}
+
+static bool validate_function_typed_expr(ResolveContext *context,
+                                         const FengExpr *expr,
+                                         const FengTypeRef *expected_type_ref) {
+    CallableValueResolution resolution;
+    char *expr_name;
+    char *type_name;
+
+    if (expr == NULL || resolve_function_type_decl(context, expected_type_ref) == NULL) {
+        return true;
+    }
+
+    resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
+    if (resolution.kind == FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(expr);
+    type_name = format_type_ref_name(expected_type_ref);
+
+    if (resolution.kind == FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS) {
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message("expression '%s' has multiple overloads matching expected function type '%s'",
+                           expr_name != NULL ? expr_name : "<expression>",
+                           type_name != NULL ? type_name : "<type>"));
+
+        free(expr_name);
+        free(type_name);
+        return ok;
+    }
+
+    {
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message("expression '%s' does not match expected function type '%s'",
+                           expr_name != NULL ? expr_name : "<expression>",
+                           type_name != NULL ? type_name : "<type>"));
+
+        free(expr_name);
+        free(type_name);
+        return ok;
+    }
+}
+
+static bool validate_untyped_callable_value_expr(ResolveContext *context, const FengExpr *expr) {
+    char *expr_name;
+
+    if (!expr_requires_explicit_function_type_context(context, expr)) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(expr);
+    if (!resolver_append_error(context,
+                               expr != NULL ? expr->token : context->program->module_token,
+                               format_message("expression '%s' requires an explicit target function type to resolve overloads",
+                                              expr_name != NULL ? expr_name : "<expression>"))) {
+        free(expr_name);
+        return false;
+    }
+
+    free(expr_name);
+    return true;
 }
 
 static bool validate_constructor_invocation(ResolveContext *context,
@@ -3086,6 +3676,13 @@ static bool resolve_binding(ResolveContext *context,
     if (!resolve_expr(context, binding->initializer, allow_self)) {
         return false;
     }
+    if (binding->type != NULL) {
+        if (!validate_function_typed_expr(context, binding->initializer, binding->type)) {
+            return false;
+        }
+    } else if (!validate_untyped_callable_value_expr(context, binding->initializer)) {
+        return false;
+    }
     if (add_to_scope) {
         binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
                                              : infer_expr_type(context, binding->initializer);
@@ -3185,7 +3782,14 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                    resolve_block(context, stmt->as.try_stmt.finally_block, allow_self);
 
         case FENG_STMT_RETURN:
-            return resolve_expr(context, stmt->as.return_value, allow_self);
+            if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
+                return false;
+            }
+            return validate_function_typed_expr(context,
+                                                stmt->as.return_value,
+                                                context->current_callable_signature != NULL
+                                                    ? context->current_callable_signature->return_type
+                                                    : NULL);
 
         case FENG_STMT_THROW:
             return resolve_expr(context, stmt->as.throw_value, allow_self);
@@ -3204,19 +3808,26 @@ static bool resolve_callable(ResolveContext *context,
     size_t param_index;
     bool is_constructor = context->current_callable_member != NULL &&
                           context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR;
+    const FengCallableSignature *previous_callable_signature =
+        context->current_callable_signature;
     bool ok;
 
+    context->current_callable_signature = callable;
+
     if (!resolve_type_ref(context, callable->return_type, true)) {
+        context->current_callable_signature = previous_callable_signature;
         return false;
     }
 
     for (param_index = 0U; param_index < callable->param_count; ++param_index) {
         if (!resolve_type_ref(context, callable->params[param_index].type, false)) {
+            context->current_callable_signature = previous_callable_signature;
             return false;
         }
     }
 
     if (callable->body == NULL) {
+        context->current_callable_signature = previous_callable_signature;
         return true;
     }
 
@@ -3228,6 +3839,7 @@ static bool resolve_callable(ResolveContext *context,
         if (is_constructor) {
             resolver_clear_current_constructor_bindings(context);
         }
+        context->current_callable_signature = previous_callable_signature;
         return false;
     }
 
@@ -3246,6 +3858,7 @@ static bool resolve_callable(ResolveContext *context,
     if (is_constructor) {
         resolver_clear_current_constructor_bindings(context);
     }
+    context->current_callable_signature = previous_callable_signature;
     return ok;
 }
 
@@ -3278,7 +3891,10 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!resolve_type_ref(context, member->as.field.type, false) ||
-                        !resolve_expr(context, member->as.field.initializer, false)) {
+                        !resolve_expr(context, member->as.field.initializer, false) ||
+                        !validate_function_typed_expr(context,
+                                                      member->as.field.initializer,
+                                                      member->as.field.type)) {
                         return false;
                     }
                     continue;

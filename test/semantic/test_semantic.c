@@ -396,6 +396,351 @@ static void test_private_method_is_inaccessible_across_modules(void) {
     feng_program_free(main_program);
 }
 
+static void test_top_level_function_value_selects_overload_by_explicit_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntPicker(a: int): int;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let picker: IntPicker = pick;\n"
+        "    return picker(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_binding_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_selects_overload_by_parameter_context(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntPicker(a: int): int;\n"
+        "fn apply(picker: IntPicker): int {\n"
+        "    return picker(1);\n"
+        "}\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return apply(pick);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_arg_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_selects_overload_by_return_type_context(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntPicker(a: int): int;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn make(): IntPicker {\n"
+        "    return pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_return_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_requires_explicit_type_when_overloaded(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let picker = pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_requires_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "function_value_requires_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message, "requires an explicit target function type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_method_value_selects_overload_by_explicit_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type M0(): void;\n"
+        "type User {\n"
+        "    fn say() {}\n"
+        "    fn say(msg: string) {}\n"
+        "}\n"
+        "fn run(user: User) {\n"
+        "    let action: M0 = user.say;\n"
+        "    action();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_value_binding_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_method_value_selects_overload_by_parameter_context(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type M0(): void;\n"
+        "type User {\n"
+        "    fn say() {}\n"
+        "    fn say(msg: string) {}\n"
+        "}\n"
+        "fn apply(action: M0) {\n"
+        "    action();\n"
+        "}\n"
+        "fn run(user: User) {\n"
+        "    apply(user.say);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_value_arg_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_method_value_selects_overload_by_return_type_context(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type M0(): void;\n"
+        "type User {\n"
+        "    fn say() {}\n"
+        "    fn say(msg: string) {}\n"
+        "}\n"
+        "fn make(user: User): M0 {\n"
+        "    return user.say;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_value_return_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_method_value_requires_explicit_type_when_overloaded(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    fn say() {}\n"
+        "    fn say(msg: string) {}\n"
+        "}\n"
+        "fn run(user: User) {\n"
+        "    let action = user.say;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_value_requires_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "method_value_requires_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "requires an explicit target function type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_binding_rejects_non_matching_target_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type BoolPicker(a: bool): bool;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let picker: BoolPicker = pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_binding_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "function_value_binding_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 10U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'BoolPicker'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_return_rejects_non_matching_target_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type BoolPicker(a: bool): bool;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n"
+        "fn make(): BoolPicker {\n"
+        "    return pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_return_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "function_value_return_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 10U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'BoolPicker'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_alias_function_value_argument_rejects_non_matching_target_type(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "pu fn pick(a: string): string {\n"
+        "    return a;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "type BoolPicker(a: bool): bool;\n"
+        "fn accept(picker: BoolPicker) {}\n"
+        "fn run() {\n"
+        "    accept(base.pick);\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("alias_function_value_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_function_value_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_function_value_main.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "top-level function 'accept' has no overload accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_method_value_argument_rejects_non_matching_target_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type BoolAction(flag: bool): bool;\n"
+        "type User {\n"
+        "    fn say() {}\n"
+        "    fn say(msg: string) {}\n"
+        "}\n"
+        "fn accept(action: BoolAction) {}\n"
+        "fn run(user: User) {\n"
+        "    accept(user.say);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_value_argument_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "method_value_argument_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message, "top-level function 'accept' has no overload accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1336,6 +1681,18 @@ int main(void) {
     test_function_typed_local_binding_is_callable();
     test_non_callable_local_binding_reports_error();
     test_private_method_is_inaccessible_across_modules();
+    test_top_level_function_value_selects_overload_by_explicit_binding_type();
+    test_top_level_function_value_selects_overload_by_parameter_context();
+    test_top_level_function_value_selects_overload_by_return_type_context();
+    test_top_level_function_value_requires_explicit_type_when_overloaded();
+    test_top_level_function_value_binding_rejects_non_matching_target_type();
+    test_top_level_function_value_return_rejects_non_matching_target_type();
+    test_method_value_selects_overload_by_explicit_binding_type();
+    test_method_value_selects_overload_by_parameter_context();
+    test_method_value_selects_overload_by_return_type_context();
+    test_method_value_requires_explicit_type_when_overloaded();
+    test_alias_function_value_argument_rejects_non_matching_target_type();
+    test_method_value_argument_rejects_non_matching_target_type();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
