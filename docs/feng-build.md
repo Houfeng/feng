@@ -21,7 +21,7 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 feng compile <源文件列表> --target <目标> --out <输出路径> [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
-- `<源文件列表>`: 需要编译的 `.f` 源文件,可使用 glob 展开
+- `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
 - `--target <目标>`: 编译目标,取值为 `bin`（可执行文件）或 `fb`（`.fb` 分发包）; 该参数必须显式指定
 - `--out <输出路径>`: 指定输出文件路径; 该参数必须显式指定,编译器不假定默认输出位置
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
@@ -59,7 +59,7 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 编译器从两类来源自动收集链接参数,无需用户额外指定:
 
-**来源①: `.f` 源文件中的 `@cdecl` / `@stdcall` / `@fastcall` 导入注解**
+**来源①: `.ff` 源文件中的 `@cdecl` / `@stdcall` / `@fastcall` 导入注解**
 
 ```feng
 @cdecl("m")
@@ -99,7 +99,7 @@ extern fn ssl_connect(fd: int): int;
 | 字段 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `target` | 是 | — | 构建目标，取值 `bin`（可执行文件）或 `fb`（分发包） |
-| `src` | 否 | `src/` | 源文件根目录，构建工具对此目录 glob 展开 `.f` 文件 |
+| `src` | 否 | `src/` | 源文件根目录，构建工具对此目录 glob 展开 `.ff` 文件 |
 | `out` | 否 | `build/` | 输出根目录；`target bin` 时输出 `<out>/<name>`，`target fb` 时输出 `<out>/<name>-<version>.fb` |
 
 构建工具将 `target` 转换为编译器的 `--target` 参数，将 `out` 与项目名/版本拼装为编译器的 `--out` 参数。
@@ -120,7 +120,7 @@ extern fn ssl_connect(fd: int): int;
 将解析完成的依赖图转换为编译器参数:
 
 ```
-feng compile src/*.f   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/base-2.1.0.fb
+feng compile src/*.ff   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/base-2.1.0.fb
 ```
 
 构建工具传入的是**已确定的 `.fb` 路径列表**,不传包名、版本或搜索路径。编译器只认路径。
@@ -147,7 +147,7 @@ feng.fm (项目)
     └─ 组装参数
            │
            ▼
-feng compile src/*.f --pkg a.fb --pkg b.fb
+feng compile src/*.ff --pkg a.fb --pkg b.fb
     │
     ├─ 扫描 .fb，建模块索引
     ├─ 处理 use，定位 .fi，类型检查

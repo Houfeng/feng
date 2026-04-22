@@ -9,7 +9,7 @@
 - Feng 采用强类型、静态类型系统,所有变量、参数和返回值均在编译期完成类型检查。
 - 基础值类型覆盖有符号整数、无符号整数、浮点与布尔,并提供 `int` 和 `float` 作为常用别名。
 - 统一使用 `type` 定义具名类型,并通过 `@fixed` 标记其中进入 C ABI 的结构体、联合体或函数指针类型。
-- 支持鸭子类型(鸭型),通过公开成员签名或函数签名完成编译期兼容性检查。
+- 支持 `spec` 契约与 `fit` 显式适配,契约关系由编译期检查。
 - 支持类型推导,但仅限带初始值的变量和可推导返回值的函数。
 - 具名类型声明必须位于模块级顶层,不允许嵌套声明,不支持匿名类型定义,也不支持在类型位置直接内联声明类型; 同一模块内的 Feng 原生 `type` 与函数类型允许前向引用和互引用。
 
@@ -170,7 +170,7 @@ type StringHandle(s: string): bool;
 - 函数类型的参数类型和返回类型必须写成已有类型引用,不能在签名中继续内联声明另一个函数类型。
 - `Lambda` 赋值、返回或传参时,其本质仍需满足目标函数类型签名。
 - 重载函数或重载方法作为值赋给函数类型、作为参数传递或作为返回值时,必须能由目标函数类型唯一确定具体重载; 若缺少目标函数类型或仍存在多个候选,则编译期报错。
-- 函数类型同样参与鸭型兼容性检查,只要参数列表和返回值签名一致即可兼容。
+- 若需要声明可调用契约,应使用可调用 `spec`; Feng 原生函数类型本身不因签名相同而自动兼容。
 - Feng 原生函数类型不可作为 C 函数指针传递。
 - `@fixed type` 定义的函数类型仅用于 C ABI 兼容回调。
 
@@ -190,50 +190,38 @@ type User {
 type FormatName(p1: string): (p2: string): string;
 ```
 
-## 6 鸭子类型(鸭型)规则
+## 6 `spec` 契约与 `fit` 适配
 
-- 遵循“只要像鸭子一样行走、鸣叫,就是鸭子”的设计逻辑。
-- 鸭型兼容性只基于公开成员与公开方法签名进行检查,无论类型来自当前包还是外部包,规则完全一致。
-- 类型无需显式实现接口或继承; 对象类型只要满足目标类型要求的公开成员集合与公开方法签名,即可兼容。
-- 函数类型只要参数列表与返回值签名一致,即可兼容。
-- 鸭型兼容性检查在编译期完成,并允许对复杂成员类型继续递归检查。
-- 鸭型兼容性检查仅针对具名类型进行; 当前语言不支持匿名类型定义,也不支持在类型位置直接内联声明类型。
-- 若同一重载集合中的两个候选在参数类型上因鸭型兼容而存在可重叠匹配,则该重载集合非法,编译期报错。
+- Feng 不采用仅凭结构自动成立的开放式兼容。
+- `spec` 用于声明对象形状或可调用形状,具体规则见 [feng-spec.md](./feng-spec.md)。
+- 具体 `type` 进入某个 `spec` 位置前,必须先显式建立契约关系; 该关系可以写在 `type` 声明头上,也可以通过可见的 `fit` 声明提供。
+- `fit A` 只用于为 `A` 自身补充成员,不建立新的 `spec` 契约关系。
+- 契约关系只针对具名 `type` 与 `spec`; 当前语言不支持匿名类型定义,也不支持在类型位置直接内联声明结构。
+- 若同一重载集合中的两个候选在当前可见的显式契约关系下可能同时匹配同一实参类型,则该重载集合非法,编译期报错。
+- 若需要声明可调用契约,应使用可调用 `spec`,而不是依赖签名相同即自动兼容的函数类型规则。
 
-对象类型示例:
+显式契约示例:
 
 ```feng
-type Duck {
-    pu fn quack(): string {
-        return "quack";
-    }
+spec Named {
+    let name: string;
+    fn display(): string;
 }
 
-type Bird {
-    pu fn quack(): string {
-        return "bird quack";
-    }
-}
+type User: Named {
+    let name: string;
 
-// 兼容所有公开提供 quack() 方法的类型
-fn make_sound(obj: Duck) {
-    print(obj.quack());
+    fn display(): string {
+        return self.name;
+    }
 }
 ```
 
-函数类型示例:
-
 ```feng
-type IntHandler(x: int): int;
-type NumberMapper(v: int): int;
-
-fn apply(handler: IntHandler, value: int): int {
-    return handler(value);
-}
-
-fn run(mapper: NumberMapper, value: int): int {
-    // NumberMapper 与 IntHandler 签名一致,因此可直接兼容
-    return apply(mapper, value);
+fit ThirdPartyUser: Named {
+    fn display(self): string {
+        return self.first + " " + self.last;
+    }
 }
 ```
 
@@ -248,7 +236,7 @@ fn run(mapper: NumberMapper, value: int): int {
 - 数组使用 `T[]`,支持多维数组,动态数组由 GC 托管。
 - 函数类型定义统一使用 `type ... : 返回值` 形式,`->` 仅用于 `Lambda` 表达式语法,不引入新的函数类型。
 - C 兼容布局与 C 兼容函数指针通过标注 `@fixed` 的 `type` 声明表达,详见 [feng-interop.md](./feng-interop.md)。
-- 鸭型规则同时适用于对象类型和函数类型,且只基于公开成员进行检查。
+- 契约形状通过 `spec` 声明,具体类型的进入关系通过定义头或 `fit` 显式建立,不采用开放式结构兼容规则。
 - 无冗余关键字,无结构体专用关键字,统一 `type` 体系。
 - 成员变量必须使用 `var` 或 `let` 修饰; 类型成员默认公开,也可显式通过 `pu` 和 `pr` 设置可见性。
 
