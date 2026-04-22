@@ -1425,10 +1425,221 @@ static bool inferred_expr_type_is_numeric(InferredExprType expr_type) {
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
 
+static bool inferred_expr_type_is_bool(InferredExprType expr_type) {
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+
+    return builtin_name != NULL && strcmp(builtin_name, "bool") == 0;
+}
+
 static bool inferred_expr_type_is_string(InferredExprType expr_type) {
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
 
     return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
+}
+
+static const char *format_operator_name(FengTokenKind kind) {
+    switch (kind) {
+        case FENG_TOKEN_PLUS:
+            return "+";
+        case FENG_TOKEN_MINUS:
+            return "-";
+        case FENG_TOKEN_STAR:
+            return "*";
+        case FENG_TOKEN_SLASH:
+            return "/";
+        case FENG_TOKEN_PERCENT:
+            return "%";
+        case FENG_TOKEN_NOT:
+            return "!";
+        case FENG_TOKEN_LT:
+            return "<";
+        case FENG_TOKEN_LE:
+            return "<=";
+        case FENG_TOKEN_GT:
+            return ">";
+        case FENG_TOKEN_GE:
+            return ">=";
+        case FENG_TOKEN_EQ:
+            return "==";
+        case FENG_TOKEN_NE:
+            return "!=";
+        case FENG_TOKEN_AND_AND:
+            return "&&";
+        case FENG_TOKEN_OR_OR:
+            return "||";
+        default:
+            return "?";
+    }
+}
+
+static bool unary_expr_type_is_valid(FengTokenKind op, InferredExprType operand_type) {
+    switch (op) {
+        case FENG_TOKEN_MINUS:
+            return inferred_expr_type_is_numeric(operand_type);
+
+        case FENG_TOKEN_NOT:
+            return inferred_expr_type_is_bool(operand_type);
+
+        default:
+            return false;
+    }
+}
+
+static bool binary_expr_types_are_valid(ResolveContext *context,
+                                        FengTokenKind op,
+                                        InferredExprType left_type,
+                                        InferredExprType right_type) {
+    switch (op) {
+        case FENG_TOKEN_PLUS:
+            return inferred_expr_types_equal(context, left_type, right_type) &&
+                   (inferred_expr_type_is_numeric(left_type) || inferred_expr_type_is_string(left_type));
+
+        case FENG_TOKEN_MINUS:
+        case FENG_TOKEN_STAR:
+        case FENG_TOKEN_SLASH:
+        case FENG_TOKEN_PERCENT:
+            return inferred_expr_types_equal(context, left_type, right_type) &&
+                   inferred_expr_type_is_numeric(left_type);
+
+        case FENG_TOKEN_LT:
+        case FENG_TOKEN_LE:
+        case FENG_TOKEN_GT:
+        case FENG_TOKEN_GE:
+            return inferred_expr_types_equal(context, left_type, right_type) &&
+                   inferred_expr_type_is_numeric(left_type);
+
+        case FENG_TOKEN_EQ:
+        case FENG_TOKEN_NE:
+            return inferred_expr_type_is_known(left_type) &&
+                   inferred_expr_type_is_known(right_type) &&
+                   inferred_expr_types_equal(context, left_type, right_type);
+
+        case FENG_TOKEN_AND_AND:
+        case FENG_TOKEN_OR_OR:
+            return inferred_expr_type_is_bool(left_type) && inferred_expr_type_is_bool(right_type);
+
+        default:
+            return false;
+    }
+}
+
+static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType operand_type;
+    const char *operator_name;
+    char *operand_type_name;
+    char *message;
+
+    operand_type = infer_expr_type(context, expr->as.unary.operand);
+    if (unary_expr_type_is_valid(expr->as.unary.op, operand_type)) {
+        return true;
+    }
+
+    operator_name = format_operator_name(expr->as.unary.op);
+    operand_type_name = format_inferred_expr_type_name(operand_type);
+    message = format_message(expr->as.unary.op == FENG_TOKEN_MINUS
+                                 ? "unary operator '%s' requires a numeric operand, got '%s'"
+                                 : "unary operator '%s' requires a bool operand, got '%s'",
+                             operator_name,
+                             operand_type_name != NULL ? operand_type_name : "<unknown>");
+    free(operand_type_name);
+    return resolver_append_error(context, expr->token, message);
+}
+
+static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
+    InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
+    const char *operator_name = format_operator_name(expr->as.binary.op);
+    char *left_type_name;
+    char *right_type_name;
+    char *message;
+
+    if (binary_expr_types_are_valid(context, expr->as.binary.op, left_type, right_type)) {
+        return true;
+    }
+
+    left_type_name = format_inferred_expr_type_name(left_type);
+    right_type_name = format_inferred_expr_type_name(right_type);
+
+    switch (expr->as.binary.op) {
+        case FENG_TOKEN_PLUS:
+            message = format_message(
+                "binary operator '%s' requires operands of the same numeric or string type, got '%s' and '%s'",
+                operator_name,
+                left_type_name != NULL ? left_type_name : "<unknown>",
+                right_type_name != NULL ? right_type_name : "<unknown>");
+            break;
+
+        case FENG_TOKEN_MINUS:
+        case FENG_TOKEN_STAR:
+        case FENG_TOKEN_SLASH:
+        case FENG_TOKEN_PERCENT:
+        case FENG_TOKEN_LT:
+        case FENG_TOKEN_LE:
+        case FENG_TOKEN_GT:
+        case FENG_TOKEN_GE:
+            message = format_message(
+                "binary operator '%s' requires operands of the same numeric type, got '%s' and '%s'",
+                operator_name,
+                left_type_name != NULL ? left_type_name : "<unknown>",
+                right_type_name != NULL ? right_type_name : "<unknown>");
+            break;
+
+        case FENG_TOKEN_EQ:
+        case FENG_TOKEN_NE:
+            message = format_message("binary operator '%s' requires operands of the same type, got '%s' and '%s'",
+                                     operator_name,
+                                     left_type_name != NULL ? left_type_name : "<unknown>",
+                                     right_type_name != NULL ? right_type_name : "<unknown>");
+            break;
+
+        case FENG_TOKEN_AND_AND:
+        case FENG_TOKEN_OR_OR:
+            message = format_message("binary operator '%s' requires bool operands, got '%s' and '%s'",
+                                     operator_name,
+                                     left_type_name != NULL ? left_type_name : "<unknown>",
+                                     right_type_name != NULL ? right_type_name : "<unknown>");
+            break;
+
+        default:
+            message = format_message("binary operator '%s' is not supported in this context",
+                                     operator_name);
+            break;
+    }
+
+    free(left_type_name);
+    free(right_type_name);
+    return resolver_append_error(context, expr->token, message);
+}
+
+static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
+    InferredExprType then_type = infer_expr_type(context, expr->as.if_expr.then_expr);
+    InferredExprType else_type = infer_expr_type(context, expr->as.if_expr.else_expr);
+
+    if (!inferred_expr_type_is_bool(condition_type)) {
+        char *condition_type_name = format_inferred_expr_type_name(condition_type);
+        char *message = format_message("if expression condition must have type 'bool', got '%s'",
+                                       condition_type_name != NULL ? condition_type_name : "<unknown>");
+
+        free(condition_type_name);
+        return resolver_append_error(context, expr->token, message);
+    }
+
+    if (inferred_expr_types_equal(context, then_type, else_type)) {
+        return true;
+    }
+
+    {
+        char *then_type_name = format_inferred_expr_type_name(then_type);
+        char *else_type_name = format_inferred_expr_type_name(else_type);
+        char *message = format_message("if expression branches must have the same type, got '%s' and '%s'",
+                                       then_type_name != NULL ? then_type_name : "<unknown>",
+                                       else_type_name != NULL ? else_type_name : "<unknown>");
+
+        free(then_type_name);
+        free(else_type_name);
+        return resolver_append_error(context, expr->token, message);
+    }
 }
 
 static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *context,
@@ -2904,7 +3115,8 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 inferred_expr_type_is_numeric(operand_type)) {
                 return operand_type;
             }
-            if (expr->as.unary.op == FENG_TOKEN_NOT) {
+            if (expr->as.unary.op == FENG_TOKEN_NOT &&
+                inferred_expr_type_is_bool(operand_type)) {
                 return inferred_expr_type_builtin("bool");
             }
 
@@ -2938,11 +3150,28 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 case FENG_TOKEN_LE:
                 case FENG_TOKEN_GT:
                 case FENG_TOKEN_GE:
+                    if (inferred_expr_types_equal(context, left_type, right_type) &&
+                        inferred_expr_type_is_numeric(left_type)) {
+                        return inferred_expr_type_builtin("bool");
+                    }
+                    return inferred_expr_type_unknown();
+
                 case FENG_TOKEN_EQ:
                 case FENG_TOKEN_NE:
+                    if (inferred_expr_type_is_known(left_type) &&
+                        inferred_expr_type_is_known(right_type) &&
+                        inferred_expr_types_equal(context, left_type, right_type)) {
+                        return inferred_expr_type_builtin("bool");
+                    }
+                    return inferred_expr_type_unknown();
+
                 case FENG_TOKEN_AND_AND:
                 case FENG_TOKEN_OR_OR:
-                    return inferred_expr_type_builtin("bool");
+                    if (inferred_expr_type_is_bool(left_type) &&
+                        inferred_expr_type_is_bool(right_type)) {
+                        return inferred_expr_type_builtin("bool");
+                    }
+                    return inferred_expr_type_unknown();
 
                 default:
                     return inferred_expr_type_unknown();
@@ -2953,10 +3182,12 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return inferred_expr_type_from_type_ref(expr->as.cast.type);
 
         case FENG_EXPR_IF: {
+            InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
             InferredExprType then_type = infer_expr_type(context, expr->as.if_expr.then_expr);
             InferredExprType else_type = infer_expr_type(context, expr->as.if_expr.else_expr);
 
-            return inferred_expr_types_equal(context, then_type, else_type)
+            return inferred_expr_type_is_bool(condition_type) &&
+                       inferred_expr_types_equal(context, then_type, else_type)
                        ? then_type
                        : inferred_expr_type_unknown();
         }
@@ -4307,11 +4538,13 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    resolve_expr(context, expr->as.index.index, allow_self);
 
         case FENG_EXPR_UNARY:
-            return resolve_expr(context, expr->as.unary.operand, allow_self);
+            return resolve_expr(context, expr->as.unary.operand, allow_self) &&
+                   validate_unary_expr(context, expr);
 
         case FENG_EXPR_BINARY:
             return resolve_expr(context, expr->as.binary.left, allow_self) &&
-                   resolve_expr(context, expr->as.binary.right, allow_self);
+                   resolve_expr(context, expr->as.binary.right, allow_self) &&
+                   validate_binary_expr(context, expr);
 
         case FENG_EXPR_LAMBDA:
             return resolve_lambda_expr(context, expr);
@@ -4323,7 +4556,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         case FENG_EXPR_IF:
             return resolve_expr(context, expr->as.if_expr.condition, allow_self) &&
                    resolve_expr(context, expr->as.if_expr.then_expr, allow_self) &&
-                   resolve_expr(context, expr->as.if_expr.else_expr, allow_self);
+                   resolve_expr(context, expr->as.if_expr.else_expr, allow_self) &&
+                   validate_if_expr(context, expr);
 
         case FENG_EXPR_MATCH:
             if (!resolve_expr(context, expr->as.match_expr.target, allow_self)) {

@@ -1242,6 +1242,161 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
     feng_program_free(program);
 }
 
+static void test_unary_minus_rejects_non_numeric_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    -true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_minus_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_minus_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "unary operator '-' requires a numeric operand") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_not_rejects_non_bool_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    !1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_not_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_not_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "unary operator '!' requires a bool operand") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_binary_plus_rejects_non_matching_operands(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    1 + true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("binary_plus_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "binary_plus_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '+' requires operands of the same numeric or string type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_binary_and_rejects_non_bool_operands(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    1 && true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("binary_and_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "binary_and_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "binary operator '&&' requires bool operands") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_if_expression_rejects_non_bool_condition(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value = if 1 { 2 } else { 3 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_expr_condition_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "if_expr_condition_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "if expression condition must have type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_if_expression_requires_matching_branch_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value = if true { 1 } else { \"two\" };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_expr_branch_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "if_expr_branch_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "if expression branches must have the same type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_valid_unary_binary_and_if_expressions_pass(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let flag: bool = !false && 1 < 2;\n"
+        "    let value: int = if flag { 1 + 2 } else { 3 + 4 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("valid_expr_type_checks_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2215,6 +2370,13 @@ int main(void) {
     test_inferred_nested_array_literal_supports_nested_index_read_write();
     test_empty_array_literal_binding_requires_explicit_target_type();
     test_empty_array_literal_binding_accepts_explicit_target_type();
+    test_unary_minus_rejects_non_numeric_operand();
+    test_unary_not_rejects_non_bool_operand();
+    test_binary_plus_rejects_non_matching_operands();
+    test_binary_and_rejects_non_bool_operands();
+    test_if_expression_rejects_non_bool_condition();
+    test_if_expression_requires_matching_branch_types();
+    test_valid_unary_binary_and_if_expressions_pass();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
