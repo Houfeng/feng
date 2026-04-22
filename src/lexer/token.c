@@ -8,6 +8,12 @@ static const FengKeywordSpec g_keywords[] = {
 };
 #undef FENG_KEYWORD_SPEC
 
+#define FENG_RESERVED_WORD_SPEC(name, text) {text, sizeof(text) - 1U},
+static const FengReservedWordSpec g_reserved_words[] = {
+    FENG_RESERVED_WORD_LIST(FENG_RESERVED_WORD_SPEC)
+};
+#undef FENG_RESERVED_WORD_SPEC
+
 #define FENG_ANNOTATION_SPEC(name, text) {text, sizeof(text) - 1U, FENG_ANNOTATION_##name},
 static const FengAnnotationSpec g_builtin_annotations[] = {
     FENG_BUILTIN_ANNOTATION_LIST(FENG_ANNOTATION_SPEC)
@@ -127,6 +133,27 @@ bool feng_lookup_keyword(const char *text, size_t length, FengTokenKind *out_kin
             if (out_kind != NULL) {
                 *out_kind = g_keywords[index].kind;
             }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+size_t feng_reserved_word_count(void) {
+    return sizeof(g_reserved_words) / sizeof(g_reserved_words[0]);
+}
+
+const FengReservedWordSpec *feng_reserved_words(void) {
+    return g_reserved_words;
+}
+
+bool feng_is_reserved_word(const char *text, size_t length) {
+    size_t index;
+
+    for (index = 0; index < feng_reserved_word_count(); ++index) {
+        if (g_reserved_words[index].length == length &&
+            memcmp(g_reserved_words[index].text, text, length) == 0) {
             return true;
         }
     }

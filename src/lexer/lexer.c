@@ -232,6 +232,14 @@ static FengToken scan_identifier_or_keyword(FengLexer *lexer,
         return token;
     }
 
+    if (feng_is_reserved_word(text, length)) {
+        return make_error(lexer,
+                          start_offset,
+                          start_line,
+                          start_column,
+                          "reserved word cannot be used as an identifier in the current language version");
+    }
+
     if (feng_lookup_keyword(text, length, &keyword_kind)) {
         token.kind = keyword_kind;
     }

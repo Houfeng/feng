@@ -34,6 +34,18 @@ extern "C" {
     X(RETURN, "return") \
     X(VOID, "void")
 
+#define FENG_RESERVED_WORD_LIST(X) \
+    X(CLASS, "class") \
+    X(STRUCT, "struct") \
+    X(PUBLIC, "public") \
+    X(PRIVATE, "private") \
+    X(PUB, "pub") \
+    X(PRO, "pro") \
+    X(GET, "get") \
+    X(SET, "set") \
+    X(THIS, "this") \
+    X(INTERFACE, "interface")
+
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(FIXED, "fixed") \
     X(UNION, "union") \
@@ -114,6 +126,11 @@ typedef struct FengKeywordSpec {
     FengTokenKind kind;
 } FengKeywordSpec;
 
+typedef struct FengReservedWordSpec {
+    const char *text;
+    size_t length;
+} FengReservedWordSpec;
+
 typedef struct FengAnnotationSpec {
     const char *text;
     size_t length;
@@ -126,6 +143,10 @@ const char *feng_annotation_kind_name(FengAnnotationKind kind);
 size_t feng_keyword_count(void);
 const FengKeywordSpec *feng_keywords(void);
 bool feng_lookup_keyword(const char *text, size_t length, FengTokenKind *out_kind);
+
+size_t feng_reserved_word_count(void);
+const FengReservedWordSpec *feng_reserved_words(void);
+bool feng_is_reserved_word(const char *text, size_t length);
 
 size_t feng_builtin_annotation_count(void);
 const FengAnnotationSpec *feng_builtin_annotations(void);

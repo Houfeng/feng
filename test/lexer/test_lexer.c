@@ -31,14 +31,47 @@ static void test_keyword_and_annotation_counts(void) {
     FengAnnotationKind annotation_kind;
 
     ASSERT(feng_keyword_count() == 23U);
+    ASSERT(feng_reserved_word_count() == 10U);
     ASSERT(feng_builtin_annotation_count() == 6U);
     ASSERT(feng_lookup_keyword("extern", 6U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_EXTERN);
     ASSERT(!feng_lookup_keyword("bool", 4U, &keyword_kind));
+    ASSERT(feng_is_reserved_word("class", 5U));
+    ASSERT(feng_is_reserved_word("interface", 9U));
+    ASSERT(!feng_is_reserved_word("self", 4U));
     ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
     ASSERT(feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_BOUNDED);
+}
+
+static void test_reserved_words_rejected(void) {
+    static const char *const reserved_words[] = {
+        "class",
+        "struct",
+        "public",
+        "private",
+        "pub",
+        "pro",
+        "get",
+        "set",
+        "this",
+        "interface"
+    };
+    size_t index;
+
+    for (index = 0; index < sizeof(reserved_words) / sizeof(reserved_words[0]); ++index) {
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer,
+                        reserved_words[index],
+                        strlen(reserved_words[index]),
+                        "reserved.ff");
+        token = next_token(&lexer, FENG_TOKEN_ERROR);
+        assert_lexeme(&token, reserved_words[index]);
+        ASSERT(strstr(token.message, "reserved word") != NULL);
+    }
 }
 
 static void test_basic_module_tokens(void) {
@@ -222,6 +255,7 @@ static void test_error_tokens(void) {
 
 int main(void) {
     test_keyword_and_annotation_counts();
+    test_reserved_words_rejected();
     test_basic_module_tokens();
     test_literals_and_arrow();
     test_comments_crlf_and_custom_annotations();
