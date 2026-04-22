@@ -175,6 +175,61 @@ static void test_method_auto_infers_return_type_for_forward_call(void) {
     feng_program_free(program);
 }
 
+static void test_imported_function_auto_infers_return_type_across_modules(void) {
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn run(): int {\n"
+        "    return base.value();\n"
+        "}\n";
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu fn value() {\n"
+        "    return 1;\n"
+        "}\n";
+    FengProgram *main_program = parse_program_or_die("auto_return_import_main.f", main_source);
+    FengProgram *base_program = parse_program_or_die("auto_return_import_base.f", base_source);
+    const FengProgram *programs[] = {main_program, base_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(main_program);
+    feng_program_free(base_program);
+}
+
+static void test_omitted_return_function_can_infer_lambda_signature(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntToInt(x: int): int;\n"
+        "fn make() {\n"
+        "    return (x: int) -> x * 2;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let func: IntToInt = make();\n"
+        "    return func(4);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("auto_return_lambda_signature_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_explicit_non_void_return_rejects_empty_return(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2867,6 +2922,8 @@ int main(void) {
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();
+    test_imported_function_auto_infers_return_type_across_modules();
+    test_omitted_return_function_can_infer_lambda_signature();
     test_explicit_non_void_return_rejects_empty_return();
     test_match_expression_rejects_non_constant_label();
     test_match_expression_rejects_incomparable_label_type();
