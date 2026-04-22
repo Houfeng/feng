@@ -97,6 +97,227 @@ static void test_function_return_only_overload_error(void) {
     feng_program_free(program);
 }
 
+static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value: int = add(1, 2);\n"
+        "}\n"
+        "fn add(a: int, b: int) {\n"
+        "    return a + b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("auto_return_forward_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(flag: bool) {\n"
+        "    if flag {\n"
+        "        return 1;\n"
+        "    }\n"
+        "    return true;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let value: int = pick(false);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("auto_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "auto_return_conflict_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_method_auto_infers_return_type_for_forward_call(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Counter {\n"
+        "    fn value() {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n"
+        "fn run(counter: Counter) {\n"
+        "    let value: int = counter.value();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("method_auto_return_forward_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_explicit_non_void_return_rejects_empty_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn value(): int {\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("explicit_non_void_empty_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "explicit_non_void_empty_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_expression_rejects_non_constant_label(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int, other: int): int {\n"
+        "    return if value {\n"
+        "        other + 1: 1,\n"
+        "        else: 0\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_non_constant_label_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "match_non_constant_label_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "match case label must be a constant expression") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_expression_rejects_incomparable_label_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    return if value {\n"
+        "        \"one\": 1,\n"
+        "        else: 0\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_incomparable_label_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "match_incomparable_label_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "not comparable with target type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_expression_rejects_inconsistent_result_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    return if value {\n"
+        "        1: 1,\n"
+        "        else: \"zero\"\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_inconsistent_result_types_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "match_inconsistent_result_types_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "match expression branches must have the same type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_untyped_lambda_binding_is_callable(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let func = (x: int) -> x * 2;\n"
+        "    return func(2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("untyped_lambda_binding_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_untyped_lambda_binding_matches_named_function_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntToInt(x: int): int;\n"
+        "fn run(): int {\n"
+        "    let func = (x: int) -> x * 2;\n"
+        "    let typed: IntToInt = func;\n"
+        "    return typed(3);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("untyped_lambda_binding_function_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_module_visibility_conflict(void) {
     const char *source_a = "pu mod demo.main;\n";
     const char *source_b = "mod demo.main;\n";
@@ -2643,6 +2864,15 @@ int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
+    test_top_level_function_auto_infers_return_type_for_forward_call();
+    test_top_level_function_rejects_conflicting_inferred_return_types();
+    test_method_auto_infers_return_type_for_forward_call();
+    test_explicit_non_void_return_rejects_empty_return();
+    test_match_expression_rejects_non_constant_label();
+    test_match_expression_rejects_incomparable_label_type();
+    test_match_expression_rejects_inconsistent_result_types();
+    test_untyped_lambda_binding_is_callable();
+    test_untyped_lambda_binding_matches_named_function_type();
     test_module_visibility_conflict();
     test_valid_function_overload_by_parameter_type();
     test_top_level_function_call_selects_overload_by_literal_type();

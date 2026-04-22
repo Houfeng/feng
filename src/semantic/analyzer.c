@@ -42,7 +42,8 @@ typedef enum InferredExprTypeKind {
     FENG_INFERRED_EXPR_TYPE_UNKNOWN = 0,
     FENG_INFERRED_EXPR_TYPE_BUILTIN,
     FENG_INFERRED_EXPR_TYPE_TYPE_REF,
-    FENG_INFERRED_EXPR_TYPE_DECL
+    FENG_INFERRED_EXPR_TYPE_DECL,
+    FENG_INFERRED_EXPR_TYPE_LAMBDA
 } InferredExprTypeKind;
 
 typedef struct InferredExprType {
@@ -50,6 +51,7 @@ typedef struct InferredExprType {
     FengSlice builtin_name;
     const FengTypeRef *type_ref;
     const FengDecl *type_decl;
+    const FengExpr *lambda_expr;
 } InferredExprType;
 
 typedef struct LocalNameEntry {
@@ -97,6 +99,18 @@ typedef struct CallableValueResolution {
     CallableValueResolutionKind kind;
 } CallableValueResolution;
 
+typedef struct CallableReturnCacheEntry {
+    const FengCallableSignature *callable;
+    InferredExprType return_type;
+} CallableReturnCacheEntry;
+
+typedef struct CallableReturnCache {
+    CallableReturnCacheEntry *entries;
+    size_t entry_count;
+    size_t entry_capacity;
+    bool changed;
+} CallableReturnCache;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -115,12 +129,15 @@ typedef struct ResolveContext {
     const FengDecl *current_type_decl;
     const FengTypeMember *current_callable_member;
     const FengCallableSignature *current_callable_signature;
+    InferredExprType current_callable_inferred_return_type;
+    bool current_callable_saw_return;
     FengSlice *current_constructor_bound_names;
     size_t current_constructor_bound_count;
     size_t current_constructor_bound_capacity;
     FengTypeRef **synthetic_type_refs;
     size_t synthetic_type_ref_count;
     size_t synthetic_type_ref_capacity;
+    CallableReturnCache *callable_return_cache;
     FengSemanticError **errors;
     size_t *error_count;
     size_t *error_capacity;
@@ -171,6 +188,14 @@ static bool path_equals(const FengSlice *left,
 
 static char *format_module_name(const FengSlice *segments, size_t segment_count);
 static bool type_ref_is_void(const FengTypeRef *type_ref);
+static bool append_raw(void **items,
+                       size_t *count,
+                       size_t *capacity,
+                       size_t item_size,
+                       const void *value);
+static bool inferred_expr_types_equal(const ResolveContext *context,
+                                      InferredExprType left,
+                                      InferredExprType right);
 
 static InferredExprType inferred_expr_type_unknown(void) {
     InferredExprType type;
@@ -203,6 +228,15 @@ static InferredExprType inferred_expr_type_from_decl(const FengDecl *type_decl) 
     return type;
 }
 
+static InferredExprType inferred_expr_type_from_lambda(const FengExpr *lambda_expr) {
+    InferredExprType type = inferred_expr_type_unknown();
+
+    type.kind = lambda_expr != NULL ? FENG_INFERRED_EXPR_TYPE_LAMBDA
+                                    : FENG_INFERRED_EXPR_TYPE_UNKNOWN;
+    type.lambda_expr = lambda_expr;
+    return type;
+}
+
 static InferredExprType inferred_expr_type_from_return_type_ref(const FengTypeRef *type_ref) {
     if (type_ref == NULL || type_ref_is_void(type_ref)) {
         return inferred_expr_type_builtin("void");
@@ -232,6 +266,111 @@ static void free_synthetic_type_ref(FengTypeRef *type_ref) {
 
 static bool inferred_expr_type_is_known(InferredExprType type) {
     return type.kind != FENG_INFERRED_EXPR_TYPE_UNKNOWN;
+}
+
+static const CallableReturnCacheEntry *find_callable_return_cache_entry(
+    const CallableReturnCache *cache,
+    const FengCallableSignature *callable) {
+    size_t index;
+
+    if (cache == NULL || callable == NULL) {
+        return NULL;
+    }
+
+    for (index = 0U; index < cache->entry_count; ++index) {
+        if (cache->entries[index].callable == callable) {
+            return &cache->entries[index];
+        }
+    }
+
+    return NULL;
+}
+
+static CallableReturnCacheEntry *find_mutable_callable_return_cache_entry(
+    CallableReturnCache *cache,
+    const FengCallableSignature *callable) {
+    size_t index;
+
+    if (cache == NULL || callable == NULL) {
+        return NULL;
+    }
+
+    for (index = 0U; index < cache->entry_count; ++index) {
+        if (cache->entries[index].callable == callable) {
+            return &cache->entries[index];
+        }
+    }
+
+    return NULL;
+}
+
+static InferredExprType callable_effective_return_type(const ResolveContext *context,
+                                                       const FengCallableSignature *callable) {
+    const CallableReturnCacheEntry *entry;
+
+    if (callable == NULL) {
+        return inferred_expr_type_unknown();
+    }
+    if (callable->return_type != NULL) {
+        return inferred_expr_type_from_return_type_ref(callable->return_type);
+    }
+
+    entry = context != NULL
+                ? find_callable_return_cache_entry(context->callable_return_cache, callable)
+                : NULL;
+    return entry != NULL ? entry->return_type : inferred_expr_type_unknown();
+}
+
+static bool cache_callable_return_type(ResolveContext *context,
+                                       const FengCallableSignature *callable,
+                                       InferredExprType return_type) {
+    CallableReturnCache *cache;
+    CallableReturnCacheEntry *entry;
+    CallableReturnCacheEntry new_entry;
+
+    if (context == NULL || callable == NULL || !inferred_expr_type_is_known(return_type)) {
+        return true;
+    }
+
+    cache = context->callable_return_cache;
+    if (cache == NULL) {
+        return true;
+    }
+
+    entry = find_mutable_callable_return_cache_entry(cache, callable);
+    if (entry != NULL) {
+        if (inferred_expr_types_equal(context, entry->return_type, return_type)) {
+            return true;
+        }
+        entry->return_type = return_type;
+        cache->changed = true;
+        return true;
+    }
+
+    new_entry.callable = callable;
+    new_entry.return_type = return_type;
+    if (!append_raw((void **)&cache->entries,
+                    &cache->entry_count,
+                    &cache->entry_capacity,
+                    sizeof(new_entry),
+                    &new_entry)) {
+        return false;
+    }
+
+    cache->changed = true;
+    return true;
+}
+
+static void free_callable_return_cache(CallableReturnCache *cache) {
+    if (cache == NULL) {
+        return;
+    }
+
+    free(cache->entries);
+    cache->entries = NULL;
+    cache->entry_count = 0U;
+    cache->entry_capacity = 0U;
+    cache->changed = false;
 }
 
 static bool append_raw(void **items,
@@ -1098,6 +1237,7 @@ static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *t
             }
             return type_ref;
 
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             return NULL;
     }
@@ -1158,6 +1298,23 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
+static bool validate_expr_against_expected_type(ResolveContext *context,
+                                                const FengExpr *expr,
+                                                const FengTypeRef *expected_type);
+static bool inferred_expr_types_equal(const ResolveContext *context,
+                                      InferredExprType left,
+                                      InferredExprType right);
+static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
+static bool lambda_expr_matches_function_type(ResolveContext *context,
+                                              const FengExpr *expr,
+                                              const FengDecl *function_type_decl);
+static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
+                                                      const FengExpr *left,
+                                                      const FengExpr *right);
+static bool lambda_expr_parameters_match_args(ResolveContext *context,
+                                              const FengExpr *expr,
+                                              FengExpr *const *args,
+                                              size_t arg_count);
 static char *format_expr_target_name(const FengExpr *expr);
 static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext *context,
                                                                  const FengExpr *object_expr);
@@ -1305,6 +1462,16 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
             target_decl = resolve_type_ref_decl(context, type_ref);
             return target_decl != NULL && target_decl == expr_type.type_decl;
 
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+            target_decl = resolve_type_ref_decl(context, type_ref);
+            if (target_decl == NULL || target_decl->kind != FENG_DECL_TYPE ||
+                target_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+                return false;
+            }
+            return lambda_expr_matches_function_type((ResolveContext *)context,
+                                                     expr_type.lambda_expr,
+                                                     target_decl);
+
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             return false;
     }
@@ -1332,6 +1499,11 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
         right.kind == FENG_INFERRED_EXPR_TYPE_DECL) {
         return left.type_decl != NULL && left.type_decl == right.type_decl;
     }
+    if (left.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA &&
+        right.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        return lambda_expr_signature_matches_lambda_expr(
+            (ResolveContext *)context, left.lambda_expr, right.lambda_expr);
+    }
     if (left.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN &&
         right.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
         return inferred_expr_type_matches_type_ref(context, left, right.type_ref);
@@ -1347,6 +1519,32 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
     if (left.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
         right.kind == FENG_INFERRED_EXPR_TYPE_DECL) {
         return inferred_expr_type_matches_type_ref(context, right, left.type_ref);
+    }
+    if (left.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA &&
+        right.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        return inferred_expr_type_matches_type_ref(context, left, right.type_ref);
+    }
+    if (left.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+        right.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        return inferred_expr_type_matches_type_ref(context, right, left.type_ref);
+    }
+    if (left.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA &&
+        right.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+        right.type_decl != NULL &&
+        right.type_decl->kind == FENG_DECL_TYPE &&
+        right.type_decl->as.type_decl.form == FENG_TYPE_DECL_FUNCTION) {
+        return lambda_expr_matches_function_type((ResolveContext *)context,
+                                                 left.lambda_expr,
+                                                 right.type_decl);
+    }
+    if (left.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+        right.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA &&
+        left.type_decl != NULL &&
+        left.type_decl->kind == FENG_DECL_TYPE &&
+        left.type_decl->as.type_decl.form == FENG_TYPE_DECL_FUNCTION) {
+        return lambda_expr_matches_function_type((ResolveContext *)context,
+                                                 right.lambda_expr,
+                                                 left.type_decl);
     }
 
     return false;
@@ -1364,26 +1562,28 @@ static const FengDecl *resolve_function_type_decl(const ResolveContext *context,
     return type_decl;
 }
 
-static bool function_type_decl_return_matches_type_ref(const ResolveContext *context,
-                                                       const FengDecl *function_type_decl,
-                                                       const FengTypeRef *return_type) {
+static bool inferred_expr_type_is_void(InferredExprType expr_type) {
+    return expr_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN &&
+           slice_equals_cstr(expr_type.builtin_name, "void");
+}
+
+static bool function_type_decl_return_matches_inferred_type(const ResolveContext *context,
+                                                            const FengDecl *function_type_decl,
+                                                            InferredExprType return_type) {
     const FengTypeRef *expected_return_type;
-    bool expected_is_void;
-    bool actual_is_void;
 
     if (function_type_decl == NULL || function_type_decl->kind != FENG_DECL_TYPE ||
-        function_type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION) {
+        function_type_decl->as.type_decl.form != FENG_TYPE_DECL_FUNCTION ||
+        !inferred_expr_type_is_known(return_type)) {
         return false;
     }
 
     expected_return_type = function_type_decl->as.type_decl.as.function.return_type;
-    expected_is_void = expected_return_type == NULL || type_ref_is_void(expected_return_type);
-    actual_is_void = return_type == NULL || type_ref_is_void(return_type);
-    if (expected_is_void || actual_is_void) {
-        return expected_is_void && actual_is_void;
+    if (expected_return_type == NULL || type_ref_is_void(expected_return_type)) {
+        return inferred_expr_type_is_void(return_type);
     }
 
-    return type_refs_semantically_equal(context, expected_return_type, return_type);
+    return inferred_expr_type_matches_type_ref(context, return_type, expected_return_type);
 }
 
 static bool function_type_decl_matches_callable_signature(const ResolveContext *context,
@@ -1410,9 +1610,8 @@ static bool function_type_decl_matches_callable_signature(const ResolveContext *
         }
     }
 
-    return function_type_decl_return_matches_type_ref(context,
-                                                      function_type_decl,
-                                                      callable->return_type);
+    return function_type_decl_return_matches_inferred_type(
+        context, function_type_decl, callable_effective_return_type(context, callable));
 }
 
 static const char *inferred_expr_type_builtin_canonical_name(InferredExprType expr_type) {
@@ -1424,6 +1623,7 @@ static const char *inferred_expr_type_builtin_canonical_name(InferredExprType ex
             return type_ref_builtin_canonical_name(expr_type.type_ref);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             return NULL;
     }
@@ -1660,6 +1860,181 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 }
 
+static bool expr_is_constant(const FengExpr *expr) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+
+        case FENG_EXPR_UNARY:
+            return expr_is_constant(expr->as.unary.operand);
+
+        case FENG_EXPR_BINARY:
+            return expr_is_constant(expr->as.binary.left) &&
+                   expr_is_constant(expr->as.binary.right);
+
+        case FENG_EXPR_CAST:
+            return expr_is_constant(expr->as.cast.value);
+
+        case FENG_EXPR_IF:
+            return expr_is_constant(expr->as.if_expr.condition) &&
+                   expr_is_constant(expr->as.if_expr.then_expr) &&
+                   expr_is_constant(expr->as.if_expr.else_expr);
+
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_ARRAY_LITERAL:
+        case FENG_EXPR_OBJECT_LITERAL:
+        case FENG_EXPR_CALL:
+        case FENG_EXPR_MEMBER:
+        case FENG_EXPR_INDEX:
+        case FENG_EXPR_LAMBDA:
+        case FENG_EXPR_MATCH:
+            return false;
+    }
+
+    return false;
+}
+
+static bool validate_match_case_label(ResolveContext *context,
+                                      const FengExpr *target,
+                                      const FengMatchCase *match_case) {
+    InferredExprType target_type;
+    InferredExprType label_type;
+    char *target_type_name;
+    char *label_type_name;
+    char *message;
+
+    if (match_case == NULL || match_case->label == NULL) {
+        return true;
+    }
+    if (!expr_is_constant(match_case->label)) {
+        return resolver_append_error(context,
+                                     match_case->token,
+                                     format_message("match case label must be a constant expression")) &&
+               false;
+    }
+
+    target_type = infer_expr_type(context, target);
+    label_type = infer_expr_type(context, match_case->label);
+    if (!inferred_expr_type_is_known(target_type) || !inferred_expr_type_is_known(label_type) ||
+        binary_expr_types_are_valid(context, FENG_TOKEN_EQ, target_type, label_type)) {
+        return true;
+    }
+
+    target_type_name = format_inferred_expr_type_name(target_type);
+    label_type_name = format_inferred_expr_type_name(label_type);
+    message = format_message("match case label type '%s' is not comparable with target type '%s'",
+                             label_type_name != NULL ? label_type_name : "<unknown>",
+                             target_type_name != NULL ? target_type_name : "<unknown>");
+    free(target_type_name);
+    free(label_type_name);
+    return resolver_append_error(context, match_case->token, message) && false;
+}
+
+static bool validate_match_expr_result_types(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType expected_type = inferred_expr_type_unknown();
+    InferredExprType else_type;
+    size_t index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_MATCH || expr->as.match_expr.else_expr == NULL) {
+        return true;
+    }
+
+    else_type = infer_expr_type(context, expr->as.match_expr.else_expr);
+    if (inferred_expr_type_is_known(else_type)) {
+        expected_type = else_type;
+    } else {
+        for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
+            InferredExprType case_type =
+                infer_expr_type(context, expr->as.match_expr.cases[index].value);
+
+            if (inferred_expr_type_is_known(case_type)) {
+                expected_type = case_type;
+                break;
+            }
+        }
+    }
+
+    if (!inferred_expr_type_is_known(expected_type)) {
+        return true;
+    }
+
+    for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
+        InferredExprType case_type = infer_expr_type(context, expr->as.match_expr.cases[index].value);
+
+        if (!inferred_expr_type_is_known(case_type) ||
+            inferred_expr_types_equal(context, expected_type, case_type)) {
+            continue;
+        }
+
+        {
+            char *expected_type_name = format_inferred_expr_type_name(expected_type);
+            char *case_type_name = format_inferred_expr_type_name(case_type);
+            char *message = format_message(
+                "match expression branches must have the same type, got '%s' and '%s'",
+                expected_type_name != NULL ? expected_type_name : "<unknown>",
+                case_type_name != NULL ? case_type_name : "<unknown>");
+
+            free(expected_type_name);
+            free(case_type_name);
+            return resolver_append_error(context,
+                                         expr->as.match_expr.cases[index].value->token,
+                                         message) &&
+                   false;
+        }
+    }
+
+    if (!inferred_expr_type_is_known(else_type) ||
+        inferred_expr_types_equal(context, expected_type, else_type)) {
+        return true;
+    }
+
+    {
+        char *expected_type_name = format_inferred_expr_type_name(expected_type);
+        char *else_type_name = format_inferred_expr_type_name(else_type);
+        char *message = format_message(
+            "match expression branches must have the same type, got '%s' and '%s'",
+            expected_type_name != NULL ? expected_type_name : "<unknown>",
+            else_type_name != NULL ? else_type_name : "<unknown>");
+
+        free(expected_type_name);
+        free(else_type_name);
+        return resolver_append_error(context, expr->as.match_expr.else_expr->token, message) &&
+               false;
+    }
+}
+
+static bool validate_match_expr(ResolveContext *context, const FengExpr *expr) {
+    size_t index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_MATCH) {
+        return true;
+    }
+    if (expr->as.match_expr.else_expr == NULL) {
+        return resolver_append_error(context,
+                                     expr->token,
+                                     format_message("match expressions require an else branch")) &&
+               false;
+    }
+
+    for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
+        if (!validate_match_case_label(context,
+                                       expr->as.match_expr.target,
+                                       &expr->as.match_expr.cases[index])) {
+            return false;
+        }
+    }
+
+    return validate_match_expr_result_types(context, expr);
+}
+
 static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
     const char *builtin_name = type_ref_builtin_canonical_name(type_ref);
 
@@ -1747,6 +2122,65 @@ static bool validate_stmt_condition_expr(ResolveContext *context,
     return resolver_append_error(context, token, message);
 }
 
+static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) {
+    InferredExprType return_type;
+    char *expected_type_name;
+    char *existing_type_name;
+    char *return_type_name;
+    char *message;
+
+    if (context->current_callable_signature == NULL) {
+        return true;
+    }
+
+    if (context->current_callable_signature->return_type != NULL) {
+        if (stmt->as.return_value == NULL) {
+            if (type_ref_is_void(context->current_callable_signature->return_type)) {
+                return true;
+            }
+
+            expected_type_name =
+                format_type_ref_name(context->current_callable_signature->return_type);
+            message = format_message("return statement does not match expected type '%s'",
+                                     expected_type_name != NULL ? expected_type_name : "<type>");
+            free(expected_type_name);
+            return resolver_append_error(context, stmt->token, message) && false;
+        }
+
+        return validate_expr_against_expected_type(context,
+                                                   stmt->as.return_value,
+                                                   context->current_callable_signature->return_type);
+    }
+
+    context->current_callable_saw_return = true;
+    return_type = stmt->as.return_value != NULL ? infer_expr_type(context, stmt->as.return_value)
+                                                : inferred_expr_type_builtin("void");
+    if (!inferred_expr_type_is_known(return_type)) {
+        return true;
+    }
+    if (!inferred_expr_type_is_known(context->current_callable_inferred_return_type)) {
+        context->current_callable_inferred_return_type = return_type;
+        return true;
+    }
+    if (inferred_expr_types_equal(context,
+                                  context->current_callable_inferred_return_type,
+                                  return_type)) {
+        return true;
+    }
+
+    existing_type_name =
+        format_inferred_expr_type_name(context->current_callable_inferred_return_type);
+    return_type_name = format_inferred_expr_type_name(return_type);
+    message = format_message("callable '%.*s' has conflicting inferred return types '%s' and '%s'",
+                             (int)context->current_callable_signature->name.length,
+                             context->current_callable_signature->name.data,
+                             existing_type_name != NULL ? existing_type_name : "<type>",
+                             return_type_name != NULL ? return_type_name : "<type>");
+    free(existing_type_name);
+    free(return_type_name);
+    return resolver_append_error(context, stmt->token, message) && false;
+}
+
 static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *context,
                                                        InferredExprType expr_type) {
     switch (expr_type.kind) {
@@ -1756,6 +2190,7 @@ static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *con
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
             return resolve_type_ref_decl(context, expr_type.type_ref);
 
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             return NULL;
@@ -2311,6 +2746,26 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
         return true;
     }
 
+    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        if (lambda_expr_parameters_match_args(context, callee_type.lambda_expr, args, arg_count)) {
+            return true;
+        }
+
+        target_name = format_expr_target_name(callee);
+        if (!resolver_append_error(
+                context,
+                callee->token,
+                format_message("call target '%s' has no function type overload accepting %zu argument(s)",
+                               target_name != NULL ? target_name : "<expression>",
+                               arg_count))) {
+            free(target_name);
+            return false;
+        }
+
+        free(target_name);
+        return true;
+    }
+
     if (!inferred_expr_type_is_known(callee_type)) {
         return true;
     }
@@ -2328,44 +2783,64 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     return true;
 }
 
-static InferredExprType infer_lambda_call_expr_type(ResolveContext *context,
-                                                    const FengExpr *callee,
-                                                    FengExpr *const *args,
-                                                    size_t arg_count) {
+static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
     bool ok = true;
     InferredExprType body_type = inferred_expr_type_unknown();
 
-    if (callee == NULL || callee->kind != FENG_EXPR_LAMBDA ||
-        callee->as.lambda.param_count != arg_count) {
+    if (expr == NULL || expr->kind != FENG_EXPR_LAMBDA) {
         return inferred_expr_type_unknown();
-    }
-
-    for (param_index = 0U; param_index < arg_count; ++param_index) {
-        if (!expr_matches_expected_type_ref(context,
-                                            args[param_index],
-                                            callee->as.lambda.params[param_index].type)) {
-            return inferred_expr_type_unknown();
-        }
     }
 
     if (!resolver_push_scope(context)) {
         return inferred_expr_type_unknown();
     }
 
-    for (param_index = 0U; param_index < callee->as.lambda.param_count && ok; ++param_index) {
-        ok = resolver_add_local_typed_name(
-            context,
-            callee->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(callee->as.lambda.params[param_index].type),
-            callee->as.lambda.params[param_index].mutability);
+    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
+        ok = resolver_add_local_typed_name(context,
+                                           expr->as.lambda.params[param_index].name,
+                                           inferred_expr_type_from_type_ref(
+                                               expr->as.lambda.params[param_index].type),
+                                           expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
-        body_type = infer_expr_type(context, callee->as.lambda.body);
+        body_type = infer_expr_type(context, expr->as.lambda.body);
     }
 
     resolver_pop_scope(context);
     return ok ? body_type : inferred_expr_type_unknown();
+}
+
+static bool lambda_expr_parameters_match_args(ResolveContext *context,
+                                              const FengExpr *expr,
+                                              FengExpr *const *args,
+                                              size_t arg_count) {
+    size_t param_index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_LAMBDA || expr->as.lambda.param_count != arg_count) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < arg_count; ++param_index) {
+        if (!expr_matches_expected_type_ref(context,
+                                            args[param_index],
+                                            expr->as.lambda.params[param_index].type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static InferredExprType infer_lambda_call_expr_type(ResolveContext *context,
+                                                    const FengExpr *callee,
+                                                    FengExpr *const *args,
+                                                    size_t arg_count) {
+    if (!lambda_expr_parameters_match_args(context, callee, args, arg_count)) {
+        return inferred_expr_type_unknown();
+    }
+
+    return infer_lambda_body_type(context, callee);
 }
 
 static InferredExprType infer_call_expr_type(ResolveContext *context, const FengExpr *expr) {
@@ -2402,7 +2877,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                return inferred_expr_type_from_return_type_ref(resolution.callable->return_type);
+                InferredExprType return_type =
+                    callable_effective_return_type(context, resolution.callable);
+
+                if (inferred_expr_type_is_known(return_type)) {
+                    return return_type;
+                }
             }
         }
     }
@@ -2423,7 +2903,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
-                    return inferred_expr_type_from_return_type_ref(resolution.callable->return_type);
+                    InferredExprType return_type =
+                        callable_effective_return_type(context, resolution.callable);
+
+                    if (inferred_expr_type_is_known(return_type)) {
+                        return return_type;
+                    }
                 }
             }
         }
@@ -2442,7 +2927,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             expr->as.call.arg_count);
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                return inferred_expr_type_from_return_type_ref(resolution.callable->return_type);
+                InferredExprType return_type =
+                    callable_effective_return_type(context, resolution.callable);
+
+                if (inferred_expr_type_is_known(return_type)) {
+                    return return_type;
+                }
             }
         }
     }
@@ -2460,6 +2950,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
     callee_type = infer_expr_type(context, callee);
     callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
+    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        return infer_lambda_call_expr_type(context,
+                                           callee_type.lambda_expr,
+                                           expr->as.call.args,
+                                           expr->as.call.arg_count);
+    }
     if (callee_type_decl != NULL &&
         function_type_parameters_match_args(context,
                                             callee_type_decl,
@@ -3184,7 +3680,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return infer_array_literal_expr_type(context, expr);
 
         case FENG_EXPR_LAMBDA:
-            return inferred_expr_type_unknown();
+            return inferred_expr_type_is_known(infer_lambda_body_type(context, expr))
+                       ? inferred_expr_type_from_lambda(expr)
+                       : inferred_expr_type_unknown();
 
         case FENG_EXPR_INDEX: {
             const FengTypeRef *element_type_ref =
@@ -3326,8 +3824,7 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
                                               const FengExpr *expr,
                                               const FengDecl *function_type_decl) {
     size_t param_index;
-    bool ok = true;
-    InferredExprType body_type = inferred_expr_type_unknown();
+    InferredExprType body_type;
 
     if (expr == NULL || expr->kind != FENG_EXPR_LAMBDA || function_type_decl == NULL ||
         function_type_decl->kind != FENG_DECL_TYPE ||
@@ -3346,25 +3843,7 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
         }
     }
 
-    if (!resolver_push_scope(context)) {
-        return false;
-    }
-
-    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
-        ok = resolver_add_local_typed_name(
-            context,
-            expr->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
-            expr->as.lambda.params[param_index].mutability);
-    }
-    if (ok) {
-        body_type = infer_expr_type(context, expr->as.lambda.body);
-    }
-
-    resolver_pop_scope(context);
-    if (!ok) {
-        return false;
-    }
+    body_type = infer_lambda_body_type(context, expr);
     if (!inferred_expr_type_is_known(body_type)) {
         return true;
     }
@@ -3372,6 +3851,33 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
     return inferred_expr_type_matches_type_ref(context,
                                                body_type,
                                                function_type_decl->as.type_decl.as.function.return_type);
+}
+
+static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
+                                                      const FengExpr *left,
+                                                      const FengExpr *right) {
+    size_t param_index;
+    InferredExprType left_body_type;
+    InferredExprType right_body_type;
+
+    if (left == NULL || right == NULL || left->kind != FENG_EXPR_LAMBDA ||
+        right->kind != FENG_EXPR_LAMBDA || left->as.lambda.param_count != right->as.lambda.param_count) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < left->as.lambda.param_count; ++param_index) {
+        if (!type_refs_semantically_equal(context,
+                                          left->as.lambda.params[param_index].type,
+                                          right->as.lambda.params[param_index].type)) {
+            return false;
+        }
+    }
+
+    left_body_type = infer_lambda_body_type(context, left);
+    right_body_type = infer_lambda_body_type(context, right);
+    return inferred_expr_type_is_known(left_body_type) &&
+           inferred_expr_type_is_known(right_body_type) &&
+           inferred_expr_types_equal(context, left_body_type, right_body_type);
 }
 
 static CallableValueResolution resolve_expr_callable_value(ResolveContext *context,
@@ -3655,6 +4161,9 @@ static char *format_inferred_expr_type_name(InferredExprType type) {
                 return format_module_name(&type.type_decl->as.type_decl.name, 1U);
             }
             return duplicate_cstr("<type>");
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+            return duplicate_cstr("<function>");
 
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             return duplicate_cstr("<type>");
@@ -4677,7 +5186,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            return resolve_expr(context, expr->as.match_expr.else_expr, allow_self);
+            return resolve_expr(context, expr->as.match_expr.else_expr, allow_self) &&
+                   validate_match_expr(context, expr);
     }
 
     return true;
@@ -4827,11 +5337,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
                 return false;
             }
-            return validate_expr_against_expected_type(context,
-                                                       stmt->as.return_value,
-                                                       context->current_callable_signature != NULL
-                                                           ? context->current_callable_signature->return_type
-                                                           : NULL);
+            return validate_return_stmt(context, stmt);
 
         case FENG_STMT_THROW:
             return resolve_expr(context, stmt->as.throw_value, allow_self);
@@ -4852,23 +5358,34 @@ static bool resolve_callable(ResolveContext *context,
                           context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR;
     const FengCallableSignature *previous_callable_signature =
         context->current_callable_signature;
+    InferredExprType previous_callable_inferred_return_type =
+        context->current_callable_inferred_return_type;
+    bool previous_callable_saw_return = context->current_callable_saw_return;
     bool ok;
 
     context->current_callable_signature = callable;
+    context->current_callable_inferred_return_type = callable_effective_return_type(context, callable);
+    context->current_callable_saw_return = false;
 
     if (!resolve_type_ref(context, callable->return_type, true)) {
+        context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
+        context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
 
     for (param_index = 0U; param_index < callable->param_count; ++param_index) {
         if (!resolve_type_ref(context, callable->params[param_index].type, false)) {
+            context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
+            context->current_callable_saw_return = previous_callable_saw_return;
             context->current_callable_signature = previous_callable_signature;
             return false;
         }
     }
 
     if (callable->body == NULL) {
+        context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
+        context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_signature = previous_callable_signature;
         return true;
     }
@@ -4881,6 +5398,8 @@ static bool resolve_callable(ResolveContext *context,
         if (is_constructor) {
             resolver_clear_current_constructor_bindings(context);
         }
+        context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
+        context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
@@ -4901,6 +5420,18 @@ static bool resolve_callable(ResolveContext *context,
     if (is_constructor) {
         resolver_clear_current_constructor_bindings(context);
     }
+    if (ok && callable->return_type == NULL && !is_constructor) {
+        InferredExprType inferred_return_type =
+            context->current_callable_saw_return ? context->current_callable_inferred_return_type
+                                                : inferred_expr_type_builtin("void");
+
+        if (inferred_expr_type_is_known(inferred_return_type) &&
+            !cache_callable_return_type(context, callable, inferred_return_type)) {
+            ok = false;
+        }
+    }
+    context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
+    context->current_callable_saw_return = previous_callable_saw_return;
     context->current_callable_signature = previous_callable_signature;
     return ok;
 }
@@ -4972,6 +5503,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   size_t visible_value_count,
                                   const FunctionOverloadSetEntry *function_sets,
                                   size_t function_set_count,
+                                  CallableReturnCache *callable_return_cache,
                                   FengSemanticError **errors,
                                   size_t *error_count,
                                   size_t *error_capacity) {
@@ -4992,6 +5524,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.visible_value_count = visible_value_count;
     context.function_sets = function_sets;
     context.function_set_count = function_set_count;
+    context.callable_return_cache = callable_return_cache;
     context.errors = errors;
     context.error_count = error_count;
     context.error_capacity = error_capacity;
@@ -5016,6 +5549,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
+                                   CallableReturnCache *callable_return_cache,
                                    FengSemanticError **errors,
                                    size_t *error_count,
                                    size_t *error_capacity) {
@@ -5306,6 +5840,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    visible_value_count,
                                    function_sets,
                                    function_set_count,
+                                   callable_return_cache,
                                    errors,
                                    error_count,
                                    error_capacity);
@@ -5315,6 +5850,139 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
     free(visible_values);
     free_function_overload_sets(function_sets, function_set_count);
     return ok;
+}
+
+static size_t count_inferable_callables(const FengSemanticAnalysis *analysis) {
+    size_t module_index;
+    size_t count = 0U;
+
+    if (analysis == NULL) {
+        return 0U;
+    }
+
+    for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind == FENG_DECL_FUNCTION && decl->as.function_decl.return_type == NULL) {
+                    ++count;
+                    continue;
+                }
+
+                if (decl->kind == FENG_DECL_TYPE &&
+                    decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
+                    size_t member_index;
+
+                    for (member_index = 0U;
+                         member_index < decl->as.type_decl.as.object.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member =
+                            decl->as.type_decl.as.object.members[member_index];
+
+                        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                            member->as.callable.return_type == NULL) {
+                            ++count;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analysis,
+                                               const CallableReturnCache *callable_return_cache,
+                                               FengSemanticError **errors,
+                                               size_t *error_count,
+                                               size_t *error_capacity) {
+    size_t module_index;
+    bool ok = true;
+
+    if (analysis == NULL) {
+        return true;
+    }
+
+    for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind == FENG_DECL_FUNCTION && decl->as.function_decl.return_type == NULL) {
+                    if (find_callable_return_cache_entry(callable_return_cache,
+                                                         &decl->as.function_decl) == NULL) {
+                        ok = append_error(
+                            errors,
+                            error_count,
+                            error_capacity,
+                            program->path,
+                            decl->as.function_decl.token,
+                            format_message(
+                                "function '%.*s' requires an explicit return type because its return type could not be inferred",
+                                (int)decl->as.function_decl.name.length,
+                                decl->as.function_decl.name.data));
+                        if (!ok) {
+                            return false;
+                        }
+                    }
+                    continue;
+                }
+
+                if (decl->kind == FENG_DECL_TYPE &&
+                    decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
+                    size_t member_index;
+
+                    for (member_index = 0U;
+                         member_index < decl->as.type_decl.as.object.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member =
+                            decl->as.type_decl.as.object.members[member_index];
+
+                        if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+                            member->as.callable.return_type != NULL) {
+                            continue;
+                        }
+                        if (find_callable_return_cache_entry(callable_return_cache,
+                                                             &member->as.callable) != NULL) {
+                            continue;
+                        }
+
+                        ok = append_error(
+                            errors,
+                            error_count,
+                            error_capacity,
+                            program->path,
+                            member->as.callable.token,
+                            format_message(
+                                "method '%.*s.%.*s' requires an explicit return type because its return type could not be inferred",
+                                (int)decl->as.type_decl.name.length,
+                                decl->as.type_decl.name.data,
+                                (int)member->as.callable.name.length,
+                                member->as.callable.name.data));
+                        if (!ok) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 bool feng_semantic_analyze(const FengProgram *const *programs,
@@ -5327,7 +5995,12 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
     size_t error_count = 0U;
     size_t error_capacity = 0U;
     size_t program_index;
+    size_t iteration;
+    size_t max_iterations;
     bool ok = true;
+    CallableReturnCache callable_return_cache;
+
+    memset(&callable_return_cache, 0, sizeof(callable_return_cache));
 
     analysis = (FengSemanticAnalysis *)calloc(1U, sizeof(*analysis));
     if (analysis == NULL) {
@@ -5365,12 +6038,36 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
         ok = append_module_program(&analysis->modules[module_index], program);
     }
 
-    for (program_index = 0U; program_index < analysis->module_count && ok; ++program_index) {
-        ok = check_symbol_conflicts(analysis,
-                                    &analysis->modules[program_index],
-                                    &errors,
-                                    &error_count,
-                                    &error_capacity);
+    max_iterations = count_inferable_callables(analysis) + 1U;
+    if (max_iterations == 0U) {
+        max_iterations = 1U;
+    }
+
+    for (iteration = 0U; iteration < max_iterations && ok && error_count == 0U; ++iteration) {
+        callable_return_cache.changed = false;
+
+        for (program_index = 0U;
+             program_index < analysis->module_count && ok && error_count == 0U;
+             ++program_index) {
+            ok = check_symbol_conflicts(analysis,
+                                        &analysis->modules[program_index],
+                                        &callable_return_cache,
+                                        &errors,
+                                        &error_count,
+                                        &error_capacity);
+        }
+
+        if (!callable_return_cache.changed) {
+            break;
+        }
+    }
+
+    if (ok && error_count == 0U) {
+        ok = report_uninferred_callable_returns(analysis,
+                                                &callable_return_cache,
+                                                &errors,
+                                                &error_count,
+                                                &error_capacity);
     }
 
 finish:
@@ -5387,6 +6084,7 @@ finish:
         } else {
             feng_semantic_errors_free(errors, error_count);
         }
+        free_callable_return_cache(&callable_return_cache);
         feng_semantic_analysis_free(analysis);
         return false;
     }
@@ -5396,6 +6094,7 @@ finish:
     } else {
         feng_semantic_analysis_free(analysis);
     }
+    free_callable_return_cache(&callable_return_cache);
     if (out_errors != NULL) {
         *out_errors = NULL;
     }
