@@ -58,6 +58,7 @@ typedef struct LocalNameEntry {
     FengSlice name;
     InferredExprType type;
     FengMutability mutability;
+    const FengExpr *source_expr;
 } LocalNameEntry;
 
 typedef struct ScopeFrame {
@@ -97,6 +98,8 @@ typedef enum CallableValueResolutionKind {
 
 typedef struct CallableValueResolution {
     CallableValueResolutionKind kind;
+    const FengCallableSignature *callable;
+    const FengExpr *lambda_expr;
 } CallableValueResolution;
 
 typedef struct CallableReturnCacheEntry {
@@ -156,6 +159,7 @@ typedef struct ResolveContext {
     size_t *error_capacity;
     bool current_callable_has_escaping_exception;
     size_t exception_capture_depth;
+    size_t finally_depth;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
@@ -1319,7 +1323,8 @@ static void resolver_pop_scope(ResolveContext *context) {
 static bool resolver_add_local_entry(ResolveContext *context,
                                      FengSlice name,
                                      InferredExprType type,
-                                     FengMutability mutability) {
+                                     FengMutability mutability,
+                                     const FengExpr *source_expr) {
     ScopeFrame *frame;
     LocalNameEntry entry;
 
@@ -1331,6 +1336,7 @@ static bool resolver_add_local_entry(ResolveContext *context,
     entry.name = name;
     entry.type = type;
     entry.mutability = normalize_mutability(mutability);
+    entry.source_expr = source_expr;
     return append_raw((void **)&frame->locals,
                       &frame->local_count,
                       &frame->local_capacity,
@@ -1338,11 +1344,19 @@ static bool resolver_add_local_entry(ResolveContext *context,
                       &entry);
 }
 
+static bool resolver_add_local_typed_name_with_source(ResolveContext *context,
+                                                      FengSlice name,
+                                                      InferredExprType type,
+                                                      FengMutability mutability,
+                                                      const FengExpr *source_expr) {
+    return resolver_add_local_entry(context, name, type, mutability, source_expr);
+}
+
 static bool resolver_add_local_typed_name(ResolveContext *context,
                                           FengSlice name,
                                           InferredExprType type,
                                           FengMutability mutability) {
-    return resolver_add_local_entry(context, name, type, mutability);
+    return resolver_add_local_typed_name_with_source(context, name, type, mutability, NULL);
 }
 
 static const LocalNameEntry *resolver_find_local_name_entry(const ResolveContext *context,
@@ -1569,6 +1583,9 @@ static char *format_inferred_expr_type_name(InferredExprType type);
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref);
+static CallableValueResolution resolve_expr_callable_value(ResolveContext *context,
+                                                           const FengExpr *expr,
+                                                           const FengTypeRef *expected_type_ref);
 static ResolvedTypeTarget resolve_type_target_expr(const ResolveContext *context,
                                                    const FengExpr *target_expr,
                                                    bool follow_call_callee);
@@ -2637,6 +2654,201 @@ static void note_callable_exception_escape(ResolveContext *context,
     note_current_callable_exception_escape(context);
 }
 
+static bool lambda_expr_may_escape_exception(ResolveContext *context, const FengExpr *expr) {
+    const FengCallableSignature *previous_callable_signature;
+    bool previous_callable_has_escaping_exception;
+    bool escapes = false;
+    size_t param_index;
+    bool ok = true;
+
+    if (context == NULL || expr == NULL || expr->kind != FENG_EXPR_LAMBDA) {
+        return false;
+    }
+
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
+        ok = resolver_add_local_typed_name(
+            context,
+            expr->as.lambda.params[param_index].name,
+            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
+            expr->as.lambda.params[param_index].mutability);
+    }
+
+    previous_callable_signature = context->current_callable_signature;
+    previous_callable_has_escaping_exception = context->current_callable_has_escaping_exception;
+    context->current_callable_has_escaping_exception = false;
+    if (ok) {
+        ok = resolve_expr(context, expr->as.lambda.body, false);
+    }
+    escapes = ok && context->current_callable_has_escaping_exception;
+    context->current_callable_signature = previous_callable_signature;
+    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+
+    resolver_pop_scope(context);
+    return escapes;
+}
+
+static bool callable_value_expr_may_escape_exception(ResolveContext *context,
+                                                     const FengExpr *expr,
+                                                     const FengTypeRef *expected_type_ref,
+                                                     size_t depth) {
+    CallableValueResolution resolution;
+
+    if (context == NULL || expr == NULL || depth > 32U) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER: {
+            const LocalNameEntry *local_entry =
+                resolver_find_local_name_entry(context, expr->as.identifier);
+
+            if (local_entry != NULL) {
+                const FengTypeRef *source_type_ref =
+                    local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+                        ? local_entry->type.type_ref
+                        : expected_type_ref;
+
+                if (local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+                    return lambda_expr_may_escape_exception(context, local_entry->type.lambda_expr);
+                }
+                if (local_entry->source_expr != NULL) {
+                    return callable_value_expr_may_escape_exception(
+                        context, local_entry->source_expr, source_type_ref, depth + 1U);
+                }
+                return false;
+            }
+
+            {
+                const VisibleValueEntry *visible_value =
+                    find_visible_value(context->visible_values,
+                                       context->visible_value_count,
+                                       expr->as.identifier);
+
+                if (visible_value != NULL && !visible_value->is_function && visible_value->decl != NULL &&
+                    visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                    visible_value->decl->as.binding.initializer != NULL) {
+                    const FengTypeRef *source_type_ref = visible_value->decl->as.binding.type != NULL
+                                                             ? visible_value->decl->as.binding.type
+                                                             : expected_type_ref;
+
+                    return callable_value_expr_may_escape_exception(context,
+                                                                    visible_value->decl->as.binding.initializer,
+                                                                    source_type_ref,
+                                                                    depth + 1U);
+                }
+            }
+            break;
+        }
+
+        case FENG_EXPR_MEMBER: {
+            const FengExpr *object = expr->as.member.object;
+
+            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+
+                if (alias != NULL) {
+                    const FengDecl *binding_decl =
+                        find_module_public_binding_decl(alias->target_module, expr->as.member.member);
+
+                    if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                        binding_decl->as.binding.initializer != NULL) {
+                        const FengTypeRef *source_type_ref = binding_decl->as.binding.type != NULL
+                                                                 ? binding_decl->as.binding.type
+                                                                 : expected_type_ref;
+
+                        return callable_value_expr_may_escape_exception(
+                            context,
+                            binding_decl->as.binding.initializer,
+                            source_type_ref,
+                            depth + 1U);
+                    }
+                }
+            }
+            break;
+        }
+
+        case FENG_EXPR_LAMBDA:
+            return lambda_expr_may_escape_exception(context, expr);
+
+        case FENG_EXPR_IF:
+            return callable_value_expr_may_escape_exception(
+                       context, expr->as.if_expr.then_expr, expected_type_ref, depth + 1U) ||
+                   callable_value_expr_may_escape_exception(
+                       context, expr->as.if_expr.else_expr, expected_type_ref, depth + 1U);
+
+        case FENG_EXPR_MATCH: {
+            size_t case_index;
+
+            for (case_index = 0U; case_index < expr->as.match_expr.case_count; ++case_index) {
+                if (callable_value_expr_may_escape_exception(
+                        context,
+                        expr->as.match_expr.cases[case_index].value,
+                        expected_type_ref,
+                        depth + 1U)) {
+                    return true;
+                }
+            }
+
+            return callable_value_expr_may_escape_exception(
+                context, expr->as.match_expr.else_expr, expected_type_ref, depth + 1U);
+        }
+
+        case FENG_EXPR_CAST:
+            return callable_value_expr_may_escape_exception(
+                context, expr->as.cast.value, expected_type_ref, depth + 1U);
+
+        default:
+            break;
+    }
+
+    if (expected_type_ref == NULL) {
+        return false;
+    }
+
+    resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
+    if (resolution.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+        return false;
+    }
+    if (resolution.callable != NULL) {
+        return callable_may_escape_exception(context, resolution.callable);
+    }
+    if (resolution.lambda_expr != NULL) {
+        return lambda_expr_may_escape_exception(context, resolution.lambda_expr);
+    }
+
+    return false;
+}
+
+static void note_callable_value_expr_exception_escape(ResolveContext *context,
+                                                      const FengExpr *callee) {
+    InferredExprType callee_type;
+    const FengTypeRef *expected_type_ref = NULL;
+
+    if (context == NULL || callee == NULL) {
+        return;
+    }
+
+    callee_type = infer_expr_type(context, callee);
+    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        if (lambda_expr_may_escape_exception(context, callee_type.lambda_expr)) {
+            note_current_callable_exception_escape(context);
+        }
+        return;
+    }
+
+    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        expected_type_ref = callee_type.type_ref;
+    }
+
+    if (callable_value_expr_may_escape_exception(context, callee, expected_type_ref, 0U)) {
+        note_current_callable_exception_escape(context);
+    }
+}
+
 static bool callable_parameters_match_args(ResolveContext *context,
                                            const FengCallableSignature *callable,
                                            FengExpr *const *args,
@@ -2656,6 +2868,41 @@ static bool callable_parameters_match_args(ResolveContext *context,
     }
 
     return true;
+}
+
+static bool current_stmt_is_inside_finally(const ResolveContext *context) {
+    return context != NULL && context->finally_depth > 0U;
+}
+
+static bool validate_finally_forbidden_control_stmt(ResolveContext *context,
+                                                    const FengStmt *stmt,
+                                                    const char *keyword) {
+    if (!current_stmt_is_inside_finally(context)) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        stmt != NULL ? stmt->token : context->program->module_token,
+        format_message("finally blocks cannot contain '%s'", keyword));
+}
+
+static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
+    InferredExprType throw_type;
+
+    if (!validate_finally_forbidden_control_stmt(context, stmt, "throw")) {
+        return false;
+    }
+
+    throw_type = infer_expr_type(context, stmt != NULL ? stmt->as.throw_value : NULL);
+    if (!inferred_expr_type_is_known(throw_type) || !inferred_expr_type_is_void(throw_type)) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        stmt->token,
+        format_message("throw statement requires a non-void expression"));
 }
 
 static ConstructorResolution resolve_accessible_constructor_overload(
@@ -2771,10 +3018,14 @@ static CallableValueResolution resolve_top_level_function_value_overload(
 
         if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            result.callable = &decl->as.function_decl;
+            result.lambda_expr = NULL;
             continue;
         }
 
         result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+        result.callable = NULL;
+        result.lambda_expr = NULL;
     }
 
     return result;
@@ -2816,10 +3067,14 @@ static CallableValueResolution resolve_module_public_function_value_overload(
 
             if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable = &decl->as.function_decl;
+                result.lambda_expr = NULL;
                 continue;
             }
 
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+            result.callable = NULL;
+            result.lambda_expr = NULL;
         }
     }
 
@@ -2860,10 +3115,14 @@ static CallableValueResolution resolve_accessible_method_value_overload(
 
         if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+            result.callable = &member->as.callable;
+            result.lambda_expr = NULL;
             continue;
         }
 
         result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+        result.callable = NULL;
+        result.lambda_expr = NULL;
     }
 
     return result;
@@ -3072,6 +3331,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     if (callee_type_decl != NULL && callee_type_decl->kind == FENG_DECL_TYPE &&
         callee_type_decl->as.type_decl.form == FENG_TYPE_DECL_FUNCTION) {
         if (function_type_parameters_match_args(context, callee_type_decl, args, arg_count)) {
+            note_callable_value_expr_exception_escape(context, callee);
             return true;
         }
 
@@ -3092,6 +3352,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
 
     if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
         if (lambda_expr_parameters_match_args(context, callee_type.lambda_expr, args, arg_count)) {
+            note_callable_value_expr_exception_escape(context, callee);
             return true;
         }
 
@@ -4426,6 +4687,9 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                     (!requires_fixed_abi_callable ||
                      inferred_expr_type_can_match_fixed_abi_callable_type(local_entry->type))) {
                     result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                    result.lambda_expr = local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA
+                                             ? local_entry->type.lambda_expr
+                                             : NULL;
                 }
                 return result;
             }
@@ -4504,6 +4768,7 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             }
             if (lambda_expr_matches_function_type(context, expr, function_type_decl)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.lambda_expr = expr;
             }
             return result;
 
@@ -5205,6 +5470,74 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
                 callable_kind,
                 (int)name.length,
                 name.data));
+    }
+
+    return true;
+}
+
+static bool type_ref_is_extern_c_abi_compatible(const ResolveContext *context,
+                                                const FengTypeRef *type_ref,
+                                                bool allow_void) {
+    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U) {
+        const char *builtin_name = canonical_builtin_type_name(type_ref->as.named.segments[0]);
+
+        if (builtin_name != NULL && strcmp(builtin_name, "string") == 0) {
+            return true;
+        }
+    }
+
+    return type_ref_is_fixed_abi_stable(context, type_ref, allow_void, NULL);
+}
+
+static bool validate_extern_function_signature(ResolveContext *context, const FengDecl *decl) {
+    const FengCallableSignature *callable;
+    size_t param_index;
+
+    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_FUNCTION || !decl->is_extern) {
+        return true;
+    }
+
+    callable = &decl->as.function_decl;
+    for (param_index = 0U; param_index < callable->param_count; ++param_index) {
+        const FengParameter *param = &callable->params[param_index];
+        char *type_name;
+
+        if (type_ref_is_extern_c_abi_compatible(context, param->type, false)) {
+            continue;
+        }
+
+        type_name = format_type_ref_name(param->type);
+        if (!resolver_append_error(
+                context,
+                param->token,
+                format_message(
+                    "extern function '%.*s' parameter '%.*s' type '%s' is not C ABI-stable",
+                    (int)callable->name.length,
+                    callable->name.data,
+                    (int)param->name.length,
+                    param->name.data,
+                    type_name != NULL ? type_name : "<type>"))) {
+            free(type_name);
+            return false;
+        }
+
+        free(type_name);
+        return true;
+    }
+
+    if (!type_ref_is_extern_c_abi_compatible(context, callable->return_type, true)) {
+        char *type_name = format_type_ref_name(callable->return_type);
+        bool ok = resolver_append_error(
+            context,
+            callable->token,
+            format_message("extern function '%.*s' return type '%s' is not C ABI-stable",
+                           (int)callable->name.length,
+                           callable->name.data,
+                           type_name != NULL ? type_name : "<type>"));
+
+        free(type_name);
+        return ok;
     }
 
     return true;
@@ -6110,6 +6443,8 @@ static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *e
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
+    const FengCallableSignature *previous_callable_signature;
+    bool previous_callable_has_escaping_exception;
     bool ok;
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
@@ -6123,6 +6458,9 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     ok = true;
+    previous_callable_signature = context->current_callable_signature;
+    previous_callable_has_escaping_exception = context->current_callable_has_escaping_exception;
+    context->current_callable_signature = NULL;
     for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
         ok = resolver_add_local_typed_name(
             context,
@@ -6133,6 +6471,9 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     if (ok) {
         ok = resolve_expr(context, expr->as.lambda.body, false);
     }
+
+    context->current_callable_signature = previous_callable_signature;
+    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
 
     resolver_pop_scope(context);
     return ok;
@@ -6317,8 +6658,8 @@ static bool resolve_binding(ResolveContext *context,
     if (add_to_scope) {
         binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
                                              : infer_expr_type(context, binding->initializer);
-        return resolver_add_local_typed_name(
-            context, binding->name, binding_type, binding->mutability);
+        return resolver_add_local_typed_name_with_source(
+            context, binding->name, binding_type, binding->mutability, binding->initializer);
     }
     return true;
 }
@@ -6353,6 +6694,23 @@ static bool resolve_block_with_exception_capture(ResolveContext *context,
 
     ok = resolve_block(context, block, allow_self);
     context->exception_capture_depth = previous_capture_depth;
+    return ok;
+}
+
+static bool resolve_block_with_finally_context(ResolveContext *context,
+                                               const FengBlock *block,
+                                               bool allow_self) {
+    size_t previous_finally_depth;
+    bool ok;
+
+    if (context == NULL) {
+        return true;
+    }
+
+    previous_finally_depth = context->finally_depth;
+    context->finally_depth += 1U;
+    ok = resolve_block(context, block, allow_self);
+    context->finally_depth = previous_finally_depth;
     return ok;
 }
 
@@ -6452,10 +6810,15 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                                         allow_self,
                                                         stmt->as.try_stmt.catch_block != NULL) &&
                    resolve_block(context, stmt->as.try_stmt.catch_block, allow_self) &&
-                   resolve_block(context, stmt->as.try_stmt.finally_block, allow_self);
+                   resolve_block_with_finally_context(context,
+                                                     stmt->as.try_stmt.finally_block,
+                                                     allow_self);
 
         case FENG_STMT_RETURN:
             if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
+                return false;
+            }
+            if (!validate_finally_forbidden_control_stmt(context, stmt, "return")) {
                 return false;
             }
             return validate_return_stmt(context, stmt);
@@ -6464,12 +6827,17 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (!resolve_expr(context, stmt->as.throw_value, allow_self)) {
                 return false;
             }
+            if (!validate_throw_stmt(context, stmt)) {
+                return false;
+            }
             note_current_callable_exception_escape(context);
             return true;
 
         case FENG_STMT_BREAK:
+            return validate_finally_forbidden_control_stmt(context, stmt, "break");
+
         case FENG_STMT_CONTINUE:
-            return true;
+            return validate_finally_forbidden_control_stmt(context, stmt, "continue");
     }
 
     return true;
@@ -6489,6 +6857,7 @@ static bool resolve_callable(ResolveContext *context,
     bool previous_callable_has_escaping_exception =
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
+    size_t previous_finally_depth = context->finally_depth;
     bool ok;
 
     context->current_callable_signature = callable;
@@ -6496,12 +6865,14 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = false;
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
+    context->finally_depth = 0U;
 
     if (!resolve_type_ref(context, callable->return_type, true)) {
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
@@ -6512,6 +6883,7 @@ static bool resolve_callable(ResolveContext *context,
             context->current_callable_saw_return = previous_callable_saw_return;
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
             context->exception_capture_depth = previous_exception_capture_depth;
+            context->finally_depth = previous_finally_depth;
             context->current_callable_signature = previous_callable_signature;
             return false;
         }
@@ -6522,6 +6894,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
         return true;
     }
@@ -6538,6 +6911,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
@@ -6576,6 +6950,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = previous_callable_saw_return;
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
     context->exception_capture_depth = previous_exception_capture_depth;
+    context->finally_depth = previous_finally_depth;
     context->current_callable_signature = previous_callable_signature;
     return ok;
 }
@@ -6641,6 +7016,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 return false;
             }
             if (!resolve_callable(context, &decl->as.function_decl, false)) {
+                return false;
+            }
+            if (!validate_extern_function_signature(context, decl)) {
                 return false;
             }
             return validate_fixed_function_declaration(context, decl);

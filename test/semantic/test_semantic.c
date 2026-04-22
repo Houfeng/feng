@@ -185,6 +185,100 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_rejects_array_parameter_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"m\")\n"
+        "extern fn fill(values: int[]): int;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_array_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_array_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "parameter 'values' type 'int[]' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_array_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"m\")\n"
+        "extern fn load(name: int): int[];\n";
+    FengProgram *program = parse_program_or_die("extern_fn_array_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_array_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "return type 'int[]' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_non_fixed_object_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@cdecl(\"m\")\n"
+        "extern fn use_point(point: Point): int;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_non_fixed_object_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_non_fixed_object_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "parameter 'point' type 'Point' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@fixed\n"
+        "type PointCallback(p: Point): int;\n"
+        "@cdecl(\"m\")\n"
+        "extern fn run_point(point: Point, cb: PointCallback): int;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_fixed_types_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fixed_type_accepts_abi_stable_fields(void) {
     const char *source =
         "mod demo.main;\n"
@@ -550,6 +644,246 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
     ASSERT(strcmp(errors[0].path, "fixed_method_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int {\n"
+        "    throw \"boom\";\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    let wrap = (x: int) -> helper();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_unused_lambda_throwing_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int {\n"
+        "    throw \"boom\";\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    let wrap = (x: int) -> helper();\n"
+        "    return wrap(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_throwing_call_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_invoked_lambda_throwing_call_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_local_function_value_call_to_throwing_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Callback(x: int): int;\n"
+        "fn helper(x: int): int {\n"
+        "    throw \"boom\";\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    let cb: Callback = helper;\n"
+        "    return cb(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_local_function_value_throwing_call_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_local_function_value_throwing_call_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int {\n"
+        "    try {\n"
+        "        throw \"boom\";\n"
+        "    } catch {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    let wrap = (x: int) -> helper();\n"
+        "    return wrap(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_catching_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_throw_rejects_void_expression(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn side() {\n"
+        "}\n"
+        "fn run() {\n"
+        "    throw side();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("throw_void_expression_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "throw_void_expression_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "throw statement requires a non-void expression") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finally_rejects_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    try {\n"
+        "        return 1;\n"
+        "    } finally {\n"
+        "        return 2;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("finally_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "finally_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'return'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finally_rejects_throw(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    try {\n"
+        "    } finally {\n"
+        "        throw \"boom\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("finally_throw_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "finally_throw_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'throw'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finally_rejects_break(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        try {\n"
+        "        } finally {\n"
+        "            break;\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("finally_break_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "finally_break_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'break'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finally_rejects_continue(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        try {\n"
+        "        } finally {\n"
+        "            continue;\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("finally_continue_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "finally_continue_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'continue'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3458,6 +3792,10 @@ int main(void) {
     test_extern_function_requires_calling_convention_annotation();
     test_extern_function_rejects_multiple_calling_convention_annotations();
     test_extern_function_rejects_non_string_library_binding();
+    test_extern_function_rejects_array_parameter_type();
+    test_extern_function_rejects_array_return_type();
+    test_extern_function_rejects_non_fixed_object_parameter();
+    test_extern_function_accepts_fixed_object_and_callback_types();
     test_fixed_type_accepts_abi_stable_fields();
     test_fixed_type_rejects_managed_field_type();
     test_fixed_function_type_rejects_union_annotation();
@@ -3473,6 +3811,15 @@ int main(void) {
     test_fixed_function_rejects_call_to_throwing_function();
     test_fixed_function_allows_call_to_catching_function();
     test_fixed_method_rejects_uncaught_throw();
+    test_fixed_function_allows_unused_lambda_wrapping_throwing_call();
+    test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call();
+    test_fixed_function_rejects_local_function_value_call_to_throwing_function();
+    test_fixed_function_allows_invoked_lambda_wrapping_catching_call();
+    test_throw_rejects_void_expression();
+    test_finally_rejects_return();
+    test_finally_rejects_throw();
+    test_finally_rejects_break();
+    test_finally_rejects_continue();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();
