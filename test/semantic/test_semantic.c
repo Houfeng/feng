@@ -1403,6 +1403,52 @@ static void test_index_expression_rejects_bool_operand(void) {
     feng_program_free(program);
 }
 
+static void test_index_expression_rejects_non_array_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var value: int = 1;\n"
+        "    let item: int = value[0];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_non_array_target_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "index_non_array_target_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "index expression target must have array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_index_assignment_rejects_non_array_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var value: int = 1;\n"
+        "    value[0] = 2;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_assign_non_array_target_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "index_assign_non_array_target_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "index expression target must have array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_unary_minus_rejects_non_numeric_operand(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2648,6 +2694,8 @@ int main(void) {
     test_cast_rejects_array_to_numeric();
     test_index_expression_rejects_float_operand();
     test_index_expression_rejects_bool_operand();
+    test_index_expression_rejects_non_array_target();
+    test_index_assignment_rejects_non_array_target();
     test_unary_minus_rejects_non_numeric_operand();
     test_unary_not_rejects_non_bool_operand();
     test_binary_plus_rejects_non_matching_operands();

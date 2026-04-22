@@ -1159,6 +1159,8 @@ static void resolver_free_scopes(ResolveContext *context) {
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static char *format_expr_target_name(const FengExpr *expr);
+static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext *context,
+                                                                 const FengExpr *object_expr);
 static char *format_inferred_expr_type_name(InferredExprType type);
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
@@ -1693,9 +1695,20 @@ static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
 }
 
 static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType object_type;
+    char *object_type_name;
     InferredExprType index_type;
     char *index_type_name;
     char *message;
+
+    if (resolve_indexed_array_element_type_ref(context, expr->as.index.object) == NULL) {
+        object_type = infer_expr_type(context, expr->as.index.object);
+        object_type_name = format_inferred_expr_type_name(object_type);
+        message = format_message("index expression target must have array type, got '%s'",
+                                 object_type_name != NULL ? object_type_name : "<unknown>");
+        free(object_type_name);
+        return resolver_append_error(context, expr->token, message) && false;
+    }
 
     index_type = infer_expr_type(context, expr->as.index.index);
     if (inferred_expr_type_is_integer(index_type)) {
@@ -1706,7 +1719,7 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
     message = format_message("index expression requires an integer operand, got '%s'",
                              index_type_name != NULL ? index_type_name : "<unknown>");
     free(index_type_name);
-    return resolver_append_error(context, expr->token, message);
+    return resolver_append_error(context, expr->token, message) && false;
 }
 
 static bool validate_stmt_condition_expr(ResolveContext *context,
@@ -2985,12 +2998,7 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         }
 
         case FENG_EXPR_INDEX:
-            return resolve_indexed_array_element_type_ref(context, target->as.index.object) != NULL
-                       ? true
-                       : resolver_append_error(
-                             context,
-                             target->token,
-                             format_message("indexed assignment targets are not supported yet"));
+            return validate_index_expr(context, target);
 
         default:
             return append_assignment_target_not_writable_error(context, target);
