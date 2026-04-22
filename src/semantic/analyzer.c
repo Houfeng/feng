@@ -1642,6 +1642,31 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 }
 
+static bool validate_stmt_condition_expr(ResolveContext *context,
+                                         FengToken token,
+                                         const FengExpr *condition,
+                                         const char *statement_kind) {
+    InferredExprType condition_type;
+    char *condition_type_name;
+    char *message;
+
+    if (condition == NULL) {
+        return true;
+    }
+
+    condition_type = infer_expr_type(context, condition);
+    if (inferred_expr_type_is_bool(condition_type)) {
+        return true;
+    }
+
+    condition_type_name = format_inferred_expr_type_name(condition_type);
+    message = format_message("%s condition must have type 'bool', got '%s'",
+                             statement_kind,
+                             condition_type_name != NULL ? condition_type_name : "<unknown>");
+    free(condition_type_name);
+    return resolver_append_error(context, token, message);
+}
+
 static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *context,
                                                        InferredExprType expr_type) {
     switch (expr_type.kind) {
@@ -4676,6 +4701,10 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
         case FENG_STMT_IF:
             for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
                 if (!resolve_expr(context, stmt->as.if_stmt.clauses[clause_index].condition, allow_self) ||
+                    !validate_stmt_condition_expr(context,
+                                                  stmt->token,
+                                                  stmt->as.if_stmt.clauses[clause_index].condition,
+                                                  "if statement") ||
                     !resolve_block(context, stmt->as.if_stmt.clauses[clause_index].block, allow_self)) {
                     return false;
                 }
@@ -4684,6 +4713,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
         case FENG_STMT_WHILE:
             return resolve_expr(context, stmt->as.while_stmt.condition, allow_self) &&
+                   validate_stmt_condition_expr(
+                       context, stmt->token, stmt->as.while_stmt.condition, "while statement") &&
                    resolve_block(context, stmt->as.while_stmt.body, allow_self);
 
         case FENG_STMT_FOR: {
@@ -4695,6 +4726,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
             ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&
                  resolve_expr(context, stmt->as.for_stmt.condition, allow_self) &&
+                 validate_stmt_condition_expr(
+                     context, stmt->token, stmt->as.for_stmt.condition, "for statement") &&
                  resolve_stmt(context, stmt->as.for_stmt.update, allow_self) &&
                  resolve_block(context, stmt->as.for_stmt.body, allow_self);
 

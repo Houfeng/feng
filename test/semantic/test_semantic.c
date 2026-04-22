@@ -1397,6 +1397,116 @@ static void test_valid_unary_binary_and_if_expressions_pass(void) {
     feng_program_free(program);
 }
 
+static void test_if_statement_rejects_non_bool_condition(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    if 1 {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_stmt_condition_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "if_stmt_condition_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "if statement condition must have type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_while_statement_rejects_non_bool_condition(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    while 1 {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("while_stmt_condition_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "while_stmt_condition_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "while statement condition must have type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_for_statement_rejects_non_bool_condition(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    for ; 1; {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("for_stmt_condition_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "for_stmt_condition_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "for statement condition must have type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_valid_statement_conditions_pass(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    if true {}\n"
+        "    while false {}\n"
+        "    for var i = 0; i < 1; i = i + 1 {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("valid_stmt_condition_checks_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_for_statement_accepts_empty_condition(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    for ; ; {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("for_stmt_empty_condition_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2377,6 +2487,11 @@ int main(void) {
     test_if_expression_rejects_non_bool_condition();
     test_if_expression_requires_matching_branch_types();
     test_valid_unary_binary_and_if_expressions_pass();
+    test_if_statement_rejects_non_bool_condition();
+    test_while_statement_rejects_non_bool_condition();
+    test_for_statement_rejects_non_bool_condition();
+    test_valid_statement_conditions_pass();
+    test_for_statement_accepts_empty_condition();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
