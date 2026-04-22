@@ -426,6 +426,135 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     feng_program_free(program);
 }
 
+static void test_fixed_function_rejects_uncaught_throw(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "fn fail(): int {\n"
+        "    throw \"boom\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_uncaught_throw_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_uncaught_throw_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_allows_locally_caught_throw(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "fn recover(): int {\n"
+        "    try {\n"
+        "        throw \"boom\";\n"
+        "    } catch {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_caught_throw_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_call_to_throwing_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int {\n"
+        "    throw \"boom\";\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    return helper();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_throwing_call_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_throwing_call_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_allows_call_to_catching_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int {\n"
+        "    try {\n"
+        "        throw \"boom\";\n"
+        "    } catch {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n"
+        "@fixed\n"
+        "fn run(): int {\n"
+        "    return helper();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_catching_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_method_rejects_uncaught_throw(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Worker {\n"
+        "    @fixed\n"
+        "    fn run() {\n"
+        "        throw \"boom\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_method_uncaught_throw_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_method_uncaught_throw_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
         "mod demo.main;\n"
@@ -3339,6 +3468,11 @@ int main(void) {
     test_fixed_function_type_rejects_plain_function_value();
     test_fixed_function_type_rejects_direct_lambda_value();
     test_fixed_function_type_rejects_captured_lambda_binding();
+    test_fixed_function_rejects_uncaught_throw();
+    test_fixed_function_allows_locally_caught_throw();
+    test_fixed_function_rejects_call_to_throwing_function();
+    test_fixed_function_allows_call_to_catching_function();
+    test_fixed_method_rejects_uncaught_throw();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();

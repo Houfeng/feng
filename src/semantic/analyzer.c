@@ -111,6 +111,18 @@ typedef struct CallableReturnCache {
     bool changed;
 } CallableReturnCache;
 
+typedef struct CallableExceptionEscapeCacheEntry {
+    const FengCallableSignature *callable;
+    bool escapes;
+} CallableExceptionEscapeCacheEntry;
+
+typedef struct CallableExceptionEscapeCache {
+    CallableExceptionEscapeCacheEntry *entries;
+    size_t entry_count;
+    size_t entry_capacity;
+    bool changed;
+} CallableExceptionEscapeCache;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -138,9 +150,12 @@ typedef struct ResolveContext {
     size_t synthetic_type_ref_count;
     size_t synthetic_type_ref_capacity;
     CallableReturnCache *callable_return_cache;
+    CallableExceptionEscapeCache *callable_exception_escape_cache;
     FengSemanticError **errors;
     size_t *error_count;
     size_t *error_capacity;
+    bool current_callable_has_escaping_exception;
+    size_t exception_capture_depth;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
@@ -293,8 +308,44 @@ static const CallableReturnCacheEntry *find_callable_return_cache_entry(
     return NULL;
 }
 
+static const CallableExceptionEscapeCacheEntry *find_callable_exception_escape_cache_entry(
+    const CallableExceptionEscapeCache *cache,
+    const FengCallableSignature *callable) {
+    size_t index;
+
+    if (cache == NULL || callable == NULL) {
+        return NULL;
+    }
+
+    for (index = 0U; index < cache->entry_count; ++index) {
+        if (cache->entries[index].callable == callable) {
+            return &cache->entries[index];
+        }
+    }
+
+    return NULL;
+}
+
 static CallableReturnCacheEntry *find_mutable_callable_return_cache_entry(
     CallableReturnCache *cache,
+    const FengCallableSignature *callable) {
+    size_t index;
+
+    if (cache == NULL || callable == NULL) {
+        return NULL;
+    }
+
+    for (index = 0U; index < cache->entry_count; ++index) {
+        if (cache->entries[index].callable == callable) {
+            return &cache->entries[index];
+        }
+    }
+
+    return NULL;
+}
+
+static CallableExceptionEscapeCacheEntry *find_mutable_callable_exception_escape_cache_entry(
+    CallableExceptionEscapeCache *cache,
     const FengCallableSignature *callable) {
     size_t index;
 
@@ -368,7 +419,74 @@ static bool cache_callable_return_type(ResolveContext *context,
     return true;
 }
 
+static bool callable_may_escape_exception(const ResolveContext *context,
+                                          const FengCallableSignature *callable) {
+    const CallableExceptionEscapeCacheEntry *entry;
+
+    if (callable == NULL || callable->body == NULL) {
+        return false;
+    }
+
+    entry = context != NULL
+                ? find_callable_exception_escape_cache_entry(
+                      context->callable_exception_escape_cache, callable)
+                : NULL;
+    return entry != NULL && entry->escapes;
+}
+
+static bool cache_callable_exception_escape(ResolveContext *context,
+                                            const FengCallableSignature *callable,
+                                            bool escapes) {
+    CallableExceptionEscapeCache *cache;
+    CallableExceptionEscapeCacheEntry *entry;
+    CallableExceptionEscapeCacheEntry new_entry;
+
+    if (context == NULL || callable == NULL || callable->body == NULL) {
+        return true;
+    }
+
+    cache = context->callable_exception_escape_cache;
+    if (cache == NULL) {
+        return true;
+    }
+
+    entry = find_mutable_callable_exception_escape_cache_entry(cache, callable);
+    if (entry != NULL) {
+        if (entry->escapes == escapes) {
+            return true;
+        }
+        entry->escapes = escapes;
+        cache->changed = true;
+        return true;
+    }
+
+    new_entry.callable = callable;
+    new_entry.escapes = escapes;
+    if (!append_raw((void **)&cache->entries,
+                    &cache->entry_count,
+                    &cache->entry_capacity,
+                    sizeof(new_entry),
+                    &new_entry)) {
+        return false;
+    }
+
+    cache->changed = true;
+    return true;
+}
+
 static void free_callable_return_cache(CallableReturnCache *cache) {
+    if (cache == NULL) {
+        return;
+    }
+
+    free(cache->entries);
+    cache->entries = NULL;
+    cache->entry_count = 0U;
+    cache->entry_capacity = 0U;
+    cache->changed = false;
+}
+
+static void free_callable_exception_escape_cache(CallableExceptionEscapeCache *cache) {
     if (cache == NULL) {
         return;
     }
@@ -2495,6 +2613,28 @@ static bool method_member_is_fixed_abi_callable_value(const FengTypeMember *memb
 
 static bool inferred_expr_type_can_match_fixed_abi_callable_type(InferredExprType type) {
     return type.kind != FENG_INFERRED_EXPR_TYPE_LAMBDA;
+}
+
+static bool current_callable_is_inside_exception_handler(const ResolveContext *context) {
+    return context != NULL && context->exception_capture_depth > 0U;
+}
+
+static void note_current_callable_exception_escape(ResolveContext *context) {
+    if (context == NULL || context->current_callable_signature == NULL ||
+        current_callable_is_inside_exception_handler(context)) {
+        return;
+    }
+
+    context->current_callable_has_escaping_exception = true;
+}
+
+static void note_callable_exception_escape(ResolveContext *context,
+                                          const FengCallableSignature *callable) {
+    if (!callable_may_escape_exception(context, callable)) {
+        return;
+    }
+
+    note_current_callable_exception_escape(context);
 }
 
 static bool callable_parameters_match_args(ResolveContext *context,
@@ -5056,6 +5196,17 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
         return ok;
     }
 
+    if (callable_may_escape_exception(context, callable)) {
+        return resolver_append_error(
+            context,
+            token,
+            format_message(
+                "%s '%.*s' cannot be marked as @fixed because uncaught exceptions must not cross the @fixed ABI boundary",
+                callable_kind,
+                (int)name.length,
+                name.data));
+    }
+
     return true;
 }
 
@@ -5220,6 +5371,10 @@ static bool validate_constructor_invocation(ResolveContext *context,
     resolution = resolve_accessible_constructor_overload(
         context, type_decl, provider_module, args, arg_count);
     if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_UNIQUE) {
+        note_callable_exception_escape(context,
+                                       resolution.constructor != NULL
+                                           ? &resolution.constructor->as.callable
+                                           : NULL);
         return true;
     }
     if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_AMBIGUOUS) {
@@ -5280,6 +5435,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     expr->as.call.arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    note_callable_exception_escape(context, resolution.callable);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -5336,6 +5492,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             expr->as.call.arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                note_callable_exception_escape(context, resolution.callable);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -5402,6 +5559,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                         expr->as.call.arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    note_callable_exception_escape(context, resolution.callable);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -6177,6 +6335,27 @@ static bool resolve_block(ResolveContext *context, const FengBlock *block, bool 
     return ok;
 }
 
+static bool resolve_block_with_exception_capture(ResolveContext *context,
+                                                 const FengBlock *block,
+                                                 bool allow_self,
+                                                 bool catches_exceptions) {
+    size_t previous_capture_depth;
+    bool ok;
+
+    if (context == NULL) {
+        return true;
+    }
+
+    previous_capture_depth = context->exception_capture_depth;
+    if (catches_exceptions) {
+        context->exception_capture_depth += 1U;
+    }
+
+    ok = resolve_block(context, block, allow_self);
+    context->exception_capture_depth = previous_capture_depth;
+    return ok;
+}
+
 static bool resolve_block_contents(ResolveContext *context,
                                    const FengBlock *block,
                                    bool allow_self) {
@@ -6268,7 +6447,10 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
         }
 
         case FENG_STMT_TRY:
-            return resolve_block(context, stmt->as.try_stmt.try_block, allow_self) &&
+            return resolve_block_with_exception_capture(context,
+                                                        stmt->as.try_stmt.try_block,
+                                                        allow_self,
+                                                        stmt->as.try_stmt.catch_block != NULL) &&
                    resolve_block(context, stmt->as.try_stmt.catch_block, allow_self) &&
                    resolve_block(context, stmt->as.try_stmt.finally_block, allow_self);
 
@@ -6279,7 +6461,11 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return validate_return_stmt(context, stmt);
 
         case FENG_STMT_THROW:
-            return resolve_expr(context, stmt->as.throw_value, allow_self);
+            if (!resolve_expr(context, stmt->as.throw_value, allow_self)) {
+                return false;
+            }
+            note_current_callable_exception_escape(context);
+            return true;
 
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
@@ -6300,15 +6486,22 @@ static bool resolve_callable(ResolveContext *context,
     InferredExprType previous_callable_inferred_return_type =
         context->current_callable_inferred_return_type;
     bool previous_callable_saw_return = context->current_callable_saw_return;
+    bool previous_callable_has_escaping_exception =
+        context->current_callable_has_escaping_exception;
+    size_t previous_exception_capture_depth = context->exception_capture_depth;
     bool ok;
 
     context->current_callable_signature = callable;
     context->current_callable_inferred_return_type = callable_effective_return_type(context, callable);
     context->current_callable_saw_return = false;
+    context->current_callable_has_escaping_exception = false;
+    context->exception_capture_depth = 0U;
 
     if (!resolve_type_ref(context, callable->return_type, true)) {
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
+        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
@@ -6317,6 +6510,8 @@ static bool resolve_callable(ResolveContext *context,
         if (!resolve_type_ref(context, callable->params[param_index].type, false)) {
             context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
             context->current_callable_saw_return = previous_callable_saw_return;
+            context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+            context->exception_capture_depth = previous_exception_capture_depth;
             context->current_callable_signature = previous_callable_signature;
             return false;
         }
@@ -6325,6 +6520,8 @@ static bool resolve_callable(ResolveContext *context,
     if (callable->body == NULL) {
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
+        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_callable_signature = previous_callable_signature;
         return true;
     }
@@ -6339,6 +6536,8 @@ static bool resolve_callable(ResolveContext *context,
         }
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
+        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_callable_signature = previous_callable_signature;
         return false;
     }
@@ -6369,8 +6568,14 @@ static bool resolve_callable(ResolveContext *context,
             ok = false;
         }
     }
+    if (ok && !cache_callable_exception_escape(
+                  context, callable, context->current_callable_has_escaping_exception)) {
+        ok = false;
+    }
     context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
     context->current_callable_saw_return = previous_callable_saw_return;
+    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+    context->exception_capture_depth = previous_exception_capture_depth;
     context->current_callable_signature = previous_callable_signature;
     return ok;
 }
@@ -6454,6 +6659,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   const FunctionOverloadSetEntry *function_sets,
                                   size_t function_set_count,
                                   CallableReturnCache *callable_return_cache,
+                                  CallableExceptionEscapeCache *callable_exception_escape_cache,
                                   FengSemanticError **errors,
                                   size_t *error_count,
                                   size_t *error_capacity) {
@@ -6475,6 +6681,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.function_sets = function_sets;
     context.function_set_count = function_set_count;
     context.callable_return_cache = callable_return_cache;
+    context.callable_exception_escape_cache = callable_exception_escape_cache;
     context.errors = errors;
     context.error_count = error_count;
     context.error_capacity = error_capacity;
@@ -6500,6 +6707,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
                                    CallableReturnCache *callable_return_cache,
+                                   CallableExceptionEscapeCache *callable_exception_escape_cache,
                                    FengSemanticError **errors,
                                    size_t *error_count,
                                    size_t *error_capacity) {
@@ -6791,6 +6999,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    function_sets,
                                    function_set_count,
                                    callable_return_cache,
+                                   callable_exception_escape_cache,
                                    errors,
                                    error_count,
                                    error_capacity);
@@ -6802,7 +7011,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
-static size_t count_inferable_callables(const FengSemanticAnalysis *analysis) {
+static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
     size_t module_index;
     size_t count = 0U;
 
@@ -6821,7 +7030,7 @@ static size_t count_inferable_callables(const FengSemanticAnalysis *analysis) {
             for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
                 const FengDecl *decl = program->declarations[decl_index];
 
-                if (decl->kind == FENG_DECL_FUNCTION && decl->as.function_decl.return_type == NULL) {
+                if (decl->kind == FENG_DECL_FUNCTION) {
                     ++count;
                     continue;
                 }
@@ -6836,8 +7045,8 @@ static size_t count_inferable_callables(const FengSemanticAnalysis *analysis) {
                         const FengTypeMember *member =
                             decl->as.type_decl.as.object.members[member_index];
 
-                        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
-                            member->as.callable.return_type == NULL) {
+                        if (member->kind == FENG_TYPE_MEMBER_METHOD ||
+                            member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
                             ++count;
                         }
                     }
@@ -6949,8 +7158,10 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
     size_t max_iterations;
     bool ok = true;
     CallableReturnCache callable_return_cache;
+    CallableExceptionEscapeCache callable_exception_escape_cache;
 
     memset(&callable_return_cache, 0, sizeof(callable_return_cache));
+    memset(&callable_exception_escape_cache, 0, sizeof(callable_exception_escape_cache));
 
     analysis = (FengSemanticAnalysis *)calloc(1U, sizeof(*analysis));
     if (analysis == NULL) {
@@ -6988,13 +7199,14 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
         ok = append_module_program(&analysis->modules[module_index], program);
     }
 
-    max_iterations = count_inferable_callables(analysis) + 1U;
+    max_iterations = count_all_callables(analysis) + 1U;
     if (max_iterations == 0U) {
         max_iterations = 1U;
     }
 
     for (iteration = 0U; iteration < max_iterations && ok && error_count == 0U; ++iteration) {
         callable_return_cache.changed = false;
+        callable_exception_escape_cache.changed = false;
 
         for (program_index = 0U;
              program_index < analysis->module_count && ok && error_count == 0U;
@@ -7002,12 +7214,13 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
             ok = check_symbol_conflicts(analysis,
                                         &analysis->modules[program_index],
                                         &callable_return_cache,
+                                        &callable_exception_escape_cache,
                                         &errors,
                                         &error_count,
                                         &error_capacity);
         }
 
-        if (!callable_return_cache.changed) {
+        if (!callable_return_cache.changed && !callable_exception_escape_cache.changed) {
             break;
         }
     }
@@ -7034,6 +7247,7 @@ finish:
         } else {
             feng_semantic_errors_free(errors, error_count);
         }
+        free_callable_exception_escape_cache(&callable_exception_escape_cache);
         free_callable_return_cache(&callable_return_cache);
         feng_semantic_analysis_free(analysis);
         return false;
@@ -7044,6 +7258,7 @@ finish:
     } else {
         feng_semantic_analysis_free(analysis);
     }
+    free_callable_exception_escape_cache(&callable_exception_escape_cache);
     free_callable_return_cache(&callable_return_cache);
     if (out_errors != NULL) {
         *out_errors = NULL;
