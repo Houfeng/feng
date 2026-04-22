@@ -118,6 +118,9 @@ typedef struct ResolveContext {
     FengSlice *current_constructor_bound_names;
     size_t current_constructor_bound_count;
     size_t current_constructor_bound_capacity;
+    FengTypeRef **synthetic_type_refs;
+    size_t synthetic_type_ref_count;
+    size_t synthetic_type_ref_capacity;
     FengSemanticError **errors;
     size_t *error_count;
     size_t *error_capacity;
@@ -206,6 +209,25 @@ static InferredExprType inferred_expr_type_from_return_type_ref(const FengTypeRe
     }
 
     return inferred_expr_type_from_type_ref(type_ref);
+}
+
+static void free_synthetic_type_ref(FengTypeRef *type_ref) {
+    if (type_ref == NULL) {
+        return;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            free(type_ref->as.named.segments);
+            break;
+
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            free_synthetic_type_ref(type_ref->as.inner);
+            break;
+    }
+
+    free(type_ref);
 }
 
 static bool inferred_expr_type_is_known(InferredExprType type) {
@@ -956,18 +978,178 @@ static bool resolver_has_local_name(const ResolveContext *context, FengSlice nam
     return resolver_find_local_name_entry(context, name) != NULL;
 }
 
+static bool resolver_track_synthetic_type_ref(ResolveContext *context, FengTypeRef *type_ref) {
+    return append_raw((void **)&context->synthetic_type_refs,
+                      &context->synthetic_type_ref_count,
+                      &context->synthetic_type_ref_capacity,
+                      sizeof(type_ref),
+                      &type_ref);
+}
+
+static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
+    FengTypeRef *clone;
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+
+    clone = (FengTypeRef *)calloc(1U, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+
+    clone->token = type_ref->token;
+    clone->kind = type_ref->kind;
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            clone->as.named.segment_count = type_ref->as.named.segment_count;
+            if (type_ref->as.named.segment_count == 0U) {
+                return clone;
+            }
+
+            clone->as.named.segments =
+                (FengSlice *)malloc(sizeof(FengSlice) * type_ref->as.named.segment_count);
+            if (clone->as.named.segments == NULL) {
+                free(clone);
+                return NULL;
+            }
+            memcpy(clone->as.named.segments,
+                   type_ref->as.named.segments,
+                   sizeof(FengSlice) * type_ref->as.named.segment_count);
+            return clone;
+
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            clone->as.inner = clone_type_ref_for_inference(type_ref->as.inner);
+            if (clone->as.inner == NULL) {
+                free(clone);
+                return NULL;
+            }
+            return clone;
+    }
+
+    free(clone);
+    return NULL;
+}
+
+static FengTypeRef *create_named_type_ref_for_inference(FengToken token,
+                                                        FengSlice *segments,
+                                                        size_t segment_count) {
+    FengTypeRef *type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+
+    type_ref->token = token;
+    type_ref->kind = FENG_TYPE_REF_NAMED;
+    type_ref->as.named.segments = segments;
+    type_ref->as.named.segment_count = segment_count;
+    return type_ref;
+}
+
+static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *type, FengToken token) {
+    FengTypeRef *type_ref;
+    FengSlice *segments;
+
+    if (type == NULL) {
+        return NULL;
+    }
+
+    switch (type->kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+            segments = (FengSlice *)malloc(sizeof(FengSlice));
+            if (segments == NULL) {
+                return NULL;
+            }
+            segments[0] = type->builtin_name;
+            type_ref = create_named_type_ref_for_inference(token, segments, 1U);
+            if (type_ref == NULL) {
+                free(segments);
+            }
+            return type_ref;
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return clone_type_ref_for_inference(type->type_ref);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (type->type_decl == NULL || type->type_decl->kind != FENG_DECL_TYPE) {
+                return NULL;
+            }
+
+            segments = (FengSlice *)malloc(sizeof(FengSlice));
+            if (segments == NULL) {
+                return NULL;
+            }
+            segments[0] = type->type_decl->as.type_decl.name;
+            type_ref = create_named_type_ref_for_inference(token, segments, 1U);
+            if (type_ref == NULL) {
+                free(segments);
+            }
+            return type_ref;
+
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return NULL;
+    }
+
+    return NULL;
+}
+
+static const FengTypeRef *synthesize_array_type_ref(ResolveContext *context,
+                                                    const InferredExprType *element_type,
+                                                    FengToken token) {
+    FengTypeRef *inner_type_ref;
+    FengTypeRef *array_type_ref;
+
+    if (context == NULL || element_type == NULL) {
+        return NULL;
+    }
+
+    inner_type_ref = create_type_ref_from_inferred_type(element_type, token);
+    if (inner_type_ref == NULL) {
+        return NULL;
+    }
+
+    array_type_ref = (FengTypeRef *)calloc(1U, sizeof(*array_type_ref));
+    if (array_type_ref == NULL) {
+        free_synthetic_type_ref(inner_type_ref);
+        return NULL;
+    }
+
+    array_type_ref->token = token;
+    array_type_ref->kind = FENG_TYPE_REF_ARRAY;
+    array_type_ref->as.inner = inner_type_ref;
+    if (!resolver_track_synthetic_type_ref(context, array_type_ref)) {
+        free_synthetic_type_ref(array_type_ref);
+        return NULL;
+    }
+
+    return array_type_ref;
+}
+
 static void resolver_free_scopes(ResolveContext *context) {
+    size_t type_ref_index;
+
     while (context->scope_count > 0U) {
         resolver_pop_scope(context);
     }
     free(context->scopes);
     context->scopes = NULL;
     context->scope_capacity = 0U;
+
+    for (type_ref_index = 0U; type_ref_index < context->synthetic_type_ref_count; ++type_ref_index) {
+        free_synthetic_type_ref(context->synthetic_type_refs[type_ref_index]);
+    }
+    free(context->synthetic_type_refs);
+    context->synthetic_type_refs = NULL;
+    context->synthetic_type_ref_count = 0U;
+    context->synthetic_type_ref_capacity = 0U;
 }
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static char *format_expr_target_name(const FengExpr *expr);
+static char *format_inferred_expr_type_name(InferredExprType type);
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref);
@@ -2342,6 +2524,71 @@ static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext 
     return object_type.type_ref->as.inner;
 }
 
+static InferredExprType infer_array_literal_expr_type(ResolveContext *context, const FengExpr *expr) {
+    size_t item_index;
+    InferredExprType element_type;
+    const FengTypeRef *array_type_ref;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL || expr->as.array_literal.count == 0U) {
+        return inferred_expr_type_unknown();
+    }
+
+    element_type = infer_expr_type(context, expr->as.array_literal.items[0]);
+    if (!inferred_expr_type_is_known(element_type)) {
+        return inferred_expr_type_unknown();
+    }
+
+    for (item_index = 1U; item_index < expr->as.array_literal.count; ++item_index) {
+        InferredExprType item_type = infer_expr_type(context, expr->as.array_literal.items[item_index]);
+
+        if (!inferred_expr_type_is_known(item_type) ||
+            !inferred_expr_types_equal(context, element_type, item_type)) {
+            return inferred_expr_type_unknown();
+        }
+    }
+
+    array_type_ref = synthesize_array_type_ref(context, &element_type, expr->token);
+    return array_type_ref != NULL ? inferred_expr_type_from_type_ref(array_type_ref)
+                                  : inferred_expr_type_unknown();
+}
+
+static bool validate_array_literal_expr(ResolveContext *context, const FengExpr *expr) {
+    size_t item_index;
+    InferredExprType element_type = inferred_expr_type_unknown();
+
+    if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL) {
+        return true;
+    }
+
+    for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+        InferredExprType item_type = infer_expr_type(context, expr->as.array_literal.items[item_index]);
+
+        if (!inferred_expr_type_is_known(item_type)) {
+            continue;
+        }
+
+        if (!inferred_expr_type_is_known(element_type)) {
+            element_type = item_type;
+            continue;
+        }
+
+        if (!inferred_expr_types_equal(context, element_type, item_type)) {
+            char *type_name = format_inferred_expr_type_name(element_type);
+            bool ok = resolver_append_error(
+                context,
+                expr->as.array_literal.items[item_index]->token,
+                format_message("array literal element at index %zu does not match expected type '%s'",
+                               item_index,
+                               type_name != NULL ? type_name : "<type>"));
+
+            free(type_name);
+            return ok;
+        }
+    }
+
+    return true;
+}
+
 static bool append_assignment_target_not_writable_error(ResolveContext *context,
                                                         const FengExpr *target) {
     char *target_name = format_expr_target_name(target);
@@ -2623,6 +2870,8 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return inferred_expr_type_builtin("string");
 
         case FENG_EXPR_ARRAY_LITERAL:
+            return infer_array_literal_expr_type(context, expr);
+
         case FENG_EXPR_LAMBDA:
             return inferred_expr_type_unknown();
 
@@ -3132,6 +3381,16 @@ static bool validate_untyped_callable_value_expr(ResolveContext *context, const 
 
     free(expr_name);
     return true;
+}
+
+static bool validate_untyped_array_literal_expr(ResolveContext *context, const FengExpr *expr) {
+    if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL || expr->as.array_literal.count != 0U) {
+        return true;
+    }
+
+    return resolver_append_error(context,
+                                 expr->token,
+                                 format_message("empty array literal requires an explicit target array type"));
 }
 
 static bool validate_constructor_invocation(ResolveContext *context,
@@ -3989,7 +4248,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            return true;
+            return validate_array_literal_expr(context, expr);
 
         case FENG_EXPR_OBJECT_LITERAL:
             {
@@ -4098,8 +4357,13 @@ static bool resolve_binding(ResolveContext *context,
         if (!validate_expr_against_expected_type(context, binding->initializer, binding->type)) {
             return false;
         }
-    } else if (!validate_untyped_callable_value_expr(context, binding->initializer)) {
-        return false;
+    } else {
+        if (!validate_untyped_callable_value_expr(context, binding->initializer)) {
+            return false;
+        }
+        if (!validate_untyped_array_literal_expr(context, binding->initializer)) {
+            return false;
+        }
     }
     if (add_to_scope) {
         binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)

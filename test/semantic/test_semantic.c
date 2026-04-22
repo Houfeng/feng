@@ -1106,6 +1106,142 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     feng_program_free(program);
 }
 
+static void test_inferred_array_literal_binding_supports_index_read_write(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items = [1, 2, 3];\n"
+        "    items[0] = 4;\n"
+        "    let first: int = items[0];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("inferred_array_index_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_inferred_array_literal_binding_rejects_non_matching_index_assignment(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items = [1, 2, 3];\n"
+        "    items[0] = true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("inferred_array_index_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "inferred_array_index_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_inferred_array_literal_rejects_mixed_element_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items = [1, true];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("mixed_array_literal_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "mixed_array_literal_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "array literal element at index 1 does not match expected type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_inferred_nested_array_literal_supports_nested_index_read_write(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var matrix = [[1, 2], [3, 4]];\n"
+        "    matrix[0][1] = 5;\n"
+        "    let value: int = matrix[1][0];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("nested_array_index_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_empty_array_literal_binding_requires_explicit_target_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items = [];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("empty_array_literal_type_context_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "empty_array_literal_type_context_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "empty array literal requires an explicit target array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_empty_array_literal_binding_accepts_explicit_target_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("empty_array_literal_typed_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_missing_use_target_module(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2073,6 +2209,12 @@ int main(void) {
     test_alias_public_let_binding_assignment_rejects_non_writable_target();
     test_index_assignment_accepts_explicit_array_target();
     test_index_assignment_rejects_non_matching_array_element_type();
+    test_inferred_array_literal_binding_supports_index_read_write();
+    test_inferred_array_literal_binding_rejects_non_matching_index_assignment();
+    test_inferred_array_literal_rejects_mixed_element_types();
+    test_inferred_nested_array_literal_supports_nested_index_read_write();
+    test_empty_array_literal_binding_requires_explicit_target_type();
+    test_empty_array_literal_binding_accepts_explicit_target_type();
     test_missing_use_target_module();
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
