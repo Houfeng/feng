@@ -1,6 +1,6 @@
 # Feng 语言 `spec` 规范
 
-本文档说明 Feng 中 `spec` 的职责、语法与默认语义。`spec` 用于声明契约形状; 具体类型如何显式满足这些契约,见 [feng-fit-draft.md](./feng-fit-draft.md)。
+本文档说明 Feng 中 `spec` 的职责、语法与默认语义。`spec` 用于声明契约形状; 具体类型如何显式满足这些契约,见 [feng-fit.md](./feng-fit.md)。
 
 ## 1 `spec` 的职责
 
@@ -136,4 +136,4 @@ let s2: S;
 - 某个 `type` 若要在要求某个 `spec` 的位置上使用,必须显式建立契约关系; 该关系既可以写在 `type` 声明头上,也可以通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 声明提供。
 - `fit A` 只用于给 `A` 自身补充额外能力,不建立新的 `spec` 契约关系。
 
-更多适配与导出规则见 [feng-fit-draft.md](./feng-fit-draft.md)。
+更多适配与导出规则见 [feng-fit.md](./feng-fit.md)。
