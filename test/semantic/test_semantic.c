@@ -97,6 +97,94 @@ static void test_function_return_only_overload_error(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_accepts_module_string_library_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "let math_lib = \"m\";\n"
+        "@cdecl(math_lib)\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_module_string_binding_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_extern_function_requires_calling_convention_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_missing_callconv_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_missing_callconv_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message,
+                  "must use exactly one of '@cdecl', '@stdcall', or '@fastcall'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"m\")\n"
+        "@stdcall(\"m\")\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_multiple_callconv_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_multiple_callconv_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "must use exactly one of '@cdecl', '@stdcall', or '@fastcall'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_non_string_library_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "var math_lib = \"m\";\n"
+        "@cdecl(math_lib)\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_non_string_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_non_string_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "library argument must be a string literal or a module-level let binding") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2996,6 +3084,10 @@ int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
+    test_extern_function_accepts_module_string_library_binding();
+    test_extern_function_requires_calling_convention_annotation();
+    test_extern_function_rejects_multiple_calling_convention_annotations();
+    test_extern_function_rejects_non_string_library_binding();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();

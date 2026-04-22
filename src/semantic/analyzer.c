@@ -143,6 +143,8 @@ typedef struct ResolveContext {
     size_t *error_capacity;
 } ResolveContext;
 
+static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
+
 typedef struct ResolvedTypeTarget {
     const FengDecl *type_decl;
     const FengSemanticModule *provider_module;
@@ -938,6 +940,84 @@ static FengMutability normalize_mutability(FengMutability mutability) {
 
 static bool mutability_is_writable(FengMutability mutability) {
     return normalize_mutability(mutability) == FENG_MUTABILITY_VAR;
+}
+
+static bool annotation_kind_is_calling_convention(FengAnnotationKind kind) {
+    return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL ||
+           kind == FENG_ANNOTATION_FASTCALL;
+}
+
+static bool extern_library_annotation_arg_is_valid(ResolveContext *context, const FengExpr *expr) {
+    const VisibleValueEntry *visible_value;
+
+    if (expr == NULL) {
+        return false;
+    }
+    if (expr->kind == FENG_EXPR_STRING) {
+        return true;
+    }
+    if (expr->kind != FENG_EXPR_IDENTIFIER) {
+        return false;
+    }
+
+    visible_value = find_visible_value(context->visible_values,
+                                       context->visible_value_count,
+                                       expr->as.identifier);
+    if (visible_value == NULL || visible_value->provider_module != context->module ||
+        visible_value->is_function || visible_value->decl == NULL ||
+        visible_value->decl->kind != FENG_DECL_GLOBAL_BINDING) {
+        return false;
+    }
+
+    return normalize_mutability(visible_value->decl->as.binding.mutability) == FENG_MUTABILITY_LET &&
+           visible_value->decl->as.binding.initializer != NULL &&
+           visible_value->decl->as.binding.initializer->kind == FENG_EXPR_STRING;
+}
+
+static bool validate_extern_function_annotations(ResolveContext *context, const FengDecl *decl) {
+    const FengAnnotation *calling_convention = NULL;
+    size_t calling_convention_count = 0U;
+    size_t annotation_index;
+
+    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_FUNCTION || !decl->is_extern) {
+        return true;
+    }
+
+    for (annotation_index = 0U; annotation_index < decl->annotation_count; ++annotation_index) {
+        const FengAnnotation *annotation = &decl->annotations[annotation_index];
+
+        if (!annotation_kind_is_calling_convention(annotation->builtin_kind)) {
+            continue;
+        }
+
+        ++calling_convention_count;
+        if (calling_convention == NULL) {
+            calling_convention = annotation;
+        }
+    }
+
+    if (decl->annotation_count != 1U || calling_convention_count != 1U ||
+        calling_convention == NULL || calling_convention->arg_count != 1U) {
+        return resolver_append_error(
+            context,
+            decl->as.function_decl.token,
+            format_message(
+                "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a single library argument",
+                (int)decl->as.function_decl.name.length,
+                decl->as.function_decl.name.data));
+    }
+
+    if (extern_library_annotation_arg_is_valid(context, calling_convention->args[0])) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        calling_convention->token,
+        format_message(
+            "extern function annotation '@%.*s' library argument must be a string literal or a module-level let binding initialized directly with a string literal",
+            (int)calling_convention->name.length,
+            calling_convention->name.data));
 }
 
 static const FengDecl *find_module_public_function_decl(const FengSemanticModule *module, FengSlice name) {
@@ -5795,6 +5875,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             return true;
 
         case FENG_DECL_FUNCTION:
+            if (!validate_extern_function_annotations(context, decl)) {
+                return false;
+            }
             return resolve_callable(context, &decl->as.function_decl, false);
     }
 
