@@ -44,7 +44,9 @@ extern "C" {
     X(GET, "get") \
     X(SET, "set") \
     X(THIS, "this") \
-    X(INTERFACE, "interface")
+    X(INTERFACE, "interface") \
+    X(STATIC, "static") \
+    X(ENUM, "enum")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(FIXED, "fixed") \
