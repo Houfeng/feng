@@ -185,6 +185,247 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
     feng_program_free(program);
 }
 
+static void test_fixed_type_accepts_abi_stable_fields(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_type_rejects_managed_field_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type NameBox {\n"
+        "    var name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_type_managed_field_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_type_managed_field_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "type 'NameBox' cannot be marked as @fixed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_type_rejects_union_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "@union\n"
+        "type Cmp(a: int, b: int): int;\n";
+    FengProgram *program = parse_program_or_die("fixed_function_type_union_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_function_type_union_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "type 'Cmp' cannot be marked as @fixed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_accepts_abi_stable_signature(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_parameterized_calling_convention(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "@cdecl(\"m\")\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_callconv_arg_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_callconv_arg_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "function 'cmp' cannot be marked as @fixed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_method_rejects_managed_signature_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type CallbackHolder {\n"
+        "    @fixed\n"
+        "    fn emit(msg: string) {\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_method_managed_signature_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_method_managed_signature_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "method 'emit' cannot be marked as @fixed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_type_accepts_fixed_function_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Callback(x: int): int;\n"
+        "@fixed\n"
+        "fn add1(x: int): int {\n"
+        "    return x + 1;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let cb: Callback = add1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_callback_fixed_fn_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_type_rejects_plain_function_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Callback(x: int): int;\n"
+        "fn add1(x: int): int {\n"
+        "    return x + 1;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let cb: Callback = add1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_callback_plain_fn_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_callback_plain_fn_error.f") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_type_rejects_direct_lambda_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Callback(x: int): int;\n"
+        "fn run() {\n"
+        "    let cb: Callback = (x: int) -> x + 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_callback_lambda_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_callback_lambda_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Callback(x: int): int;\n"
+        "fn run(base: int) {\n"
+        "    let add = (x: int) -> x + base;\n"
+        "    let cb: Callback = add;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_callback_captured_lambda_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_callback_captured_lambda_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
         "mod demo.main;\n"
@@ -3088,6 +3329,16 @@ int main(void) {
     test_extern_function_requires_calling_convention_annotation();
     test_extern_function_rejects_multiple_calling_convention_annotations();
     test_extern_function_rejects_non_string_library_binding();
+    test_fixed_type_accepts_abi_stable_fields();
+    test_fixed_type_rejects_managed_field_type();
+    test_fixed_function_type_rejects_union_annotation();
+    test_fixed_function_accepts_abi_stable_signature();
+    test_fixed_function_rejects_parameterized_calling_convention();
+    test_fixed_method_rejects_managed_signature_type();
+    test_fixed_function_type_accepts_fixed_function_value();
+    test_fixed_function_type_rejects_plain_function_value();
+    test_fixed_function_type_rejects_direct_lambda_value();
+    test_fixed_function_type_rejects_captured_lambda_binding();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();

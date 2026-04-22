@@ -25,6 +25,7 @@ static void test_top_level_declarations(void) {
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
+        "@fixed\n"
         "type PointCallback(p: Point): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -51,6 +52,8 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[2]->as.type_decl.as.object.member_count == 2U);
 
     ASSERT(program->declarations[3]->kind == FENG_DECL_TYPE);
+    ASSERT(program->declarations[3]->annotation_count == 1U);
+    ASSERT(program->declarations[3]->annotations[0].builtin_kind == FENG_ANNOTATION_FIXED);
     ASSERT(program->declarations[3]->as.type_decl.form == FENG_TYPE_DECL_FUNCTION);
     ASSERT(program->declarations[3]->as.type_decl.as.function.param_count == 1U);
     ASSERT(program->declarations[3]->as.type_decl.as.function.return_type != NULL);

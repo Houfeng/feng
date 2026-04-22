@@ -35,6 +35,7 @@ extern "C" {
     X(VOID, "void")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
+    X(FIXED, "fixed") \
     X(UNION, "union") \
     X(CDECL, "cdecl") \
     X(STDCALL, "stdcall") \

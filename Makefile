@@ -2,6 +2,7 @@ CC ?= cc
 CPPFLAGS ?= -Isrc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 LDFLAGS ?=
+DEPFLAGS = -MMD -MP
 
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj
@@ -19,6 +20,7 @@ CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTI
 TEST_LEXER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(TEST_LEXER_SRCS))
 TEST_PARSER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(TEST_PARSER_SRCS))
 TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(TEST_SEMANTIC_SRCS))
+DEPS := $(CLI_OBJS:.o=.d) $(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) $(TEST_SEMANTIC_OBJS:.o=.d)
 
 .PHONY: all cli test clean
 
@@ -49,7 +51,9 @@ $(BIN_DIR)/test_semantic: $(TEST_SEMANTIC_OBJS)
 
 $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 clean:
 	$(RM) -r $(BUILD_DIR)
+
+-include $(DEPS)

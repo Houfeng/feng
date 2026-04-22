@@ -31,10 +31,12 @@ static void test_keyword_and_annotation_counts(void) {
     FengAnnotationKind annotation_kind;
 
     ASSERT(feng_keyword_count() == 23U);
-    ASSERT(feng_builtin_annotation_count() == 5U);
+    ASSERT(feng_builtin_annotation_count() == 6U);
     ASSERT(feng_lookup_keyword("extern", 6U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_EXTERN);
     ASSERT(!feng_lookup_keyword("bool", 4U, &keyword_kind));
+    ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
     ASSERT(feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_BOUNDED);
 }
