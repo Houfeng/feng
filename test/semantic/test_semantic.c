@@ -230,6 +230,32 @@ static void test_omitted_return_function_can_infer_lambda_signature(void) {
     feng_program_free(program);
 }
 
+static void test_omitted_return_function_value_matches_named_function_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type IntToInt(x: int): int;\n"
+        "fn pick(x: int) {\n"
+        "    return x;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let func: IntToInt = pick;\n"
+        "    return func(4);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("omitted_return_function_value_named_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_explicit_non_void_return_rejects_empty_return(void) {
     const char *source =
         "mod demo.main;\n"
@@ -949,6 +975,57 @@ static void test_top_level_function_value_return_rejects_non_matching_target_typ
     ASSERT(strcmp(errors[0].path, "function_value_return_mismatch_error.f") == 0);
     ASSERT(errors[0].token.line == 10U);
     ASSERT(strstr(errors[0].message, "does not match expected function type 'BoolPicker'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_function_value_rejects_non_function_binding_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let flag: bool = pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_value_non_function_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "function_value_non_function_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'bool'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_lambda_body_rejects_function_value_for_non_function_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type BoolMaker(a: int): bool;\n"
+        "fn pick(a: int): int {\n"
+        "    return a;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let maker: BoolMaker = (a: int) -> pick;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("lambda_body_function_value_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lambda_body_function_value_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'BoolMaker'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -2924,6 +3001,7 @@ int main(void) {
     test_method_auto_infers_return_type_for_forward_call();
     test_imported_function_auto_infers_return_type_across_modules();
     test_omitted_return_function_can_infer_lambda_signature();
+    test_omitted_return_function_value_matches_named_function_type();
     test_explicit_non_void_return_rejects_empty_return();
     test_match_expression_rejects_non_constant_label();
     test_match_expression_rejects_incomparable_label_type();
@@ -2947,6 +3025,8 @@ int main(void) {
     test_top_level_function_value_requires_explicit_type_when_overloaded();
     test_top_level_function_value_binding_rejects_non_matching_target_type();
     test_top_level_function_value_return_rejects_non_matching_target_type();
+    test_top_level_function_value_rejects_non_function_binding_type();
+    test_lambda_body_rejects_function_value_for_non_function_return_type();
     test_method_value_selects_overload_by_explicit_binding_type();
     test_method_value_selects_overload_by_parameter_context();
     test_method_value_selects_overload_by_return_type_context();
