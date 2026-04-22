@@ -1242,6 +1242,167 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
     feng_program_free(program);
 }
 
+static void test_explicit_numeric_and_exact_casts_pass(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3];\n"
+        "    var index: u8 = (u8)1;\n"
+        "    let value: int = items[index];\n"
+        "    let small: i32 = (i32)value;\n"
+        "    let ratio: float = (float)small;\n"
+        "    let flag: bool = (bool)false;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_and_integer_index_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_bool_to_numeric(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value: int = (int)true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_bool_to_numeric_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "cast_bool_to_numeric_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "cast from 'bool' to 'int' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_numeric_to_bool(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let flag: bool = (bool)1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_numeric_to_bool_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "cast_numeric_to_bool_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "to 'bool' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_string_to_numeric(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let value: int = (int)\"12\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_string_to_numeric_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "cast_string_to_numeric_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "cast from 'string' to 'int' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_array_to_numeric(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3];\n"
+        "    let value: int = (int)items;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_array_to_numeric_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "cast_array_to_numeric_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "cast from 'int[]' to 'int' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_index_expression_rejects_float_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3];\n"
+        "    let value: int = items[1.5];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_float_operand_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "index_float_operand_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "index expression requires an integer operand") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_index_expression_rejects_bool_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3];\n"
+        "    let value: int = items[true];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_bool_operand_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "index_bool_operand_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "index expression requires an integer operand") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_unary_minus_rejects_non_numeric_operand(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2480,6 +2641,13 @@ int main(void) {
     test_inferred_nested_array_literal_supports_nested_index_read_write();
     test_empty_array_literal_binding_requires_explicit_target_type();
     test_empty_array_literal_binding_accepts_explicit_target_type();
+    test_explicit_numeric_and_exact_casts_pass();
+    test_cast_rejects_bool_to_numeric();
+    test_cast_rejects_numeric_to_bool();
+    test_cast_rejects_string_to_numeric();
+    test_cast_rejects_array_to_numeric();
+    test_index_expression_rejects_float_operand();
+    test_index_expression_rejects_bool_operand();
     test_unary_minus_rejects_non_numeric_operand();
     test_unary_not_rejects_non_bool_operand();
     test_binary_plus_rejects_non_matching_operands();

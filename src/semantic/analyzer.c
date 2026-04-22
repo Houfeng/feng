@@ -623,6 +623,16 @@ static bool builtin_type_name_is_numeric(FengSlice name) {
            strcmp(canonical_name, "string") != 0 && strcmp(canonical_name, "void") != 0;
 }
 
+static bool builtin_type_name_is_integer(FengSlice name) {
+    const char *canonical_name = canonical_builtin_type_name(name);
+
+    return canonical_name != NULL &&
+           (strcmp(canonical_name, "i8") == 0 || strcmp(canonical_name, "i16") == 0 ||
+            strcmp(canonical_name, "i32") == 0 || strcmp(canonical_name, "i64") == 0 ||
+            strcmp(canonical_name, "u8") == 0 || strcmp(canonical_name, "u16") == 0 ||
+            strcmp(canonical_name, "u32") == 0 || strcmp(canonical_name, "u64") == 0);
+}
+
 static bool module_is_visible_from(const FengSemanticModule *from, const FengSemanticModule *target) {
     return from == target || target->visibility == FENG_VISIBILITY_PUBLIC;
 }
@@ -1425,6 +1435,12 @@ static bool inferred_expr_type_is_numeric(InferredExprType expr_type) {
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
 
+static bool inferred_expr_type_is_integer(InferredExprType expr_type) {
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+
+    return builtin_name != NULL && builtin_type_name_is_integer(slice_from_cstr(builtin_name));
+}
+
 static bool inferred_expr_type_is_bool(InferredExprType expr_type) {
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
 
@@ -1640,6 +1656,57 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         free(else_type_name);
         return resolver_append_error(context, expr->token, message);
     }
+}
+
+static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
+    const char *builtin_name = type_ref_builtin_canonical_name(type_ref);
+
+    return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
+}
+
+static bool cast_expr_types_are_valid(const ResolveContext *context,
+                                      InferredExprType value_type,
+                                      const FengTypeRef *target_type) {
+    return inferred_expr_type_matches_type_ref(context, value_type, target_type) ||
+           (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type));
+}
+
+static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType value_type;
+    char *value_type_name;
+    char *target_type_name;
+    char *message;
+
+    value_type = infer_expr_type(context, expr->as.cast.value);
+    if (cast_expr_types_are_valid(context, value_type, expr->as.cast.type)) {
+        return true;
+    }
+
+    value_type_name = format_inferred_expr_type_name(value_type);
+    target_type_name = format_type_ref_name(expr->as.cast.type);
+    message = format_message("cast from '%s' to '%s' is not allowed",
+                             value_type_name != NULL ? value_type_name : "<unknown>",
+                             target_type_name != NULL ? target_type_name : "<type>");
+    free(value_type_name);
+    free(target_type_name);
+    return resolver_append_error(context, expr->token, message);
+}
+
+static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType index_type;
+    char *index_type_name;
+    char *message;
+
+    index_type = infer_expr_type(context, expr->as.index.index);
+    if (inferred_expr_type_is_integer(index_type)) {
+        return true;
+    }
+
+    index_type_name = format_inferred_expr_type_name(index_type);
+    message = format_message("index expression requires an integer operand, got '%s'",
+                             index_type_name != NULL ? index_type_name : "<unknown>");
+    free(index_type_name);
+    return resolver_append_error(context, expr->token, message);
 }
 
 static bool validate_stmt_condition_expr(ResolveContext *context,
@@ -3115,7 +3182,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             const FengTypeRef *element_type_ref =
                 resolve_indexed_array_element_type_ref(context, expr->as.index.object);
 
-            return element_type_ref != NULL ? inferred_expr_type_from_type_ref(element_type_ref)
+            return element_type_ref != NULL &&
+                           inferred_expr_type_is_integer(infer_expr_type(context, expr->as.index.index))
+                       ? inferred_expr_type_from_type_ref(element_type_ref)
                                             : inferred_expr_type_unknown();
         }
 
@@ -3204,7 +3273,11 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         }
 
         case FENG_EXPR_CAST:
-            return inferred_expr_type_from_type_ref(expr->as.cast.type);
+            return cast_expr_types_are_valid(context,
+                                             infer_expr_type(context, expr->as.cast.value),
+                                             expr->as.cast.type)
+                       ? inferred_expr_type_from_type_ref(expr->as.cast.type)
+                       : inferred_expr_type_unknown();
 
         case FENG_EXPR_IF: {
             InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
@@ -4560,7 +4633,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
         case FENG_EXPR_INDEX:
             return resolve_expr(context, expr->as.index.object, allow_self) &&
-                   resolve_expr(context, expr->as.index.index, allow_self);
+                   resolve_expr(context, expr->as.index.index, allow_self) &&
+                   validate_index_expr(context, expr);
 
         case FENG_EXPR_UNARY:
             return resolve_expr(context, expr->as.unary.operand, allow_self) &&
@@ -4576,7 +4650,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
         case FENG_EXPR_CAST:
             return resolve_type_ref(context, expr->as.cast.type, false) &&
-                   resolve_expr(context, expr->as.cast.value, allow_self);
+                   resolve_expr(context, expr->as.cast.value, allow_self) &&
+                   validate_cast_expr(context, expr);
 
         case FENG_EXPR_IF:
             return resolve_expr(context, expr->as.if_expr.condition, allow_self) &&
