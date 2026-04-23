@@ -189,5 +189,5 @@ user.name = "admin";
 
 - [feng-language.md](./feng-language.md): 语言总体规范、表达式概要、类型、函数、流程控制、异常、对象模型、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if` 表达式、循环与控制流规则。
-- [feng-object.md](./feng-object.md): Feng 原生 `type` 的对象模型、构造与引用语义。
+- [feng-type.md](./feng-type.md): Feng 原生 `type` 的类型定义、对象模型、构造与引用语义。
 - 本文档: 表达式类别、求值顺序、运算符优先级与赋值语义。

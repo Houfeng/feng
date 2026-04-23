@@ -71,6 +71,6 @@
 ## 8 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、GC 概要、对象模型、异常、类型与 C 互操作。
-- [feng-object.md](./feng-object.md): Feng 原生对象的引用语义与实例创建方式。
+- [feng-type.md](./feng-type.md): Feng 原生对象的引用语义与实例创建方式。
 - [feng-interop.md](./feng-interop.md): `@fixed` ABI 边界上的非托管内存与 ABI 约束。
 - 本文档: GC 可达性、根集合、托管范围和 C 边界限制。

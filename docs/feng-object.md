@@ -1,6 +1,7 @@
 # Feng 语言对象模型规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的对象模型概要说明,聚焦 Feng 原生 `type` 的实例创建、引用语义、成员可变性与方法调用规则。
+> **已合并**: 本文档内容已全部合并入 [feng-type.md](./feng-type.md)。请势必看该文档。本文件保留仅为历史参考。
+
 
 > **设计范围说明**: 本文档讨论普通 Feng `type` 的对象模型。`@fixed type` 的 ABI 资格与布局规则见 [feng-interop.md](./feng-interop.md); `@fixed` 标注本身不改变 Feng 侧的创建、绑定、方法或相等性语义。
 

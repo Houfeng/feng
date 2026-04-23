@@ -203,5 +203,5 @@ let s = u.say; // 错误: say 的重载本身合法,但 let s 无法推导唯一
 - [Feng 语言 `spec` 规范](./feng-spec.md): 可调用形状与契约规则。
 - [Feng 语言变量绑定与作用域规范](./feng-binding.md): 参数 `let`/`var` 默认规则与赋值约束。
 - [Feng 语言类型规范](./feng-type.md): `type`、构造函数与成员规则。
-- [Feng 语言对象模型规范](./feng-object.md): `self`、方法值与对象行为细节。
+- [Feng 语言类型规范](./feng-type.md): `self`、方法値与对象行为细节。
 - [Feng 语言 GC 与内存模型规范](./feng-gc.md): 闭包环境的托管语义。
