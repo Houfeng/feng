@@ -29,7 +29,7 @@ fit User: Named, Auditable;
 
 ```feng
 fit User: Named {
-  fn display(self): string {
+  fn display(): string {
     return self.first + " " + self.last;
   }
 }
@@ -38,7 +38,7 @@ fit User {
   pu let nickname: string;
   var visits: int;
 
-  fn say_hi(self) {
+  fn say_hi() {
     print("Hello, " + self.nickname);
   }
 }
@@ -73,7 +73,7 @@ fit User: User {
 - [必须] 契约适配形式中,`fit A: B, C, ...` 的左侧必须是具体 `type`,右侧每一项都必须是 `spec`。
 - [必须] 契约适配形式中,不带块体与带块体都表示“声明满足并触发编译期检查”。
 - [必须] `fit` 块中的成员定义方式与 `type` 中成员一致,可声明 `let`、`var`、`fn` 与可见性。
-- [必须] `fit` 块中的 `fn` 成员第一个参数必须是 `self`; 若该 `fn` 无其他参数且函数体不使用 `self`,可省略 `self`。
+- [必须] `fit` 块中的 `fn` 成员与 `type` 成员方法相同,`self` 由编译器隐式提供,无需在参数列表中显式声明; `fn` 体内可直接使用 `self` 引用当前实例。
 - [必须] 当同一个 `type` 通过 `fit` 同时满足多个 `spec` 时,若出现“方法名相同,且参数个数、参数类型和参数顺序一致,但返回值类型不一致”的方法签名,必须视为冲突。
 - [必须] `fit` 建立的契约关系必须遵守 `spec` 规范中的字段/方法精确匹配规则。
 - [禁止] 契约适配右侧出现普通 `type`。
