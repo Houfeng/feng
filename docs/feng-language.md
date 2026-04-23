@@ -202,8 +202,8 @@ pu mod libc.interop;
 // C 兼容结构体
 @fixed
 type Point {
-    var x: int;
-    var y: int;
+  var x: int;
+  var y: int;
 }
 
 // C 兼容函数指针类型
@@ -222,7 +222,7 @@ extern fn exec_point_cb(p: Point, cb: PointCB);
 // 定义 feng 回调函数
 @fixed
 fn on_point(p: Point) {
-    print("Point:x=", p.x, " y=", p.y);
+  print("Point:x=", p.x, " y=", p.y);
 }
 ```
 
@@ -233,43 +233,43 @@ mod main;
 use libc.interop;
 use mylib; // 导入 feng 自有二进制包
 
-// feng 内部函数类型
-type IntToInt(x: int): int;
+// 函数契约形状
+spec IntToInt(x: int): int;
 
 // feng 内部普通函数
 fn make_adder(base: int): IntToInt {
-    return (x: int) -> base + x;
+  return (x: int) -> base + x;
 }
 
 fn main(args: string[]) {
-    // 操作 C 兼容结构体
-    let p1 = Point {x: 10, y: 20};
-    let p2 = Point {x: 5, y: 5};
-    let res_p = point_add(p1, p2);
-    print(res_p.x, res_p.y);
+  // 操作 C 兼容结构体
+  let p1 = Point {x: 10, y: 20};
+  let p2 = Point {x: 5, y: 5};
+  let res_p = point_add(p1, p2);
+  print(res_p.x, res_p.y);
 
-    // 传递 feng 回调给 C
-    exec_point_cb(res_p, on_point);
+  // 传递 feng 回调给 C
+  exec_point_cb(res_p, on_point);
 
-    // 调用 feng 自有包成员
-    let user = User{name:"test", age:20};
-    add_user(user);
+  // 调用 feng 自有包成员
+  let user = User {name: "test", age: 20};
+  add_user(user);
 
-    // 闭包调用
-    let add5 = make_adder(5);
-    print(add5(3));
+  // 闭包调用
+  let add5 = make_adder(5);
+  print(add5(3));
 
-    // 数组操作
-    let arr = [10, 20, 30];
-    print(arr[0]);
+  // 数组操作
+  let arr = [10, 20, 30];
+  print(arr[0]);
 
-    // 异常处理
-    try {
-        let num = arr[10];
-    } catch {
-        print("数组越界异常");
-    } finally {
-        print("程序执行完毕");
-    }
+  // 异常处理
+  try {
+    let num = arr[10];
+  } catch {
+    print("数组越界异常");
+  } finally {
+    print("程序执行完毕");
+  }
 }
 ```
