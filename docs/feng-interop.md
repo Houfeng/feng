@@ -143,7 +143,7 @@ pu fn create_point_export(x: int, y: int): Point {
 - `extern fn` 声明必须使用且只能使用一个带参数的 `@cdecl`、`@stdcall` 或 `@fastcall`。
 - 带参数注解的参数可以是字符串字面量,也可以是当前可见作用域中以字符串字面量初始化的 `let` 绑定（来源文件或模块不限）。
 - 带参数注解的注解名本身决定调用方式,不再额外传入字符串形式的调用约定。
-- `extern fn` 的参数和返回値应使用语言已定义的 C 就合表示。
+- `extern fn` 的参数和返回值应使用语言已定义的 C 兼容表示。
 - `extern fn` 支持 `pu`/`pr` 可见性修饰符,默认等价于 `pr extern fn`,仅当前模块内可调用; `pu extern fn` 将该外部函数名公开,允许其他模块通过导入当前模块后调用。
 
 ```feng

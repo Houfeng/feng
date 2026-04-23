@@ -42,6 +42,7 @@ fn ensure_positive(x: int) {
 - `catch` 捕获从对应 `try` 块或其内部调用链抛出的异常。
 - 当前语言版本仅支持无绑定形式的 `catch { ... }`,表示捕获任意 Feng 异常。
 - 一个 `try` 块最多跟随一个 `catch` 块。
+- `catch` 块可省略；`try { ... } finally { ... }` 不带 `catch` 合法，异常仍会向上传播，`finally` 保证执行。
 
 ### 3.3 `finally`
 
@@ -57,6 +58,15 @@ fn read_value() {
         print("读取失败");
     } finally {
         print("执行收尾操作");
+    }
+}
+
+// 不带 catch，异常向上传播，finally 保证执行
+fn with_cleanup() {
+    try {
+        do_work();
+    } finally {
+        release_resource();
     }
 }
 ```
