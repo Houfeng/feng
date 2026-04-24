@@ -6216,12 +6216,15 @@ static bool validate_constructor_invocation(ResolveContext *context,
     }
 
     if (type_decl->kind != FENG_DECL_TYPE) {
+        FengSlice name = decl_typeish_name(type_decl);
+        const char *kind_label = type_decl->kind == FENG_DECL_SPEC ? "spec" : "type";
         bool ok = resolver_append_error(
             context,
             target_expr != NULL ? target_expr->token : context->program->module_token,
-            format_message("type '%.*s' is not an object type and cannot be constructed",
-                           type_decl->kind == FENG_DECL_TYPE ? (int)type_decl->as.type_decl.name.length : 0,
-                           type_decl->kind == FENG_DECL_TYPE ? type_decl->as.type_decl.name.data : ""));
+            format_message("%s '%.*s' is not an object type and cannot be constructed",
+                           kind_label,
+                           (int)name.length,
+                           name.data));
 
         return ok;
     }

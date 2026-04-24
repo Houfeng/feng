@@ -3882,7 +3882,31 @@ static void test_constructor_call_rejects_function_type(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "ctor_non_object_type.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "is not an object type and cannot be constructed") != NULL);
+    ASSERT(strstr(errors[0].message, "spec 'Factory' is not an object type and cannot be constructed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_call_rejects_object_form_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec CommitOptions {\n"
+        "    var message: int;\n"
+        "}\n"
+        "fn make() {\n"
+        "    CommitOptions();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_object_spec.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message, "spec 'CommitOptions' is not an object type and cannot be constructed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -4997,6 +5021,7 @@ int main(void) {
     test_constructor_call_selects_overload_by_inferred_local_binding();
     test_constructor_call_reports_type_mismatch();
     test_constructor_call_rejects_function_type();
+    test_constructor_call_rejects_object_form_spec();
     test_object_literal_reports_inaccessible_imported_constructor();
     test_object_literal_rejects_decl_bound_let_member();
     test_constructor_rejects_decl_bound_let_member_assignment();

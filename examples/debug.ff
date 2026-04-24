@@ -6,12 +6,11 @@ spec CommitOptions {
 
 type User {
   fn commit(options: CommitOptions): void {
-    let y:f32 = 1;
-    let x:i64 = y;
     options.message = 1;
   }
 }
 
+// 主函数
 fn main() {
   let user = User();
   user.commit(CommitOptions());
