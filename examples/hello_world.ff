@@ -1,5 +1,11 @@
 mod org.houfeng;
 
+spec X {
+  let a: int;
+  let b: string;
+  fn foo(): void;
+}
+
 type User {
   let name: string;
   let age: int;
