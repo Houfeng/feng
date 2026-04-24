@@ -322,14 +322,14 @@ struct FengDecl {
             FengSlice name;
             FengTypeMember **members;
             size_t member_count;
-            FengTypeRef **extends;
-            size_t extend_count;
+            FengTypeRef **declared_specs;
+            size_t declared_spec_count;
         } type_decl;
         struct {
             FengSlice name;
             FengSpecForm form;
-            FengTypeRef **extends;
-            size_t extend_count;
+            FengTypeRef **parent_specs;
+            size_t parent_spec_count;
             union {
                 struct {
                     FengTypeMember **members;

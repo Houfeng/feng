@@ -3991,12 +3991,12 @@ static void test_spec_type_satisfaction_succeeds(void) {
     feng_program_free(program);
 }
 
-static void test_spec_extends_must_be_spec(void) {
+static void test_spec_parent_specs_must_be_spec(void) {
     const char *source =
         "mod demo.main;\n"
         "type Other {}\n"
         "spec Bad: Other {}\n";
-    FengProgram *program = parse_program_or_die("spec_extends_type.f", source);
+    FengProgram *program = parse_program_or_die("spec_parent_type.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -4005,17 +4005,17 @@ static void test_spec_extends_must_be_spec(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "spec 'Bad' extends list must contain only spec types") != NULL);
+                  "spec 'Bad' parent spec list must contain only spec types") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_spec_extends_rejects_duplicate(void) {
+static void test_spec_parent_specs_rejects_duplicate(void) {
     const char *source =
         "mod demo.main;\n"
         "spec A {}\n"
         "spec B: A, A {}\n";
-    FengProgram *program = parse_program_or_die("spec_extends_dup.f", source);
+    FengProgram *program = parse_program_or_die("spec_parent_dup.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -4028,7 +4028,7 @@ static void test_spec_extends_rejects_duplicate(void) {
     feng_program_free(program);
 }
 
-static void test_spec_extends_rejects_cycle(void) {
+static void test_spec_parent_specs_rejects_cycle(void) {
     const char *source =
         "mod demo.main;\n"
         "spec A: B {}\n"
@@ -4046,12 +4046,12 @@ static void test_spec_extends_rejects_cycle(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_must_be_spec(void) {
+static void test_type_declared_specs_must_be_spec(void) {
     const char *source =
         "mod demo.main;\n"
         "type Other {}\n"
         "type User: Other {}\n";
-    FengProgram *program = parse_program_or_die("type_extends_type.f", source);
+    FengProgram *program = parse_program_or_die("type_declared_type.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -4060,17 +4060,17 @@ static void test_type_extends_must_be_spec(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "type 'User' extends list must contain only spec types") != NULL);
+                  "type 'User' declared spec list must contain only spec types") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_type_extends_rejects_duplicate(void) {
+static void test_type_declared_specs_rejects_duplicate(void) {
     const char *source =
         "mod demo.main;\n"
         "spec A {}\n"
         "type User: A, A {}\n";
-    FengProgram *program = parse_program_or_die("type_extends_dup.f", source);
+    FengProgram *program = parse_program_or_die("type_declared_dup.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -4083,7 +4083,7 @@ static void test_type_extends_rejects_duplicate(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_missing_field_rejected(void) {
+static void test_type_declared_specs_missing_field_rejected(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Named {\n"
@@ -4104,7 +4104,7 @@ static void test_type_extends_missing_field_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_field_mutability_mismatch_rejected(void) {
+static void test_type_declared_specs_field_mutability_mismatch_rejected(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Named {\n"
@@ -4126,7 +4126,7 @@ static void test_type_extends_field_mutability_mismatch_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_method_signature_mismatch_rejected(void) {
+static void test_type_declared_specs_method_signature_mismatch_rejected(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Named {\n"
@@ -4150,7 +4150,7 @@ static void test_type_extends_method_signature_mismatch_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_transitive_satisfaction_required(void) {
+static void test_type_declared_specs_transitive_satisfaction_required(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Identified {\n"
@@ -4176,7 +4176,7 @@ static void test_type_extends_transitive_satisfaction_required(void) {
     feng_program_free(program);
 }
 
-static void test_type_extends_cross_spec_method_conflict(void) {
+static void test_type_declared_specs_cross_spec_method_conflict(void) {
     const char *source =
         "mod demo.main;\n"
         "spec A {\n"
@@ -4778,16 +4778,16 @@ int main(void) {
     test_object_literal_rejects_inaccessible_private_field();
     test_object_literal_allows_private_field_inside_same_module();
     test_spec_type_satisfaction_succeeds();
-    test_spec_extends_must_be_spec();
-    test_spec_extends_rejects_duplicate();
-    test_spec_extends_rejects_cycle();
-    test_type_extends_must_be_spec();
-    test_type_extends_rejects_duplicate();
-    test_type_extends_missing_field_rejected();
-    test_type_extends_field_mutability_mismatch_rejected();
-    test_type_extends_method_signature_mismatch_rejected();
-    test_type_extends_transitive_satisfaction_required();
-    test_type_extends_cross_spec_method_conflict();
+    test_spec_parent_specs_must_be_spec();
+    test_spec_parent_specs_rejects_duplicate();
+    test_spec_parent_specs_rejects_cycle();
+    test_type_declared_specs_must_be_spec();
+    test_type_declared_specs_rejects_duplicate();
+    test_type_declared_specs_missing_field_rejected();
+    test_type_declared_specs_field_mutability_mismatch_rejected();
+    test_type_declared_specs_method_signature_mismatch_rejected();
+    test_type_declared_specs_transitive_satisfaction_required();
+    test_type_declared_specs_cross_spec_method_conflict();
     test_fit_target_must_be_type();
     test_fit_specs_must_be_spec();
     test_fit_specs_rejects_duplicate();

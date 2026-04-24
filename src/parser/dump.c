@@ -436,13 +436,13 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
             case FENG_DECL_TYPE:
                 fputs("type ", stream);
                 dump_slice(stream, decl->as.type_decl.name);
-                if (decl->as.type_decl.extend_count > 0U) {
+                if (decl->as.type_decl.declared_spec_count > 0U) {
                     fputs(" : ", stream);
-                    for (member_index = 0U; member_index < decl->as.type_decl.extend_count; ++member_index) {
+                    for (member_index = 0U; member_index < decl->as.type_decl.declared_spec_count; ++member_index) {
                         if (member_index != 0U) {
                             fputs(", ", stream);
                         }
-                        dump_type_ref(stream, decl->as.type_decl.extends[member_index]);
+                        dump_type_ref(stream, decl->as.type_decl.declared_specs[member_index]);
                     }
                 }
                 fputc('\n', stream);
@@ -473,13 +473,13 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                         "spec %s ",
                         decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ? "object" : "callable");
                 dump_slice(stream, decl->as.spec_decl.name);
-                if (decl->as.spec_decl.extend_count > 0U) {
+                if (decl->as.spec_decl.parent_spec_count > 0U) {
                     fputs(" : ", stream);
-                    for (member_index = 0U; member_index < decl->as.spec_decl.extend_count; ++member_index) {
+                    for (member_index = 0U; member_index < decl->as.spec_decl.parent_spec_count; ++member_index) {
                         if (member_index != 0U) {
                             fputs(", ", stream);
                         }
-                        dump_type_ref(stream, decl->as.spec_decl.extends[member_index]);
+                        dump_type_ref(stream, decl->as.spec_decl.parent_specs[member_index]);
                     }
                 }
                 fputc('\n', stream);

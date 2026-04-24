@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Returns true when `decl` denotes a callable-form spec — i.e. a function-shaped
+ * contract such as `spec Name(...): T;`. Callable-form spec satisfaction is
+ * structural: any function whose parameter and return shape matches the spec
+ * is accepted, no declaration of intent required. Object-form spec satisfaction
+ * is nominal and handled separately by type_decl_satisfies_spec_decl. */
 static inline bool decl_is_function_type(const FengDecl *decl) {
     return decl != NULL && decl->kind == FENG_DECL_SPEC &&
            decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE;
@@ -1758,6 +1763,10 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                 const FengDecl *src_decl = resolve_type_ref_decl(context, expr_type.type_ref);
                 const FengDecl *dst_decl = resolve_type_ref_decl(context, type_ref);
 
+                /* Object-form spec satisfaction is nominal: the source type must explicitly
+                 * declare the spec (in its declared spec list, transitively, or via a visible
+                 * fit). Structural shape match alone is not sufficient — duck typing is not
+                 * supported here. See type_decl_satisfies_spec_decl for the lookup. */
                 if (src_decl != NULL && dst_decl != NULL &&
                     src_decl->kind == FENG_DECL_TYPE &&
                     dst_decl->kind == FENG_DECL_SPEC &&
@@ -7308,27 +7317,27 @@ static bool resolve_callable(ResolveContext *context,
     return ok;
 }
 
-/* ===== Contract validation: spec / type extends / fit ===== */
+/* ===== Contract validation: spec parent specs / type-declared specs / fit ===== */
 
 static bool slice_eq(FengSlice a, FengSlice b) {
     return a.length == b.length &&
            (a.length == 0U || memcmp(a.data, b.data, a.length) == 0);
 }
 
-static bool spec_extends_reaches_recursive(const ResolveContext *ctx,
-                                           const FengDecl *current,
-                                           const FengDecl *target,
-                                           const FengDecl ***visited,
-                                           size_t *visited_count,
-                                           size_t *visited_capacity) {
+static bool spec_parent_reaches_recursive(const ResolveContext *ctx,
+                                          const FengDecl *current,
+                                          const FengDecl *target,
+                                          const FengDecl ***visited,
+                                          size_t *visited_count,
+                                          size_t *visited_capacity) {
     size_t i;
 
     if (current == NULL || current->kind != FENG_DECL_SPEC) {
         return false;
     }
 
-    for (i = 0U; i < current->as.spec_decl.extend_count; ++i) {
-        const FengDecl *next = resolve_type_ref_decl(ctx, current->as.spec_decl.extends[i]);
+    for (i = 0U; i < current->as.spec_decl.parent_spec_count; ++i) {
+        const FengDecl *next = resolve_type_ref_decl(ctx, current->as.spec_decl.parent_specs[i]);
         size_t j;
         bool seen;
 
@@ -7352,8 +7361,8 @@ static bool spec_extends_reaches_recursive(const ResolveContext *ctx,
                         sizeof(**visited), &next)) {
             return false;
         }
-        if (spec_extends_reaches_recursive(ctx, next, target, visited, visited_count,
-                                           visited_capacity)) {
+        if (spec_parent_reaches_recursive(ctx, next, target, visited, visited_count,
+                                          visited_capacity)) {
             return true;
         }
     }
@@ -7380,8 +7389,8 @@ static bool spec_collect_closure(const ResolveContext *ctx,
                     sizeof(**out_set), &spec_decl)) {
         return false;
     }
-    for (i = 0U; i < spec_decl->as.spec_decl.extend_count; ++i) {
-        const FengDecl *next = resolve_type_ref_decl(ctx, spec_decl->as.spec_decl.extends[i]);
+    for (i = 0U; i < spec_decl->as.spec_decl.parent_spec_count; ++i) {
+        const FengDecl *next = resolve_type_ref_decl(ctx, spec_decl->as.spec_decl.parent_specs[i]);
 
         if (next == NULL || next->kind != FENG_DECL_SPEC) {
             continue;
@@ -7393,12 +7402,12 @@ static bool spec_collect_closure(const ResolveContext *ctx,
     return true;
 }
 
-static bool validate_spec_extends_list(ResolveContext *context, const FengDecl *spec_decl) {
+static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDecl *spec_decl) {
     size_t i;
     size_t j;
 
-    for (i = 0U; i < spec_decl->as.spec_decl.extend_count; ++i) {
-        const FengTypeRef *r = spec_decl->as.spec_decl.extends[i];
+    for (i = 0U; i < spec_decl->as.spec_decl.parent_spec_count; ++i) {
+        const FengTypeRef *r = spec_decl->as.spec_decl.parent_specs[i];
         const FengDecl *resolved = resolve_type_ref_decl(context, r);
 
         if (resolved == NULL || resolved->kind != FENG_DECL_SPEC) {
@@ -7406,7 +7415,7 @@ static bool validate_spec_extends_list(ResolveContext *context, const FengDecl *
             bool ok = resolver_append_error(
                 context, r->token,
                 format_message(
-                    "spec '%.*s' extends list must contain only spec types but found '%s'",
+                    "spec '%.*s' parent spec list must contain only spec types but found '%s'",
                     (int)spec_decl->as.spec_decl.name.length,
                     spec_decl->as.spec_decl.name.data,
                     target_name != NULL ? target_name : "<unknown>"));
@@ -7415,13 +7424,13 @@ static bool validate_spec_extends_list(ResolveContext *context, const FengDecl *
             return ok;
         }
         for (j = 0U; j < i; ++j) {
-            const FengDecl *prev = resolve_type_ref_decl(context, spec_decl->as.spec_decl.extends[j]);
+            const FengDecl *prev = resolve_type_ref_decl(context, spec_decl->as.spec_decl.parent_specs[j]);
 
             if (prev == resolved) {
                 return resolver_append_error(
                     context, r->token,
                     format_message(
-                        "spec '%.*s' lists '%.*s' more than once in its extends clause",
+                        "spec '%.*s' lists '%.*s' more than once in its parent spec list",
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data,
                         (int)resolved->as.spec_decl.name.length,
@@ -7434,15 +7443,15 @@ static bool validate_spec_extends_list(ResolveContext *context, const FengDecl *
         const FengDecl **visited = NULL;
         size_t visited_count = 0U;
         size_t visited_capacity = 0U;
-        bool cycle = spec_extends_reaches_recursive(context, spec_decl, spec_decl,
-                                                    &visited, &visited_count, &visited_capacity);
+        bool cycle = spec_parent_reaches_recursive(context, spec_decl, spec_decl,
+                                                   &visited, &visited_count, &visited_capacity);
 
         free(visited);
         if (cycle) {
             return resolver_append_error(
                 context, spec_decl->token,
                 format_message(
-                    "spec '%.*s' forms a cycle through its extends clause",
+                    "spec '%.*s' forms a cycle through its parent spec list",
                     (int)spec_decl->as.spec_decl.name.length,
                     spec_decl->as.spec_decl.name.data));
         }
@@ -7651,9 +7660,9 @@ static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
         return true;
     }
 
-    /* Specs from the type's own extends list (transitive). */
-    for (i = 0U; i < type_decl->as.type_decl.extend_count; ++i) {
-        const FengDecl *spec = resolve_type_ref_decl(ctx, type_decl->as.type_decl.extends[i]);
+    /* Specs from the type's own declared spec list (transitive). */
+    for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
+        const FengDecl *spec = resolve_type_ref_decl(ctx, type_decl->as.type_decl.declared_specs[i]);
 
         if (!spec_collect_closure(ctx, spec, out_set, out_count, out_capacity)) {
             return false;
@@ -7792,8 +7801,8 @@ static bool detect_cross_spec_method_conflicts(ResolveContext *ctx,
     return true;
 }
 
-static bool validate_type_extends_and_satisfaction(ResolveContext *context,
-                                                   const FengDecl *type_decl) {
+static bool validate_type_declared_specs_and_satisfaction(ResolveContext *context,
+                                                          const FengDecl *type_decl) {
     size_t i;
     size_t j;
     const FengDecl **closure = NULL;
@@ -7801,8 +7810,8 @@ static bool validate_type_extends_and_satisfaction(ResolveContext *context,
     size_t closure_capacity = 0U;
     bool ok = true;
 
-    for (i = 0U; i < type_decl->as.type_decl.extend_count; ++i) {
-        const FengTypeRef *r = type_decl->as.type_decl.extends[i];
+    for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
+        const FengTypeRef *r = type_decl->as.type_decl.declared_specs[i];
         const FengDecl *resolved = resolve_type_ref_decl(context, r);
 
         if (resolved == NULL || resolved->kind != FENG_DECL_SPEC) {
@@ -7810,7 +7819,7 @@ static bool validate_type_extends_and_satisfaction(ResolveContext *context,
             bool result = resolver_append_error(
                 context, r->token,
                 format_message(
-                    "type '%.*s' extends list must contain only spec types but found '%s'",
+                    "type '%.*s' declared spec list must contain only spec types but found '%s'",
                     (int)type_decl->as.type_decl.name.length,
                     type_decl->as.type_decl.name.data,
                     target_name != NULL ? target_name : "<unknown>"));
@@ -7819,13 +7828,13 @@ static bool validate_type_extends_and_satisfaction(ResolveContext *context,
             return result;
         }
         for (j = 0U; j < i; ++j) {
-            const FengDecl *prev = resolve_type_ref_decl(context, type_decl->as.type_decl.extends[j]);
+            const FengDecl *prev = resolve_type_ref_decl(context, type_decl->as.type_decl.declared_specs[j]);
 
             if (prev == resolved) {
                 return resolver_append_error(
                     context, r->token,
                     format_message(
-                        "type '%.*s' lists '%.*s' more than once in its extends clause",
+                        "type '%.*s' lists '%.*s' more than once in its declared spec list",
                         (int)type_decl->as.type_decl.name.length,
                         type_decl->as.type_decl.name.data,
                         (int)resolved->as.spec_decl.name.length,
@@ -7834,8 +7843,8 @@ static bool validate_type_extends_and_satisfaction(ResolveContext *context,
         }
     }
 
-    for (i = 0U; i < type_decl->as.type_decl.extend_count; ++i) {
-        const FengDecl *spec = resolve_type_ref_decl(context, type_decl->as.type_decl.extends[i]);
+    for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
+        const FengDecl *spec = resolve_type_ref_decl(context, type_decl->as.type_decl.declared_specs[i]);
 
         if (!spec_collect_closure(context, spec, &closure, &closure_count, &closure_capacity)) {
             free(closure);
@@ -7965,8 +7974,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             return resolve_binding(context, &decl->as.binding, false, false);
 
         case FENG_DECL_TYPE:
-            for (index = 0U; index < decl->as.type_decl.extend_count; ++index) {
-                if (!resolve_type_ref(context, decl->as.type_decl.extends[index], false)) {
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                if (!resolve_type_ref(context, decl->as.type_decl.declared_specs[index], false)) {
                     return false;
                 }
             }
@@ -8005,15 +8014,15 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (!validate_fixed_type_declaration(context, decl)) {
                 return false;
             }
-            return validate_type_extends_and_satisfaction(context, decl);
+            return validate_type_declared_specs_and_satisfaction(context, decl);
 
         case FENG_DECL_SPEC:
-            for (index = 0U; index < decl->as.spec_decl.extend_count; ++index) {
-                if (!resolve_type_ref(context, decl->as.spec_decl.extends[index], false)) {
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (!resolve_type_ref(context, decl->as.spec_decl.parent_specs[index], false)) {
                     return false;
                 }
             }
-            if (!validate_spec_extends_list(context, decl)) {
+            if (!validate_spec_parent_spec_list(context, decl)) {
                 return false;
             }
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {

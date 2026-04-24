@@ -570,9 +570,9 @@ static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind, 
     return member;
 }
 
-static bool parse_extends_list(Parser *parser,
-                               FengTypeRef ***out_list,
-                               size_t *out_count) {
+static bool parse_spec_satisfaction_list(Parser *parser,
+                                         FengTypeRef ***out_list,
+                                         size_t *out_count) {
     FengTypeRef **list = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
@@ -638,9 +638,9 @@ static FengDecl *parse_type_declaration(Parser *parser,
     }
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
-        if (!parse_extends_list(parser,
-                                &decl->as.type_decl.extends,
-                                &decl->as.type_decl.extend_count)) {
+        if (!parse_spec_satisfaction_list(parser,
+                                &decl->as.type_decl.declared_specs,
+                                &decl->as.type_decl.declared_spec_count)) {
             free_decl(decl);
             return NULL;
         }
@@ -984,9 +984,9 @@ static FengDecl *parse_spec_declaration(Parser *parser,
     decl->as.spec_decl.form = FENG_SPEC_FORM_OBJECT;
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
-        if (!parse_extends_list(parser,
-                                &decl->as.spec_decl.extends,
-                                &decl->as.spec_decl.extend_count)) {
+        if (!parse_spec_satisfaction_list(parser,
+                                &decl->as.spec_decl.parent_specs,
+                                &decl->as.spec_decl.parent_spec_count)) {
             free_decl(decl);
             return NULL;
         }
@@ -1109,7 +1109,7 @@ static FengDecl *parse_fit_declaration(Parser *parser,
     }
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
-        if (!parse_extends_list(parser,
+        if (!parse_spec_satisfaction_list(parser,
                                 &decl->as.fit_decl.specs,
                                 &decl->as.fit_decl.spec_count)) {
             free_decl(decl);
@@ -2694,16 +2694,16 @@ static void free_decl(FengDecl *decl) {
                 free_type_member(decl->as.type_decl.members[index]);
             }
             free(decl->as.type_decl.members);
-            for (index = 0U; index < decl->as.type_decl.extend_count; ++index) {
-                free_type_ref(decl->as.type_decl.extends[index]);
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                free_type_ref(decl->as.type_decl.declared_specs[index]);
             }
-            free(decl->as.type_decl.extends);
+            free(decl->as.type_decl.declared_specs);
             break;
         case FENG_DECL_SPEC:
-            for (index = 0U; index < decl->as.spec_decl.extend_count; ++index) {
-                free_type_ref(decl->as.spec_decl.extends[index]);
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                free_type_ref(decl->as.spec_decl.parent_specs[index]);
             }
-            free(decl->as.spec_decl.extends);
+            free(decl->as.spec_decl.parent_specs);
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
                     free_type_member(decl->as.spec_decl.as.object.members[index]);
