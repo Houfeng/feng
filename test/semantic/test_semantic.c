@@ -17,7 +17,15 @@ static FengProgram *parse_program_or_die(const char *path, const char *source) {
     FengProgram *program = NULL;
     FengParseError error;
 
-    ASSERT(feng_parse_source(source, strlen(source), path, &program, &error));
+    if (!feng_parse_source(source, strlen(source), path, &program, &error)) {
+        fprintf(stderr,
+                "parse failed for %s at %u:%u: %s\n",
+                path,
+                error.token.line,
+                error.token.column,
+                error.message != NULL ? error.message : "unknown parse error");
+        ASSERT(false);
+    }
     ASSERT(program != NULL);
     return program;
 }
@@ -2018,7 +2026,7 @@ static void test_member_assignment_rejects_non_matching_type(void) {
         "mod demo.main;\n"
         "type User {\n"
         "    var flag: bool;\n"
-        "    fn set() {\n"
+        "    fn update() {\n"
         "        self.flag = 1;\n"
         "    }\n"
         "}\n";
@@ -2158,7 +2166,7 @@ static void test_instance_let_member_assignment_rejects_non_writable_target(void
         "type User {\n"
         "    let id: int = 0;\n"
         "}\n"
-        "fn set(var user: User) {\n"
+        "fn update(var user: User) {\n"
         "    user.id = 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("instance_let_member_assign_error.f", source);
@@ -3595,7 +3603,7 @@ static void test_method_rejects_let_member_assignment(void) {
         "mod demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
-        "    fn set() {\n"
+        "    fn update() {\n"
         "        self.id = 1;\n"
         "    }\n"
         "}\n";

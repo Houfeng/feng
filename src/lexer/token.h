@@ -11,6 +11,8 @@ extern "C" {
 
 #define FENG_KEYWORD_LIST(X) \
     X(TYPE, "type") \
+    X(SPEC, "spec") \
+    X(FIT, "fit") \
     X(EXTERN, "extern") \
     X(FN, "fn") \
     X(LET, "let") \
@@ -46,7 +48,11 @@ extern "C" {
     X(THIS, "this") \
     X(INTERFACE, "interface") \
     X(STATIC, "static") \
-    X(ENUM, "enum")
+    X(ENUM, "enum") \
+    X(CONST, "const") \
+    X(ABSTRACT, "abstract") \
+    X(CHAR, "char") \
+    X(IS, "is")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(FIXED, "fixed") \

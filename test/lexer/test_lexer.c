@@ -30,16 +30,26 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 23U);
-    ASSERT(feng_reserved_word_count() == 12U);
+    ASSERT(feng_keyword_count() == 25U);
+    ASSERT(feng_reserved_word_count() == 16U);
     ASSERT(feng_builtin_annotation_count() == 6U);
+    ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_SPEC);
+    ASSERT(feng_lookup_keyword("fit", 3U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_FIT);
     ASSERT(feng_lookup_keyword("extern", 6U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_EXTERN);
     ASSERT(!feng_lookup_keyword("bool", 4U, &keyword_kind));
+    ASSERT(!feng_lookup_keyword("int", 3U, &keyword_kind));
+    ASSERT(!feng_lookup_keyword("float", 5U, &keyword_kind));
     ASSERT(feng_is_reserved_word("class", 5U));
     ASSERT(feng_is_reserved_word("interface", 9U));
     ASSERT(feng_is_reserved_word("static", 6U));
     ASSERT(feng_is_reserved_word("enum", 4U));
+    ASSERT(feng_is_reserved_word("const", 5U));
+    ASSERT(feng_is_reserved_word("abstract", 8U));
+    ASSERT(feng_is_reserved_word("char", 4U));
+    ASSERT(feng_is_reserved_word("is", 2U));
     ASSERT(!feng_is_reserved_word("self", 4U));
     ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
@@ -60,7 +70,11 @@ static void test_reserved_words_rejected(void) {
         "this",
         "interface",
         "static",
-        "enum"
+        "enum",
+        "const",
+        "abstract",
+        "char",
+        "is"
     };
     size_t index;
 
@@ -76,6 +90,42 @@ static void test_reserved_words_rejected(void) {
         assert_lexeme(&token, reserved_words[index]);
         ASSERT(strstr(token.message, "reserved word") != NULL);
     }
+}
+
+static void test_new_keywords_and_builtin_type_names(void) {
+    const char *source =
+        "spec fit bool string int long byte float double i32 u8 f64\n";
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "keywords_and_types.f");
+
+    token = next_token(&lexer, FENG_TOKEN_KW_SPEC);
+    assert_lexeme(&token, "spec");
+    token = next_token(&lexer, FENG_TOKEN_KW_FIT);
+    assert_lexeme(&token, "fit");
+
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "bool");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "string");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "int");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "long");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "byte");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "float");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "double");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "i32");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "u8");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "f64");
+    token = next_token(&lexer, FENG_TOKEN_EOF);
 }
 
 static void test_basic_module_tokens(void) {
@@ -260,6 +310,7 @@ static void test_error_tokens(void) {
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
+    test_new_keywords_and_builtin_type_names();
     test_basic_module_tokens();
     test_literals_and_arrow();
     test_comments_crlf_and_custom_annotations();
