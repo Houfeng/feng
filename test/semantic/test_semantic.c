@@ -4138,6 +4138,91 @@ static void test_fit_missing_method_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_spec_at_type_position_accepts_satisfying_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fn use_named(n: Named): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let u: User = User { name: \"a\" };\n"
+        "    use_named(u);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_pos_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_at_type_position_rejects_unrelated_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type Other {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fn use_named(n: Named): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let o: Other = Other { name: \"a\" };\n"
+        "    use_named(o);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_pos_bad.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_spec_at_type_position_accepts_via_fit(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type Other {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fit Other: Named;\n"
+        "fn use_named(n: Named): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let o: Other = Other { name: \"a\" };\n"
+        "    use_named(o);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_pos_fit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -4304,6 +4389,9 @@ int main(void) {
     test_fit_specs_rejects_duplicate();
     test_fit_body_methods_satisfy_spec();
     test_fit_missing_method_rejected();
+    test_spec_at_type_position_accepts_satisfying_type();
+    test_spec_at_type_position_rejects_unrelated_type();
+    test_spec_at_type_position_accepts_via_fit();
     puts("semantic tests passed");
     return 0;
 }

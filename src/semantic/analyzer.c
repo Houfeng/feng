@@ -1609,6 +1609,9 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
 static ResolvedTypeTarget resolve_type_target_expr(const ResolveContext *context,
                                                    const FengExpr *target_expr,
                                                    bool follow_call_callee);
+static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
+                                          const FengDecl *type_decl,
+                                          const FengDecl *spec_decl);
 
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
@@ -1739,12 +1742,34 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                    strcmp(expr_builtin, target_builtin) == 0;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return expr_type.type_ref != NULL &&
-                   type_refs_semantically_equal(context, expr_type.type_ref, type_ref);
+            if (expr_type.type_ref != NULL &&
+                type_refs_semantically_equal(context, expr_type.type_ref, type_ref)) {
+                return true;
+            }
+            {
+                const FengDecl *src_decl = resolve_type_ref_decl(context, expr_type.type_ref);
+                const FengDecl *dst_decl = resolve_type_ref_decl(context, type_ref);
+
+                if (src_decl != NULL && dst_decl != NULL &&
+                    src_decl->kind == FENG_DECL_TYPE &&
+                    dst_decl->kind == FENG_DECL_SPEC &&
+                    type_decl_satisfies_spec_decl(context, src_decl, dst_decl)) {
+                    return true;
+                }
+            }
+            return false;
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
             target_decl = resolve_type_ref_decl(context, type_ref);
-            return target_decl != NULL && target_decl == expr_type.type_decl;
+            if (target_decl != NULL && target_decl == expr_type.type_decl) {
+                return true;
+            }
+            if (target_decl != NULL && target_decl->kind == FENG_DECL_SPEC &&
+                expr_type.type_decl != NULL && expr_type.type_decl->kind == FENG_DECL_TYPE &&
+                type_decl_satisfies_spec_decl(context, expr_type.type_decl, target_decl)) {
+                return true;
+            }
+            return false;
 
         case FENG_INFERRED_EXPR_TYPE_LAMBDA:
             target_decl = resolve_type_ref_decl(context, type_ref);
@@ -7326,6 +7351,87 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
         }
     }
     return true;
+}
+
+static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
+                                              const FengDecl *type_decl,
+                                              const FengDecl ***out_set,
+                                              size_t *out_count,
+                                              size_t *out_capacity) {
+    size_t i;
+    size_t p;
+    size_t d;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    /* Specs from the type's own extends list (transitive). */
+    for (i = 0U; i < type_decl->as.type_decl.extend_count; ++i) {
+        const FengDecl *spec = resolve_type_ref_decl(ctx, type_decl->as.type_decl.extends[i]);
+
+        if (!spec_collect_closure(ctx, spec, out_set, out_count, out_capacity)) {
+            return false;
+        }
+    }
+
+    /* Specs from visible fit declarations whose target is this type. */
+    if (ctx->module != NULL) {
+        for (p = 0U; p < ctx->module->program_count; ++p) {
+            const FengProgram *prog = ctx->module->programs[p];
+
+            if (prog == NULL) {
+                continue;
+            }
+            for (d = 0U; d < prog->declaration_count; ++d) {
+                const FengDecl *fd = prog->declarations[d];
+                size_t s;
+
+                if (fd == NULL || fd->kind != FENG_DECL_FIT) {
+                    continue;
+                }
+                if (resolve_type_ref_decl(ctx, fd->as.fit_decl.target) != type_decl) {
+                    continue;
+                }
+                for (s = 0U; s < fd->as.fit_decl.spec_count; ++s) {
+                    const FengDecl *spec = resolve_type_ref_decl(ctx, fd->as.fit_decl.specs[s]);
+
+                    if (!spec_collect_closure(ctx, spec, out_set, out_count, out_capacity)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
+                                          const FengDecl *type_decl,
+                                          const FengDecl *spec_decl) {
+    const FengDecl **closure = NULL;
+    size_t closure_count = 0U;
+    size_t closure_capacity = 0U;
+    size_t i;
+    bool found = false;
+
+    if (type_decl == NULL || spec_decl == NULL ||
+        type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+    if (!collect_type_decl_satisfied_specs(ctx, type_decl, &closure,
+                                           &closure_count, &closure_capacity)) {
+        free(closure);
+        return false;
+    }
+    for (i = 0U; i < closure_count; ++i) {
+        if (closure[i] == spec_decl) {
+            found = true;
+            break;
+        }
+    }
+    free(closure);
+    return found;
 }
 
 static bool detect_cross_spec_method_conflicts(ResolveContext *ctx,
