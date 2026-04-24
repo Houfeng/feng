@@ -4866,7 +4866,7 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return inferred_expr_type_builtin("int");
 
         case FENG_EXPR_FLOAT:
-            return inferred_expr_type_builtin("float");
+            return inferred_expr_type_builtin("double");
 
         case FENG_EXPR_STRING:
             return inferred_expr_type_builtin("string");
