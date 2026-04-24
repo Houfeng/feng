@@ -42,6 +42,7 @@ static void print_usage(const char *program) {
     fprintf(stderr, "  %s lex <file>\n", program);
     fprintf(stderr, "  %s parse <file>\n", program);
     fprintf(stderr, "  %s semantic <file> [more files...]\n", program);
+    fprintf(stderr, "  %s check <file> [more files...]\n", program);
 }
 
 typedef struct LoadedSource {
@@ -471,6 +472,135 @@ cleanup:
     return exit_code;
 }
 
+static void fprint_json_string(FILE *stream, const char *s) {
+    if (s == NULL) {
+        fputs("null", stream);
+        return;
+    }
+    fprint_escaped_slice(stream, s, strlen(s));
+}
+
+static void fprint_check_entry(FILE *stream,
+                               bool *first,
+                               const char *path,
+                               unsigned int line,
+                               unsigned int col,
+                               size_t token_length,
+                               const char *severity,
+                               const char *source,
+                               const char *message) {
+    if (!*first) {
+        fputs(",\n", stream);
+    }
+    *first = false;
+
+    fputs("  {\n", stream);
+    fputs("    \"path\": ", stream);
+    fprint_json_string(stream, path);
+    fprintf(stream, ",\n    \"line\": %u,\n    \"col\": %u,\n    \"end_col\": %u,\n",
+            line, col, col + (unsigned int)(token_length > 0U ? token_length : 1U));
+    fprintf(stream, "    \"severity\": \"%s\",\n    \"source\": \"%s\",\n", severity, source);
+    fputs("    \"message\": ", stream);
+    fprint_json_string(stream, message != NULL ? message : "unknown error");
+    fputs("\n  }", stream);
+}
+
+static int run_check_command(int path_count, char **paths) {
+    LoadedSource *sources = NULL;
+    const FengProgram **programs = NULL;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    int exit_code = 0;
+    int path_index;
+    bool first = true;
+
+    sources = (LoadedSource *)calloc((size_t)path_count, sizeof(*sources));
+    programs = (const FengProgram **)calloc((size_t)path_count, sizeof(*programs));
+    if (sources == NULL || programs == NULL) {
+        fprintf(stderr, "out of memory\n");
+        free_loaded_sources(sources, (size_t)path_count);
+        free(programs);
+        return 1;
+    }
+
+    fputs("[\n", stdout);
+
+    for (path_index = 0; path_index < path_count; ++path_index) {
+        FengParseError error;
+
+        sources[path_index].path = paths[path_index];
+        sources[path_index].source = read_entire_file(paths[path_index],
+                                                      &sources[path_index].source_length);
+        if (sources[path_index].source == NULL) {
+            fprintf(stderr, "failed to read %s: %s\n", paths[path_index], strerror(errno));
+            exit_code = 1;
+            goto done;
+        }
+
+        if (!feng_parse_source(sources[path_index].source,
+                               sources[path_index].source_length,
+                               paths[path_index],
+                               &sources[path_index].program,
+                               &error)) {
+            fprint_check_entry(stdout, &first,
+                               paths[path_index],
+                               error.token.line,
+                               error.token.column,
+                               error.token.length,
+                               "error", "parse",
+                               error.message);
+            exit_code = 1;
+            goto done;
+        }
+
+        programs[path_index] = sources[path_index].program;
+    }
+
+    if (!feng_semantic_analyze(programs, (size_t)path_count,
+                               &analysis, &errors, &error_count)) {
+        size_t i;
+
+        for (i = 0U; i < error_count; ++i) {
+            fprint_check_entry(stdout, &first,
+                               errors[i].path,
+                               errors[i].token.line,
+                               errors[i].token.column,
+                               errors[i].token.length,
+                               "error", "semantic",
+                               errors[i].message);
+        }
+
+        if (error_count == 0U) {
+            fprintf(stderr, "semantic analysis failed\n");
+        }
+
+        exit_code = 1;
+    }
+
+    if (analysis != NULL) {
+        size_t i;
+
+        for (i = 0U; i < analysis->info_count; ++i) {
+            fprint_check_entry(stdout, &first,
+                               analysis->infos[i].path,
+                               analysis->infos[i].token.line,
+                               analysis->infos[i].token.column,
+                               analysis->infos[i].token.length,
+                               "info", "semantic",
+                               analysis->infos[i].message);
+        }
+    }
+
+done:
+    fputs("\n]\n", stdout);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    free(programs);
+    free_loaded_sources(sources, (size_t)path_count);
+    return exit_code;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         print_usage(argv[0]);
@@ -493,6 +623,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "semantic") == 0) {
         return run_semantic_command(argc - 2, argv + 2);
+    }
+    if (strcmp(argv[1], "check") == 0) {
+        return run_check_command(argc - 2, argv + 2);
     }
 
     fprintf(stderr, "unknown command: %s\n", argv[1]);
