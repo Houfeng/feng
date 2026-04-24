@@ -446,6 +446,23 @@ static int run_semantic_command(int path_count, char **paths) {
         exit_code = 1;
     }
 
+    if (analysis != NULL && analysis->info_count > 0U) {
+        size_t info_index;
+
+        for (info_index = 0U; info_index < analysis->info_count; ++info_index) {
+            const LoadedSource *source = find_loaded_source(
+                sources, (size_t)path_count, analysis->infos[info_index].path);
+
+            print_diagnostic(stderr,
+                             analysis->infos[info_index].path,
+                             "info",
+                             analysis->infos[info_index].message,
+                             &analysis->infos[info_index].token,
+                             source != NULL ? source->source : NULL,
+                             source != NULL ? source->source_length : 0U);
+        }
+    }
+
 cleanup:
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);

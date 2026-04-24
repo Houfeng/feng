@@ -17,6 +17,12 @@ typedef struct FengSemanticError {
     FengToken token;
 } FengSemanticError;
 
+typedef struct FengSemanticInfo {
+    const char *path;
+    char *message;
+    FengToken token;
+} FengSemanticInfo;
+
 typedef struct FengSemanticModule {
     const FengSlice *segments;
     size_t segment_count;
@@ -30,6 +36,9 @@ typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
     size_t module_count;
     size_t module_capacity;
+    FengSemanticInfo *infos;
+    size_t info_count;
+    size_t info_capacity;
 } FengSemanticAnalysis;
 
 bool feng_semantic_analyze(const FengProgram *const *programs,
@@ -40,6 +49,7 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
 
 void feng_semantic_analysis_free(FengSemanticAnalysis *analysis);
 void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count);
+void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
 
 #ifdef __cplusplus
 }

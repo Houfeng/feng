@@ -1308,6 +1308,11 @@ static bool append_error(FengSemanticError **errors,
                          FengToken token,
                          char *message);
 
+static bool analysis_append_info(const FengSemanticAnalysis *analysis,
+                                 const char *path,
+                                 FengToken token,
+                                 char *message);
+
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message) {
     return append_error(context->errors,
                         context->error_count,
@@ -3250,6 +3255,111 @@ static const FengTypeMember *find_type_method_member(const FengDecl *type_decl, 
     return NULL;
 }
 
+/* Visit every fit-body method member that targets `type_decl` and is visible from
+ * the current resolve context. Callback returns false to stop iteration; iteration
+ * function returns false only when stopped by the callback. */
+typedef bool (*FitMethodVisitor)(const FengTypeMember *member,
+                                 const FengSemanticModule *fit_module,
+                                 const FengDecl *fit_decl,
+                                 void *userdata);
+
+static bool fit_decl_is_visible_from(const ResolveContext *ctx,
+                                     const FengSemanticModule *fit_module,
+                                     const FengDecl *fit_decl) {
+    if (ctx == NULL || fit_module == NULL || fit_decl == NULL) {
+        return false;
+    }
+    if (fit_module == ctx->module) {
+        return true;
+    }
+    return fit_decl->visibility == FENG_VISIBILITY_PUBLIC &&
+           module_is_visible_from(ctx->module, fit_module);
+}
+
+static bool visit_visible_fit_methods_for_type(const ResolveContext *ctx,
+                                               const FengDecl *type_decl,
+                                               FengSlice name,
+                                               bool require_name_match,
+                                               FitMethodVisitor visitor,
+                                               void *userdata) {
+    size_t module_index;
+    size_t program_index;
+    size_t decl_index;
+    size_t member_index;
+
+    if (ctx == NULL || ctx->analysis == NULL || type_decl == NULL ||
+        type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (module_index = 0U; module_index < ctx->analysis->module_count; ++module_index) {
+        const FengSemanticModule *m = &ctx->analysis->modules[module_index];
+
+        for (program_index = 0U; program_index < m->program_count; ++program_index) {
+            const FengProgram *prog = m->programs[program_index];
+
+            if (prog == NULL) {
+                continue;
+            }
+            for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
+                const FengDecl *fd = prog->declarations[decl_index];
+
+                if (fd == NULL || fd->kind != FENG_DECL_FIT) {
+                    continue;
+                }
+                if (!fit_decl_is_visible_from(ctx, m, fd)) {
+                    continue;
+                }
+                if (resolve_type_ref_decl(ctx, fd->as.fit_decl.target) != type_decl) {
+                    continue;
+                }
+                for (member_index = 0U; member_index < fd->as.fit_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = fd->as.fit_decl.members[member_index];
+
+                    if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
+                        continue;
+                    }
+                    if (require_name_match &&
+                        !slice_equals(member->as.callable.name, name)) {
+                        continue;
+                    }
+                    if (!visitor(member, m, fd, userdata)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+typedef struct FitFirstMethodCtx {
+    const FengTypeMember *result;
+} FitFirstMethodCtx;
+
+static bool fit_first_method_visitor(const FengTypeMember *member,
+                                     const FengSemanticModule *fit_module,
+                                     const FengDecl *fit_decl,
+                                     void *userdata) {
+    FitFirstMethodCtx *st = (FitFirstMethodCtx *)userdata;
+
+    (void)fit_module;
+    (void)fit_decl;
+    st->result = member;
+    return false;
+}
+
+static const FengTypeMember *find_fit_method_member_for_type(const ResolveContext *ctx,
+                                                             const FengDecl *type_decl,
+                                                             FengSlice name) {
+    FitFirstMethodCtx st;
+
+    st.result = NULL;
+    (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true,
+                                             fit_first_method_visitor, &st);
+    return st.result;
+}
+
 static const FengTypeMember *find_accessible_type_field_member(ResolveContext *context,
                                                                const FengDecl *type_decl,
                                                                const FengSemanticModule *provider_module,
@@ -3265,7 +3375,28 @@ static const FengTypeMember *find_accessible_type_method_member(ResolveContext *
                                                                 FengSlice name) {
     const FengTypeMember *member = find_type_method_member(type_decl, name);
 
-    return type_member_is_accessible_from(context, provider_module, member) ? member : NULL;
+    if (type_member_is_accessible_from(context, provider_module, member)) {
+        return member;
+    }
+    /* Fall back to any visible fit-body method for this type. */
+    return find_fit_method_member_for_type(context, type_decl, name);
+}
+
+typedef struct FitMethodCountCtx {
+    size_t count;
+} FitMethodCountCtx;
+
+static bool fit_method_count_visitor(const FengTypeMember *member,
+                                     const FengSemanticModule *fit_module,
+                                     const FengDecl *fit_decl,
+                                     void *userdata) {
+    FitMethodCountCtx *st = (FitMethodCountCtx *)userdata;
+
+    (void)member;
+    (void)fit_module;
+    (void)fit_decl;
+    ++st->count;
+    return true;
 }
 
 static size_t count_accessible_method_overloads(ResolveContext *context,
@@ -3274,6 +3405,7 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
                                                 FengSlice name) {
     size_t member_index;
     size_t count = 0U;
+    FitMethodCountCtx st;
 
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
         return 0U;
@@ -3289,7 +3421,40 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
         }
     }
 
-    return count;
+    st.count = 0U;
+    (void)visit_visible_fit_methods_for_type(context, type_decl, name, true,
+                                             fit_method_count_visitor, &st);
+    return count + st.count;
+}
+
+typedef struct FitOverloadResolveCtx {
+    ResolveContext *context;
+    FengExpr *const *args;
+    size_t arg_count;
+    FunctionCallResolution result;
+} FitOverloadResolveCtx;
+
+static bool fit_overload_resolve_visitor(const FengTypeMember *member,
+                                         const FengSemanticModule *fit_module,
+                                         const FengDecl *fit_decl,
+                                         void *userdata) {
+    FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
+
+    (void)fit_module;
+    (void)fit_decl;
+    if (!callable_parameters_match_args(st->context, &member->as.callable,
+                                        st->args, st->arg_count)) {
+        return true;
+    }
+    if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+        st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+        st->result.decl = NULL;
+        st->result.callable = &member->as.callable;
+        return true;
+    }
+    st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+    st->result.callable = NULL;
+    return true;
 }
 
 static FunctionCallResolution resolve_accessible_method_overload(
@@ -3301,6 +3466,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
     size_t arg_count) {
     size_t member_index;
     FunctionCallResolution result;
+    FitOverloadResolveCtx st;
 
     memset(&result, 0, sizeof(result));
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
@@ -3328,7 +3494,13 @@ static FunctionCallResolution resolve_accessible_method_overload(
         result.callable = NULL;
     }
 
-    return result;
+    st.context = context;
+    st.args = args;
+    st.arg_count = arg_count;
+    st.result = result;
+    (void)visit_visible_fit_methods_for_type(context, type_decl, name, true,
+                                             fit_overload_resolve_visitor, &st);
+    return st.result;
 }
 
 static InferredExprType resolve_expr_owner_type(ResolveContext *context,
@@ -3808,6 +3980,12 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
 
     member = find_instance_member(owner_type_decl, expr->as.member.member);
     if (member == NULL) {
+        /* Allow lookup to also find methods supplied by visible fit declarations. */
+        const FengTypeMember *fit_member =
+            find_fit_method_member_for_type(context, owner_type_decl, expr->as.member.member);
+        if (fit_member != NULL) {
+            return true;
+        }
         return resolver_append_error(
             context,
             expr->token,
@@ -6072,6 +6250,11 @@ static bool resolve_self_member_expr(ResolveContext *context,
         return true;
     }
 
+    if (find_fit_method_member_for_type(context, context->current_type_decl,
+                                        expr->as.member.member) != NULL) {
+        return true;
+    }
+
     return resolver_append_error(
         context,
         expr->token,
@@ -6111,6 +6294,38 @@ static bool append_error(FengSemanticError **errors,
         return false;
     }
 
+    return true;
+}
+
+static bool analysis_append_info(const FengSemanticAnalysis *analysis_const,
+                                 const char *path,
+                                 FengToken token,
+                                 char *message) {
+    FengSemanticAnalysis *analysis;
+    FengSemanticInfo info;
+
+    if (analysis_const == NULL) {
+        free(message);
+        return true;
+    }
+    analysis = (FengSemanticAnalysis *)analysis_const;
+    if (message == NULL) {
+        message = duplicate_cstr("out of memory during semantic analysis");
+        if (message == NULL) {
+            return false;
+        }
+    }
+    info.path = path;
+    info.message = message;
+    info.token = token;
+    if (!append_raw((void **)&analysis->infos,
+                    &analysis->info_count,
+                    &analysis->info_capacity,
+                    sizeof(info),
+                    &info)) {
+        free(message);
+        return false;
+    }
     return true;
 }
 
@@ -7578,7 +7793,6 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
     bool ok = true;
-
     if (target == NULL || target->kind != FENG_DECL_TYPE) {
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
@@ -7637,6 +7851,37 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     if (ok) {
         ok = detect_cross_spec_method_conflicts(context, target, closure, closure_count,
                                                 fit_decl->token);
+    }
+    if (ok) {
+        /* Orphan-fit detection: a fit is an orphan when neither its target type
+         * nor any of its specs originates in the current module. The spec mandates
+         * that orphan fits cannot be exported across the package boundary, so we
+         * emit an info note and downgrade `pu` to module-local visibility. */
+        const FengSemanticModule *target_module =
+            find_decl_provider_module(context->analysis, target);
+        bool is_local = (target_module == context->module);
+
+        for (i = 0U; i < closure_count && !is_local; ++i) {
+            const FengSemanticModule *spec_module =
+                find_decl_provider_module(context->analysis, closure[i]);
+            if (spec_module == context->module) {
+                is_local = true;
+            }
+        }
+        if (!is_local && fit_decl->visibility == FENG_VISIBILITY_PUBLIC) {
+            FengDecl *mutable_decl = (FengDecl *)fit_decl;
+            char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
+            char *message = format_message(
+                "orphan fit for '%s' cannot be exported; downgraded to module-local visibility",
+                target_name != NULL ? target_name : "<unknown>");
+
+            free(target_name);
+            mutable_decl->visibility = FENG_VISIBILITY_PRIVATE;
+            if (!analysis_append_info(context->analysis, context->program->path,
+                                      fit_decl->token, message)) {
+                ok = false;
+            }
+        }
     }
     free(closure);
     return ok;
@@ -8435,6 +8680,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->modules[index].programs);
     }
     free(analysis->modules);
+    feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }
 
@@ -8449,4 +8695,17 @@ void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count) {
         free(errors[index].message);
     }
     free(errors);
+}
+
+void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count) {
+    size_t index;
+
+    if (infos == NULL) {
+        return;
+    }
+
+    for (index = 0U; index < info_count; ++index) {
+        free(infos[index].message);
+    }
+    free(infos);
 }

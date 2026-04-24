@@ -4138,6 +4138,128 @@ static void test_fit_missing_method_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_orphan_pu_fit_emits_info_and_downgrades(void) {
+    /* Module `demo.types` defines the type, `demo.specs` defines the spec,
+     * and `demo.adapter` declares a `pu fit` that bridges them. Because the
+     * adapter owns neither the type nor the spec, it is an orphan and its
+     * `pu` export must be downgraded to module-local visibility with an
+     * informational note. */
+    const char *src_types =
+        "pu mod demo.types;\n"
+        "pu type User {}\n";
+    const char *src_specs =
+        "pu mod demo.specs;\n"
+        "pu spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n";
+    const char *src_adapter =
+        "pu mod demo.adapter;\n"
+        "use demo.types;\n"
+        "use demo.specs;\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    FengProgram *p1 = parse_program_or_die("types.f", src_types);
+    FengProgram *p2 = parse_program_or_die("specs.f", src_specs);
+    FengProgram *p3 = parse_program_or_die("adapter.f", src_adapter);
+    const FengProgram *programs[] = {p1, p2, p3};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(analysis != NULL);
+    ASSERT(analysis->info_count == 1U);
+    ASSERT(strstr(analysis->infos[0].message, "orphan fit") != NULL);
+    ASSERT(strstr(analysis->infos[0].message, "downgraded to module-local") != NULL);
+    ASSERT(strcmp(analysis->infos[0].path, "adapter.f") == 0);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(p1);
+    feng_program_free(p2);
+    feng_program_free(p3);
+}
+
+static void test_local_fit_emits_no_orphan_info(void) {
+    /* The fit lives in the same module as its target type, so it is not an
+     * orphan and no info is emitted. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {}\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("local_fit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(analysis != NULL);
+    ASSERT(analysis->info_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_method_callable_on_instance(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n"
+        "fn run(): string {\n"
+        "    let u: User = User {};\n"
+        "    return u.greet();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_call.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_method_unknown_member_still_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let u: User = User {};\n"
+        "    u.farewell();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_unknown.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "no member 'farewell'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_spec_at_type_position_accepts_satisfying_type(void) {
     const char *source =
         "mod demo.main;\n"
@@ -4389,6 +4511,10 @@ int main(void) {
     test_fit_specs_rejects_duplicate();
     test_fit_body_methods_satisfy_spec();
     test_fit_missing_method_rejected();
+    test_orphan_pu_fit_emits_info_and_downgrades();
+    test_local_fit_emits_no_orphan_info();
+    test_fit_method_callable_on_instance();
+    test_fit_method_unknown_member_still_rejected();
     test_spec_at_type_position_accepts_satisfying_type();
     test_spec_at_type_position_rejects_unrelated_type();
     test_spec_at_type_position_accepts_via_fit();
