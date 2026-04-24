@@ -10,7 +10,8 @@
   },
   "categories": [
     "Programming Languages",
-    "Formatters"
+    "Formatters",
+    "Linters"
   ],
   "scripts": {
     "test": "node ./test/formatter.test.js"
@@ -45,6 +46,16 @@
         "scopeName": "source.feng",
         "path": "./syntaxes/feng.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Feng",
+      "properties": {
+        "feng.executablePath": {
+          "type": "string",
+          "default": "feng",
+          "description": "Path to the Feng executable. Use an absolute path or a path relative to the workspace root (e.g. ./build/bin/feng)."
+        }
+      }
+    }
   }
 }
