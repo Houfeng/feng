@@ -257,6 +257,6 @@ fn main(args: string[]) {
 ## 10 与主规范的关系
 
 - [feng-principles.md](./feng-principles.md): 语言设计原则、分层原则与诊断原则。
-- [feng-language.md](./feng-language.md): 语言总体规范、C 互操作概要、模块、类型、函数、流程控制、异常、GC、包分发与完整示例。
+- [feng-language.md](./feng-language.md): 语言总体规范、C 互操作概要、模块、类型、函数、流程控制、异常、自动内存管理、包分发与完整示例。
 - [feng-exception.md](./feng-exception.md): ABI 边界上的异常传播限制。
 - 本文档: C 库来源与调用方式、`@fixed` ABI 类型、`extern fn` 导入声明、导出函数和回调规则的独立补充文档。

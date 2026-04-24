@@ -118,6 +118,6 @@ for var i = 0; i < 10; i = i + 1 {
 
 ## 9 与主规范的关系
 
-- [feng-language.md](./feng-language.md): 语言总体规范、流程控制概要、模块、类型、函数、异常、GC、包分发与完整示例。
+- [feng-language.md](./feng-language.md): 语言总体规范、流程控制概要、模块、类型、函数、异常、自动内存管理、包分发与完整示例。
 - [feng-exception.md](./feng-exception.md): `throw`、异常传播与 `try/catch/finally` 的异常语义。
 - 本文档: 条件判断、`if` 表达式、模式匹配、循环与控制转移规则的独立补充文档。

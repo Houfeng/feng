@@ -37,7 +37,7 @@
 
 ## 5 生命周期原则
 
-- 普通 `type` 是托管对象。运行时最终可采用 RC、GC 或等价的自动内存管理策略,但这不影响语言层语义。
+- 普通 `type` 是托管对象，由运行时自动内存管理机制负责生命周期，不影响语言层语义。
 - `@fixed` 只额外约束进入 C ABI 边界时的布局与资格,不单独引入另一套 Feng 侧生命周期、比较或初始化语义。
 - 值是否随作用域失效、是否需要显式释放,由其存储位置和外部资源拥有关系决定,不能仅因标注了 `@fixed` 就作不同语义推断。
 - 若某个值内部持有外部资源,资源释放协议应由显式函数或外部约定完成,不能依赖注解本身替代协议。
@@ -59,4 +59,4 @@
 - [feng-language.md](./feng-language.md): 总规范入口,提供摘要性说明并引用本文档。
 - [feng-interop.md](./feng-interop.md): C 互操作的具体规则,包括 `extern fn` 导入、`@fixed` ABI 类型和 ABI 调用方式注解。
 - [feng-type.md](./feng-type.md): 普通类型与 `@fixed type` 的类型系统位置与边界。
-- [feng-gc.md](./feng-gc.md): 托管对象与 `@fixed` 非托管 ABI 值的内存边界。
+- [feng-lifetime.md](./feng-lifetime.md): 托管对象与 `@fixed` 非托管 ABI 值的内存边界。

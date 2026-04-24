@@ -228,5 +228,5 @@ use mylib.user;
 
 ## 9 与主规范的关系
 
-- [feng-language.md](./feng-language.md): 语言总体规范、包系统概要、模块、类型、函数、C 互操作、流程控制、GC 与完整示例。
+- [feng-language.md](./feng-language.md): 语言总体规范、包系统概要、模块、类型、函数、C 互操作、流程控制、自动内存管理与完整示例。
 - 本文档: `.fb` 包格式、三层结构、`feng.fm` 清单、编译流程、`.fi` 生成规则、使用规则和导入语法的独立补充文档。
