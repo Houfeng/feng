@@ -1,5 +1,7 @@
 const KEYWORDS = new Set([
     'type',
+    'spec',
+    'fit',
     'extern',
     'fn',
     'let',
@@ -190,6 +192,18 @@ function tokenize(source) {
             continue;
         }
 
+        if (current === '~' && isIdentifierStart(next)) {
+            let end = index + 2;
+
+            while (end < source.length && isIdentifierPart(source[end])) {
+                end += 1;
+            }
+
+            tokens.push({ type: 'identifier', value: source.slice(index, end) });
+            index = end;
+            continue;
+        }
+
         if (isIdentifierStart(current)) {
             let end = index + 1;
 
@@ -204,6 +218,37 @@ function tokenize(source) {
 
         if (isDigit(current)) {
             let end = index + 1;
+
+            if (current === '0' && end < source.length) {
+                const prefix = source[end];
+                if (prefix === 'x' || prefix === 'X') {
+                    end += 1;
+                    while (end < source.length && /[0-9A-Fa-f]/.test(source[end])) {
+                        end += 1;
+                    }
+                    tokens.push({ type: 'number', value: source.slice(index, end) });
+                    index = end;
+                    continue;
+                }
+                if (prefix === 'b' || prefix === 'B') {
+                    end += 1;
+                    while (end < source.length && /[01]/.test(source[end])) {
+                        end += 1;
+                    }
+                    tokens.push({ type: 'number', value: source.slice(index, end) });
+                    index = end;
+                    continue;
+                }
+                if (prefix === 'o' || prefix === 'O') {
+                    end += 1;
+                    while (end < source.length && /[0-7]/.test(source[end])) {
+                        end += 1;
+                    }
+                    tokens.push({ type: 'number', value: source.slice(index, end) });
+                    index = end;
+                    continue;
+                }
+            }
 
             while (end < source.length && isDigit(source[end])) {
                 end += 1;

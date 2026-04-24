@@ -18,6 +18,12 @@
       "include": "#typeDefinitions"
     },
     {
+      "include": "#specDefinitions"
+    },
+    {
+      "include": "#fitDefinitions"
+    },
+    {
       "include": "#modulePaths"
     },
     {
@@ -34,6 +40,9 @@
     },
     {
       "include": "#selfReference"
+    },
+    {
+      "include": "#reservedWords"
     },
     {
       "include": "#keywords"
@@ -85,7 +94,7 @@
     "functionDefinitions": {
       "patterns": [
         {
-          "match": "\\b(fn)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "match": "\\b(fn)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
             "1": {
               "name": "keyword.declaration.function.feng"
@@ -104,6 +113,36 @@
           "captures": {
             "1": {
               "name": "keyword.declaration.type.feng"
+            },
+            "3": {
+              "name": "entity.name.type.feng"
+            }
+          }
+        }
+      ]
+    },
+    "specDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(spec)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.spec.feng"
+            },
+            "3": {
+              "name": "entity.name.type.feng"
+            }
+          }
+        }
+      ]
+    },
+    "fitDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(fit)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.fit.feng"
             },
             "3": {
               "name": "entity.name.type.feng"
@@ -146,12 +185,24 @@
       "patterns": [
         {
           "name": "support.type.builtin.feng",
-          "match": "\\b(?:bool|string|int|float|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|void)\\b"
+          "match": "\\b(?:bool|string|int|long|byte|float|double|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|void)\\b"
         }
       ]
     },
     "numbers": {
       "patterns": [
+        {
+          "name": "constant.numeric.hex.feng",
+          "match": "\\b0[xX][0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.feng",
+          "match": "\\b0[bB][01]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.feng",
+          "match": "\\b0[oO][0-7]+\\b"
+        },
         {
           "name": "constant.numeric.feng",
           "match": "\\b\\d+(?:\\.\\d+)?\\b"
@@ -171,6 +222,14 @@
         {
           "name": "variable.language.self.feng",
           "match": "\\bself\\b"
+        }
+      ]
+    },
+    "reservedWords": {
+      "patterns": [
+        {
+          "name": "keyword.other.reserved.feng",
+          "match": "\\b(?:class|struct|public|private|pub|pro|get|set|this|interface|static|enum|const|abstract|char|is)\\b"
         }
       ]
     },
