@@ -8,10 +8,15 @@ type User {
   fn commit(options: CommitOptions): void {
     options.message = 1;
   }
+
+  // 默认参数
+  fn commit(message: i32): int {
+    
+  }
 }
 
 // 主函数
 fn main() {
   let user = User();
-  user.commit(CommitOptions());
+  user.commit(1);
 }
