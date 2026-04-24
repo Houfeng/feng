@@ -570,6 +570,40 @@ static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind, 
     return member;
 }
 
+static bool parse_extends_list(Parser *parser,
+                               FengTypeRef ***out_list,
+                               size_t *out_count) {
+    FengTypeRef **list = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+
+    do {
+        FengTypeRef *type_ref = parse_type_ref(parser);
+
+        if (type_ref == NULL) {
+            goto fail;
+        }
+        if (!APPEND_VALUE(parser, list, count, capacity, type_ref)) {
+            free_type_ref(type_ref);
+            goto fail;
+        }
+    } while (parser_match(parser, FENG_TOKEN_COMMA));
+
+    *out_list = list;
+    *out_count = count;
+    return true;
+
+fail:
+    {
+        size_t index;
+        for (index = 0U; index < count; ++index) {
+            free_type_ref(list[index]);
+        }
+        free(list);
+    }
+    return false;
+}
+
 static FengDecl *parse_type_declaration(Parser *parser,
                                         FengVisibility visibility,
                                         bool is_extern,
@@ -596,41 +630,29 @@ static FengDecl *parse_type_declaration(Parser *parser,
     decl->as.type_decl.name = type_name;
 
     if (parser_check(parser, FENG_TOKEN_LPAREN)) {
-        decl->as.type_decl.form = FENG_TYPE_DECL_FUNCTION;
-        if (!parse_parameters(parser,
-                              &decl->as.type_decl.as.function.params,
-                              &decl->as.type_decl.as.function.param_count)) {
-            free_decl(decl);
-            return NULL;
-        }
-        if (!parser_expect(parser,
-                   FENG_TOKEN_COLON,
-                   "function type declarations require ':' before the return type")) {
-            free_decl(decl);
-            return NULL;
-        }
-        decl->as.type_decl.as.function.return_type = parse_type_ref(parser);
-        if (decl->as.type_decl.as.function.return_type == NULL) {
-            free_decl(decl);
-            return NULL;
-        }
-        if (!parser_expect(parser,
-                   FENG_TOKEN_SEMICOLON,
-                   "function type declarations must end with ';'")) {
-            free_decl(decl);
-            return NULL;
-        }
-        return decl;
-    }
-
-    if (!parser_expect(parser,
-                       FENG_TOKEN_LBRACE,
-                       "type declarations must use '{...}' for object form or '(...) : ...;' for function form")) {
+        (void)parser_error_current(
+            parser,
+            "callable contracts must use 'spec Name(args): ReturnType;'; 'type' no longer defines callable shapes");
         free_decl(decl);
         return NULL;
     }
 
-    decl->as.type_decl.form = FENG_TYPE_DECL_OBJECT;
+    if (parser_match(parser, FENG_TOKEN_COLON)) {
+        if (!parse_extends_list(parser,
+                                &decl->as.type_decl.extends,
+                                &decl->as.type_decl.extend_count)) {
+            free_decl(decl);
+            return NULL;
+        }
+    }
+
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "type declarations require '{...}' after the optional spec list")) {
+        free_decl(decl);
+        return NULL;
+    }
+
     {
         size_t member_capacity = 0U;
 
@@ -766,8 +788,8 @@ static FengDecl *parse_type_declaration(Parser *parser,
         }
 
         if (!APPEND_VALUE(parser,
-                          decl->as.type_decl.as.object.members,
-                          decl->as.type_decl.as.object.member_count,
+                          decl->as.type_decl.members,
+                          decl->as.type_decl.member_count,
                           member_capacity,
                           member)) {
             free_type_member(member);
@@ -778,6 +800,360 @@ static FengDecl *parse_type_declaration(Parser *parser,
     }
 
     if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close type body")) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    return decl;
+}
+
+static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
+    FengToken member_start = parser_current_token(parser);
+    FengTypeMember *member = NULL;
+
+    if (parser_check(parser, FENG_TOKEN_KW_PU) || parser_check(parser, FENG_TOKEN_KW_PR)) {
+        (void)parser_error_current(
+            parser,
+            "spec members cannot declare visibility; remove 'pu' or 'pr'");
+        return NULL;
+    }
+
+    if (parser_match(parser, FENG_TOKEN_KW_LET) || parser_match(parser, FENG_TOKEN_KW_VAR)) {
+        FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
+                                        ? FENG_MUTABILITY_LET
+                                        : FENG_MUTABILITY_VAR;
+        FengBinding binding = parse_binding_core(parser, mutability, true);
+
+        if (parser->error.message != NULL) {
+            return NULL;
+        }
+        if (binding.initializer != NULL) {
+            (void)parser_error_current(parser, "spec field declarations cannot have an initializer");
+            free_type_ref(binding.type);
+            free_expr(binding.initializer);
+            return NULL;
+        }
+        if (!parser_expect(parser,
+                           FENG_TOKEN_SEMICOLON,
+                           "spec field declarations must end with ';'")) {
+            free_type_ref(binding.type);
+            return NULL;
+        }
+        member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD, binding.token);
+        if (member == NULL) {
+            free_type_ref(binding.type);
+            return NULL;
+        }
+        member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->as.field.mutability = binding.mutability;
+        member->as.field.name = binding.name;
+        member->as.field.type = binding.type;
+        member->as.field.initializer = NULL;
+        return member;
+    }
+
+    if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+        FengCallableSignature callable;
+        FengSlice name;
+        FengToken member_name_token = parser_current_token(parser);
+        size_t param_index;
+
+        if (!parser_expect_identifier_like(parser,
+                                           &name,
+                                           false,
+                                           "expected a method name after 'fn'")) {
+            return NULL;
+        }
+        if (slice_equals(name, spec_name)) {
+            (void)parser_error_current(parser, "spec cannot declare a constructor");
+            return NULL;
+        }
+        callable = parse_callable_signature(
+            parser,
+            member_name_token,
+            name,
+            false,
+            "spec method signatures must end with ';' and cannot have a body '{...}'");
+        if (parser->error.message != NULL) {
+            return NULL;
+        }
+        for (param_index = 0U; param_index < callable.param_count; ++param_index) {
+            if (callable.params[param_index].mutability != FENG_MUTABILITY_DEFAULT) {
+                (void)parser_error_current(
+                    parser,
+                    "spec method parameters cannot use 'let' or 'var' modifiers");
+                free_parameters(callable.params, callable.param_count);
+                free_type_ref(callable.return_type);
+                free_block(callable.body);
+                return NULL;
+            }
+        }
+        if (callable.return_type == NULL) {
+            (void)parser_error_current(parser, "spec method signatures must declare a return type");
+            free_parameters(callable.params, callable.param_count);
+            free_block(callable.body);
+            return NULL;
+        }
+        member = new_type_member(parser, FENG_TYPE_MEMBER_METHOD, callable.token);
+        if (member == NULL) {
+            free_parameters(callable.params, callable.param_count);
+            free_type_ref(callable.return_type);
+            free_block(callable.body);
+            return NULL;
+        }
+        member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->as.callable = callable;
+        return member;
+    }
+
+    (void)member_start;
+    (void)parser_error_current(parser, "expected spec member declaration: 'let', 'var', or 'fn'");
+    return NULL;
+}
+
+static FengDecl *parse_spec_declaration(Parser *parser,
+                                        FengVisibility visibility,
+                                        bool is_extern,
+                                        FengAnnotation *annotations,
+                                        size_t annotation_count) {
+    FengToken name_token = parser_current_token(parser);
+    FengDecl *decl;
+    FengSlice spec_name;
+
+    if (is_extern) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "'extern' cannot be applied to a 'spec' declaration");
+        return NULL;
+    }
+
+    decl = new_decl(parser, FENG_DECL_SPEC, name_token);
+    if (decl == NULL) {
+        free_annotations(annotations, annotation_count);
+        return NULL;
+    }
+    decl->visibility = visibility;
+    decl->is_extern = false;
+    decl->annotations = annotations;
+    decl->annotation_count = annotation_count;
+
+    if (!parser_expect_identifier_like(parser, &spec_name, false, "expected a spec name after 'spec'")) {
+        free_decl(decl);
+        return NULL;
+    }
+    decl->as.spec_decl.name = spec_name;
+
+    if (parser_check(parser, FENG_TOKEN_LPAREN)) {
+        size_t param_index;
+
+        decl->as.spec_decl.form = FENG_SPEC_FORM_CALLABLE;
+        if (!parse_parameters(parser,
+                              &decl->as.spec_decl.as.callable.params,
+                              &decl->as.spec_decl.as.callable.param_count)) {
+            free_decl(decl);
+            return NULL;
+        }
+        for (param_index = 0U; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
+            if (decl->as.spec_decl.as.callable.params[param_index].mutability != FENG_MUTABILITY_DEFAULT) {
+                (void)parser_error_current(
+                    parser,
+                    "spec callable parameters cannot use 'let' or 'var' modifiers");
+                free_decl(decl);
+                return NULL;
+            }
+        }
+        if (!parser_expect(parser,
+                           FENG_TOKEN_COLON,
+                           "spec callable declarations require ':' before the return type")) {
+            free_decl(decl);
+            return NULL;
+        }
+        decl->as.spec_decl.as.callable.return_type = parse_type_ref(parser);
+        if (decl->as.spec_decl.as.callable.return_type == NULL) {
+            free_decl(decl);
+            return NULL;
+        }
+        if (!parser_expect(parser,
+                           FENG_TOKEN_SEMICOLON,
+                           "spec callable declarations must end with ';'")) {
+            free_decl(decl);
+            return NULL;
+        }
+        return decl;
+    }
+
+    decl->as.spec_decl.form = FENG_SPEC_FORM_OBJECT;
+
+    if (parser_match(parser, FENG_TOKEN_COLON)) {
+        if (!parse_extends_list(parser,
+                                &decl->as.spec_decl.extends,
+                                &decl->as.spec_decl.extend_count)) {
+            free_decl(decl);
+            return NULL;
+        }
+    }
+
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "spec object declarations require '{...}' after the optional spec list")) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    {
+        size_t member_capacity = 0U;
+
+        while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+            FengTypeMember *member = parse_spec_member(parser, spec_name);
+
+            if (member == NULL) {
+                free_decl(decl);
+                return NULL;
+            }
+            if (!APPEND_VALUE(parser,
+                              decl->as.spec_decl.as.object.members,
+                              decl->as.spec_decl.as.object.member_count,
+                              member_capacity,
+                              member)) {
+                free_type_member(member);
+                free_decl(decl);
+                return NULL;
+            }
+        }
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close spec body")) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    return decl;
+}
+
+static FengTypeMember *parse_fit_method_member(Parser *parser) {
+    FengVisibility visibility = parse_visibility(parser);
+    FengToken member_start = parser_current_token(parser);
+    FengCallableSignature callable;
+    FengSlice name;
+    FengTypeMember *member;
+
+    if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) {
+        (void)parser_error_current(
+            parser,
+            "fit blocks cannot declare 'let' or 'var' fields; declare them on the original type");
+        return NULL;
+    }
+
+    if (!parser_match(parser, FENG_TOKEN_KW_FN)) {
+        (void)parser_error_current(parser, "fit block members must start with 'fn'");
+        return NULL;
+    }
+
+    if (!parser_expect_identifier_like(parser, &name, false, "expected a method name after 'fn'")) {
+        return NULL;
+    }
+    callable = parse_callable_signature(
+        parser,
+        member_start,
+        name,
+        true,
+        "fit block methods must provide a body '{...}'");
+    if (parser->error.message != NULL) {
+        return NULL;
+    }
+    member = new_type_member(parser, FENG_TYPE_MEMBER_METHOD, callable.token);
+    if (member == NULL) {
+        free_parameters(callable.params, callable.param_count);
+        free_type_ref(callable.return_type);
+        free_block(callable.body);
+        return NULL;
+    }
+    member->visibility = visibility;
+    member->as.callable = callable;
+    return member;
+}
+
+static FengDecl *parse_fit_declaration(Parser *parser,
+                                       FengVisibility visibility,
+                                       bool is_extern,
+                                       FengAnnotation *annotations,
+                                       size_t annotation_count) {
+    FengToken start = parser_current_token(parser);
+    FengDecl *decl;
+
+    if (is_extern) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "'extern' cannot be applied to a 'fit' declaration");
+        return NULL;
+    }
+    if (annotation_count > 0U) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "annotations cannot be applied to 'fit' declarations");
+        return NULL;
+    }
+    if (visibility == FENG_VISIBILITY_PRIVATE) {
+        (void)parser_error_current(parser, "fit declarations cannot use 'pr'");
+        return NULL;
+    }
+
+    decl = new_decl(parser, FENG_DECL_FIT, start);
+    if (decl == NULL) {
+        return NULL;
+    }
+    decl->visibility = visibility;
+    decl->is_extern = false;
+
+    decl->as.fit_decl.target = parse_type_ref(parser);
+    if (decl->as.fit_decl.target == NULL) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    if (parser_match(parser, FENG_TOKEN_COLON)) {
+        if (!parse_extends_list(parser,
+                                &decl->as.fit_decl.specs,
+                                &decl->as.fit_decl.spec_count)) {
+            free_decl(decl);
+            return NULL;
+        }
+    }
+
+    if (parser_match(parser, FENG_TOKEN_LBRACE)) {
+        size_t member_capacity = 0U;
+
+        decl->as.fit_decl.has_body = true;
+        while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+            FengTypeMember *member = parse_fit_method_member(parser);
+
+            if (member == NULL) {
+                free_decl(decl);
+                return NULL;
+            }
+            if (!APPEND_VALUE(parser,
+                              decl->as.fit_decl.members,
+                              decl->as.fit_decl.member_count,
+                              member_capacity,
+                              member)) {
+                free_type_member(member);
+                free_decl(decl);
+                return NULL;
+            }
+        }
+        if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close fit body")) {
+            free_decl(decl);
+            return NULL;
+        }
+    } else {
+        decl->as.fit_decl.has_body = false;
+        if (!parser_expect(parser,
+                           FENG_TOKEN_SEMICOLON,
+                           "fit declarations without a body must end with ';'")) {
+            free_decl(decl);
+            return NULL;
+        }
+    }
+
+    if (decl->as.fit_decl.spec_count == 0U && !decl->as.fit_decl.has_body) {
+        (void)parser_error_current(parser, "fit declarations must include a spec list, a body block, or both");
         free_decl(decl);
         return NULL;
     }
@@ -910,13 +1286,19 @@ static FengDecl *parse_declaration(Parser *parser) {
     if (parser_match(parser, FENG_TOKEN_KW_TYPE)) {
         return parse_type_declaration(parser, visibility, is_extern, annotations, annotation_count);
     }
+    if (parser_match(parser, FENG_TOKEN_KW_SPEC)) {
+        return parse_spec_declaration(parser, visibility, is_extern, annotations, annotation_count);
+    }
+    if (parser_match(parser, FENG_TOKEN_KW_FIT)) {
+        return parse_fit_declaration(parser, visibility, is_extern, annotations, annotation_count);
+    }
     if (parser_match(parser, FENG_TOKEN_KW_FN)) {
         return parse_function_declaration(parser, visibility, is_extern, annotations, annotation_count);
     }
 
     free_annotations(annotations, annotation_count);
     (void)parser_error_current(parser,
-                               "expected top-level declaration: 'let', 'var', 'extern fn', 'type', or 'fn'");
+                               "expected top-level declaration: 'let', 'var', 'extern fn', 'type', 'spec', 'fit', or 'fn'");
     return NULL;
 }
 
@@ -2308,16 +2690,41 @@ static void free_decl(FengDecl *decl) {
             free_expr(decl->as.binding.initializer);
             break;
         case FENG_DECL_TYPE:
-            if (decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
-                for (index = 0U; index < decl->as.type_decl.as.object.member_count; ++index) {
-                    free_type_member(decl->as.type_decl.as.object.members[index]);
-                }
-                free(decl->as.type_decl.as.object.members);
-            } else {
-                free_parameters(decl->as.type_decl.as.function.params,
-                                decl->as.type_decl.as.function.param_count);
-                free_type_ref(decl->as.type_decl.as.function.return_type);
+            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+                free_type_member(decl->as.type_decl.members[index]);
             }
+            free(decl->as.type_decl.members);
+            for (index = 0U; index < decl->as.type_decl.extend_count; ++index) {
+                free_type_ref(decl->as.type_decl.extends[index]);
+            }
+            free(decl->as.type_decl.extends);
+            break;
+        case FENG_DECL_SPEC:
+            for (index = 0U; index < decl->as.spec_decl.extend_count; ++index) {
+                free_type_ref(decl->as.spec_decl.extends[index]);
+            }
+            free(decl->as.spec_decl.extends);
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
+                    free_type_member(decl->as.spec_decl.as.object.members[index]);
+                }
+                free(decl->as.spec_decl.as.object.members);
+            } else {
+                free_parameters(decl->as.spec_decl.as.callable.params,
+                                decl->as.spec_decl.as.callable.param_count);
+                free_type_ref(decl->as.spec_decl.as.callable.return_type);
+            }
+            break;
+        case FENG_DECL_FIT:
+            free_type_ref(decl->as.fit_decl.target);
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                free_type_ref(decl->as.fit_decl.specs[index]);
+            }
+            free(decl->as.fit_decl.specs);
+            for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
+                free_type_member(decl->as.fit_decl.members[index]);
+            }
+            free(decl->as.fit_decl.members);
             break;
         case FENG_DECL_FUNCTION:
             free_parameters(decl->as.function_decl.params, decl->as.function_decl.param_count);

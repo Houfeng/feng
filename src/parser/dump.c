@@ -434,48 +434,107 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                 fputc('\n', stream);
                 break;
             case FENG_DECL_TYPE:
-                fprintf(stream,
-                        "type %s ",
-                        decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT ? "object" : "function");
+                fputs("type ", stream);
                 dump_slice(stream, decl->as.type_decl.name);
+                if (decl->as.type_decl.extend_count > 0U) {
+                    fputs(" : ", stream);
+                    for (member_index = 0U; member_index < decl->as.type_decl.extend_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_type_ref(stream, decl->as.type_decl.extends[member_index]);
+                    }
+                }
                 fputc('\n', stream);
-                if (decl->as.type_decl.form == FENG_TYPE_DECL_OBJECT) {
-                    for (member_index = 0U; member_index < decl->as.type_decl.as.object.member_count; ++member_index) {
-                        const FengTypeMember *member = decl->as.type_decl.as.object.members[member_index];
+                for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = decl->as.type_decl.members[member_index];
 
-                        dump_annotations(stream, member->annotations, member->annotation_count, 2);
+                    dump_annotations(stream, member->annotations, member->annotation_count, 2);
+                    dump_indent(stream, 2);
+                    fprintf(stream, "%s ", visibility_name(member->visibility));
+                    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                        fprintf(stream, "field %s ", mutability_name(member->as.field.mutability));
+                        dump_slice(stream, member->as.field.name);
+                        fputs(": ", stream);
+                        dump_type_ref(stream, member->as.field.type);
+                        if (member->as.field.initializer != NULL) {
+                            fputs(" = ", stream);
+                            dump_expr(stream, member->as.field.initializer, 0);
+                        }
+                        fputc('\n', stream);
+                    } else {
+                        fputs(member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "constructor\n" : "method\n", stream);
+                        dump_callable(stream, &member->as.callable, 3);
+                    }
+                }
+                break;
+            case FENG_DECL_SPEC:
+                fprintf(stream,
+                        "spec %s ",
+                        decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ? "object" : "callable");
+                dump_slice(stream, decl->as.spec_decl.name);
+                if (decl->as.spec_decl.extend_count > 0U) {
+                    fputs(" : ", stream);
+                    for (member_index = 0U; member_index < decl->as.spec_decl.extend_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_type_ref(stream, decl->as.spec_decl.extends[member_index]);
+                    }
+                }
+                fputc('\n', stream);
+                if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                    for (member_index = 0U; member_index < decl->as.spec_decl.as.object.member_count; ++member_index) {
+                        const FengTypeMember *member = decl->as.spec_decl.as.object.members[member_index];
+
                         dump_indent(stream, 2);
-                        fprintf(stream, "%s ", visibility_name(member->visibility));
                         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                             fprintf(stream, "field %s ", mutability_name(member->as.field.mutability));
                             dump_slice(stream, member->as.field.name);
                             fputs(": ", stream);
                             dump_type_ref(stream, member->as.field.type);
-                            if (member->as.field.initializer != NULL) {
-                                fputs(" = ", stream);
-                                dump_expr(stream, member->as.field.initializer, 0);
-                            }
                             fputc('\n', stream);
                         } else {
-                            fputs(member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "constructor\n" : "method\n", stream);
+                            fputs("method\n", stream);
                             dump_callable(stream, &member->as.callable, 3);
                         }
                     }
                 } else {
                     dump_indent(stream, 2);
-                    dump_slice(stream, decl->as.type_decl.name);
+                    dump_slice(stream, decl->as.spec_decl.name);
                     fputc('(', stream);
-                    for (member_index = 0U; member_index < decl->as.type_decl.as.function.param_count; ++member_index) {
+                    for (member_index = 0U; member_index < decl->as.spec_decl.as.callable.param_count; ++member_index) {
                         if (member_index != 0U) {
                             fputs(", ", stream);
                         }
-                        dump_slice(stream, decl->as.type_decl.as.function.params[member_index].name);
+                        dump_slice(stream, decl->as.spec_decl.as.callable.params[member_index].name);
                         fputs(": ", stream);
-                        dump_type_ref(stream, decl->as.type_decl.as.function.params[member_index].type);
+                        dump_type_ref(stream, decl->as.spec_decl.as.callable.params[member_index].type);
                     }
                     fputs("): ", stream);
-                    dump_type_ref(stream, decl->as.type_decl.as.function.return_type);
+                    dump_type_ref(stream, decl->as.spec_decl.as.callable.return_type);
                     fputc('\n', stream);
+                }
+                break;
+            case FENG_DECL_FIT:
+                fputs("fit ", stream);
+                dump_type_ref(stream, decl->as.fit_decl.target);
+                if (decl->as.fit_decl.spec_count > 0U) {
+                    fputs(" : ", stream);
+                    for (member_index = 0U; member_index < decl->as.fit_decl.spec_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_type_ref(stream, decl->as.fit_decl.specs[member_index]);
+                    }
+                }
+                fputc('\n', stream);
+                for (member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+
+                    dump_indent(stream, 2);
+                    fprintf(stream, "%s method\n", visibility_name(member->visibility));
+                    dump_callable(stream, &member->as.callable, 3);
                 }
                 break;
             case FENG_DECL_FUNCTION:

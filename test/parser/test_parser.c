@@ -25,8 +25,7 @@ static void test_top_level_declarations(void) {
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
-        "@fixed\n"
-        "type PointCallback(p: Point): void;\n";
+        "spec PointCallback(p: Point): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -48,15 +47,13 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[2]->is_extern);
     ASSERT(program->declarations[2]->annotation_count == 1U);
     ASSERT(program->declarations[2]->annotations[0].builtin_kind == FENG_ANNOTATION_UNION);
-    ASSERT(program->declarations[2]->as.type_decl.form == FENG_TYPE_DECL_OBJECT);
-    ASSERT(program->declarations[2]->as.type_decl.as.object.member_count == 2U);
+    ASSERT(program->declarations[2]->as.type_decl.member_count == 2U);
 
-    ASSERT(program->declarations[3]->kind == FENG_DECL_TYPE);
-    ASSERT(program->declarations[3]->annotation_count == 1U);
-    ASSERT(program->declarations[3]->annotations[0].builtin_kind == FENG_ANNOTATION_FIXED);
-    ASSERT(program->declarations[3]->as.type_decl.form == FENG_TYPE_DECL_FUNCTION);
-    ASSERT(program->declarations[3]->as.type_decl.as.function.param_count == 1U);
-    ASSERT(program->declarations[3]->as.type_decl.as.function.return_type != NULL);
+    ASSERT(program->declarations[3]->kind == FENG_DECL_SPEC);
+    ASSERT(program->declarations[3]->annotation_count == 0U);
+    ASSERT(program->declarations[3]->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE);
+    ASSERT(program->declarations[3]->as.spec_decl.as.callable.param_count == 1U);
+    ASSERT(program->declarations[3]->as.spec_decl.as.callable.return_type != NULL);
 
     feng_program_free(program);
 }
@@ -140,16 +137,16 @@ static void test_member_annotations_and_constructors(void) {
     ASSERT(program->declaration_count == 1U);
     decl = program->declarations[0];
     ASSERT(decl->kind == FENG_DECL_TYPE);
-    ASSERT(decl->as.type_decl.as.object.member_count == 5U);
-    ASSERT(decl->as.type_decl.as.object.members[1]->annotation_count == 1U);
-    ASSERT(decl->as.type_decl.as.object.members[1]->annotations[0].builtin_kind == FENG_ANNOTATION_BOUNDED);
-    ASSERT(decl->as.type_decl.as.object.members[2]->kind == FENG_TYPE_MEMBER_FIELD);
-    ASSERT(decl->as.type_decl.as.object.members[3]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
-    ASSERT(decl->as.type_decl.as.object.members[3]->annotation_count == 1U);
-    ASSERT(decl->as.type_decl.as.object.members[3]->annotations[0].arg_count == 1U);
-    ASSERT(decl->as.type_decl.as.object.members[3]->as.callable.body != NULL);
-    ASSERT(decl->as.type_decl.as.object.members[4]->kind == FENG_TYPE_MEMBER_METHOD);
-    ASSERT(decl->as.type_decl.as.object.members[4]->as.callable.body != NULL);
+    ASSERT(decl->as.type_decl.member_count == 5U);
+    ASSERT(decl->as.type_decl.members[1]->annotation_count == 1U);
+    ASSERT(decl->as.type_decl.members[1]->annotations[0].builtin_kind == FENG_ANNOTATION_BOUNDED);
+    ASSERT(decl->as.type_decl.members[2]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(decl->as.type_decl.members[3]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
+    ASSERT(decl->as.type_decl.members[3]->annotation_count == 1U);
+    ASSERT(decl->as.type_decl.members[3]->annotations[0].arg_count == 1U);
+    ASSERT(decl->as.type_decl.members[3]->as.callable.body != NULL);
+    ASSERT(decl->as.type_decl.members[4]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(decl->as.type_decl.members[4]->as.callable.body != NULL);
 
     feng_program_free(program);
 }
@@ -184,11 +181,11 @@ static void test_ast_source_tokens(void) {
     ASSERT(program->declarations[0]->as.function_decl.body->statements[0]->token.line == 5U);
     ASSERT(program->declarations[0]->as.function_decl.body->statements[1]->token.line == 6U);
     ASSERT(program->declarations[1]->token.line == 8U);
-    ASSERT(program->declarations[1]->as.type_decl.as.object.members[0]->token.line == 9U);
-    ASSERT(program->declarations[1]->as.type_decl.as.object.members[0]->as.field.initializer->token.line == 9U);
-    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->token.line == 10U);
-    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->as.callable.params[0].token.line == 10U);
-    ASSERT(program->declarations[1]->as.type_decl.as.object.members[1]->as.callable.body->token.line == 10U);
+    ASSERT(program->declarations[1]->as.type_decl.members[0]->token.line == 9U);
+    ASSERT(program->declarations[1]->as.type_decl.members[0]->as.field.initializer->token.line == 9U);
+    ASSERT(program->declarations[1]->as.type_decl.members[1]->token.line == 10U);
+    ASSERT(program->declarations[1]->as.type_decl.members[1]->as.callable.params[0].token.line == 10U);
+    ASSERT(program->declarations[1]->as.type_decl.members[1]->as.callable.body->token.line == 10U);
 
     feng_program_free(program);
 }

@@ -272,13 +272,15 @@ struct FengTypeMember {
 typedef enum FengDeclKind {
     FENG_DECL_GLOBAL_BINDING = 0,
     FENG_DECL_TYPE,
+    FENG_DECL_SPEC,
+    FENG_DECL_FIT,
     FENG_DECL_FUNCTION
 } FengDeclKind;
 
-typedef enum FengTypeDeclForm {
-    FENG_TYPE_DECL_OBJECT = 0,
-    FENG_TYPE_DECL_FUNCTION
-} FengTypeDeclForm;
+typedef enum FengSpecForm {
+    FENG_SPEC_FORM_OBJECT = 0,
+    FENG_SPEC_FORM_CALLABLE
+} FengSpecForm;
 
 typedef struct FengUseDecl {
     FengToken token;
@@ -299,7 +301,16 @@ struct FengDecl {
         FengBinding binding;
         struct {
             FengSlice name;
-            FengTypeDeclForm form;
+            FengTypeMember **members;
+            size_t member_count;
+            FengTypeRef **extends;
+            size_t extend_count;
+        } type_decl;
+        struct {
+            FengSlice name;
+            FengSpecForm form;
+            FengTypeRef **extends;
+            size_t extend_count;
             union {
                 struct {
                     FengTypeMember **members;
@@ -309,9 +320,17 @@ struct FengDecl {
                     FengParameter *params;
                     size_t param_count;
                     FengTypeRef *return_type;
-                } function;
+                } callable;
             } as;
-        } type_decl;
+        } spec_decl;
+        struct {
+            FengTypeRef *target;
+            FengTypeRef **specs;
+            size_t spec_count;
+            FengTypeMember **members;
+            size_t member_count;
+            bool has_body;
+        } fit_decl;
         FengCallableSignature function_decl;
     } as;
 };

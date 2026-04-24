@@ -269,7 +269,7 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
         "    var y: int;\n"
         "}\n"
         "@fixed\n"
-        "type PointCallback(p: Point): int;\n"
+        "spec PointCallback(p: Point): int;\n"
         "@cdecl(\"m\")\n"
         "extern fn run_point(point: Point, cb: PointCallback): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_fixed_types_ok.f", source);
@@ -338,7 +338,7 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
         "mod demo.main;\n"
         "@fixed\n"
         "@union\n"
-        "type Cmp(a: int, b: int): int;\n";
+        "spec Cmp(a: int, b: int): int;\n";
     FengProgram *program = parse_program_or_die("fixed_function_type_union_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -429,7 +429,7 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
     const char *source =
         "mod demo.main;\n"
         "@fixed\n"
-        "type Callback(x: int): int;\n"
+        "spec Callback(x: int): int;\n"
         "@fixed\n"
         "fn add1(x: int): int {\n"
         "    return x + 1;\n"
@@ -456,7 +456,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
     const char *source =
         "mod demo.main;\n"
         "@fixed\n"
-        "type Callback(x: int): int;\n"
+        "spec Callback(x: int): int;\n"
         "fn add1(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
@@ -483,7 +483,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
     const char *source =
         "mod demo.main;\n"
         "@fixed\n"
-        "type Callback(x: int): int;\n"
+        "spec Callback(x: int): int;\n"
         "fn run() {\n"
         "    let cb: Callback = (x: int) -> x + 1;\n"
         "}\n";
@@ -507,7 +507,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     const char *source =
         "mod demo.main;\n"
         "@fixed\n"
-        "type Callback(x: int): int;\n"
+        "spec Callback(x: int): int;\n"
         "fn run(base: int) {\n"
         "    let add = (x: int) -> x + base;\n"
         "    let cb: Callback = add;\n"
@@ -713,7 +713,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
 static void test_fixed_function_rejects_local_function_value_call_to_throwing_function(void) {
     const char *source =
         "mod demo.main;\n"
-        "type Callback(x: int): int;\n"
+        "spec Callback(x: int): int;\n"
         "fn helper(x: int): int {\n"
         "    throw \"boom\";\n"
         "}\n"
@@ -1007,7 +1007,7 @@ static void test_imported_function_auto_infers_return_type_across_modules(void) 
 static void test_omitted_return_function_can_infer_lambda_signature(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntToInt(x: int): int;\n"
+        "spec IntToInt(x: int): int;\n"
         "fn make() {\n"
         "    return (x: int) -> x * 2;\n"
         "}\n"
@@ -1033,7 +1033,7 @@ static void test_omitted_return_function_can_infer_lambda_signature(void) {
 static void test_omitted_return_function_value_matches_named_function_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntToInt(x: int): int;\n"
+        "spec IntToInt(x: int): int;\n"
         "fn pick(x: int) {\n"
         "    return x;\n"
         "}\n"
@@ -1178,7 +1178,7 @@ static void test_untyped_lambda_binding_is_callable(void) {
 static void test_untyped_lambda_binding_matches_named_function_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntToInt(x: int): int;\n"
+        "spec IntToInt(x: int): int;\n"
         "fn run(): int {\n"
         "    let func = (x: int) -> x * 2;\n"
         "    let typed: IntToInt = func;\n"
@@ -1423,7 +1423,7 @@ static void test_method_call_selects_overload_by_literal_type(void) {
 static void test_function_typed_local_binding_is_callable(void) {
     const char *source =
         "mod demo.main;\n"
-        "type Picker(a: int): int;\n"
+        "spec Picker(a: int): int;\n"
         "fn run(): int {\n"
         "    let pick: Picker = (a: int) -> a;\n"
         "    return pick(1);\n"
@@ -1501,7 +1501,7 @@ static void test_private_method_is_inaccessible_across_modules(void) {
 static void test_top_level_function_value_selects_overload_by_explicit_binding_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntPicker(a: int): int;\n"
+        "spec IntPicker(a: int): int;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -1530,7 +1530,7 @@ static void test_top_level_function_value_selects_overload_by_explicit_binding_t
 static void test_top_level_function_value_selects_overload_by_parameter_context(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntPicker(a: int): int;\n"
+        "spec IntPicker(a: int): int;\n"
         "fn apply(picker: IntPicker): int {\n"
         "    return picker(1);\n"
         "}\n"
@@ -1561,7 +1561,7 @@ static void test_top_level_function_value_selects_overload_by_parameter_context(
 static void test_top_level_function_value_selects_overload_by_return_type_context(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntPicker(a: int): int;\n"
+        "spec IntPicker(a: int): int;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -1617,7 +1617,7 @@ static void test_top_level_function_value_requires_explicit_type_when_overloaded
 static void test_method_value_selects_overload_by_explicit_binding_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type M0(): void;\n"
+        "spec M0(): void;\n"
         "type User {\n"
         "    fn say() {}\n"
         "    fn say(msg: string) {}\n"
@@ -1644,7 +1644,7 @@ static void test_method_value_selects_overload_by_explicit_binding_type(void) {
 static void test_method_value_selects_overload_by_parameter_context(void) {
     const char *source =
         "mod demo.main;\n"
-        "type M0(): void;\n"
+        "spec M0(): void;\n"
         "type User {\n"
         "    fn say() {}\n"
         "    fn say(msg: string) {}\n"
@@ -1673,7 +1673,7 @@ static void test_method_value_selects_overload_by_parameter_context(void) {
 static void test_method_value_selects_overload_by_return_type_context(void) {
     const char *source =
         "mod demo.main;\n"
-        "type M0(): void;\n"
+        "spec M0(): void;\n"
         "type User {\n"
         "    fn say() {}\n"
         "    fn say(msg: string) {}\n"
@@ -1725,7 +1725,7 @@ static void test_method_value_requires_explicit_type_when_overloaded(void) {
 static void test_top_level_function_value_binding_rejects_non_matching_target_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type BoolPicker(a: bool): bool;\n"
+        "spec BoolPicker(a: bool): bool;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -1754,7 +1754,7 @@ static void test_top_level_function_value_binding_rejects_non_matching_target_ty
 static void test_top_level_function_value_return_rejects_non_matching_target_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type BoolPicker(a: bool): bool;\n"
+        "spec BoolPicker(a: bool): bool;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -1808,7 +1808,7 @@ static void test_top_level_function_value_rejects_non_function_binding_type(void
 static void test_lambda_body_rejects_function_value_for_non_function_return_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type BoolMaker(a: int): bool;\n"
+        "spec BoolMaker(a: int): bool;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -1843,7 +1843,7 @@ static void test_alias_function_value_argument_rejects_non_matching_target_type(
     const char *main_source =
         "mod demo.main;\n"
         "use demo.base as base;\n"
-        "type BoolPicker(a: bool): bool;\n"
+        "spec BoolPicker(a: bool): bool;\n"
         "fn accept(picker: BoolPicker) {}\n"
         "fn run() {\n"
         "    accept(base.pick);\n"
@@ -1869,7 +1869,7 @@ static void test_alias_function_value_argument_rejects_non_matching_target_type(
 static void test_method_value_argument_rejects_non_matching_target_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type BoolAction(flag: bool): bool;\n"
+        "spec BoolAction(flag: bool): bool;\n"
         "type User {\n"
         "    fn say() {}\n"
         "    fn say(msg: string) {}\n"
@@ -1897,7 +1897,7 @@ static void test_method_value_argument_rejects_non_matching_target_type(void) {
 static void test_function_typed_call_result_rejects_non_matching_binding_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type IntPicker(a: int): int;\n"
+        "spec IntPicker(a: int): int;\n"
         "fn pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
@@ -3300,7 +3300,7 @@ static void test_object_literal_reports_unknown_field(void) {
 static void test_object_literal_requires_object_type_target(void) {
     const char *source =
         "mod demo.main;\n"
-        "type Factory(): int;\n"
+        "spec Factory(): int;\n"
         "fn make() {\n"
         "    Factory {};\n"
         "}\n";
@@ -3472,7 +3472,7 @@ static void test_constructor_call_reports_type_mismatch(void) {
 static void test_constructor_call_rejects_function_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "type Factory(): int;\n"
+        "spec Factory(): int;\n"
         "fn make() {\n"
         "    Factory();\n"
         "}\n";
@@ -3792,6 +3792,352 @@ static void test_object_literal_allows_private_field_inside_same_module(void) {
     feng_program_free(program_b);
 }
 
+static void test_spec_type_satisfaction_succeeds(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    let name: string;\n"
+        "    fn greet(): string {\n"
+        "        return self.name;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_extends_must_be_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Other {}\n"
+        "spec Bad: Other {}\n";
+    FengProgram *program = parse_program_or_die("spec_extends_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "spec 'Bad' extends list must contain only spec types") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_spec_extends_rejects_duplicate(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A {}\n"
+        "spec B: A, A {}\n";
+    FengProgram *program = parse_program_or_die("spec_extends_dup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "lists 'A' more than once") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_spec_extends_rejects_cycle(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A: B {}\n"
+        "spec B: A {}\n";
+    FengProgram *program = parse_program_or_die("spec_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "forms a cycle") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_must_be_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Other {}\n"
+        "type User: Other {}\n";
+    FengProgram *program = parse_program_or_die("type_extends_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'User' extends list must contain only spec types") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_rejects_duplicate(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A {}\n"
+        "type User: A, A {}\n";
+    FengProgram *program = parse_program_or_die("type_extends_dup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "lists 'A' more than once") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_missing_field_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type User: Named {}\n";
+    FengProgram *program = parse_program_or_die("type_missing_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'User' is missing field 'name' required by spec 'Named'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_field_mutability_mismatch_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    var name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_field_mut.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "mutability does not match") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_method_signature_mismatch_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    fn greet(): int {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_method_sig.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "signature does not match") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_transitive_satisfaction_required(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Identified {\n"
+        "    fn id(): int;\n"
+        "}\n"
+        "spec Named: Identified {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    let name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_transitive.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'User' is missing method 'id' required by spec 'Identified'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_extends_cross_spec_method_conflict(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A {\n"
+        "    fn run(): int;\n"
+        "}\n"
+        "spec B {\n"
+        "    fn run(): string;\n"
+        "}\n"
+        "type Worker: A, B {\n"
+        "    fn run(): int {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_conflict.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    /* Either the missing-spec-B-method message or the conflict message is acceptable;
+       both indicate the conflict was detected. */
+    ASSERT(strstr(errors[0].message, "different return types") != NULL ||
+           strstr(errors[0].message, "signature does not match") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_target_must_be_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "fit A: B;\n";
+    FengProgram *program = parse_program_or_die("fit_target_spec.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "fit target must be a concrete type") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_specs_must_be_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {}\n"
+        "type Other {}\n"
+        "fit User: Other;\n";
+    FengProgram *program = parse_program_or_die("fit_spec_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "fit specs list must contain only spec types") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_specs_rejects_duplicate(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec A {}\n"
+        "type User {}\n"
+        "fit User: A, A;\n";
+    FengProgram *program = parse_program_or_die("fit_spec_dup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "fit lists 'A' more than once") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_body_methods_satisfy_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string {\n"
+        "        return self.name;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_body_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_missing_method_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {}\n"
+        "fit User: Named;\n";
+    FengProgram *program = parse_program_or_die("fit_missing.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'User' is missing method 'greet' required by spec 'Named'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -3942,6 +4288,22 @@ int main(void) {
     test_object_literal_rejects_duplicate_fields();
     test_object_literal_rejects_inaccessible_private_field();
     test_object_literal_allows_private_field_inside_same_module();
+    test_spec_type_satisfaction_succeeds();
+    test_spec_extends_must_be_spec();
+    test_spec_extends_rejects_duplicate();
+    test_spec_extends_rejects_cycle();
+    test_type_extends_must_be_spec();
+    test_type_extends_rejects_duplicate();
+    test_type_extends_missing_field_rejected();
+    test_type_extends_field_mutability_mismatch_rejected();
+    test_type_extends_method_signature_mismatch_rejected();
+    test_type_extends_transitive_satisfaction_required();
+    test_type_extends_cross_spec_method_conflict();
+    test_fit_target_must_be_type();
+    test_fit_specs_must_be_spec();
+    test_fit_specs_rejects_duplicate();
+    test_fit_body_methods_satisfy_spec();
+    test_fit_missing_method_rejected();
     puts("semantic tests passed");
     return 0;
 }
