@@ -3550,6 +3550,124 @@ static void test_callable_form_spec_typed_param_rejects_member_access(void) {
     feng_program_free(program);
 }
 
+static void test_numeric_literal_adapts_to_explicit_integer_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: i32 = 1;\n"
+        "    let b: i64 = 1;\n"
+        "    let c: i16 = -1;\n"
+        "    let d: i8  = -128;\n"
+        "    let e: u8  = 255;\n"
+        "    let f: u16 = 65535;\n"
+        "    let g: u32 = 4294967295;\n"
+        "    let h: u64 = 0;\n"
+        "    let i: f32 = 1.5;\n"
+        "    let j: f64 = 1.5;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_adapt_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_adapts_to_explicit_alias_targets(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: int = 1;\n"
+        "    let b: long = 1;\n"
+        "    let c: byte = 0;\n"
+        "    let d: float = 1.5;\n"
+        "    let e: double = 1.5;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_alias_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_overflowing_target_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: i8 = 200;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_overflow.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i8'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_negative_to_unsigned_target_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: u8 = -1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_neg_unsigned.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'u8'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_overflows_default_int_target(void) {
+    /* Default integer literal type is `int` (i32) per docs/feng-builtin-type.md §16, so an
+     * out-of-range literal must be rejected even when the target's canonical name is i32. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: i32 = 9999999999;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_default_int_overflow.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_object_literal_reports_unknown_field(void) {
     const char *source =
         "mod demo.main;\n"
@@ -3699,7 +3817,7 @@ static void test_constructor_call_selects_overload_by_inferred_local_binding(voi
     const char *source =
         "mod demo.main;\n"
         "type User {\n"
-        "    fn User(id: i64) {}\n"
+        "    fn User(id: int) {}\n"
         "    fn User(name: string) {}\n"
         "}\n"
         "fn make(): User {\n"
@@ -4865,6 +4983,11 @@ int main(void) {
     test_spec_typed_param_rejects_let_field_assignment();
     test_spec_typed_param_reports_unknown_member_with_spec_name();
     test_callable_form_spec_typed_param_rejects_member_access();
+    test_numeric_literal_adapts_to_explicit_integer_target();
+    test_numeric_literal_adapts_to_explicit_alias_targets();
+    test_numeric_literal_overflowing_target_is_rejected();
+    test_numeric_literal_negative_to_unsigned_target_is_rejected();
+    test_numeric_literal_overflows_default_int_target();
     test_object_literal_reports_unknown_field();
     test_object_literal_requires_object_type_target();
     test_object_literal_accepts_constructor_call_target();

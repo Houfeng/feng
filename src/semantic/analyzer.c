@@ -1,6 +1,7 @@
 #include "semantic/semantic.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -848,10 +849,14 @@ static bool append_slice(FengSlice **items, size_t *count, size_t *capacity, Fen
 }
 
 static bool is_builtin_type_name(FengSlice name) {
+    /* Built-in type names per docs/feng-builtin-type.md §2.
+     * Aliases are: int ≡ i32, long ≡ i64, byte ≡ u8, float ≡ f32, double ≡ f64.
+     * Aliases are first-class spellings — both forms are recognized as built-ins. */
     static const char *builtin_names[] = {
-        "i8",   "i16",  "i32",  "i64",  "int",
+        "i8",   "i16",  "i32",  "i64",
         "u8",   "u16",  "u32",  "u64",
-        "f32",  "f64",  "float",
+        "f32",  "f64",
+        "int",  "long", "byte", "float", "double",
         "bool", "string", "void"};
     size_t index;
 
@@ -865,10 +870,21 @@ static bool is_builtin_type_name(FengSlice name) {
 }
 
 static const char *canonical_builtin_type_name(FengSlice name) {
-    if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i64")) {
+    /* Canonical (width-explicit) names per docs/feng-builtin-type.md §2 alias table.
+     * Aliases collapse to their canonical width-explicit spelling for type identity checks. */
+    if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
+        return "i32";
+    }
+    if (slice_equals_cstr(name, "long") || slice_equals_cstr(name, "i64")) {
         return "i64";
     }
-    if (slice_equals_cstr(name, "float") || slice_equals_cstr(name, "f64")) {
+    if (slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "u8")) {
+        return "u8";
+    }
+    if (slice_equals_cstr(name, "float") || slice_equals_cstr(name, "f32")) {
+        return "f32";
+    }
+    if (slice_equals_cstr(name, "double") || slice_equals_cstr(name, "f64")) {
         return "f64";
     }
     if (slice_equals_cstr(name, "i8")) {
@@ -876,12 +892,6 @@ static const char *canonical_builtin_type_name(FengSlice name) {
     }
     if (slice_equals_cstr(name, "i16")) {
         return "i16";
-    }
-    if (slice_equals_cstr(name, "i32")) {
-        return "i32";
-    }
-    if (slice_equals_cstr(name, "u8")) {
-        return "u8";
     }
     if (slice_equals_cstr(name, "u16")) {
         return "u16";
@@ -891,9 +901,6 @@ static const char *canonical_builtin_type_name(FengSlice name) {
     }
     if (slice_equals_cstr(name, "u64")) {
         return "u64";
-    }
-    if (slice_equals_cstr(name, "f32")) {
-        return "f32";
     }
     if (slice_equals_cstr(name, "bool")) {
         return "bool";
@@ -5230,6 +5237,104 @@ static bool expr_matches_expected_type_ref_when_inference_unknown(
     return true;
 }
 
+/* Walk a (possibly negated) integer literal expression and yield its compile-time value.
+ * Supports `123` and `-123` only; INT64_MIN negation is handled via uint64_t arithmetic to
+ * avoid signed overflow UB. Returns false for any non-constant or non-integer-literal form. */
+static bool extract_constant_integer_literal(const FengExpr *expr, int64_t *out_value) {
+    if (expr == NULL || out_value == NULL) {
+        return false;
+    }
+    if (expr->kind == FENG_EXPR_INTEGER) {
+        *out_value = expr->as.integer;
+        return true;
+    }
+    if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_MINUS &&
+        expr->as.unary.operand != NULL && expr->as.unary.operand->kind == FENG_EXPR_INTEGER) {
+        uint64_t magnitude = (uint64_t)expr->as.unary.operand->as.integer;
+        *out_value = (int64_t)(0U - magnitude);
+        return true;
+    }
+    return false;
+}
+
+static bool expr_is_floating_literal(const FengExpr *expr) {
+    if (expr == NULL) {
+        return false;
+    }
+    if (expr->kind == FENG_EXPR_FLOAT) {
+        return true;
+    }
+    if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_MINUS &&
+        expr->as.unary.operand != NULL && expr->as.unary.operand->kind == FENG_EXPR_FLOAT) {
+        return true;
+    }
+    return false;
+}
+
+/* Compile-time range check for an integer literal against a canonical integer target.
+ * Per docs/feng-builtin-type.md §17: literals that overflow the target are compile errors. */
+static bool integer_literal_fits_canonical_target(int64_t value, const char *canonical_target) {
+    if (canonical_target == NULL) {
+        return false;
+    }
+    if (strcmp(canonical_target, "i8") == 0) {
+        return value >= INT8_MIN && value <= INT8_MAX;
+    }
+    if (strcmp(canonical_target, "i16") == 0) {
+        return value >= INT16_MIN && value <= INT16_MAX;
+    }
+    if (strcmp(canonical_target, "i32") == 0) {
+        return value >= INT32_MIN && value <= INT32_MAX;
+    }
+    if (strcmp(canonical_target, "i64") == 0) {
+        return true;
+    }
+    if (strcmp(canonical_target, "u8") == 0) {
+        return value >= 0 && value <= (int64_t)UINT8_MAX;
+    }
+    if (strcmp(canonical_target, "u16") == 0) {
+        return value >= 0 && value <= (int64_t)UINT16_MAX;
+    }
+    if (strcmp(canonical_target, "u32") == 0) {
+        return value >= 0 && value <= (int64_t)UINT32_MAX;
+    }
+    if (strcmp(canonical_target, "u64") == 0) {
+        return value >= 0;
+    }
+    return false;
+}
+
+/* Numeric literal adaptation: an integer/float literal may be implicitly retyped to any
+ * compatible numeric target type, subject to compile-time range checks. This realises the
+ * "如需其他精度或宽度，必须显式标注类型" contract from docs/feng-builtin-type.md §16-§17,
+ * where the explicit annotation drives the literal's effective type. */
+static bool numeric_literal_adapts_to_target(const FengExpr *expr, const FengTypeRef *target) {
+    const char *canonical_target = type_ref_builtin_canonical_name(target);
+    int64_t int_value;
+
+    if (canonical_target == NULL) {
+        return false;
+    }
+    if (extract_constant_integer_literal(expr, &int_value)) {
+        return integer_literal_fits_canonical_target(int_value, canonical_target);
+    }
+    if (expr_is_floating_literal(expr)) {
+        return strcmp(canonical_target, "f32") == 0 || strcmp(canonical_target, "f64") == 0;
+    }
+    return false;
+}
+
+/* Returns true when `expr` is a constant numeric literal form (integer/float, optionally
+ * negated) for which numeric_literal_adapts_to_target encodes the full match decision. */
+static bool expr_is_numeric_literal_constant(const FengExpr *expr) {
+    int64_t unused;
+
+    if (extract_constant_integer_literal(expr, &unused)) {
+        return true;
+    }
+    return expr_is_floating_literal(expr);
+}
+
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref) {
@@ -5239,6 +5344,16 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
     if (function_type_decl != NULL) {
         return resolve_expr_callable_value(context, expr, expected_type_ref).kind ==
                FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+    }
+
+    /* For numeric literal constants targeting a built-in numeric type, the literal-adaptation
+     * path (with compile-time range checking per docs/feng-builtin-type.md §17) is the sole
+     * authority — falling through to the default-inferred-type path would let oversized
+     * literals like `let c: i32 = 9999999999;` slip past because the literal's *default*
+     * inferred type happens to match the target's canonical name. */
+    if (type_ref_builtin_canonical_name(expected_type_ref) != NULL &&
+        expr_is_numeric_literal_constant(expr)) {
+        return numeric_literal_adapts_to_target(expr, expected_type_ref);
     }
 
     expr_type = infer_expr_type(context, expr);
