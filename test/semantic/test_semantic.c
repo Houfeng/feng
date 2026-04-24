@@ -3446,6 +3446,110 @@ static void test_self_reports_unknown_member(void) {
     feng_program_free(program);
 }
 
+static void test_spec_typed_param_supports_field_and_method_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    var name: string;\n"
+        "    fn display(): string;\n"
+        "}\n"
+        "spec Identified: Named {\n"
+        "    fn id(): int;\n"
+        "}\n"
+        "type Wrapper {\n"
+        "    fn process(target: Identified): int {\n"
+        "        target.name = \"x\";\n"
+        "        let s: string = target.display();\n"
+        "        return target.id();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_polymorphism.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_typed_param_rejects_let_field_assignment(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type Wrapper {\n"
+        "    fn rename(target: Named): void {\n"
+        "        target.name = \"x\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_let_write.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_spec_typed_param_reports_unknown_member_with_spec_name(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    var name: string;\n"
+        "}\n"
+        "type Wrapper {\n"
+        "    fn rename(target: Named): void {\n"
+        "        let unused: string = target.unknown;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_unknown_member.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "spec 'Named' has no member 'unknown'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_callable_form_spec_typed_param_rejects_member_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Mapper(x: int): int;\n"
+        "type Wrapper {\n"
+        "    fn invoke(target: Mapper): void {\n"
+        "        let unused: int = target.x;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_callable_member.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "callable-form") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_object_literal_reports_unknown_field(void) {
     const char *source =
         "mod demo.main;\n"
@@ -4757,6 +4861,10 @@ int main(void) {
     test_alias_member_access_reports_missing_public_name();
     test_alias_identifier_requires_member_access();
     test_self_reports_unknown_member();
+    test_spec_typed_param_supports_field_and_method_access();
+    test_spec_typed_param_rejects_let_field_assignment();
+    test_spec_typed_param_reports_unknown_member_with_spec_name();
+    test_callable_form_spec_typed_param_rejects_member_access();
     test_object_literal_reports_unknown_field();
     test_object_literal_requires_object_type_target();
     test_object_literal_accepts_constructor_call_target();

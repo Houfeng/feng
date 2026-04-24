@@ -2599,6 +2599,80 @@ static const FengTypeMember *find_instance_member(const FengDecl *type_decl, Fen
     return NULL;
 }
 
+/* Forward declaration: defined later in the spec satisfaction section. */
+static bool spec_collect_closure(const ResolveContext *ctx,
+                                 const FengDecl *spec_decl,
+                                 const FengDecl ***out_set,
+                                 size_t *out_count,
+                                 size_t *out_capacity);
+
+/* Find a field/method member declared on an object-form spec, walking parent specs.
+ * Spec methods only carry signatures (no body); the returned member is suitable for
+ * field-type inference, accessibility (spec members are always public), and
+ * polymorphic call dispatch. Callable-form specs have no member surface and return
+ * NULL here. */
+static const FengTypeMember *find_spec_object_member(const ResolveContext *context,
+                                                     const FengDecl *spec_decl,
+                                                     FengSlice name) {
+    const FengDecl **closure = NULL;
+    size_t closure_count = 0U;
+    size_t closure_capacity = 0U;
+    const FengTypeMember *result = NULL;
+    size_t i;
+    size_t j;
+
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return NULL;
+    }
+    if (!spec_collect_closure(context, spec_decl, &closure, &closure_count, &closure_capacity)) {
+        free(closure);
+        return NULL;
+    }
+
+    for (i = 0U; i < closure_count && result == NULL; ++i) {
+        const FengDecl *current = closure[i];
+
+        if (current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            continue;
+        }
+        for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
+            const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
+
+            if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+                slice_equals(member->as.field.name, name)) {
+                result = member;
+                break;
+            }
+            if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                slice_equals(member->as.callable.name, name)) {
+                result = member;
+                break;
+            }
+        }
+    }
+
+    free(closure);
+    return result;
+}
+
+/* Find a member on either a concrete type or an object-form spec. Returns NULL
+ * for callable-form specs and other declaration kinds. */
+static const FengTypeMember *find_decl_instance_member(const ResolveContext *context,
+                                                       const FengDecl *decl,
+                                                       FengSlice name) {
+    if (decl == NULL) {
+        return NULL;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        return find_instance_member(decl, name);
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        return find_spec_object_member(context, decl, name);
+    }
+    return NULL;
+}
+
 static bool field_has_declaration_initializer(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
            member->as.field.initializer != NULL;
@@ -3419,7 +3493,44 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
     size_t count = 0U;
     FitMethodCountCtx st;
 
-    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+    if (type_decl == NULL) {
+        return 0U;
+    }
+
+    if (type_decl->kind == FENG_DECL_SPEC) {
+        const FengDecl **closure = NULL;
+        size_t closure_count = 0U;
+        size_t closure_capacity = 0U;
+        size_t i;
+        size_t j;
+
+        if (type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return 0U;
+        }
+        if (!spec_collect_closure(context, type_decl, &closure, &closure_count, &closure_capacity)) {
+            free(closure);
+            return 0U;
+        }
+        for (i = 0U; i < closure_count; ++i) {
+            const FengDecl *current = closure[i];
+
+            if (current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                continue;
+            }
+            for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
+                const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
+
+                if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                    slice_equals(member->as.callable.name, name)) {
+                    ++count;
+                }
+            }
+        }
+        free(closure);
+        return count;
+    }
+
+    if (type_decl->kind != FENG_DECL_TYPE) {
         return 0U;
     }
 
@@ -3487,7 +3598,57 @@ static FunctionCallResolution resolve_accessible_method_overload(
     FitOverloadResolveCtx st;
 
     memset(&result, 0, sizeof(result));
-    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+    if (type_decl == NULL) {
+        return result;
+    }
+
+    if (type_decl->kind == FENG_DECL_SPEC) {
+        const FengDecl **closure = NULL;
+        size_t closure_count = 0U;
+        size_t closure_capacity = 0U;
+        size_t i;
+        size_t j;
+
+        if (type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return result;
+        }
+        if (!spec_collect_closure(context, type_decl, &closure, &closure_count, &closure_capacity)) {
+            free(closure);
+            return result;
+        }
+        for (i = 0U; i < closure_count; ++i) {
+            const FengDecl *current = closure[i];
+
+            if (current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                continue;
+            }
+            for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
+                const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
+
+                if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+                    !slice_equals(member->as.callable.name, name) ||
+                    !callable_parameters_match_args(context, &member->as.callable, args, arg_count)) {
+                    continue;
+                }
+                if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+                    result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                    result.decl = NULL;
+                    result.callable = &member->as.callable;
+                    result.member = member;
+                    result.owner_type_decl = type_decl;
+                    continue;
+                }
+                result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+                result.callable = NULL;
+                result.member = NULL;
+                result.owner_type_decl = NULL;
+            }
+        }
+        free(closure);
+        return result;
+    }
+
+    if (type_decl->kind != FENG_DECL_TYPE) {
         return result;
     }
 
@@ -3986,17 +4147,43 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                            expr->as.member.member.data));
     }
 
+    if (owner_type_decl->kind == FENG_DECL_SPEC) {
+        FengSlice owner_name = decl_typeish_name(owner_type_decl);
+
+        if (owner_type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return resolver_append_error(
+                context,
+                expr->token,
+                format_message("spec '%.*s' is callable-form and has no member '%.*s'",
+                               (int)owner_name.length,
+                               owner_name.data,
+                               (int)expr->as.member.member.length,
+                               expr->as.member.member.data));
+        }
+
+        member = find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+        if (member != NULL) {
+            /* Spec members are unconditionally public per spec rules. */
+            return true;
+        }
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("spec '%.*s' has no member '%.*s'",
+                           (int)owner_name.length,
+                           owner_name.data,
+                           (int)expr->as.member.member.length,
+                           expr->as.member.member.data));
+    }
+
     if (owner_type_decl->kind != FENG_DECL_TYPE) {
+        FengSlice owner_name = decl_typeish_name(owner_type_decl);
         return resolver_append_error(
             context,
             expr->token,
             format_message("type '%.*s' has no member '%.*s'",
-                           owner_type_decl->kind == FENG_DECL_TYPE
-                               ? (int)owner_type_decl->as.type_decl.name.length
-                               : 0,
-                           owner_type_decl->kind == FENG_DECL_TYPE
-                               ? owner_type_decl->as.type_decl.name.data
-                               : "",
+                           (int)owner_name.length,
+                           owner_name.data,
                            (int)expr->as.member.member.length,
                            expr->as.member.member.data));
     }
@@ -4470,7 +4657,7 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
 
                 if (owner_type_decl != NULL) {
                     const FengTypeMember *member =
-                        find_instance_member(owner_type_decl, target->as.member.member);
+                        find_decl_instance_member(context, owner_type_decl, target->as.member.member);
 
                     if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
                         member->as.field.mutability == FENG_MUTABILITY_VAR) {
@@ -4634,6 +4821,14 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
     }
 
     field_member = find_type_field_member(owner_type_decl, expr->as.member.member);
+    if (field_member == NULL && owner_type_decl->kind == FENG_DECL_SPEC) {
+        const FengTypeMember *spec_member =
+            find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+
+        if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_FIELD) {
+            field_member = spec_member;
+        }
+    }
     if (field_member == NULL) {
         return inferred_expr_type_unknown();
     }

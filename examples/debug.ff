@@ -1,0 +1,11 @@
+mod test;
+
+spec CommitOptions {
+  var message: i32;
+}
+
+type User {
+  fn commit(options: CommitOptions): void {
+    options.message = 1;
+  }
+}
