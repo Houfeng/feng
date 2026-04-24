@@ -30,6 +30,180 @@ static FengProgram *parse_program_or_die(const char *path, const char *source) {
     return program;
 }
 
+/* --- AST call-expr traversal helpers (used by resolved-callable tests) --- */
+
+typedef struct CallList {
+    const FengExpr **items;
+    size_t count;
+    size_t capacity;
+} CallList;
+
+static void call_list_push(CallList *list, const FengExpr *expr) {
+    if (list->count == list->capacity) {
+        size_t new_cap = list->capacity == 0U ? 8U : list->capacity * 2U;
+        const FengExpr **resized = (const FengExpr **)realloc(
+            list->items, new_cap * sizeof(*resized));
+        ASSERT(resized != NULL);
+        list->items = resized;
+        list->capacity = new_cap;
+    }
+    list->items[list->count++] = expr;
+}
+
+static void collect_calls_in_expr(const FengExpr *expr, CallList *out);
+static void collect_calls_in_stmt(const FengStmt *stmt, CallList *out);
+static void collect_calls_in_block(const FengBlock *block, CallList *out);
+
+static void collect_calls_in_expr(const FengExpr *expr, CallList *out) {
+    size_t i;
+    if (expr == NULL) return;
+    switch (expr->kind) {
+        case FENG_EXPR_CALL:
+            call_list_push(out, expr);
+            collect_calls_in_expr(expr->as.call.callee, out);
+            for (i = 0U; i < expr->as.call.arg_count; ++i) {
+                collect_calls_in_expr(expr->as.call.args[i], out);
+            }
+            break;
+        case FENG_EXPR_MEMBER:
+            collect_calls_in_expr(expr->as.member.object, out);
+            break;
+        case FENG_EXPR_INDEX:
+            collect_calls_in_expr(expr->as.index.object, out);
+            collect_calls_in_expr(expr->as.index.index, out);
+            break;
+        case FENG_EXPR_UNARY:
+            collect_calls_in_expr(expr->as.unary.operand, out);
+            break;
+        case FENG_EXPR_BINARY:
+            collect_calls_in_expr(expr->as.binary.left, out);
+            collect_calls_in_expr(expr->as.binary.right, out);
+            break;
+        case FENG_EXPR_CAST:
+            collect_calls_in_expr(expr->as.cast.value, out);
+            break;
+        case FENG_EXPR_OBJECT_LITERAL:
+            collect_calls_in_expr(expr->as.object_literal.target, out);
+            for (i = 0U; i < expr->as.object_literal.field_count; ++i) {
+                collect_calls_in_expr(expr->as.object_literal.fields[i].value, out);
+            }
+            break;
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (i = 0U; i < expr->as.array_literal.count; ++i) {
+                collect_calls_in_expr(expr->as.array_literal.items[i], out);
+            }
+            break;
+        case FENG_EXPR_IF:
+            collect_calls_in_expr(expr->as.if_expr.condition, out);
+            collect_calls_in_expr(expr->as.if_expr.then_expr, out);
+            collect_calls_in_expr(expr->as.if_expr.else_expr, out);
+            break;
+        case FENG_EXPR_MATCH:
+            collect_calls_in_expr(expr->as.match_expr.target, out);
+            for (i = 0U; i < expr->as.match_expr.case_count; ++i) {
+                collect_calls_in_expr(expr->as.match_expr.cases[i].label, out);
+                collect_calls_in_expr(expr->as.match_expr.cases[i].value, out);
+            }
+            collect_calls_in_expr(expr->as.match_expr.else_expr, out);
+            break;
+        case FENG_EXPR_LAMBDA:
+            collect_calls_in_expr(expr->as.lambda.body, out);
+            break;
+        default:
+            break;
+    }
+}
+
+static void collect_calls_in_stmt(const FengStmt *stmt, CallList *out) {
+    size_t i;
+    if (stmt == NULL) return;
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            collect_calls_in_block(stmt->as.block, out);
+            break;
+        case FENG_STMT_BINDING:
+            collect_calls_in_expr(stmt->as.binding.initializer, out);
+            break;
+        case FENG_STMT_ASSIGN:
+            collect_calls_in_expr(stmt->as.assign.target, out);
+            collect_calls_in_expr(stmt->as.assign.value, out);
+            break;
+        case FENG_STMT_EXPR:
+            collect_calls_in_expr(stmt->as.expr, out);
+            break;
+        case FENG_STMT_IF:
+            for (i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
+                collect_calls_in_expr(stmt->as.if_stmt.clauses[i].condition, out);
+                collect_calls_in_block(stmt->as.if_stmt.clauses[i].block, out);
+            }
+            collect_calls_in_block(stmt->as.if_stmt.else_block, out);
+            break;
+        case FENG_STMT_WHILE:
+            collect_calls_in_expr(stmt->as.while_stmt.condition, out);
+            collect_calls_in_block(stmt->as.while_stmt.body, out);
+            break;
+        case FENG_STMT_FOR:
+            collect_calls_in_stmt(stmt->as.for_stmt.init, out);
+            collect_calls_in_expr(stmt->as.for_stmt.condition, out);
+            collect_calls_in_stmt(stmt->as.for_stmt.update, out);
+            collect_calls_in_block(stmt->as.for_stmt.body, out);
+            break;
+        case FENG_STMT_TRY:
+            collect_calls_in_block(stmt->as.try_stmt.try_block, out);
+            collect_calls_in_block(stmt->as.try_stmt.catch_block, out);
+            collect_calls_in_block(stmt->as.try_stmt.finally_block, out);
+            break;
+        case FENG_STMT_RETURN:
+            collect_calls_in_expr(stmt->as.return_value, out);
+            break;
+        case FENG_STMT_THROW:
+            collect_calls_in_expr(stmt->as.throw_value, out);
+            break;
+        default:
+            break;
+    }
+}
+
+static void collect_calls_in_block(const FengBlock *block, CallList *out) {
+    size_t i;
+    if (block == NULL) return;
+    for (i = 0U; i < block->statement_count; ++i) {
+        collect_calls_in_stmt(block->statements[i], out);
+    }
+}
+
+static const FengExpr *find_call_with_callee_identifier(
+    const CallList *calls, const char *name) {
+    size_t i;
+    size_t name_len = strlen(name);
+    for (i = 0U; i < calls->count; ++i) {
+        const FengExpr *call = calls->items[i];
+        const FengExpr *callee = call->as.call.callee;
+        if (callee != NULL && callee->kind == FENG_EXPR_IDENTIFIER &&
+            callee->as.identifier.length == name_len &&
+            memcmp(callee->as.identifier.data, name, name_len) == 0) {
+            return call;
+        }
+    }
+    return NULL;
+}
+
+static const FengExpr *find_call_with_member_name(
+    const CallList *calls, const char *name) {
+    size_t i;
+    size_t name_len = strlen(name);
+    for (i = 0U; i < calls->count; ++i) {
+        const FengExpr *call = calls->items[i];
+        const FengExpr *callee = call->as.call.callee;
+        if (callee != NULL && callee->kind == FENG_EXPR_MEMBER &&
+            callee->as.member.member.length == name_len &&
+            memcmp(callee->as.member.member.data, name, name_len) == 0) {
+            return call;
+        }
+    }
+    return NULL;
+}
+
 static void test_duplicate_type_across_files_same_module(void) {
     const char *source_a =
         "pu mod demo.main;\n"
@@ -4345,6 +4519,114 @@ static void test_spec_at_type_position_accepts_via_fit(void) {
     feng_program_free(program);
 }
 
+static const FengDecl *find_function_decl_by_name(
+    const FengProgram *program, const char *name) {
+    size_t i;
+    size_t name_len = strlen(name);
+    for (i = 0U; i < program->declaration_count; ++i) {
+        const FengDecl *decl = program->declarations[i];
+        if (decl->kind == FENG_DECL_FUNCTION &&
+            decl->as.function_decl.name.length == name_len &&
+            memcmp(decl->as.function_decl.name.data, name, name_len) == 0) {
+            return decl;
+        }
+    }
+    return NULL;
+}
+
+static void test_resolved_callable_attached_to_call_exprs(void) {
+    /* Exercises all four resolved-callable kinds in a single program. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {\n"
+        "    fn shout(): string { return \"HI\"; }\n"
+        "}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n"
+        "fn helper(): int { return 1; }\n"
+        "fn run(): int {\n"
+        "    let u: User = User();\n"
+        "    let a: string = u.greet();\n"
+        "    let b: string = u.shout();\n"
+        "    return helper();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("resolved.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *run_decl;
+    const FengDecl *user_type;
+    CallList calls = {NULL, 0U, 0U};
+    const FengExpr *call_user;
+    const FengExpr *call_greet;
+    const FengExpr *call_shout;
+    const FengExpr *call_helper;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    run_decl = find_function_decl_by_name(program, "run");
+    ASSERT(run_decl != NULL);
+    user_type = NULL;
+    {
+        size_t i;
+        for (i = 0U; i < program->declaration_count; ++i) {
+            const FengDecl *d = program->declarations[i];
+            if (d->kind == FENG_DECL_TYPE &&
+                d->as.type_decl.name.length == 4U &&
+                memcmp(d->as.type_decl.name.data, "User", 4U) == 0) {
+                user_type = d;
+                break;
+            }
+        }
+    }
+    ASSERT(user_type != NULL);
+
+    collect_calls_in_block(run_decl->as.function_decl.body, &calls);
+
+    call_user = find_call_with_callee_identifier(&calls, "User");
+    ASSERT(call_user != NULL);
+    ASSERT(call_user->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR);
+    ASSERT(call_user->as.call.resolved_callable.owner_type_decl == user_type);
+    /* No declared constructor in User → member is NULL (implicit zero-arg). */
+    ASSERT(call_user->as.call.resolved_callable.member == NULL);
+
+    call_greet = find_call_with_member_name(&calls, "greet");
+    ASSERT(call_greet != NULL);
+    ASSERT(call_greet->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_FIT_METHOD);
+    ASSERT(call_greet->as.call.resolved_callable.owner_type_decl == user_type);
+    ASSERT(call_greet->as.call.resolved_callable.member != NULL);
+    ASSERT(call_greet->as.call.resolved_callable.fit_decl != NULL);
+    ASSERT(call_greet->as.call.resolved_callable.fit_decl->kind == FENG_DECL_FIT);
+
+    call_shout = find_call_with_member_name(&calls, "shout");
+    ASSERT(call_shout != NULL);
+    ASSERT(call_shout->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_TYPE_METHOD);
+    ASSERT(call_shout->as.call.resolved_callable.owner_type_decl == user_type);
+    ASSERT(call_shout->as.call.resolved_callable.member != NULL);
+    ASSERT(call_shout->as.call.resolved_callable.fit_decl == NULL);
+
+    call_helper = find_call_with_callee_identifier(&calls, "helper");
+    ASSERT(call_helper != NULL);
+    ASSERT(call_helper->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_FUNCTION);
+    ASSERT(call_helper->as.call.resolved_callable.function_decl != NULL);
+    ASSERT(call_helper->as.call.resolved_callable.function_decl->kind ==
+           FENG_DECL_FUNCTION);
+
+    free(calls.items);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -4518,6 +4800,7 @@ int main(void) {
     test_spec_at_type_position_accepts_satisfying_type();
     test_spec_at_type_position_rejects_unrelated_type();
     test_spec_at_type_position_accepts_via_fit();
+    test_resolved_callable_attached_to_call_exprs();
     puts("semantic tests passed");
     return 0;
 }

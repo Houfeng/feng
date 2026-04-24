@@ -44,6 +44,24 @@ typedef struct FengBlock FengBlock;
 typedef struct FengDecl FengDecl;
 typedef struct FengTypeMember FengTypeMember;
 
+/* Resolution metadata attached by the semantic analyzer to call expressions.
+ * Codegen and tooling consume this instead of re-running symbol lookup. */
+typedef enum FengResolvedCallableKind {
+    FENG_RESOLVED_CALLABLE_NONE = 0,
+    FENG_RESOLVED_CALLABLE_FUNCTION,         /* free / module-level fn */
+    FENG_RESOLVED_CALLABLE_TYPE_METHOD,      /* method declared in a type body */
+    FENG_RESOLVED_CALLABLE_FIT_METHOD,       /* method declared in a fit body */
+    FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR  /* constructor of a concrete type */
+} FengResolvedCallableKind;
+
+typedef struct FengResolvedCallable {
+    FengResolvedCallableKind kind;
+    const FengDecl *function_decl;     /* set for FUNCTION */
+    const FengDecl *owner_type_decl;   /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
+    const FengTypeMember *member;      /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
+    const FengDecl *fit_decl;          /* set for FIT_METHOD */
+} FengResolvedCallable;
+
 typedef struct FengParameter {
     FengToken token;
     FengMutability mutability;
@@ -125,6 +143,7 @@ struct FengExpr {
             FengExpr *callee;
             FengExpr **args;
             size_t arg_count;
+            FengResolvedCallable resolved_callable;
         } call;
         struct {
             FengExpr *object;

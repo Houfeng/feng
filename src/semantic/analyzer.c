@@ -100,6 +100,9 @@ typedef struct FunctionCallResolution {
     FunctionCallResolutionKind kind;
     const FengDecl *decl;
     const FengCallableSignature *callable;
+    const FengTypeMember *member;       /* set for type-method / fit-method */
+    const FengDecl *owner_type_decl;    /* set for type-method / fit-method */
+    const FengDecl *fit_decl;           /* set for fit-method */
 } FunctionCallResolution;
 
 typedef enum CallableValueResolutionKind {
@@ -3429,6 +3432,7 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
 
 typedef struct FitOverloadResolveCtx {
     ResolveContext *context;
+    const FengDecl *owner_type_decl;
     FengExpr *const *args;
     size_t arg_count;
     FunctionCallResolution result;
@@ -3441,7 +3445,6 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
 
     (void)fit_module;
-    (void)fit_decl;
     if (!callable_parameters_match_args(st->context, &member->as.callable,
                                         st->args, st->arg_count)) {
         return true;
@@ -3450,10 +3453,16 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
         st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
         st->result.decl = NULL;
         st->result.callable = &member->as.callable;
+        st->result.member = member;
+        st->result.owner_type_decl = st->owner_type_decl;
+        st->result.fit_decl = fit_decl;
         return true;
     }
     st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
     st->result.callable = NULL;
+    st->result.member = NULL;
+    st->result.owner_type_decl = NULL;
+    st->result.fit_decl = NULL;
     return true;
 }
 
@@ -3487,14 +3496,19 @@ static FunctionCallResolution resolve_accessible_method_overload(
             result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
             result.decl = NULL;
             result.callable = &member->as.callable;
+            result.member = member;
+            result.owner_type_decl = type_decl;
             continue;
         }
 
         result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
         result.callable = NULL;
+        result.member = NULL;
+        result.owner_type_decl = NULL;
     }
 
     st.context = context;
+    st.owner_type_decl = type_decl;
     st.args = args;
     st.arg_count = arg_count;
     st.result = result;
@@ -5869,9 +5883,14 @@ static bool validate_constructor_invocation(ResolveContext *context,
                                             const FengDecl *type_decl,
                                             const FengSemanticModule *provider_module,
                                             FengExpr *const *args,
-                                            size_t arg_count) {
+                                            size_t arg_count,
+                                            const FengTypeMember **out_constructor) {
     size_t declared_constructor_count;
     ConstructorResolution resolution;
+
+    if (out_constructor != NULL) {
+        *out_constructor = NULL;
+    }
 
     if (type_decl == NULL) {
         return true;
@@ -5910,6 +5929,9 @@ static bool validate_constructor_invocation(ResolveContext *context,
                                        resolution.constructor != NULL
                                            ? &resolution.constructor->as.callable
                                            : NULL);
+        if (out_constructor != NULL) {
+            *out_constructor = resolution.constructor;
+        }
         return true;
     }
     if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_AMBIGUOUS) {
@@ -5933,17 +5955,61 @@ static bool validate_constructor_invocation(ResolveContext *context,
 
 static bool validate_constructor_call_expr(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget target = resolve_type_target_expr(context, expr->as.call.callee, false);
+    const FengTypeMember *constructor_member = NULL;
 
     if (target.type_decl == NULL) {
         return true;
     }
 
-    return validate_constructor_invocation(context,
-                                           expr->as.call.callee,
-                                           target.type_decl,
-                                           target.provider_module,
-                                           expr->as.call.args,
-                                           expr->as.call.arg_count);
+    if (!validate_constructor_invocation(context,
+                                         expr->as.call.callee,
+                                         target.type_decl,
+                                         target.provider_module,
+                                         expr->as.call.args,
+                                         expr->as.call.arg_count,
+                                         &constructor_member)) {
+        return false;
+    }
+
+    if (target.type_decl->kind == FENG_DECL_TYPE) {
+        FengExpr *mutable_expr = (FengExpr *)expr;
+        mutable_expr->as.call.resolved_callable.kind = FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR;
+        mutable_expr->as.call.resolved_callable.owner_type_decl = target.type_decl;
+        mutable_expr->as.call.resolved_callable.member = constructor_member;
+    }
+    return true;
+}
+
+static void record_resolved_callable_from_resolution(
+    const FengExpr *call_expr, const FunctionCallResolution *resolution) {
+    FengExpr *mutable_expr = (FengExpr *)call_expr;
+    FengResolvedCallable *slot;
+
+    if (mutable_expr == NULL || mutable_expr->kind != FENG_EXPR_CALL ||
+        resolution == NULL ||
+        resolution->kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+        return;
+    }
+
+    slot = &mutable_expr->as.call.resolved_callable;
+    if (resolution->fit_decl != NULL) {
+        slot->kind = FENG_RESOLVED_CALLABLE_FIT_METHOD;
+        slot->owner_type_decl = resolution->owner_type_decl;
+        slot->member = resolution->member;
+        slot->fit_decl = resolution->fit_decl;
+        return;
+    }
+    if (resolution->member != NULL) {
+        slot->kind = FENG_RESOLVED_CALLABLE_TYPE_METHOD;
+        slot->owner_type_decl = resolution->owner_type_decl;
+        slot->member = resolution->member;
+        return;
+    }
+    if (resolution->decl != NULL) {
+        slot->kind = FENG_RESOLVED_CALLABLE_FUNCTION;
+        slot->function_decl = resolution->decl;
+        return;
+    }
 }
 
 static bool validate_function_call_expr(ResolveContext *context, const FengExpr *expr) {
@@ -5971,6 +6037,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
+                    record_resolved_callable_from_resolution(expr, &resolution);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -6027,6 +6094,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 note_callable_exception_escape(context, resolution.callable);
+                record_resolved_callable_from_resolution(expr, &resolution);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -6094,6 +6162,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
+                    record_resolved_callable_from_resolution(expr, &resolution);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -6157,7 +6226,8 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                          target.type_decl,
                                          target.provider_module,
                                          NULL,
-                                         0U)) {
+                                         0U,
+                                         NULL)) {
         free(target_name);
         free(seen_field_names);
         return false;
