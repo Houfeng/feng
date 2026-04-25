@@ -1,5 +1,7 @@
 # Feng CLI 命令与选项
 
+> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。内部构建与编译流程请参考 [feng-build.md](feng-build.md)。
+
 ## 1 设计目标
 
 - 让新用户只靠 `feng --help` 就能看到最常用命令。
