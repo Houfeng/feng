@@ -3,7 +3,7 @@
   <title>Feng file icon</title>
   <desc>Document-shaped file icon for Feng, optimized for VS Code tree display.</desc>
 
-    <g transform="translate(5 3.5)">
+    <g transform="translate(8 7)">
       <g transform="translate(95 96.5) scale(1.26 1.192) translate(-95 -96.5)">
       <path d="M56 23H122L158 59V155C158 166.046 149.046 175 138 175H56C44.954 175 36 166.046 36 155V43C36 31.954 44.954 23 56 23Z"
         fill="#0A3D7D" opacity="0.12"/>
