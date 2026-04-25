@@ -11,10 +11,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 
 ## Supported File Extensions
 
-- `.feng`
-- `.ff`
-- `.fm`
-- `.fi`
+- `.feng`、`.ff`、`.fm`、`.fi`
 
 ## Quick Start
 
@@ -29,7 +26,7 @@ If the `feng` executable is not available in your system `PATH`, you can configu
 
 ```json
 {
-	"feng.executablePath": "./build/bin/feng"
+  "feng.executablePath": "./build/bin/feng"
 }
 ```
 
