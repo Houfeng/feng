@@ -27,7 +27,7 @@ feng <command> [options]
   check      检查当前项目,不产出最终制品
   clean      清理构建产物
   pack       打包为 .fb
-  deps       管理项目依赖（add / remove / update 为二级子命令）
+  deps       管理项目依赖（add / remove 为二级子命令）
   tool       编译器调试与高级诊断子命令集合
 
 选项:
@@ -104,6 +104,7 @@ feng run [<path>] [--release] [-- <program-args>...]
 
 说明:
 
+- `run` 总是先执行 `feng build`,构建成功后再运行产物,`<path>` 和 `--release` 均透传给 `feng build`。
 - `--` 之后的参数直接透传给目标程序。
 - 若当前项目是 `lib`,应给出明确诊断。
 
@@ -114,13 +115,12 @@ feng run [<path>] [--release] [-- <program-args>...]
 用法:
 
 ```text
-feng check [<path>] [--target <bin|lib>] [--format <text|json>]
+feng check [<path>] [--format <text|json>]
 ```
 
 选项:
 
 - `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
-- `--target <bin|lib>`: 指定检查目标类型;若省略,从 `feng.fm` 读取。
 - `--format <text|json>`: 指定诊断输出格式,`text` 为人类可读,`json` 适合编辑器或 CI 消费,默认 `text`。
 
 说明:
@@ -158,11 +158,12 @@ feng pack [<path>]
 
 说明:
 
-- `pack` 内部应隐式触发一次干净的 `build`,确保打包产物与源码同步。
+- `pack` 总是先执行 `feng build --release`,再对产物打包,不接受 `--release` 选项。
+- `<path>` 透传给 `feng build`。
 
 ## 5 依赖管理命令
 
-`deps` 是管理 `feng.fm` 依赖的统一入口,`add`、`remove`、`update` 均作为其二级子命令。
+`deps` 是管理 `feng.fm` 依赖的统一入口,`add`、`remove` 均作为其二级子命令。
 
 ### 5.1 `feng deps add`
 
@@ -176,7 +177,7 @@ feng deps add <pkg-name[@version]>
 
 选项:
 
-- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本要求,例如 `feng deps add mylib@1.2`。
+- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录。
 
 ### 5.2 `feng deps remove`
 
@@ -185,23 +186,12 @@ feng deps add <pkg-name[@version]>
 用法:
 
 ```text
-feng deps remove <package>
-```
-
-### 5.3 `feng deps update`
-
-用途: 更新依赖锁定结果。
-
-用法:
-
-```text
-feng deps update [package...]
+feng deps remove <pkg-name>
 ```
 
 说明:
 
-- 无参数时更新全部可更新依赖。
-- 带包名时只更新指定依赖。
+- 一个项目只允许依赖同一包的一个版本,因此移除时只需指定包名。
 
 ## 6 调试与分析命令
 
@@ -246,7 +236,7 @@ Project Commands:
   pack      Create a .fb package
 
 Dependency Commands:
-  deps      Manage dependencies (add / remove / update)
+  deps      Manage dependencies (add / remove)
 
 Developer Tools:
   tool      Compiler debugging and advanced diagnostic tools
