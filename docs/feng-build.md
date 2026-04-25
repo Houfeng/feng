@@ -18,12 +18,13 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 编译器接受以下输入:
 
 ```bash
-feng <源文件列表> --target <目标> --out <输出路径> [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
 - `--target <目标>`: 编译目标,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定
 - `--out <输出路径>`: 指定输出文件路径; 该参数必须显式指定,编译器不假定默认输出位置
+- `--release`: 使用发布模式编译;项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
 
@@ -89,7 +90,7 @@ extern fn ssl_connect(fd: int): int;
 
 ### 3.1 读取项目清单
 
-构建工具读取项目根目录的 `feng.fm`。CLI 传入的 `<path>` 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径。项目开发阶段与发布包共用同一格式,区别在于:
+构建工具读取项目根目录的 `feng.fm`。CLI 传入的 `<path>` 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径。`feng deps install` 使用同样的 `<path>` 规则;`feng deps add` 与 `feng deps remove` 也支持 `<path>`,并将其作为第二个位置参数。项目开发阶段与发布包共用同一格式,区别在于:
 
 - 开发项目的 `feng.fm` 可以省略 `abi` 字段（或留空），表示"不作为包发布"
 - 发布为 `.fb` 时，`abi` 字段必须存在且与包内目录结构一致
@@ -112,7 +113,7 @@ extern fn ssl_connect(fd: int): int;
 4. 递归读取每个依赖包内的 `feng.fm`,展开完整依赖图,并按同样规则安装其传递依赖
 5. 若两个不同包依赖同一包的不同精确版本,构建工具报冲突错误,要求用户显式消解版本分歧
 
-`feng deps add` 在写入 `feng.fm` 后立即触发该安装流程。`feng deps install` 会按 `feng.fm` 中声明的精确版本检查并安装全部依赖;默认只安装尚未安装的依赖,传入 `--force` 时强制重新安装全部依赖。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`;其中 `feng pack` 固定使用 `feng build --release`。
+`feng deps add` 在写入 `feng.fm` 后立即触发该安装流程。`feng deps install` 会按 `feng.fm` 中声明的精确版本检查并安装全部依赖;默认只安装尚未安装的依赖,传入 `--force` 时强制重新安装全部依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`;其中 `feng pack` 固定使用 `feng build --release`。
 
 ### 3.3 模块名冲突预检
 
@@ -131,6 +132,8 @@ feng src/*.ff   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/base-2.
 ### 3.5 发布流程（打包为 .fb）
 
 构建工具驱动完整发布流程:
+
+- 若项目的 `target` 不是 `lib`,构建工具在进入打包流程前立即报错。
 
 1. 调用编译器扫描源文件、生成 `.fi` 文件到 `mod/` 目录
 2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）

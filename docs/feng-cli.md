@@ -14,20 +14,20 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target <目标> --out <输出路径> --release [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
 feng <command> [options]
-feng <源文件列表> --target <目标> --out <输出路径> --release [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 
 命令:
   init       在当前目录初始化 Feng 项目
   build      构建当前项目
   run        构建并运行当前项目
   check      检查当前项目,不产出最终制品
-  clean      清理构建产物
-  pack       构建并打包为 .fb
+  clean      清理所有构建产物
+  pack       为 lib 项目构建并打包为 .fb
   deps       管理项目依赖（add / remove / install 为二级子命令）
   tool       编译器调试与高级诊断子命令集合
 
@@ -87,7 +87,7 @@ feng build [<path>] [--release]
 说明:
 
 - `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置,不接受编译器级别的细粒度选项。
-- `build` 总是先执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
+- `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 
 ### 4.3 `feng run`
 
@@ -128,12 +128,12 @@ feng check [<path>] [--format <text|json>]
 说明:
 
 - 面向日常编辑-检查循环。
-- `check` 总是先执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
+- `check` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - 完成依赖安装后执行语义检查,但跳过最终制品生成。
 
 ### 4.5 `feng clean`
 
-用途: 清理构建产物。
+用途: 清理所有构建产物。
 
 用法:
 
@@ -145,9 +145,13 @@ feng clean [<path>]
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
+说明:
+
+- `clean` 删除该项目的所有构建产物,包括最终产物与中间文件。
+
 ### 4.6 `feng pack`
 
-用途: 生成 `.fb` 分发包。
+用途: 为 `target = lib` 的项目生成 `.fb` 分发包。
 
 用法:
 
@@ -163,6 +167,7 @@ feng pack [<path>]
 
 - `pack` 总是先执行 `feng build --release`,再对产物打包,不接受 `--release` 选项。
 - `<path>` 透传给 `feng build`。
+- 若项目的 `target` 不是 `lib`,报错退出。
 
 ## 5 依赖管理命令
 
@@ -175,15 +180,17 @@ feng pack [<path>]
 用法:
 
 ```text
-feng deps add <pkg-name[@version]>
+feng deps add <pkg-name[@version]> [<path>]
 ```
 
 选项:
 
 - `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录并重新拉取该依赖。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 说明:
 
+- `deps add` 的 `<path>` 为第二个位置参数。
 - `deps add` 在写入 `feng.fm` 后立即拉取依赖,确保本地安装状态与清单一致。
 
 ### 5.2 `feng deps remove`
@@ -193,11 +200,17 @@ feng deps add <pkg-name[@version]>
 用法:
 
 ```text
-feng deps remove <pkg-name>
+feng deps remove <pkg-name> [<path>]
 ```
+
+选项:
+
+- `<pkg-name>`: 依赖包名。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 说明:
 
+- `deps remove` 的 `<path>` 为第二个位置参数。
 - 一个项目只允许依赖同一包的一个版本,因此移除时只需指定包名。
 
 ### 5.3 `feng deps install`
@@ -207,11 +220,12 @@ feng deps remove <pkg-name>
 用法:
 
 ```text
-feng deps install [--force]
+feng deps install [<path>] [--force]
 ```
 
 选项:
 
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--force`: 强制重新安装 `feng.fm` 中声明的全部依赖,即使这些依赖已经安装。
 
 说明:
@@ -239,11 +253,7 @@ feng tool check [--target <bin|lib>] <file> [more files...]
 - `feng tool semantic`: 输出人类可读的语义诊断。
 - `feng tool check`: 输出更适合编辑器或 CI 消费的结构化诊断。
 
-说明:
-
-- 当前原型已存在 `lex`、`parse`、`semantic`、`check` 顶层命令。
-
-## 8 帮助输出示例
+## 7 帮助输出示例
 
 示例:
 
@@ -252,14 +262,15 @@ Feng CLI
 
 Usage:
   feng <command> [options]
+  feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 
 Project Commands:
   init      Initialize a project in the current directory
   build     Build the current project
   run       Build and run the current project
   check     Type-check and analyze without producing final artifacts
-  clean     Remove build artifacts
-  pack      Create a .fb package
+  clean     Remove all build artifacts
+  pack      Create a .fb package from the current lib project
 
 Dependency Commands:
   deps      Manage dependencies (add / remove / install)
@@ -272,7 +283,7 @@ Global Options:
   -v, --version
 ```
 
-## 7 有意不提供的命令
+## 8 有意不提供的命令
 
 ### `feng test`
 
