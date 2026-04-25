@@ -24,8 +24,7 @@
 feng <command> [options]
 
 常用项目命令:
-  new        创建新项目
-  init       在当前目录初始化项目
+  init       创建或初始化 Feng 项目
   build      构建当前项目
   run        构建并运行当前项目
   check      检查当前项目,不产出最终制品
@@ -79,43 +78,30 @@ feng <command> [options]
 
 ## 4 常用项目命令草案
 
-### 4.1 `feng new`
+### 4.1 `feng init`
 
-用途: 创建一个新的 Feng 项目目录。
+用途: 创建或初始化一个 Feng 项目。
 
 建议用法:
 
 ```text
-feng new <name> [--bin|--lib] [--vcs <git|none>]
+feng init [<name>] [--bin|--lib] [--vcs <git|none>]
 ```
 
 建议选项:
 
-- `--bin`: 创建可执行项目。
+- `<name>`: 若给出,则创建同名目录并在其中初始化项目;若省略,则在当前目录初始化。
+- `--bin`: 创建可执行项目(默认)。
 - `--lib`: 创建库项目。
-- `--vcs <git|none>`: 是否初始化版本控制。
+- `--vcs <git|none>`: 是否初始化版本控制,默认 `git`。
 
 说明:
 
-- 默认建议创建 `bin` 项目。
+- `feng init myapp` 等价于原来的 `new myapp`。
+- `feng init` 等价于原来的在当前目录执行 `init`,适合把已有目录转成 Feng 项目。
 - 自动生成 `feng.fm`、`src/`、示例入口文件和基础 `.gitignore`。
 
-### 4.2 `feng init`
-
-用途: 在当前目录初始化 Feng 项目。
-
-建议用法:
-
-```text
-feng init [path] [--bin|--lib]
-```
-
-说明:
-
-- 适合把已有目录转成 Feng 项目。
-- 与 `new` 不同,`init` 不强制创建新目录。
-
-### 4.3 `feng build`
+### 4.2 `feng build`
 
 用途: 读取 `feng.fm`,解析依赖,构建项目。
 
@@ -139,7 +125,7 @@ feng build [--release] [--target <bin|lib>] [--manifest-path <path>] [--out-dir 
 - `build` 是项目级入口,优先给普通用户使用。
 - 其职责应与 [docs/feng-build.md](./feng-build.md) 中“构建工具”一致。
 
-### 4.4 `feng run`
+### 4.3 `feng run`
 
 用途: 构建并运行当前项目的可执行目标。
 
@@ -154,7 +140,7 @@ feng run [--release] [--manifest-path <path>] [-- <program-args>...]
 - `--` 之后的参数直接透传给目标程序。
 - 若当前项目是 `lib`,应给出明确诊断。
 
-### 4.5 `feng check`
+### 4.4 `feng check`
 
 用途: 做快速语义检查,不产出最终二进制或包。
 
@@ -169,7 +155,7 @@ feng check [--target <bin|lib>] [--manifest-path <path>] [--offline] [--locked]
 - 面向日常编辑-检查循环。
 - 语义上等价于“走完整依赖解析与检查流程,但跳过最终制品生成”。
 
-### 4.6 `feng test`
+### 4.5 `feng test`
 
 用途: 发现并运行测试。
 
@@ -185,7 +171,7 @@ feng test [<filter>] [--release] [--manifest-path <path>] [-- --test-args...]
 - `--release`: 用发布模式执行测试。
 - `-- <test-args...>`: 透传给测试运行器。
 
-### 4.7 `feng fmt`
+### 4.6 `feng fmt`
 
 用途: 格式化 Feng 源码。
 
@@ -205,7 +191,7 @@ feng fmt [paths...] [--check]
 - `fmt` 应尽量可预测,避免引入多套互斥风格。
 - 若将来有专门格式化规范,`fmt` 应以前者为准。
 
-### 4.8 `feng doc`
+### 4.7 `feng doc`
 
 用途: 生成项目 API 文档或规范化文档输出。
 
@@ -220,7 +206,7 @@ feng doc [--open] [--manifest-path <path>] [--out-dir <dir>]
 - `--open`: 生成后自动打开文档。
 - `--out-dir <dir>`: 指定输出目录。
 
-### 4.9 `feng clean`
+### 4.8 `feng clean`
 
 用途: 清理构建产物。
 
@@ -367,8 +353,7 @@ Usage:
   feng <command> [options]
 
 Project Commands:
-  new       Create a new project
-  init      Initialize a project in an existing directory
+  init      Create or initialize a project
   build     Build the current project
   run       Build and run the current project
   check     Type-check and analyze without producing final artifacts
@@ -415,7 +400,7 @@ Global Options:
 5. `fmt`
 6. `compile`
 7. `tool lex` / `tool parse` / `tool semantic`
-8. `new` / `init`
+8. `init`
 9. `add` / `remove` / `update`
 10. `package` / `publish` / `doc` / `clean`
 
