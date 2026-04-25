@@ -187,6 +187,12 @@ typedef struct ResolveContext {
     size_t scope_count;
     size_t scope_capacity;
     const FengDecl *current_type_decl;
+    /* When non-NULL, the resolver is currently inside the body of a fit-block
+     * function. `current_type_decl` is set to the fit's resolved target type so
+     * that `self`/instance lookups still work, and `current_fit_decl` is used
+     * to enforce that fit-body code cannot reach the target type's private
+     * members regardless of whether the target lives in the same package. */
+    const FengDecl *current_fit_decl;
     const FengTypeMember *current_callable_member;
     const FengCallableSignature *current_callable_signature;
     InferredExprType current_callable_inferred_return_type;
@@ -2860,6 +2866,30 @@ static bool type_member_is_public(const FengTypeMember *member) {
     return member != NULL && member->visibility != FENG_VISIBILITY_PRIVATE;
 }
 
+/* When the resolver is inside a fit-block function body, accessing the target
+ * type's private members (`pr` fields or `pr` methods) is forbidden, regardless
+ * of whether the target lives in the same package as the fit declaration.
+ * Members contributed by the fit block itself live on the fit decl, not on the
+ * target type, so this helper only consults the target type's own member set.
+ * See docs/feng-fit.md §4 / §5. */
+static bool fit_body_blocks_private_access(const ResolveContext *context,
+                                           const FengDecl *owner_type_decl,
+                                           const FengTypeMember *member) {
+    const FengDecl *fit_target;
+
+    if (context == NULL || context->current_fit_decl == NULL ||
+        owner_type_decl == NULL || member == NULL ||
+        type_member_is_public(member)) {
+        return false;
+    }
+    if (owner_type_decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    fit_target = resolve_type_ref_decl(context,
+                                       context->current_fit_decl->as.fit_decl.target);
+    return fit_target != NULL && fit_target == owner_type_decl;
+}
+
 static bool type_member_is_accessible_from(const ResolveContext *context,
                                            const FengSemanticModule *provider_module,
                                            const FengTypeMember *member) {
@@ -3252,7 +3282,8 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         if (member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
             continue;
         }
-        if (!type_member_is_accessible_from(context, provider_module, member)) {
+        if (!type_member_is_accessible_from(context, provider_module, member) ||
+            fit_body_blocks_private_access(context, type_decl, member)) {
             continue;
         }
         if (!callable_parameters_match_args(
@@ -3430,6 +3461,7 @@ static CallableValueResolution resolve_accessible_method_value_overload(
         if (member->kind != FENG_TYPE_MEMBER_METHOD ||
             !slice_equals(member->as.callable.name, name) ||
             !type_member_is_accessible_from(context, provider_module, member) ||
+            fit_body_blocks_private_access(context, type_decl, member) ||
             (requires_fixed_abi_callable && !method_member_is_fixed_abi_callable_value(member)) ||
             !function_type_decl_matches_callable_signature_or_is_pending(context,
                                                                          function_type_decl,
@@ -3653,7 +3685,13 @@ static const FengTypeMember *find_accessible_type_field_member(ResolveContext *c
                                                                FengSlice name) {
     const FengTypeMember *member = find_type_field_member(type_decl, name);
 
-    return type_member_is_accessible_from(context, provider_module, member) ? member : NULL;
+    if (!type_member_is_accessible_from(context, provider_module, member)) {
+        return NULL;
+    }
+    if (fit_body_blocks_private_access(context, type_decl, member)) {
+        return NULL;
+    }
+    return member;
 }
 
 static const FengTypeMember *find_accessible_type_method_member(ResolveContext *context,
@@ -3662,7 +3700,8 @@ static const FengTypeMember *find_accessible_type_method_member(ResolveContext *
                                                                 FengSlice name) {
     const FengTypeMember *member = find_type_method_member(type_decl, name);
 
-    if (type_member_is_accessible_from(context, provider_module, member)) {
+    if (type_member_is_accessible_from(context, provider_module, member) &&
+        !fit_body_blocks_private_access(context, type_decl, member)) {
         return member;
     }
     /* Fall back to any visible fit-body method for this type. */
@@ -3740,7 +3779,8 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
 
         if (member->kind == FENG_TYPE_MEMBER_METHOD &&
             slice_equals(member->as.callable.name, name) &&
-            type_member_is_accessible_from(context, provider_module, member)) {
+            type_member_is_accessible_from(context, provider_module, member) &&
+            !fit_body_blocks_private_access(context, type_decl, member)) {
             ++count;
         }
     }
@@ -3859,6 +3899,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
         if (member->kind != FENG_TYPE_MEMBER_METHOD ||
             !slice_equals(member->as.callable.name, name) ||
             !type_member_is_accessible_from(context, provider_module, member) ||
+            fit_body_blocks_private_access(context, type_decl, member) ||
             !callable_parameters_match_args(context, &member->as.callable, args, arg_count)) {
             continue;
         }
@@ -4408,6 +4449,18 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     }
 
     if (type_member_is_accessible_from(context, provider_module, member)) {
+        if (fit_body_blocks_private_access(context, owner_type_decl, member)) {
+            return resolver_append_error(
+                context,
+                expr->token,
+                format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
+                               member->kind == FENG_TYPE_MEMBER_FIELD ? (int)member->as.field.name.length
+                                                                      : (int)member->as.callable.name.length,
+                               member->kind == FENG_TYPE_MEMBER_FIELD ? member->as.field.name.data
+                                                                      : member->as.callable.name.data,
+                               (int)owner_type_decl->as.type_decl.name.length,
+                               owner_type_decl->as.type_decl.name.data));
+        }
         return true;
     }
 
@@ -7218,7 +7271,8 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             return ok;
         }
 
-        if (!type_member_is_accessible_from(context, target.provider_module, field_member)) {
+        if (!type_member_is_accessible_from(context, target.provider_module, field_member) ||
+            fit_body_blocks_private_access(context, target.type_decl, field_member)) {
             bool ok = resolver_append_error(
                 context,
                 field->token,
@@ -7262,6 +7316,23 @@ static bool resolve_self_member_expr(ResolveContext *context,
     }
 
     if (find_instance_member(context->current_type_decl, expr->as.member.member) != NULL) {
+        const FengTypeMember *self_member =
+            find_instance_member(context->current_type_decl, expr->as.member.member);
+
+        if (fit_body_blocks_private_access(context, context->current_type_decl, self_member)) {
+            return resolver_append_error(
+                context,
+                expr->token,
+                format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
+                               self_member->kind == FENG_TYPE_MEMBER_FIELD
+                                   ? (int)self_member->as.field.name.length
+                                   : (int)self_member->as.callable.name.length,
+                               self_member->kind == FENG_TYPE_MEMBER_FIELD
+                                   ? self_member->as.field.name.data
+                                   : self_member->as.callable.name.data,
+                               (int)context->current_type_decl->as.type_decl.name.length,
+                               context->current_type_decl->as.type_decl.name.data));
+        }
         return true;
     }
 
@@ -9004,6 +9075,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
 
         case FENG_DECL_FIT: {
             size_t fit_index;
+            const FengDecl *fit_target_decl;
             if (!resolve_type_ref(context, decl->as.fit_decl.target, false)) {
                 return false;
             }
@@ -9012,10 +9084,34 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     return false;
                 }
             }
+            /* Resolve the fit's target type once so that fit-body methods can
+             * see `self` as the target type and trigger normal instance member
+             * checks. The target may legitimately fail to resolve here (e.g.
+             * when the right-hand side is a built-in or unresolved name); in
+             * that case `validate_fit_declaration_contracts` reports the proper
+             * diagnostic and we simply skip context propagation. */
+            fit_target_decl = resolve_type_ref_decl(context, decl->as.fit_decl.target);
             for (fit_index = 0U; fit_index < decl->as.fit_decl.member_count; ++fit_index) {
                 const FengTypeMember *member = decl->as.fit_decl.members[fit_index];
+                const FengDecl *previous_type_decl = context->current_type_decl;
+                const FengDecl *previous_fit_decl = context->current_fit_decl;
+                const FengTypeMember *previous_callable_member =
+                    context->current_callable_member;
+                bool ok;
 
-                if (!resolve_callable(context, &member->as.callable, true)) {
+                if (fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE) {
+                    context->current_type_decl = fit_target_decl;
+                }
+                context->current_fit_decl = decl;
+                context->current_callable_member = member;
+
+                ok = resolve_callable(context, &member->as.callable, true);
+
+                context->current_callable_member = previous_callable_member;
+                context->current_fit_decl = previous_fit_decl;
+                context->current_type_decl = previous_type_decl;
+
+                if (!ok) {
                     return false;
                 }
             }

@@ -5109,6 +5109,147 @@ static void test_fit_method_unknown_member_still_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_fit_body_rejects_self_private_field_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {\n"
+        "    pr let secret: string;\n"
+        "}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string {\n"
+        "        return self.secret;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_priv_self_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "fit body cannot access private member 'secret' of target type 'User'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_body_rejects_self_private_method_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {\n"
+        "    pr fn whisper(): string { return \"shh\"; }\n"
+        "}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string {\n"
+        "        return self.whisper();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_priv_self_method.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "fit body cannot access private member 'whisper' of target type 'User'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_body_rejects_other_param_private_field_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Tagged {\n"
+        "    fn tag_of(other: User): string;\n"
+        "}\n"
+        "type User {\n"
+        "    pr let secret: string;\n"
+        "}\n"
+        "fit User: Tagged {\n"
+        "    fn tag_of(other: User): string {\n"
+        "        return other.secret;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_priv_other_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "fit body cannot access private member 'secret' of target type 'User'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_body_rejects_object_literal_private_field(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Builder {\n"
+        "    fn make(): User;\n"
+        "}\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "    pr let secret: string;\n"
+        "}\n"
+        "fit User: Builder {\n"
+        "    fn make(): User {\n"
+        "        return User { name: \"a\", secret: \"b\" };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_priv_object_lit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "object literal field 'secret' is not accessible for type 'User'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_body_allows_public_member_access(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "    pr let secret: string;\n"
+        "    fn shout(): string { return self.name; }\n"
+        "}\n"
+        "fit User: Named {\n"
+        "    fn greet(): string {\n"
+        "        return self.shout();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_pub_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_spec_at_type_position_accepts_satisfying_type(void) {
     const char *source =
         "mod demo.main;\n"
@@ -5639,6 +5780,11 @@ int main(void) {
     test_local_fit_emits_no_orphan_info();
     test_fit_method_callable_on_instance();
     test_fit_method_unknown_member_still_rejected();
+    test_fit_body_rejects_self_private_field_access();
+    test_fit_body_rejects_self_private_method_access();
+    test_fit_body_rejects_other_param_private_field_access();
+    test_fit_body_rejects_object_literal_private_field();
+    test_fit_body_allows_public_member_access();
     test_spec_at_type_position_accepts_satisfying_type();
     test_spec_at_type_position_rejects_unrelated_type();
     test_spec_at_type_position_accepts_via_fit();
