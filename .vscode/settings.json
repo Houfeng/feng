@@ -3,6 +3,7 @@
     "cdecl",
     "fastcall",
     "feng",
+    "finalizer",
     "libc",
     "libname",
     "venv"
