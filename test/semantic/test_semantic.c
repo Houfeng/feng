@@ -2865,6 +2865,114 @@ static void test_binary_and_rejects_non_bool_operands(void) {
     feng_program_free(program);
 }
 
+static void test_bitwise_ops_accept_same_integer_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: i32, b: i32) {\n"
+        "    let c = a & b;\n"
+        "    let d = a | b;\n"
+        "    let e = a ^ b;\n"
+        "    let f = a << b;\n"
+        "    let g = a >> b;\n"
+        "    let h = ~a;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("bitwise_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_bitwise_and_rejects_mismatched_integer_types(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: i32, b: i64) {\n"
+        "    let c = a & b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("bitwise_and_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '&' requires operands of the same integer type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_bitwise_or_rejects_non_integer_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: f32, b: f32) {\n"
+        "    let c = a | b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("bitwise_or_float.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '|' requires operands of the same integer type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_tilde_rejects_non_integer_operand(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(x: f32) {\n"
+        "    ~x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_tilde_float.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "unary operator '~' requires an integer operand") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_shift_amount_out_of_range_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: i32) {\n"
+        "    let b = a << 32;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("shift_out_of_range.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "shift amount") != NULL);
+    ASSERT(strstr(errors[0].message, "out of range") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_if_expression_rejects_non_bool_condition(void) {
     const char *source =
         "mod demo.main;\n"
@@ -5116,6 +5224,11 @@ int main(void) {
     test_unary_not_rejects_non_bool_operand();
     test_binary_plus_rejects_non_matching_operands();
     test_binary_and_rejects_non_bool_operands();
+    test_bitwise_ops_accept_same_integer_type();
+    test_bitwise_and_rejects_mismatched_integer_types();
+    test_bitwise_or_rejects_non_integer_operand();
+    test_unary_tilde_rejects_non_integer_operand();
+    test_shift_amount_out_of_range_rejected();
     test_if_expression_rejects_non_bool_condition();
     test_if_expression_requires_matching_branch_types();
     test_valid_unary_binary_and_if_expressions_pass();

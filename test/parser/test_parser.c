@@ -526,6 +526,57 @@ static void test_parse_error_direct_finalizer_call(void) {
     ASSERT(strstr(error.message, "finalizer cannot be invoked directly via '.~'") != NULL);
 }
 
+static void test_bitwise_expr_parsing(void) {
+    /* Expected precedence: a | b ^ c & d == e << f   (shift > equality > & > ^ > |) */
+    const char *source =
+        "mod demo.bits;\n"
+        "fn f(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32): bool {\n"
+        "    return a | b ^ c & d == e << f;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengExpr *ret;
+    const FengExpr *or_rhs;
+    const FengExpr *xor_rhs;
+    const FengExpr *and_rhs;
+    const FengExpr *eq_rhs;
+
+    ASSERT(feng_parse_source(source, strlen(source), "bits.f", &program, &error));
+    ASSERT(program != NULL);
+    ret = program->declarations[0]->as.function_decl.body->statements[0]->as.return_value;
+    ASSERT(ret->kind == FENG_EXPR_BINARY);
+    ASSERT(ret->as.binary.op == FENG_TOKEN_PIPE);
+    ASSERT(ret->as.binary.left->kind == FENG_EXPR_IDENTIFIER);
+    or_rhs = ret->as.binary.right;
+    ASSERT(or_rhs->kind == FENG_EXPR_BINARY && or_rhs->as.binary.op == FENG_TOKEN_CARET);
+    xor_rhs = or_rhs->as.binary.right;
+    ASSERT(xor_rhs->kind == FENG_EXPR_BINARY && xor_rhs->as.binary.op == FENG_TOKEN_AMP);
+    and_rhs = xor_rhs->as.binary.right;
+    ASSERT(and_rhs->kind == FENG_EXPR_BINARY && and_rhs->as.binary.op == FENG_TOKEN_EQ);
+    eq_rhs = and_rhs->as.binary.right;
+    ASSERT(eq_rhs->kind == FENG_EXPR_BINARY && eq_rhs->as.binary.op == FENG_TOKEN_SHL);
+
+    feng_program_free(program);
+}
+
+static void test_tilde_unary_parsing(void) {
+    const char *source =
+        "mod demo.bits;\n"
+        "fn f(a: i32): i32 {\n"
+        "    return ~a;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengExpr *ret;
+
+    ASSERT(feng_parse_source(source, strlen(source), "tilde.f", &program, &error));
+    ASSERT(program != NULL);
+    ret = program->declarations[0]->as.function_decl.body->statements[0]->as.return_value;
+    ASSERT(ret->kind == FENG_EXPR_UNARY);
+    ASSERT(ret->as.unary.op == FENG_TOKEN_TILDE);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -553,6 +604,8 @@ int main(void) {
     test_parse_error_finalizer_with_non_void_return();
     test_parse_error_finalizer_name_mismatch();
     test_parse_error_direct_finalizer_call();
+    test_bitwise_expr_parsing();
+    test_tilde_unary_parsing();
     puts("parser tests passed");
     return 0;
 }

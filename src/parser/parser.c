@@ -1987,7 +1987,9 @@ static FengExpr *parse_postfix(Parser *parser) {
 }
 
 static FengExpr *parse_unary(Parser *parser) {
-    if (parser_match(parser, FENG_TOKEN_NOT) || parser_match(parser, FENG_TOKEN_MINUS)) {
+    if (parser_match(parser, FENG_TOKEN_NOT) ||
+        parser_match(parser, FENG_TOKEN_MINUS) ||
+        parser_match(parser, FENG_TOKEN_TILDE)) {
         FengExpr *expr = new_expr(parser, FENG_EXPR_UNARY, parser_previous_token(parser));
 
         if (expr == NULL) {
@@ -2056,9 +2058,14 @@ static FengExpr *parse_additive(Parser *parser) {
     return parse_binary_series(parser, parse_multiplicative, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
+static FengExpr *parse_shift(Parser *parser) {
+    static const FengTokenKind operators[] = {FENG_TOKEN_SHL, FENG_TOKEN_SHR};
+    return parse_binary_series(parser, parse_additive, operators, sizeof(operators) / sizeof(operators[0]));
+}
+
 static FengExpr *parse_comparison(Parser *parser) {
     static const FengTokenKind operators[] = {FENG_TOKEN_LT, FENG_TOKEN_LE, FENG_TOKEN_GT, FENG_TOKEN_GE};
-    return parse_binary_series(parser, parse_additive, operators, sizeof(operators) / sizeof(operators[0]));
+    return parse_binary_series(parser, parse_shift, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
 static FengExpr *parse_equality(Parser *parser) {
@@ -2066,9 +2073,24 @@ static FengExpr *parse_equality(Parser *parser) {
     return parse_binary_series(parser, parse_comparison, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
+static FengExpr *parse_bit_and(Parser *parser) {
+    static const FengTokenKind operators[] = {FENG_TOKEN_AMP};
+    return parse_binary_series(parser, parse_equality, operators, sizeof(operators) / sizeof(operators[0]));
+}
+
+static FengExpr *parse_bit_xor(Parser *parser) {
+    static const FengTokenKind operators[] = {FENG_TOKEN_CARET};
+    return parse_binary_series(parser, parse_bit_and, operators, sizeof(operators) / sizeof(operators[0]));
+}
+
+static FengExpr *parse_bit_or(Parser *parser) {
+    static const FengTokenKind operators[] = {FENG_TOKEN_PIPE};
+    return parse_binary_series(parser, parse_bit_xor, operators, sizeof(operators) / sizeof(operators[0]));
+}
+
 static FengExpr *parse_and(Parser *parser) {
     static const FengTokenKind operators[] = {FENG_TOKEN_AND_AND};
-    return parse_binary_series(parser, parse_equality, operators, sizeof(operators) / sizeof(operators[0]));
+    return parse_binary_series(parser, parse_bit_or, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
 static FengExpr *parse_or(Parser *parser) {

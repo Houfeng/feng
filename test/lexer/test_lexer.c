@@ -307,6 +307,85 @@ static void test_error_tokens(void) {
     ASSERT(strstr(token.message, "numeric") != NULL);
 }
 
+static void test_bitwise_tokens(void) {
+    FengLexer lexer;
+    const char *source = "a & b | c ^ d << 1 >> 2 ~e";
+
+    feng_lexer_init(&lexer, source, strlen(source), "bitwise.f");
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_AMP);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_PIPE);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_CARET);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_SHL);
+    next_token(&lexer, FENG_TOKEN_INTEGER);
+    next_token(&lexer, FENG_TOKEN_SHR);
+    next_token(&lexer, FENG_TOKEN_INTEGER);
+    next_token(&lexer, FENG_TOKEN_TILDE);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_EOF);
+}
+
+static void test_numeric_literal_bases_and_separators(void) {
+    FengLexer lexer;
+    FengToken token;
+    const char *source =
+        "255 0xFF 0xab 0x_bad 0b1111_1111 0o377 1_000_000 3.14 1.5e3 2.0e-4 1E2";
+
+    feng_lexer_init(&lexer, source, strlen(source), "numbers.f");
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 255);
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 0xFF);
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 0xAB);
+
+    /* 0x_bad: '_' immediately after prefix -> error */
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "numeric") != NULL);
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 0xFF);
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 255);
+
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    ASSERT(token.value.integer == 1000000);
+
+    token = next_token(&lexer, FENG_TOKEN_FLOAT);
+    ASSERT(token.value.floating == 3.14);
+
+    token = next_token(&lexer, FENG_TOKEN_FLOAT);
+    ASSERT(token.value.floating == 1500.0);
+
+    token = next_token(&lexer, FENG_TOKEN_FLOAT);
+    ASSERT(token.value.floating == 2.0e-4);
+
+    token = next_token(&lexer, FENG_TOKEN_FLOAT);
+    ASSERT(token.value.floating == 100.0);
+
+    next_token(&lexer, FENG_TOKEN_EOF);
+}
+
+static void test_numeric_literal_rejects_trailing_underscore(void) {
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, "1_", 2U, "trailing_underscore.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "numeric") != NULL);
+
+    feng_lexer_init(&lexer, "0x_", 3U, "prefix_underscore.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "numeric") != NULL);
+}
+
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
@@ -315,6 +394,9 @@ int main(void) {
     test_literals_and_arrow();
     test_comments_crlf_and_custom_annotations();
     test_error_tokens();
+    test_bitwise_tokens();
+    test_numeric_literal_bases_and_separators();
+    test_numeric_literal_rejects_trailing_underscore();
 
     puts("lexer tests passed");
     return 0;

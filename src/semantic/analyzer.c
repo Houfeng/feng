@@ -1596,6 +1596,7 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
+static bool extract_constant_integer_literal(const FengExpr *expr, int64_t *out_value);
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
@@ -2027,6 +2028,8 @@ static const char *format_operator_name(FengTokenKind kind) {
             return "%";
         case FENG_TOKEN_NOT:
             return "!";
+        case FENG_TOKEN_TILDE:
+            return "~";
         case FENG_TOKEN_LT:
             return "<";
         case FENG_TOKEN_LE:
@@ -2043,6 +2046,16 @@ static const char *format_operator_name(FengTokenKind kind) {
             return "&&";
         case FENG_TOKEN_OR_OR:
             return "||";
+        case FENG_TOKEN_AMP:
+            return "&";
+        case FENG_TOKEN_PIPE:
+            return "|";
+        case FENG_TOKEN_CARET:
+            return "^";
+        case FENG_TOKEN_SHL:
+            return "<<";
+        case FENG_TOKEN_SHR:
+            return ">>";
         default:
             return "?";
     }
@@ -2055,6 +2068,9 @@ static bool unary_expr_type_is_valid(FengTokenKind op, InferredExprType operand_
 
         case FENG_TOKEN_NOT:
             return inferred_expr_type_is_bool(operand_type);
+
+        case FENG_TOKEN_TILDE:
+            return inferred_expr_type_is_integer(operand_type);
 
         default:
             return false;
@@ -2094,6 +2110,14 @@ static bool binary_expr_types_are_valid(ResolveContext *context,
         case FENG_TOKEN_OR_OR:
             return inferred_expr_type_is_bool(left_type) && inferred_expr_type_is_bool(right_type);
 
+        case FENG_TOKEN_AMP:
+        case FENG_TOKEN_PIPE:
+        case FENG_TOKEN_CARET:
+        case FENG_TOKEN_SHL:
+        case FENG_TOKEN_SHR:
+            return inferred_expr_types_equal(context, left_type, right_type) &&
+                   inferred_expr_type_is_integer(left_type);
+
         default:
             return false;
     }
@@ -2112,13 +2136,46 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
 
     operator_name = format_operator_name(expr->as.unary.op);
     operand_type_name = format_inferred_expr_type_name(operand_type);
-    message = format_message(expr->as.unary.op == FENG_TOKEN_MINUS
-                                 ? "unary operator '%s' requires a numeric operand, got '%s'"
-                                 : "unary operator '%s' requires a bool operand, got '%s'",
-                             operator_name,
-                             operand_type_name != NULL ? operand_type_name : "<unknown>");
+    {
+        const char *fmt;
+
+        switch (expr->as.unary.op) {
+            case FENG_TOKEN_MINUS:
+                fmt = "unary operator '%s' requires a numeric operand, got '%s'";
+                break;
+            case FENG_TOKEN_TILDE:
+                fmt = "unary operator '%s' requires an integer operand, got '%s'";
+                break;
+            case FENG_TOKEN_NOT:
+            default:
+                fmt = "unary operator '%s' requires a bool operand, got '%s'";
+                break;
+        }
+        message = format_message(fmt,
+                                 operator_name,
+                                 operand_type_name != NULL ? operand_type_name : "<unknown>");
+    }
     free(operand_type_name);
     return resolver_append_error(context, expr->token, message);
+}
+
+static int canonical_integer_bit_width(const char *canonical_name) {
+    if (canonical_name == NULL) {
+        return 0;
+    }
+    if (strcmp(canonical_name, "i8") == 0 || strcmp(canonical_name, "u8") == 0) {
+        return 8;
+    }
+    if (strcmp(canonical_name, "i16") == 0 || strcmp(canonical_name, "u16") == 0) {
+        return 16;
+    }
+    if (strcmp(canonical_name, "i32") == 0 || strcmp(canonical_name, "u32") == 0) {
+        return 32;
+    }
+    if (strcmp(canonical_name, "i64") == 0 || strcmp(canonical_name, "u64") == 0) {
+        return 64;
+    }
+    return 0;
 }
 
 static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
@@ -2130,6 +2187,26 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
     char *message;
 
     if (binary_expr_types_are_valid(context, expr->as.binary.op, left_type, right_type)) {
+        if (expr->as.binary.op == FENG_TOKEN_SHL || expr->as.binary.op == FENG_TOKEN_SHR) {
+            int64_t shift_amount;
+
+            if (extract_constant_integer_literal(expr->as.binary.right, &shift_amount)) {
+                int bit_width = canonical_integer_bit_width(
+                    inferred_expr_type_builtin_canonical_name(left_type));
+
+                if (bit_width > 0 && (shift_amount < 0 || shift_amount >= (int64_t)bit_width)) {
+                    char *lt_name = format_inferred_expr_type_name(left_type);
+                    char *msg = format_message(
+                        "shift amount %lld is out of range for type '%s' (must be in [0, %d))",
+                        (long long)shift_amount,
+                        lt_name != NULL ? lt_name : "<unknown>",
+                        bit_width);
+
+                    free(lt_name);
+                    return resolver_append_error(context, expr->token, msg);
+                }
+            }
+        }
         return true;
     }
 
@@ -2174,6 +2251,18 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
                                      operator_name,
                                      left_type_name != NULL ? left_type_name : "<unknown>",
                                      right_type_name != NULL ? right_type_name : "<unknown>");
+            break;
+
+        case FENG_TOKEN_AMP:
+        case FENG_TOKEN_PIPE:
+        case FENG_TOKEN_CARET:
+        case FENG_TOKEN_SHL:
+        case FENG_TOKEN_SHR:
+            message = format_message(
+                "binary operator '%s' requires operands of the same integer type, got '%s' and '%s'",
+                operator_name,
+                left_type_name != NULL ? left_type_name : "<unknown>",
+                right_type_name != NULL ? right_type_name : "<unknown>");
             break;
 
         default:
@@ -5025,6 +5114,17 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                     if (inferred_expr_type_is_bool(left_type) &&
                         inferred_expr_type_is_bool(right_type)) {
                         return inferred_expr_type_builtin("bool");
+                    }
+                    return inferred_expr_type_unknown();
+
+                case FENG_TOKEN_AMP:
+                case FENG_TOKEN_PIPE:
+                case FENG_TOKEN_CARET:
+                case FENG_TOKEN_SHL:
+                case FENG_TOKEN_SHR:
+                    if (inferred_expr_types_equal(context, left_type, right_type) &&
+                        inferred_expr_type_is_integer(left_type)) {
+                        return left_type;
                     }
                     return inferred_expr_type_unknown();
 

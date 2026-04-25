@@ -65,6 +65,38 @@ static bool is_ascii_digit(char c) {
     return c >= '0' && c <= '9';
 }
 
+static bool is_hex_digit(char c) {
+    return is_ascii_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static bool is_binary_digit(char c) {
+    return c == '0' || c == '1';
+}
+
+static bool is_octal_digit(char c) {
+    return c >= '0' && c <= '7';
+}
+
+static bool is_digit_of_base(char c, int base) {
+    switch (base) {
+        case 2:
+            return is_binary_digit(c);
+        case 8:
+            return is_octal_digit(c);
+        case 16:
+            return is_hex_digit(c);
+        default:
+            return is_ascii_digit(c);
+    }
+}
+
+static int hex_digit_value(char c) {
+    if (c >= '0' && c <= '9') return (int)(c - '0');
+    if (c >= 'a' && c <= 'f') return 10 + (int)(c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (int)(c - 'A');
+    return 0;
+}
+
 static bool is_identifier_start(char c) {
     return is_ascii_alpha(c) || c == '_';
 }
@@ -110,10 +142,29 @@ static FengToken make_error(FengLexer *lexer,
 
 static int64_t parse_integer_slice(const char *text, size_t length) {
     int64_t value = 0;
-    size_t index;
+    size_t index = 0;
+    int base = 10;
 
-    for (index = 0; index < length; ++index) {
-        value = (value * 10) + (int64_t)(text[index] - '0');
+    if (length >= 2 && text[0] == '0') {
+        char p = text[1];
+        if (p == 'x' || p == 'X') {
+            base = 16;
+            index = 2;
+        } else if (p == 'b' || p == 'B') {
+            base = 2;
+            index = 2;
+        } else if (p == 'o' || p == 'O') {
+            base = 8;
+            index = 2;
+        }
+    }
+
+    for (; index < length; ++index) {
+        char c = text[index];
+        if (c == '_') {
+            continue;
+        }
+        value = (value * (int64_t)base) + (int64_t)hex_digit_value(c);
     }
 
     return value;
@@ -123,6 +174,8 @@ static double parse_float_slice(const char *text, size_t length) {
     char stack_buffer[128];
     char *buffer = stack_buffer;
     double value;
+    size_t src_index;
+    size_t dst_index = 0;
 
     if (length + 1U > sizeof(stack_buffer)) {
         buffer = (char *)malloc(length + 1U);
@@ -131,8 +184,13 @@ static double parse_float_slice(const char *text, size_t length) {
         }
     }
 
-    memcpy(buffer, text, length);
-    buffer[length] = '\0';
+    for (src_index = 0; src_index < length; ++src_index) {
+        char c = text[src_index];
+        if (c != '_') {
+            buffer[dst_index++] = c;
+        }
+    }
+    buffer[dst_index] = '\0';
     value = strtod(buffer, NULL);
 
     if (buffer != stack_buffer) {
@@ -277,22 +335,107 @@ static FengToken scan_annotation(FengLexer *lexer,
     return token;
 }
 
+static void consume_digit_run(FengLexer *lexer, int base) {
+    /* Consume digits, allowing `_` only strictly between two digits. The caller
+     * is responsible for guaranteeing the first character consumed before the
+     * run is a digit, and for checking "at least one digit follows a prefix".
+     * A trailing underscore is not consumed here, so lexeme never ends in `_`. */
+    while (true) {
+        char c = lexer_peek_raw(lexer, 0);
+        if (is_digit_of_base(c, base)) {
+            (void)lexer_advance(lexer);
+            continue;
+        }
+        if (c == '_' && is_digit_of_base(lexer_peek_raw(lexer, 1), base)) {
+            (void)lexer_advance(lexer); /* the '_' */
+            (void)lexer_advance(lexer); /* next digit */
+            continue;
+        }
+        break;
+    }
+}
+
 static FengToken scan_number(FengLexer *lexer,
                              size_t start_offset,
                              unsigned int start_line,
                              unsigned int start_column) {
     FengToken token;
     bool is_float = false;
+    int base = 10;
+    char first = lexer->source[start_offset];
 
-    while (is_ascii_digit(lexer_peek_raw(lexer, 0))) {
-        (void)lexer_advance(lexer);
+    if (first == '0') {
+        char prefix = lexer_peek_raw(lexer, 0);
+
+        if (prefix == 'x' || prefix == 'X') {
+            base = 16;
+            (void)lexer_advance(lexer);
+            if (!is_hex_digit(lexer_peek_raw(lexer, 0))) {
+                while (is_identifier_continue(lexer_peek_raw(lexer, 0))) {
+                    (void)lexer_advance(lexer);
+                }
+                return make_error(lexer, start_offset, start_line, start_column,
+                                  "invalid numeric literal");
+            }
+            (void)lexer_advance(lexer);
+            consume_digit_run(lexer, 16);
+        } else if (prefix == 'b' || prefix == 'B') {
+            base = 2;
+            (void)lexer_advance(lexer);
+            if (!is_binary_digit(lexer_peek_raw(lexer, 0))) {
+                while (is_identifier_continue(lexer_peek_raw(lexer, 0))) {
+                    (void)lexer_advance(lexer);
+                }
+                return make_error(lexer, start_offset, start_line, start_column,
+                                  "invalid numeric literal");
+            }
+            (void)lexer_advance(lexer);
+            consume_digit_run(lexer, 2);
+        } else if (prefix == 'o' || prefix == 'O') {
+            base = 8;
+            (void)lexer_advance(lexer);
+            if (!is_octal_digit(lexer_peek_raw(lexer, 0))) {
+                while (is_identifier_continue(lexer_peek_raw(lexer, 0))) {
+                    (void)lexer_advance(lexer);
+                }
+                return make_error(lexer, start_offset, start_line, start_column,
+                                  "invalid numeric literal");
+            }
+            (void)lexer_advance(lexer);
+            consume_digit_run(lexer, 8);
+        } else {
+            consume_digit_run(lexer, 10);
+        }
+    } else {
+        consume_digit_run(lexer, 10);
     }
 
-    if (lexer_peek_raw(lexer, 0) == '.' && is_ascii_digit(lexer_peek_raw(lexer, 1))) {
-        is_float = true;
-        (void)lexer_advance(lexer);
-        while (is_ascii_digit(lexer_peek_raw(lexer, 0))) {
-            (void)lexer_advance(lexer);
+    if (base == 10) {
+        if (lexer_peek_raw(lexer, 0) == '.' && is_ascii_digit(lexer_peek_raw(lexer, 1))) {
+            is_float = true;
+            (void)lexer_advance(lexer); /* '.' */
+            (void)lexer_advance(lexer); /* first fractional digit */
+            consume_digit_run(lexer, 10);
+        }
+
+        {
+            char exp_marker = lexer_peek_raw(lexer, 0);
+            if (exp_marker == 'e' || exp_marker == 'E') {
+                char after_marker = lexer_peek_raw(lexer, 1);
+                char after_sign = (after_marker == '+' || after_marker == '-')
+                                      ? lexer_peek_raw(lexer, 2)
+                                      : after_marker;
+
+                if (is_ascii_digit(after_sign)) {
+                    is_float = true;
+                    (void)lexer_advance(lexer); /* 'e'/'E' */
+                    if (after_marker == '+' || after_marker == '-') {
+                        (void)lexer_advance(lexer);
+                    }
+                    (void)lexer_advance(lexer); /* first exponent digit */
+                    consume_digit_run(lexer, 10);
+                }
+            }
         }
     }
 
@@ -464,32 +607,30 @@ static FengToken scan_token_internal(FengLexer *lexer) {
             if (lexer_match(lexer, '=')) {
                 return make_token(lexer, FENG_TOKEN_LE, start_offset, start_line, start_column);
             }
+            if (lexer_match(lexer, '<')) {
+                return make_token(lexer, FENG_TOKEN_SHL, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_LT, start_offset, start_line, start_column);
         case '>':
             if (lexer_match(lexer, '=')) {
                 return make_token(lexer, FENG_TOKEN_GE, start_offset, start_line, start_column);
+            }
+            if (lexer_match(lexer, '>')) {
+                return make_token(lexer, FENG_TOKEN_SHR, start_offset, start_line, start_column);
             }
             return make_token(lexer, FENG_TOKEN_GT, start_offset, start_line, start_column);
         case '&':
             if (lexer_match(lexer, '&')) {
                 return make_token(lexer, FENG_TOKEN_AND_AND, start_offset, start_line, start_column);
             }
-            return make_error(lexer,
-                              start_offset,
-                              start_line,
-                              start_column,
-                              "unexpected character '&'"
-            );
+            return make_token(lexer, FENG_TOKEN_AMP, start_offset, start_line, start_column);
         case '|':
             if (lexer_match(lexer, '|')) {
                 return make_token(lexer, FENG_TOKEN_OR_OR, start_offset, start_line, start_column);
             }
-            return make_error(lexer,
-                              start_offset,
-                              start_line,
-                              start_column,
-                              "unexpected character '|'"
-            );
+            return make_token(lexer, FENG_TOKEN_PIPE, start_offset, start_line, start_column);
+        case '^':
+            return make_token(lexer, FENG_TOKEN_CARET, start_offset, start_line, start_column);
         default:
             return make_error(lexer,
                               start_offset,

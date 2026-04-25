@@ -93,6 +93,16 @@ const char *feng_token_kind_name(FengTokenKind kind) {
             return "AND_AND";
         case FENG_TOKEN_OR_OR:
             return "OR_OR";
+        case FENG_TOKEN_AMP:
+            return "AMP";
+        case FENG_TOKEN_PIPE:
+            return "PIPE";
+        case FENG_TOKEN_CARET:
+            return "CARET";
+        case FENG_TOKEN_SHL:
+            return "SHL";
+        case FENG_TOKEN_SHR:
+            return "SHR";
         case FENG_TOKEN_ARROW:
             return "ARROW";
         case FENG_TOKEN_TILDE:
