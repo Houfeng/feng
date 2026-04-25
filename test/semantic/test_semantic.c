@@ -2684,6 +2684,149 @@ static void test_cast_rejects_array_to_numeric(void) {
     feng_program_free(program);
 }
 
+static void test_cast_rejects_numeric_to_string(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let s: string = (string)1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_numeric_to_string_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'string' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_numeric_to_array(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let xs: int[] = (int[])1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_numeric_to_array_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'int[]' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_string_to_bool(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let b: bool = (bool)\"x\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_string_to_bool_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'string' to 'bool' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_bool_to_string(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let s: string = (string)true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_bool_to_string_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'bool' to 'string' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_numeric_to_object(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Point { var x: int; var y: int; }\n"
+        "fn run() {\n"
+        "    let p: Point = (Point)1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_numeric_to_object_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'Point' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_rejects_object_to_numeric(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Point { var x: int; var y: int; }\n"
+        "fn run(p: Point) {\n"
+        "    let v: int = (int)p;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_object_to_numeric_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from 'Point' to 'int' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cast_same_type_passes(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let i: int = (int)1;\n"
+        "    let s: string = (string)\"x\";\n"
+        "    let b: bool = (bool)true;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_same_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_index_expression_rejects_float_operand(void) {
     const char *source =
         "mod demo.main;\n"
@@ -2968,6 +3111,184 @@ static void test_shift_amount_out_of_range_rejected(void) {
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "shift amount") != NULL);
     ASSERT(strstr(errors[0].message, "out of range") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_arithmetic_fits_narrow_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: u8 = 100 + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_fit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_const_fold_arithmetic_overflows_narrow_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: u8 = 200 + 100;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_overflow_target.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_division_by_zero_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: int = 1 / 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_div_zero.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "division by zero") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_modulo_by_zero_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: int = 1 % 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_mod_zero.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "modulo by zero") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_i64_overflow_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: i64 = 9223372036854775807 + 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_i64_overflow.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "integer overflow") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_shift_amount_via_const_expr(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: i32) {\n"
+        "    let b = a << (16 + 16);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_shift_const_expr.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "shift amount 32") != NULL);
+    ASSERT(strstr(errors[0].message, "out of range for type 'i32'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_cast_truncation_then_target_check(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: u8 = (u8)(255 + 1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_cast_trunc.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_const_fold_propagates_immutable_local_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let n: int = 100;\n"
+        "    let x: u8 = n + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_let_prop.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_const_fold_does_not_propagate_var_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var n: int = 100;\n"
+        "    let x: u8 = n + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_var_no_prop.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5216,6 +5537,13 @@ int main(void) {
     test_cast_rejects_numeric_to_bool();
     test_cast_rejects_string_to_numeric();
     test_cast_rejects_array_to_numeric();
+    test_cast_rejects_numeric_to_string();
+    test_cast_rejects_numeric_to_array();
+    test_cast_rejects_string_to_bool();
+    test_cast_rejects_bool_to_string();
+    test_cast_rejects_numeric_to_object();
+    test_cast_rejects_object_to_numeric();
+    test_cast_same_type_passes();
     test_index_expression_rejects_float_operand();
     test_index_expression_rejects_bool_operand();
     test_index_expression_rejects_non_array_target();
@@ -5229,6 +5557,15 @@ int main(void) {
     test_bitwise_or_rejects_non_integer_operand();
     test_unary_tilde_rejects_non_integer_operand();
     test_shift_amount_out_of_range_rejected();
+    test_const_fold_arithmetic_fits_narrow_target();
+    test_const_fold_arithmetic_overflows_narrow_target();
+    test_const_fold_division_by_zero_rejected();
+    test_const_fold_modulo_by_zero_rejected();
+    test_const_fold_i64_overflow_rejected();
+    test_const_fold_shift_amount_via_const_expr();
+    test_const_fold_cast_truncation_then_target_check();
+    test_const_fold_propagates_immutable_local_binding();
+    test_const_fold_does_not_propagate_var_binding();
     test_if_expression_rejects_non_bool_condition();
     test_if_expression_requires_matching_branch_types();
     test_valid_unary_binary_and_if_expressions_pass();

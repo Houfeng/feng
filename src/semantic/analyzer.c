@@ -79,6 +79,30 @@ typedef struct LocalNameEntry {
     const FengExpr *source_expr;
 } LocalNameEntry;
 
+/* Compile-time constant evaluation result. Used by evaluate_constant_expr to model the
+ * limited set of values producible by Feng's constant-folder. INT carries arbitrary i64;
+ * FLOAT carries IEEE 754 double; BOOL carries a flag. */
+typedef enum FengConstKind {
+    FENG_CONST_NONE = 0,
+    FENG_CONST_INT,
+    FENG_CONST_FLOAT,
+    FENG_CONST_BOOL
+} FengConstKind;
+
+typedef struct FengConstValue {
+    FengConstKind kind;
+    int64_t i;
+    double f;
+    bool b;
+} FengConstValue;
+
+/* Linked-list guard threaded through evaluate_constant_expr_inner to detect identifier
+ * cycles such as `let a = b; let b = a;` without resorting to global state. */
+typedef struct ConstEvalGuard {
+    const FengExpr *expr;
+    struct ConstEvalGuard *prev;
+} ConstEvalGuard;
+
 typedef struct ScopeFrame {
     LocalNameEntry *locals;
     size_t local_count;
@@ -1596,7 +1620,9 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
-static bool extract_constant_integer_literal(const FengExpr *expr, int64_t *out_value);
+static bool evaluate_constant_expr(ResolveContext *context,
+                                   const FengExpr *expr,
+                                   FengConstValue *out);
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
@@ -2188,9 +2214,11 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
 
     if (binary_expr_types_are_valid(context, expr->as.binary.op, left_type, right_type)) {
         if (expr->as.binary.op == FENG_TOKEN_SHL || expr->as.binary.op == FENG_TOKEN_SHR) {
-            int64_t shift_amount;
+            FengConstValue shift_value;
 
-            if (extract_constant_integer_literal(expr->as.binary.right, &shift_amount)) {
+            if (evaluate_constant_expr(context, expr->as.binary.right, &shift_value) &&
+                shift_value.kind == FENG_CONST_INT) {
+                int64_t shift_amount = shift_value.i;
                 int bit_width = canonical_integer_bit_width(
                     inferred_expr_type_builtin_canonical_name(left_type));
 
@@ -2205,6 +2233,23 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
                     free(lt_name);
                     return resolver_append_error(context, expr->token, msg);
                 }
+            }
+        }
+        if ((expr->as.binary.op == FENG_TOKEN_SLASH ||
+             expr->as.binary.op == FENG_TOKEN_PERCENT) &&
+            inferred_expr_type_is_integer(left_type) &&
+            inferred_expr_type_is_integer(right_type)) {
+            FengConstValue rhs_value;
+
+            if (evaluate_constant_expr(context, expr->as.binary.right, &rhs_value) &&
+                rhs_value.kind == FENG_CONST_INT && rhs_value.i == 0) {
+                const char *kind_word =
+                    expr->as.binary.op == FENG_TOKEN_SLASH ? "division" : "modulo";
+                char *msg = format_message(
+                    "%s by zero in compile-time '%s' expression",
+                    kind_word,
+                    format_operator_name(expr->as.binary.op));
+                return resolver_append_error(context, expr->token, msg);
             }
         }
         return true;
@@ -5397,40 +5442,6 @@ static bool expr_matches_expected_type_ref_when_inference_unknown(
     return true;
 }
 
-/* Walk a (possibly negated) integer literal expression and yield its compile-time value.
- * Supports `123` and `-123` only; INT64_MIN negation is handled via uint64_t arithmetic to
- * avoid signed overflow UB. Returns false for any non-constant or non-integer-literal form. */
-static bool extract_constant_integer_literal(const FengExpr *expr, int64_t *out_value) {
-    if (expr == NULL || out_value == NULL) {
-        return false;
-    }
-    if (expr->kind == FENG_EXPR_INTEGER) {
-        *out_value = expr->as.integer;
-        return true;
-    }
-    if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_MINUS &&
-        expr->as.unary.operand != NULL && expr->as.unary.operand->kind == FENG_EXPR_INTEGER) {
-        uint64_t magnitude = (uint64_t)expr->as.unary.operand->as.integer;
-        *out_value = (int64_t)(0U - magnitude);
-        return true;
-    }
-    return false;
-}
-
-static bool expr_is_floating_literal(const FengExpr *expr) {
-    if (expr == NULL) {
-        return false;
-    }
-    if (expr->kind == FENG_EXPR_FLOAT) {
-        return true;
-    }
-    if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_MINUS &&
-        expr->as.unary.operand != NULL && expr->as.unary.operand->kind == FENG_EXPR_FLOAT) {
-        return true;
-    }
-    return false;
-}
-
 /* Compile-time range check for an integer literal against a canonical integer target.
  * Per docs/feng-builtin-type.md §17: literals that overflow the target are compile errors. */
 static bool integer_literal_fits_canonical_target(int64_t value, const char *canonical_target) {
@@ -5464,35 +5475,462 @@ static bool integer_literal_fits_canonical_target(int64_t value, const char *can
     return false;
 }
 
-/* Numeric literal adaptation: an integer/float literal may be implicitly retyped to any
- * compatible numeric target type, subject to compile-time range checks. This realises the
- * "如需其他精度或宽度，必须显式标注类型" contract from docs/feng-builtin-type.md §16-§17,
- * where the explicit annotation drives the literal's effective type. */
-static bool numeric_literal_adapts_to_target(const FengExpr *expr, const FengTypeRef *target) {
-    const char *canonical_target = type_ref_builtin_canonical_name(target);
-    int64_t int_value;
+/* ---------------------------------------------------------------------------
+ * Compile-time constant evaluation (per docs/feng-expression.md §3.x and §6.x)
+ *
+ * Folds integer/float/bool literals, unary `-` `~` `!`, binary arithmetic
+ * (`+ - * / %`), bitwise (`& | ^ << >>`), comparisons (`< <= > >= == !=`),
+ * logical (`&& ||`), cast `(T)expr` against numeric targets, and identifier
+ * references that bind immutably to a foldable initializer.
+ *
+ * Diagnostics emitted at compile-time:
+ *   - integer division/modulo by zero
+ *   - integer overflow during + - and * (per i64 semantics; range-narrowing is
+ *     deferred to numeric_literal_adapts_to_target's target-type check)
+ *
+ * Identifier propagation honours immutability: only `let` bindings whose
+ * initializer is itself foldable participate. Cycles are guarded via the
+ * stack-threaded ConstEvalGuard chain.
+ * --------------------------------------------------------------------------- */
 
+static FengConstValue const_int_value(int64_t v) {
+    FengConstValue r;
+    r.kind = FENG_CONST_INT;
+    r.i = v;
+    r.f = 0.0;
+    r.b = false;
+    return r;
+}
+
+static FengConstValue const_float_value(double v) {
+    FengConstValue r;
+    r.kind = FENG_CONST_FLOAT;
+    r.i = 0;
+    r.f = v;
+    r.b = false;
+    return r;
+}
+
+static FengConstValue const_bool_value(bool v) {
+    FengConstValue r;
+    r.kind = FENG_CONST_BOOL;
+    r.i = 0;
+    r.f = 0.0;
+    r.b = v;
+    return r;
+}
+
+/* If either operand is FLOAT, promote the other from INT to FLOAT in-place. */
+static bool promote_const_pair(FengConstValue *a, FengConstValue *b) {
+    if (a->kind == FENG_CONST_FLOAT && b->kind == FENG_CONST_INT) {
+        *b = const_float_value((double)b->i);
+    } else if (b->kind == FENG_CONST_FLOAT && a->kind == FENG_CONST_INT) {
+        *a = const_float_value((double)a->i);
+    }
+    return a->kind == b->kind;
+}
+
+/* Truncate `value` (treated as an unbounded integer) to the target builtin's bit pattern,
+ * mirroring the C-style cast semantics promised by docs/feng-expression.md §3.4
+ * ("整数到更小位宽整数的转换会按目标位宽截断高位"). The result is re-encoded as i64. */
+static int64_t truncate_int_to_canonical(int64_t value, const char *canonical_target) {
     if (canonical_target == NULL) {
-        return false;
+        return value;
     }
-    if (extract_constant_integer_literal(expr, &int_value)) {
-        return integer_literal_fits_canonical_target(int_value, canonical_target);
-    }
-    if (expr_is_floating_literal(expr)) {
-        return strcmp(canonical_target, "f32") == 0 || strcmp(canonical_target, "f64") == 0;
+    uint64_t bits = (uint64_t)value;
+    if (strcmp(canonical_target, "i8") == 0)  return (int64_t)(int8_t)bits;
+    if (strcmp(canonical_target, "i16") == 0) return (int64_t)(int16_t)bits;
+    if (strcmp(canonical_target, "i32") == 0) return (int64_t)(int32_t)bits;
+    if (strcmp(canonical_target, "i64") == 0) return (int64_t)bits;
+    if (strcmp(canonical_target, "u8") == 0)  return (int64_t)(uint64_t)(uint8_t)bits;
+    if (strcmp(canonical_target, "u16") == 0) return (int64_t)(uint64_t)(uint16_t)bits;
+    if (strcmp(canonical_target, "u32") == 0) return (int64_t)(uint64_t)(uint32_t)bits;
+    if (strcmp(canonical_target, "u64") == 0) return (int64_t)bits;
+    return value;
+}
+
+static bool guard_contains(const ConstEvalGuard *g, const FengExpr *expr) {
+    while (g != NULL) {
+        if (g->expr == expr) {
+            return true;
+        }
+        g = g->prev;
     }
     return false;
 }
 
-/* Returns true when `expr` is a constant numeric literal form (integer/float, optionally
- * negated) for which numeric_literal_adapts_to_target encodes the full match decision. */
-static bool expr_is_numeric_literal_constant(const FengExpr *expr) {
-    int64_t unused;
+static bool evaluate_constant_expr_inner(ResolveContext *context,
+                                         const FengExpr *expr,
+                                         FengConstValue *out,
+                                         ConstEvalGuard *guard);
 
-    if (extract_constant_integer_literal(expr, &unused)) {
+/* Resolve `name` to its compile-time foldable value when the binding is immutable and
+ * has an initializer that itself folds. Returns false otherwise. */
+static bool evaluate_constant_identifier(ResolveContext *context,
+                                         FengSlice name,
+                                         FengConstValue *out,
+                                         ConstEvalGuard *guard) {
+    const LocalNameEntry *local = resolver_find_local_name_entry(context, name);
+
+    if (local != NULL) {
+        if (local->mutability != FENG_MUTABILITY_LET || local->source_expr == NULL) {
+            return false;
+        }
+        return evaluate_constant_expr_inner(context, local->source_expr, out, guard);
+    }
+
+    {
+        const VisibleValueEntry *visible =
+            find_visible_value(context->visible_values, context->visible_value_count, name);
+
+        if (visible == NULL || visible->is_function || visible->decl == NULL ||
+            visible->decl->kind != FENG_DECL_GLOBAL_BINDING) {
+            return false;
+        }
+        if (visible->decl->as.binding.mutability != FENG_MUTABILITY_LET ||
+            visible->decl->as.binding.initializer == NULL) {
+            return false;
+        }
+        return evaluate_constant_expr_inner(context,
+                                            visible->decl->as.binding.initializer,
+                                            out,
+                                            guard);
+    }
+}
+
+static bool evaluate_constant_unary(ResolveContext *context,
+                                    const FengExpr *expr,
+                                    FengConstValue *out,
+                                    ConstEvalGuard *guard) {
+    FengConstValue operand;
+
+    if (!evaluate_constant_expr_inner(context, expr->as.unary.operand, &operand, guard)) {
+        return false;
+    }
+
+    switch (expr->as.unary.op) {
+        case FENG_TOKEN_MINUS:
+            if (operand.kind == FENG_CONST_INT) {
+                /* Mirror extract_constant_integer_literal: use unsigned arithmetic to
+                 * avoid signed-overflow UB on INT64_MIN. */
+                *out = const_int_value((int64_t)(0U - (uint64_t)operand.i));
+                return true;
+            }
+            if (operand.kind == FENG_CONST_FLOAT) {
+                *out = const_float_value(-operand.f);
+                return true;
+            }
+            return false;
+        case FENG_TOKEN_TILDE:
+            if (operand.kind != FENG_CONST_INT) return false;
+            *out = const_int_value((int64_t)~(uint64_t)operand.i);
+            return true;
+        case FENG_TOKEN_NOT:
+            if (operand.kind != FENG_CONST_BOOL) return false;
+            *out = const_bool_value(!operand.b);
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Detect i64 overflow on +, -, *. Uses GCC/Clang builtins which both toolchains
+ * targeted by Feng provide. */
+static bool i64_add_overflow(int64_t a, int64_t b, int64_t *out) {
+    return __builtin_add_overflow(a, b, out);
+}
+
+static bool i64_sub_overflow(int64_t a, int64_t b, int64_t *out) {
+    return __builtin_sub_overflow(a, b, out);
+}
+
+static bool i64_mul_overflow(int64_t a, int64_t b, int64_t *out) {
+    return __builtin_mul_overflow(a, b, out);
+}
+
+static bool report_const_eval_error(ResolveContext *context,
+                                    const FengExpr *expr,
+                                    const char *message) {
+    char *copy = format_message("%s", message);
+    return resolver_append_error(context, expr->token, copy);
+}
+
+static bool evaluate_constant_binary(ResolveContext *context,
+                                     const FengExpr *expr,
+                                     FengConstValue *out,
+                                     ConstEvalGuard *guard) {
+    FengConstValue lhs;
+    FengConstValue rhs;
+    FengTokenKind op = expr->as.binary.op;
+
+    if (!evaluate_constant_expr_inner(context, expr->as.binary.left, &lhs, guard)) {
+        return false;
+    }
+    if (!evaluate_constant_expr_inner(context, expr->as.binary.right, &rhs, guard)) {
+        return false;
+    }
+
+    /* Logical operators require BOOL on both sides. */
+    if (op == FENG_TOKEN_AND_AND || op == FENG_TOKEN_OR_OR) {
+        if (lhs.kind != FENG_CONST_BOOL || rhs.kind != FENG_CONST_BOOL) return false;
+        *out = const_bool_value(op == FENG_TOKEN_AND_AND ? (lhs.b && rhs.b) : (lhs.b || rhs.b));
         return true;
     }
-    return expr_is_floating_literal(expr);
+
+    /* Bitwise & shift require INT on both sides. */
+    if (op == FENG_TOKEN_AMP || op == FENG_TOKEN_PIPE || op == FENG_TOKEN_CARET) {
+        if (lhs.kind != FENG_CONST_INT || rhs.kind != FENG_CONST_INT) return false;
+        uint64_t l = (uint64_t)lhs.i;
+        uint64_t r = (uint64_t)rhs.i;
+        uint64_t v = op == FENG_TOKEN_AMP ? (l & r) : op == FENG_TOKEN_PIPE ? (l | r) : (l ^ r);
+        *out = const_int_value((int64_t)v);
+        return true;
+    }
+    if (op == FENG_TOKEN_SHL || op == FENG_TOKEN_SHR) {
+        if (lhs.kind != FENG_CONST_INT || rhs.kind != FENG_CONST_INT) return false;
+        if (rhs.i < 0 || rhs.i >= 64) return false; /* type-aware diagnostic handled by validator */
+        if (op == FENG_TOKEN_SHL) {
+            *out = const_int_value((int64_t)((uint64_t)lhs.i << (uint64_t)rhs.i));
+        } else {
+            /* Arithmetic shift right preserves sign for signed values; for unsigned ones
+             * carried in i64 this is a known-loss operation but matches the bit-pattern
+             * model used elsewhere in the evaluator. */
+            *out = const_int_value(lhs.i >> rhs.i);
+        }
+        return true;
+    }
+
+    /* Comparisons: allow INT/FLOAT mixed (with promotion) or matching kinds. */
+    if (op == FENG_TOKEN_LT || op == FENG_TOKEN_LE || op == FENG_TOKEN_GT ||
+        op == FENG_TOKEN_GE || op == FENG_TOKEN_EQ || op == FENG_TOKEN_NE) {
+        if ((lhs.kind == FENG_CONST_INT || lhs.kind == FENG_CONST_FLOAT) &&
+            (rhs.kind == FENG_CONST_INT || rhs.kind == FENG_CONST_FLOAT)) {
+            promote_const_pair(&lhs, &rhs);
+            bool result;
+            if (lhs.kind == FENG_CONST_INT) {
+                int64_t a = lhs.i, b = rhs.i;
+                switch (op) {
+                    case FENG_TOKEN_LT:     result = a < b;  break;
+                    case FENG_TOKEN_LE:     result = a <= b; break;
+                    case FENG_TOKEN_GT:     result = a > b;  break;
+                    case FENG_TOKEN_GE:     result = a >= b; break;
+                    case FENG_TOKEN_EQ:     result = a == b; break;
+                    default:                result = a != b; break;
+                }
+            } else {
+                double a = lhs.f, b = rhs.f;
+                switch (op) {
+                    case FENG_TOKEN_LT:     result = a < b;  break;
+                    case FENG_TOKEN_LE:     result = a <= b; break;
+                    case FENG_TOKEN_GT:     result = a > b;  break;
+                    case FENG_TOKEN_GE:     result = a >= b; break;
+                    case FENG_TOKEN_EQ:     result = a == b; break;
+                    default:                result = a != b; break;
+                }
+            }
+            *out = const_bool_value(result);
+            return true;
+        }
+        if (lhs.kind == FENG_CONST_BOOL && rhs.kind == FENG_CONST_BOOL &&
+            (op == FENG_TOKEN_EQ || op == FENG_TOKEN_NE)) {
+            *out = const_bool_value(op == FENG_TOKEN_EQ ? (lhs.b == rhs.b) : (lhs.b != rhs.b));
+            return true;
+        }
+        return false;
+    }
+
+    /* Arithmetic: +, -, *, /, %. */
+    if (op == FENG_TOKEN_PLUS || op == FENG_TOKEN_MINUS || op == FENG_TOKEN_STAR ||
+        op == FENG_TOKEN_SLASH || op == FENG_TOKEN_PERCENT) {
+        if (!(lhs.kind == FENG_CONST_INT || lhs.kind == FENG_CONST_FLOAT) ||
+            !(rhs.kind == FENG_CONST_INT || rhs.kind == FENG_CONST_FLOAT)) {
+            return false;
+        }
+        promote_const_pair(&lhs, &rhs);
+        if (lhs.kind == FENG_CONST_INT) {
+            int64_t result = 0;
+            switch (op) {
+                case FENG_TOKEN_PLUS:
+                    if (i64_add_overflow(lhs.i, rhs.i, &result)) {
+                        report_const_eval_error(context, expr,
+                            "integer overflow in compile-time '+' expression");
+                        return false;
+                    }
+                    break;
+                case FENG_TOKEN_MINUS:
+                    if (i64_sub_overflow(lhs.i, rhs.i, &result)) {
+                        report_const_eval_error(context, expr,
+                            "integer overflow in compile-time '-' expression");
+                        return false;
+                    }
+                    break;
+                case FENG_TOKEN_STAR:
+                    if (i64_mul_overflow(lhs.i, rhs.i, &result)) {
+                        report_const_eval_error(context, expr,
+                            "integer overflow in compile-time '*' expression");
+                        return false;
+                    }
+                    break;
+                case FENG_TOKEN_SLASH:
+                    if (rhs.i == 0) {
+                        report_const_eval_error(context, expr,
+                            "division by zero in compile-time '/' expression");
+                        return false;
+                    }
+                    /* INT64_MIN / -1 overflows; treat as compile-time error for parity with
+                     * the +, -, * checks above. */
+                    if (lhs.i == INT64_MIN && rhs.i == -1) {
+                        report_const_eval_error(context, expr,
+                            "integer overflow in compile-time '/' expression");
+                        return false;
+                    }
+                    result = lhs.i / rhs.i;
+                    break;
+                case FENG_TOKEN_PERCENT:
+                    if (rhs.i == 0) {
+                        report_const_eval_error(context, expr,
+                            "modulo by zero in compile-time '%' expression");
+                        return false;
+                    }
+                    if (lhs.i == INT64_MIN && rhs.i == -1) {
+                        result = 0;
+                    } else {
+                        result = lhs.i % rhs.i;
+                    }
+                    break;
+                default:
+                    return false;
+            }
+            *out = const_int_value(result);
+            return true;
+        }
+        /* FLOAT path: IEEE-754 semantics, no compile-time error on /0.0 (yields ±inf/NaN). */
+        double a = lhs.f, b = rhs.f, result = 0.0;
+        switch (op) {
+            case FENG_TOKEN_PLUS:    result = a + b; break;
+            case FENG_TOKEN_MINUS:   result = a - b; break;
+            case FENG_TOKEN_STAR:    result = a * b; break;
+            case FENG_TOKEN_SLASH:   result = a / b; break;
+            case FENG_TOKEN_PERCENT: return false; /* '%' undefined for floats in Feng */
+            default:                 return false;
+        }
+        *out = const_float_value(result);
+        return true;
+    }
+
+    return false;
+}
+
+static bool evaluate_constant_cast(ResolveContext *context,
+                                   const FengExpr *expr,
+                                   FengConstValue *out,
+                                   ConstEvalGuard *guard) {
+    FengConstValue inner;
+    const char *target;
+
+    if (!evaluate_constant_expr_inner(context, expr->as.cast.value, &inner, guard)) {
+        return false;
+    }
+    target = type_ref_builtin_canonical_name(expr->as.cast.type);
+    if (target == NULL) {
+        return false;
+    }
+    /* Numeric-to-numeric only (per docs/feng-expression.md §3.4). bool ↔ numeric is a
+     * static error caught by cast_expr_types_are_valid; we don't fold across that boundary. */
+    if (inner.kind == FENG_CONST_INT) {
+        if (strcmp(target, "f32") == 0 || strcmp(target, "f64") == 0) {
+            *out = const_float_value((double)inner.i);
+            return true;
+        }
+        if (canonical_integer_bit_width(target) > 0) {
+            *out = const_int_value(truncate_int_to_canonical(inner.i, target));
+            return true;
+        }
+        return false;
+    }
+    if (inner.kind == FENG_CONST_FLOAT) {
+        if (strcmp(target, "f32") == 0 || strcmp(target, "f64") == 0) {
+            *out = const_float_value(inner.f);
+            return true;
+        }
+        if (canonical_integer_bit_width(target) > 0) {
+            /* C-style truncation toward zero, then narrow to target bit width. */
+            int64_t truncated = (int64_t)inner.f;
+            *out = const_int_value(truncate_int_to_canonical(truncated, target));
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+static bool evaluate_constant_expr_inner(ResolveContext *context,
+                                         const FengExpr *expr,
+                                         FengConstValue *out,
+                                         ConstEvalGuard *guard) {
+    ConstEvalGuard frame;
+
+    if (expr == NULL || out == NULL) {
+        return false;
+    }
+    if (guard_contains(guard, expr)) {
+        return false; /* cycle */
+    }
+    frame.expr = expr;
+    frame.prev = guard;
+
+    switch (expr->kind) {
+        case FENG_EXPR_INTEGER:
+            *out = const_int_value(expr->as.integer);
+            return true;
+        case FENG_EXPR_FLOAT:
+            *out = const_float_value(expr->as.floating);
+            return true;
+        case FENG_EXPR_BOOL:
+            *out = const_bool_value(expr->as.boolean);
+            return true;
+        case FENG_EXPR_IDENTIFIER:
+            return evaluate_constant_identifier(context, expr->as.identifier, out, &frame);
+        case FENG_EXPR_UNARY:
+            return evaluate_constant_unary(context, expr, out, &frame);
+        case FENG_EXPR_BINARY:
+            return evaluate_constant_binary(context, expr, out, &frame);
+        case FENG_EXPR_CAST:
+            return evaluate_constant_cast(context, expr, out, &frame);
+        default:
+            return false;
+    }
+}
+
+static bool evaluate_constant_expr(ResolveContext *context,
+                                   const FengExpr *expr,
+                                   FengConstValue *out) {
+    return evaluate_constant_expr_inner(context, expr, out, NULL);
+}
+
+/* Numeric literal adaptation: an integer/float literal may be implicitly retyped to any
+ * compatible numeric target type, subject to compile-time range checks. This realises the
+ * "如需其他精度或宽度，必须显式标注类型" contract from docs/feng-builtin-type.md §16-§17,
+ * where the explicit annotation drives the literal's effective type. */
+static bool numeric_literal_adapts_to_target(ResolveContext *context,
+                                             const FengExpr *expr,
+                                             const FengTypeRef *target) {
+    const char *canonical_target = type_ref_builtin_canonical_name(target);
+    FengConstValue value;
+
+    if (canonical_target == NULL) {
+        return false;
+    }
+    if (!evaluate_constant_expr(context, expr, &value)) {
+        return false;
+    }
+    if (value.kind == FENG_CONST_INT) {
+        return integer_literal_fits_canonical_target(value.i, canonical_target);
+    }
+    if (value.kind == FENG_CONST_FLOAT) {
+        return strcmp(canonical_target, "f32") == 0 || strcmp(canonical_target, "f64") == 0;
+    }
+    return false;
 }
 
 static bool expr_matches_expected_type_ref(ResolveContext *context,
@@ -5511,9 +5949,20 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
      * authority — falling through to the default-inferred-type path would let oversized
      * literals like `let c: i32 = 9999999999;` slip past because the literal's *default*
      * inferred type happens to match the target's canonical name. */
-    if (type_ref_builtin_canonical_name(expected_type_ref) != NULL &&
-        expr_is_numeric_literal_constant(expr)) {
-        return numeric_literal_adapts_to_target(expr, expected_type_ref);
+    if (type_ref_builtin_canonical_name(expected_type_ref) != NULL) {
+        FengConstValue value;
+        size_t errors_before = *context->error_count;
+
+        if (evaluate_constant_expr(context, expr, &value) &&
+            (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
+            return numeric_literal_adapts_to_target(context, expr, expected_type_ref);
+        }
+        /* If the constant evaluator reported a compile-time error (e.g., division by zero,
+         * overflow), the binding is already known invalid; treat as matched to suppress a
+         * cascading inference-mismatch diagnostic. */
+        if (*context->error_count > errors_before) {
+            return true;
+        }
     }
 
     expr_type = infer_expr_type(context, expr);
