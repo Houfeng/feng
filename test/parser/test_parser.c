@@ -577,6 +577,53 @@ static void test_tilde_unary_parsing(void) {
     feng_program_free(program);
 }
 
+static void test_lambda_block_body_parses(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let f = (a: int) {\n"
+        "        let b = a + 1;\n"
+        "        return b;\n"
+        "    };\n"
+        "    return f(0);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *binding_stmt;
+    const FengExpr *lambda_expr;
+
+    ASSERT(feng_parse_source(source, strlen(source), "lambda_block.f", &program, &error));
+    ASSERT(program != NULL);
+
+    binding_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(binding_stmt->kind == FENG_STMT_BINDING);
+    lambda_expr = binding_stmt->as.binding.initializer;
+    ASSERT(lambda_expr->kind == FENG_EXPR_LAMBDA);
+    ASSERT(lambda_expr->as.lambda.is_block_body);
+    ASSERT(lambda_expr->as.lambda.body == NULL);
+    ASSERT(lambda_expr->as.lambda.body_block != NULL);
+    ASSERT(lambda_expr->as.lambda.body_block->statement_count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_lambda_block_body_with_arrow_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let f = (a: int) -> {\n"
+        "        return a;\n"
+        "    };\n"
+        "    return f(0);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "lambda_arrow_block.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(strstr(error.message, "multi-line lambda") != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -606,6 +653,8 @@ int main(void) {
     test_parse_error_direct_finalizer_call();
     test_bitwise_expr_parsing();
     test_tilde_unary_parsing();
+    test_lambda_block_body_parses();
+    test_lambda_block_body_with_arrow_is_rejected();
     puts("parser tests passed");
     return 0;
 }

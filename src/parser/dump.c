@@ -203,8 +203,15 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
                 fputs(": ", stream);
                 dump_type_ref(stream, expr->as.lambda.params[index].type);
             }
-            fputs(") -> ", stream);
-            dump_expr(stream, expr->as.lambda.body, 0);
+            if (expr->as.lambda.is_block_body) {
+                fputs(") {\n", stream);
+                dump_block(stream, expr->as.lambda.body_block, indent + 1);
+                dump_indent(stream, indent);
+                fputc('}', stream);
+            } else {
+                fputs(") -> ", stream);
+                dump_expr(stream, expr->as.lambda.body, 0);
+            }
             break;
         case FENG_EXPR_CAST:
             fputc('(', stream);

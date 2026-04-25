@@ -95,6 +95,17 @@ typedef struct FengObjectFieldInit {
     FengExpr *value;
 } FengObjectFieldInit;
 
+typedef enum FengLambdaCaptureKind {
+    FENG_LAMBDA_CAPTURE_LOCAL = 0, /* captured outer local binding or parameter */
+    FENG_LAMBDA_CAPTURE_SELF       /* captured outer `self` reference */
+} FengLambdaCaptureKind;
+
+typedef struct FengLambdaCapture {
+    FengLambdaCaptureKind kind;
+    FengSlice name;             /* identifier name if LOCAL; empty when SELF */
+    FengMutability mutability;  /* original binding mutability for LOCAL captures */
+} FengLambdaCapture;
+
 typedef struct FengMatchCase {
     FengToken token;
     FengExpr *label;
@@ -165,7 +176,12 @@ struct FengExpr {
         struct {
             FengParameter *params;
             size_t param_count;
-            FengExpr *body;
+            bool is_block_body;          /* false: single expression; true: block body */
+            FengExpr *body;              /* body when is_block_body == false */
+            FengBlock *body_block;       /* body when is_block_body == true */
+            FengLambdaCapture *captures; /* filled by the semantic analyzer */
+            size_t capture_count;
+            bool captures_self;          /* derived: any FENG_LAMBDA_CAPTURE_SELF entry */
         } lambda;
         struct {
             FengTypeRef *type;

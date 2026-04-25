@@ -1445,7 +1445,15 @@ static bool looks_like_lambda(const Parser *parser) {
         if (kind == FENG_TOKEN_RPAREN) {
             if (depth == 0U) {
                 bool is_empty = (index == parser->current + 1U);
-                return parser->tokens[index + 1U].kind == FENG_TOKEN_ARROW && (saw_colon || is_empty);
+                FengTokenKind after = parser->tokens[index + 1U].kind;
+
+                if (after == FENG_TOKEN_ARROW && (saw_colon || is_empty)) {
+                    return true;
+                }
+                if (after == FENG_TOKEN_LBRACE && (saw_colon || is_empty)) {
+                    return true;
+                }
+                return false;
             }
             --depth;
             continue;
@@ -1627,13 +1635,33 @@ static FengExpr *parse_lambda(Parser *parser) {
         free_expr(expr);
         return NULL;
     }
+
+    if (parser_check(parser, FENG_TOKEN_LBRACE)) {
+        expr->as.lambda.is_block_body = true;
+        expr->as.lambda.body_block = parse_block(parser);
+        if (expr->as.lambda.body_block == NULL) {
+            free_expr(expr);
+            return NULL;
+        }
+        return expr;
+    }
+
     if (!parser_expect(parser,
                        FENG_TOKEN_ARROW,
-                       "lambda expressions must use '->' after the parameter list")) {
+                       "lambda expressions must use '->' before a single-expression body or '{' for a block body")) {
         free_expr(expr);
         return NULL;
     }
 
+    if (parser_check(parser, FENG_TOKEN_LBRACE)) {
+        (void)parser_error_current(
+            parser,
+            "multi-line lambda body must omit '->' and use the block form '(params) { ... }'");
+        free_expr(expr);
+        return NULL;
+    }
+
+    expr->as.lambda.is_block_body = false;
     expr->as.lambda.body = parse_expression(parser);
     if (expr->as.lambda.body == NULL) {
         free_expr(expr);
@@ -2661,7 +2689,12 @@ static void free_expr(FengExpr *expr) {
             break;
         case FENG_EXPR_LAMBDA:
             free_parameters(expr->as.lambda.params, expr->as.lambda.param_count);
-            free_expr(expr->as.lambda.body);
+            if (expr->as.lambda.is_block_body) {
+                free_block(expr->as.lambda.body_block);
+            } else {
+                free_expr(expr->as.lambda.body);
+            }
+            free(expr->as.lambda.captures);
             break;
         case FENG_EXPR_CAST:
             free_type_ref(expr->as.cast.type);

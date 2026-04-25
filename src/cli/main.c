@@ -41,8 +41,34 @@ static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s lex <file>\n", program);
     fprintf(stderr, "  %s parse <file>\n", program);
-    fprintf(stderr, "  %s semantic <file> [more files...]\n", program);
-    fprintf(stderr, "  %s check <file> [more files...]\n", program);
+    fprintf(stderr, "  %s semantic [--target=bin|lib] <file> [more files...]\n", program);
+    fprintf(stderr, "  %s check [--target=bin|lib] <file> [more files...]\n", program);
+    fprintf(stderr, "\n--target defaults to 'bin' (requires 'main(args: string[])'); use 'lib' to skip the main entry check.\n");
+}
+
+static bool parse_target_option(const char *arg, FengCompileTarget *out_target) {
+    const char *value = NULL;
+
+    if (arg == NULL || out_target == NULL) {
+        return false;
+    }
+    if (strncmp(arg, "--target=", 9) == 0) {
+        value = arg + 9;
+    } else if (strcmp(arg, "--target") == 0) {
+        return false; /* expects value form --target=... */
+    } else {
+        return false;
+    }
+    if (strcmp(value, "bin") == 0) {
+        *out_target = FENG_COMPILE_TARGET_BIN;
+        return true;
+    }
+    if (strcmp(value, "lib") == 0) {
+        *out_target = FENG_COMPILE_TARGET_LIB;
+        return true;
+    }
+    fprintf(stderr, "invalid --target value '%s' (expected 'bin' or 'lib')\n", value);
+    return false;
 }
 
 typedef struct LoadedSource {
@@ -368,7 +394,7 @@ static int run_parse_command(const char *path) {
     return exit_code;
 }
 
-static int run_semantic_command(int path_count, char **paths) {
+static int run_semantic_command(int path_count, char **paths, FengCompileTarget target) {
     LoadedSource *sources = NULL;
     const FengProgram **programs = NULL;
     FengSemanticAnalysis *analysis = NULL;
@@ -418,6 +444,7 @@ static int run_semantic_command(int path_count, char **paths) {
 
     if (!feng_semantic_analyze(programs,
                                (size_t)path_count,
+                               target,
                                &analysis,
                                &errors,
                                &error_count)) {
@@ -505,7 +532,7 @@ static void fprint_check_entry(FILE *stream,
     fputs("\n  }", stream);
 }
 
-static int run_check_command(int path_count, char **paths) {
+static int run_check_command(int path_count, char **paths, FengCompileTarget target) {
     LoadedSource *sources = NULL;
     const FengProgram **programs = NULL;
     FengSemanticAnalysis *analysis = NULL;
@@ -558,6 +585,7 @@ static int run_check_command(int path_count, char **paths) {
     }
 
     if (!feng_semantic_analyze(programs, (size_t)path_count,
+                               target,
                                &analysis, &errors, &error_count)) {
         size_t i;
 
@@ -622,10 +650,42 @@ int main(int argc, char **argv) {
         return run_parse_command(argv[2]);
     }
     if (strcmp(argv[1], "semantic") == 0) {
-        return run_semantic_command(argc - 2, argv + 2);
+        FengCompileTarget target = FENG_COMPILE_TARGET_BIN;
+        int file_argc = argc - 2;
+        char **file_argv = argv + 2;
+
+        if (file_argc > 0 && strncmp(file_argv[0], "--target", 8) == 0) {
+            if (!parse_target_option(file_argv[0], &target)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            file_argc -= 1;
+            file_argv += 1;
+        }
+        if (file_argc <= 0) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        return run_semantic_command(file_argc, file_argv, target);
     }
     if (strcmp(argv[1], "check") == 0) {
-        return run_check_command(argc - 2, argv + 2);
+        FengCompileTarget target = FENG_COMPILE_TARGET_BIN;
+        int file_argc = argc - 2;
+        char **file_argv = argv + 2;
+
+        if (file_argc > 0 && strncmp(file_argv[0], "--target", 8) == 0) {
+            if (!parse_target_option(file_argv[0], &target)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            file_argc -= 1;
+            file_argv += 1;
+        }
+        if (file_argc <= 0) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        return run_check_command(file_argc, file_argv, target);
     }
 
     fprintf(stderr, "unknown command: %s\n", argv[1]);

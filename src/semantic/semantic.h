@@ -41,8 +41,14 @@ typedef struct FengSemanticAnalysis {
     size_t info_capacity;
 } FengSemanticAnalysis;
 
+typedef enum FengCompileTarget {
+    FENG_COMPILE_TARGET_BIN = 0, /* executable: requires a single `main(args: string[])` entry */
+    FENG_COMPILE_TARGET_LIB      /* library: no main entry required */
+} FengCompileTarget;
+
 bool feng_semantic_analyze(const FengProgram *const *programs,
                            size_t program_count,
+                           FengCompileTarget target,
                            FengSemanticAnalysis **out_analysis,
                            FengSemanticError **out_errors,
                            size_t *out_error_count);

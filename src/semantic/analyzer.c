@@ -211,6 +211,16 @@ typedef struct ResolveContext {
     bool current_callable_has_escaping_exception;
     size_t exception_capture_depth;
     size_t finally_depth;
+    /* When true, a lambda body resolved in this context may capture `self`
+     * from the enclosing type. Set inside type method/constructor bodies and
+     * inside callable-spec field initializers. */
+    bool self_capturable;
+    /* Stack of lambda capture frames, pushed by resolve_lambda_expr while a
+     * lambda body is being resolved. Used to record captured outer locals and
+     * self references onto FengExpr.lambda.captures. */
+    struct LambdaCaptureFrame *lambda_frames;
+    size_t lambda_frame_count;
+    size_t lambda_frame_capacity;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
@@ -1367,6 +1377,15 @@ static bool resolver_append_error(ResolveContext *context, FengToken token, char
                         message);
 }
 
+typedef struct LambdaCaptureFrame {
+    FengExpr *lambda;          /* lambda whose captures we are collecting */
+    size_t outer_scope_floor;  /* scope_count snapshot before pushing lambda's own scope */
+    FengLambdaCapture *captures;
+    size_t capture_count;
+    size_t capture_capacity;
+    bool captures_self;
+} LambdaCaptureFrame;
+
 static bool resolver_push_scope(ResolveContext *context) {
     ScopeFrame frame;
 
@@ -1449,6 +1468,88 @@ static const LocalNameEntry *resolver_find_local_name_entry(const ResolveContext
     }
 
     return NULL;
+}
+
+/* Same as resolver_find_local_name_entry, but also reports the 1-based scope
+ * index where the binding was found (0 if not found). */
+static const LocalNameEntry *resolver_find_local_name_entry_with_scope(
+    const ResolveContext *context, FengSlice name, size_t *out_scope_index) {
+    size_t scope_index = context->scope_count;
+
+    while (scope_index > 0U) {
+        const ScopeFrame *frame = &context->scopes[scope_index - 1U];
+        size_t local_index = frame->local_count;
+
+        while (local_index > 0U) {
+            const LocalNameEntry *entry = &frame->locals[local_index - 1U];
+
+            if (slice_equals(entry->name, name)) {
+                if (out_scope_index != NULL) {
+                    *out_scope_index = scope_index;
+                }
+                return entry;
+            }
+            --local_index;
+        }
+        --scope_index;
+    }
+
+    if (out_scope_index != NULL) {
+        *out_scope_index = 0U;
+    }
+    return NULL;
+}
+
+static bool lambda_frame_record_local(LambdaCaptureFrame *frame,
+                                      FengSlice name,
+                                      FengMutability mutability) {
+    size_t index;
+    FengLambdaCapture entry;
+
+    for (index = 0U; index < frame->capture_count; ++index) {
+        if (frame->captures[index].kind == FENG_LAMBDA_CAPTURE_LOCAL &&
+            slice_equals(frame->captures[index].name, name)) {
+            return true;
+        }
+    }
+
+    entry.kind = FENG_LAMBDA_CAPTURE_LOCAL;
+    entry.name = name;
+    entry.mutability = mutability;
+    return append_raw((void **)&frame->captures,
+                      &frame->capture_count,
+                      &frame->capture_capacity,
+                      sizeof(entry),
+                      &entry);
+}
+
+/* Record an outer-local capture against every active lambda whose own scope
+ * floor is at or above the binding's scope. Nested lambdas thus correctly
+ * inherit captures from their enclosing lambdas. */
+static bool resolver_record_local_capture(ResolveContext *context,
+                                          FengSlice name,
+                                          FengMutability mutability,
+                                          size_t binding_scope_index) {
+    size_t frame_index;
+
+    for (frame_index = 0U; frame_index < context->lambda_frame_count; ++frame_index) {
+        LambdaCaptureFrame *frame = &context->lambda_frames[frame_index];
+
+        if (binding_scope_index <= frame->outer_scope_floor) {
+            if (!lambda_frame_record_local(frame, name, mutability)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void resolver_record_self_capture(ResolveContext *context) {
+    size_t frame_index;
+
+    for (frame_index = 0U; frame_index < context->lambda_frame_count; ++frame_index) {
+        context->lambda_frames[frame_index].captures_self = true;
+    }
 }
 
 static bool resolver_has_local_name(const ResolveContext *context, FengSlice name) {
@@ -1636,6 +1737,9 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
+static bool resolve_block_contents(ResolveContext *context,
+                                   const FengBlock *block,
+                                   bool allow_self);
 static bool callable_return_inference_is_pending(ResolveContext *context,
                                                  const FengCallableSignature *callable);
 static bool expr_type_inference_is_pending(ResolveContext *context, const FengExpr *expr);
@@ -3037,7 +3141,11 @@ static bool lambda_expr_may_escape_exception(ResolveContext *context, const Feng
     previous_callable_has_escaping_exception = context->current_callable_has_escaping_exception;
     context->current_callable_has_escaping_exception = false;
     if (ok) {
-        ok = resolve_expr(context, expr->as.lambda.body, false);
+        if (expr->as.lambda.is_block_body) {
+            ok = resolve_block_contents(context, expr->as.lambda.body_block, context->self_capturable);
+        } else {
+            ok = resolve_expr(context, expr->as.lambda.body, context->self_capturable);
+        }
     }
     escapes = ok && context->current_callable_has_escaping_exception;
     context->current_callable_signature = previous_callable_signature;
@@ -4013,6 +4121,135 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     return true;
 }
 
+/* Walk a block body and unify the inferred return-statement types into a
+ * single result. Returns inferred_expr_type_unknown() when the block has no
+ * returns (effectively void) or when return types disagree. */
+static InferredExprType infer_block_return_type(ResolveContext *context, const FengBlock *block);
+
+static InferredExprType infer_stmt_return_type(ResolveContext *context, const FengStmt *stmt) {
+    InferredExprType current = inferred_expr_type_unknown();
+
+    if (stmt == NULL) {
+        return current;
+    }
+
+    switch (stmt->kind) {
+        case FENG_STMT_RETURN:
+            return stmt->as.return_value != NULL
+                       ? infer_expr_type(context, stmt->as.return_value)
+                       : inferred_expr_type_builtin("void");
+        case FENG_STMT_BLOCK:
+            return infer_block_return_type(context, stmt->as.block);
+        case FENG_STMT_IF: {
+            size_t clause_index;
+            bool any_known = false;
+
+            for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
+                InferredExprType branch =
+                    infer_block_return_type(context, stmt->as.if_stmt.clauses[clause_index].block);
+
+                if (inferred_expr_type_is_known(branch)) {
+                    if (!any_known) {
+                        current = branch;
+                        any_known = true;
+                    } else if (!inferred_expr_types_equal(context, current, branch)) {
+                        return inferred_expr_type_unknown();
+                    }
+                }
+            }
+            if (stmt->as.if_stmt.else_block != NULL) {
+                InferredExprType branch =
+                    infer_block_return_type(context, stmt->as.if_stmt.else_block);
+
+                if (inferred_expr_type_is_known(branch)) {
+                    if (!any_known) {
+                        current = branch;
+                    } else if (!inferred_expr_types_equal(context, current, branch)) {
+                        return inferred_expr_type_unknown();
+                    }
+                }
+            }
+            return current;
+        }
+        case FENG_STMT_WHILE:
+            return infer_block_return_type(context, stmt->as.while_stmt.body);
+        case FENG_STMT_FOR:
+            return infer_block_return_type(context, stmt->as.for_stmt.body);
+        case FENG_STMT_TRY: {
+            InferredExprType try_type = infer_block_return_type(context, stmt->as.try_stmt.try_block);
+            InferredExprType catch_type =
+                infer_block_return_type(context, stmt->as.try_stmt.catch_block);
+            InferredExprType finally_type = stmt->as.try_stmt.finally_block != NULL
+                                                ? infer_block_return_type(
+                                                      context, stmt->as.try_stmt.finally_block)
+                                                : inferred_expr_type_unknown();
+
+            if (inferred_expr_type_is_known(try_type)) {
+                current = try_type;
+            }
+            if (inferred_expr_type_is_known(catch_type)) {
+                if (!inferred_expr_type_is_known(current)) {
+                    current = catch_type;
+                } else if (!inferred_expr_types_equal(context, current, catch_type)) {
+                    return inferred_expr_type_unknown();
+                }
+            }
+            if (inferred_expr_type_is_known(finally_type)) {
+                if (!inferred_expr_type_is_known(current)) {
+                    current = finally_type;
+                } else if (!inferred_expr_types_equal(context, current, finally_type)) {
+                    return inferred_expr_type_unknown();
+                }
+            }
+            return current;
+        }
+        default:
+            return current;
+    }
+}
+
+static InferredExprType infer_block_return_type(ResolveContext *context, const FengBlock *block) {
+    size_t index;
+    InferredExprType current = inferred_expr_type_unknown();
+    bool any_known = false;
+
+    if (block == NULL) {
+        return current;
+    }
+
+    for (index = 0U; index < block->statement_count; ++index) {
+        const FengStmt *stmt = block->statements[index];
+        InferredExprType stmt_type;
+
+        if (stmt == NULL) {
+            continue;
+        }
+        /* Bring local bindings into scope so subsequent `return` expressions
+         * can resolve identifiers introduced by `let`/`var` statements. */
+        if (stmt->kind == FENG_STMT_BINDING) {
+            InferredExprType binding_type = stmt->as.binding.type != NULL
+                                                ? inferred_expr_type_from_type_ref(stmt->as.binding.type)
+                                                : infer_expr_type(context, stmt->as.binding.initializer);
+            (void)resolver_add_local_typed_name(context,
+                                                stmt->as.binding.name,
+                                                binding_type,
+                                                stmt->as.binding.mutability);
+            continue;
+        }
+
+        stmt_type = infer_stmt_return_type(context, stmt);
+        if (inferred_expr_type_is_known(stmt_type)) {
+            if (!any_known) {
+                current = stmt_type;
+                any_known = true;
+            } else if (!inferred_expr_types_equal(context, current, stmt_type)) {
+                return inferred_expr_type_unknown();
+            }
+        }
+    }
+    return current;
+}
+
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
     bool ok = true;
@@ -4034,7 +4271,15 @@ static InferredExprType infer_lambda_body_type(ResolveContext *context, const Fe
                                            expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
-        body_type = infer_expr_type(context, expr->as.lambda.body);
+        if (expr->as.lambda.is_block_body) {
+            body_type = infer_block_return_type(context, expr->as.lambda.body_block);
+            if (!inferred_expr_type_is_known(body_type)) {
+                /* A block lambda with no return statements yields void. */
+                body_type = inferred_expr_type_builtin("void");
+            }
+        } else {
+            body_type = infer_expr_type(context, expr->as.lambda.body);
+        }
     }
 
     resolver_pop_scope(context);
@@ -4322,7 +4567,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                    expr_type_inference_is_pending(context, expr->as.binary.right);
 
         case FENG_EXPR_LAMBDA:
-            return expr_type_inference_is_pending(context, expr->as.lambda.body);
+            return expr->as.lambda.is_block_body
+                       ? false /* block body return inference uses synthetic signature path */
+                       : expr_type_inference_is_pending(context, expr->as.lambda.body);
 
         case FENG_EXPR_CAST:
             return expr_type_inference_is_pending(context, expr->as.cast.value);
@@ -5308,10 +5555,24 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
                                            expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
-        matches = expr_matches_expected_type_ref(
-            context,
-            expr->as.lambda.body,
-            function_type_decl->as.spec_decl.as.callable.return_type);
+        if (expr->as.lambda.is_block_body) {
+            InferredExprType expected =
+                inferred_expr_type_from_return_type_ref(
+                    function_type_decl->as.spec_decl.as.callable.return_type);
+            InferredExprType inferred =
+                infer_block_return_type(context, expr->as.lambda.body_block);
+
+            if (!inferred_expr_type_is_known(inferred)) {
+                inferred = inferred_expr_type_builtin("void");
+            }
+            matches = inferred_expr_type_is_known(expected) &&
+                      inferred_expr_types_equal(context, expected, inferred);
+        } else {
+            matches = expr_matches_expected_type_ref(
+                context,
+                expr->as.lambda.body,
+                function_type_decl->as.spec_decl.as.callable.return_type);
+        }
     }
 
     resolver_pop_scope(context);
@@ -6392,6 +6653,62 @@ static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
     return true;
 }
 
+static bool validate_type_member_overloads(ResolveContext *context, const FengDecl *decl) {
+    size_t i;
+    size_t j;
+    bool ok = true;
+
+    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *mi = decl->as.type_decl.members[i];
+        const FengCallableSignature *si;
+
+        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        si = &mi->as.callable;
+
+        for (j = 0U; j < i; ++j) {
+            const FengTypeMember *mj = decl->as.type_decl.members[j];
+            const FengCallableSignature *sj;
+
+            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_METHOD) {
+                continue;
+            }
+            sj = &mj->as.callable;
+            if (!slice_equals(si->name, sj->name)) {
+                continue;
+            }
+            if (parameters_equal(si, sj)) {
+                if (return_type_equals(si->return_type, sj->return_type)) {
+                    ok = resolver_append_error(
+                             context,
+                             si->token,
+                             format_message(
+                                 "duplicate method signature '%.*s' in type '%.*s'",
+                                 (int)si->name.length, si->name.data,
+                                 (int)decl->as.type_decl.name.length,
+                                 decl->as.type_decl.name.data)) && ok;
+                } else {
+                    ok = resolver_append_error(
+                             context,
+                             si->token,
+                             format_message(
+                                 "method overloads in type '%.*s' cannot differ only by return type: '%.*s'",
+                                 (int)decl->as.type_decl.name.length,
+                                 decl->as.type_decl.name.data,
+                                 (int)si->name.length, si->name.data)) && ok;
+                }
+            }
+        }
+    }
+
+    return ok;
+}
+
 static bool validate_fixed_type_declaration(ResolveContext *context, const FengDecl *decl) {
     FixedAbiTrace trace;
     size_t callconv_count;
@@ -7315,6 +7632,10 @@ static bool resolve_self_member_expr(ResolveContext *context,
         return resolve_expr(context, expr->as.member.object, allow_self);
     }
 
+    if (context->lambda_frame_count > 0U) {
+        resolver_record_self_capture(context);
+    }
+
     if (find_instance_member(context->current_type_decl, expr->as.member.member) != NULL) {
         const FengTypeMember *self_member =
             find_instance_member(context->current_type_decl, expr->as.member.member);
@@ -7810,10 +8131,52 @@ static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *e
     return true;
 }
 
+/* Initialise transient context state for resolving the body of a lambda or
+ * function-like value. Returns the saved previous state via out parameters so
+ * the caller can restore it. */
+static void lambda_save_callable_context(ResolveContext *context,
+                                         const FengCallableSignature **out_prev_sig,
+                                         InferredExprType *out_prev_inferred_return,
+                                         bool *out_prev_saw_return,
+                                         bool *out_prev_escape,
+                                         size_t *out_prev_exception_capture,
+                                         size_t *out_prev_finally) {
+    *out_prev_sig = context->current_callable_signature;
+    *out_prev_inferred_return = context->current_callable_inferred_return_type;
+    *out_prev_saw_return = context->current_callable_saw_return;
+    *out_prev_escape = context->current_callable_has_escaping_exception;
+    *out_prev_exception_capture = context->exception_capture_depth;
+    *out_prev_finally = context->finally_depth;
+}
+
+static void lambda_restore_callable_context(ResolveContext *context,
+                                            const FengCallableSignature *prev_sig,
+                                            InferredExprType prev_inferred_return,
+                                            bool prev_saw_return,
+                                            bool prev_escape,
+                                            size_t prev_exception_capture,
+                                            size_t prev_finally) {
+    context->current_callable_signature = prev_sig;
+    context->current_callable_inferred_return_type = prev_inferred_return;
+    context->current_callable_saw_return = prev_saw_return;
+    context->current_callable_has_escaping_exception = prev_escape;
+    context->exception_capture_depth = prev_exception_capture;
+    context->finally_depth = prev_finally;
+}
+
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
-    const FengCallableSignature *previous_callable_signature;
-    bool previous_callable_has_escaping_exception;
+    const FengCallableSignature *prev_sig;
+    InferredExprType prev_inferred_return;
+    bool prev_saw_return;
+    bool prev_escape;
+    size_t prev_exception_capture;
+    size_t prev_finally;
+    bool prev_self_capturable;
+    bool effective_allow_self;
+    LambdaCaptureFrame frame;
+    FengCallableSignature synthetic_sig;
+    FengExpr *mutable_expr = (FengExpr *)expr;
     bool ok;
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
@@ -7822,14 +8185,60 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         }
     }
 
-    if (!resolver_push_scope(context)) {
+    /* Snapshot scope_count before pushing the lambda's own scope: any local
+     * binding found at scope <= floor is captured from outside. */
+    memset(&frame, 0, sizeof(frame));
+    frame.lambda = mutable_expr;
+    frame.outer_scope_floor = context->scope_count;
+
+    if (!append_raw((void **)&context->lambda_frames,
+                    &context->lambda_frame_count,
+                    &context->lambda_frame_capacity,
+                    sizeof(frame),
+                    &frame)) {
         return false;
     }
 
-    ok = true;
-    previous_callable_signature = context->current_callable_signature;
-    previous_callable_has_escaping_exception = context->current_callable_has_escaping_exception;
+    if (!resolver_push_scope(context)) {
+        --context->lambda_frame_count;
+        return false;
+    }
+
+    lambda_save_callable_context(context,
+                                 &prev_sig,
+                                 &prev_inferred_return,
+                                 &prev_saw_return,
+                                 &prev_escape,
+                                 &prev_exception_capture,
+                                 &prev_finally);
+    prev_self_capturable = context->self_capturable;
+
+    /* Inside the lambda body, `self` is available iff the enclosing context
+     * could provide it (i.e. self_capturable was true). Nested lambdas keep
+     * the same capability so they can also capture self. */
+    effective_allow_self = context->self_capturable;
+
     context->current_callable_signature = NULL;
+    context->current_callable_inferred_return_type = inferred_expr_type_unknown();
+    context->current_callable_saw_return = false;
+    context->current_callable_has_escaping_exception = false;
+    context->exception_capture_depth = 0U;
+    context->finally_depth = 0U;
+    /* self_capturable stays the same: if the lambda body could see self, so
+     * can a lambda nested inside it. */
+    context->self_capturable = effective_allow_self;
+
+    if (expr->as.lambda.is_block_body) {
+        memset(&synthetic_sig, 0, sizeof(synthetic_sig));
+        synthetic_sig.token = expr->token;
+        synthetic_sig.params = expr->as.lambda.params;
+        synthetic_sig.param_count = expr->as.lambda.param_count;
+        synthetic_sig.return_type = NULL; /* inferred from the block's return statements */
+        synthetic_sig.body = expr->as.lambda.body_block;
+        context->current_callable_signature = &synthetic_sig;
+    }
+
+    ok = true;
     for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
         ok = resolver_add_local_typed_name(
             context,
@@ -7838,13 +8247,40 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
             expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
-        ok = resolve_expr(context, expr->as.lambda.body, false);
+        if (expr->as.lambda.is_block_body) {
+            ok = resolve_block_contents(context, expr->as.lambda.body_block, effective_allow_self);
+        } else {
+            ok = resolve_expr(context, expr->as.lambda.body, effective_allow_self);
+        }
     }
 
-    context->current_callable_signature = previous_callable_signature;
-    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+    lambda_restore_callable_context(context,
+                                    prev_sig,
+                                    prev_inferred_return,
+                                    prev_saw_return,
+                                    prev_escape,
+                                    prev_exception_capture,
+                                    prev_finally);
+    context->self_capturable = prev_self_capturable;
 
     resolver_pop_scope(context);
+
+    /* Pop the lambda capture frame and publish its captures onto the AST so
+     * later phases (and code generation) can reason about closure state. */
+    {
+        LambdaCaptureFrame *built = &context->lambda_frames[context->lambda_frame_count - 1U];
+
+        if (ok) {
+            free(mutable_expr->as.lambda.captures);
+            mutable_expr->as.lambda.captures = built->captures;
+            mutable_expr->as.lambda.capture_count = built->capture_count;
+            mutable_expr->as.lambda.captures_self = built->captures_self;
+        } else {
+            free(built->captures);
+        }
+        --context->lambda_frame_count;
+    }
+
     return ok;
 }
 
@@ -7857,10 +8293,29 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
     switch (expr->kind) {
         case FENG_EXPR_IDENTIFIER:
-            if (resolver_has_local_name(context, expr->as.identifier) ||
-                find_visible_value(context->visible_values, context->visible_value_count, expr->as.identifier) != NULL ||
-                find_visible_type(context->visible_types, context->visible_type_count, expr->as.identifier) != NULL) {
-                return true;
+            {
+                size_t local_scope = 0U;
+                const LocalNameEntry *local = resolver_find_local_name_entry_with_scope(
+                    context, expr->as.identifier, &local_scope);
+
+                if (local != NULL) {
+                    if (context->lambda_frame_count > 0U &&
+                        !resolver_record_local_capture(context,
+                                                       local->name,
+                                                       local->mutability,
+                                                       local_scope)) {
+                        return false;
+                    }
+                    return true;
+                }
+                if (find_visible_value(context->visible_values,
+                                       context->visible_value_count,
+                                       expr->as.identifier) != NULL ||
+                    find_visible_type(context->visible_types,
+                                      context->visible_type_count,
+                                      expr->as.identifier) != NULL) {
+                    return true;
+                }
             }
 
             if (find_alias(context->aliases, context->alias_count, expr->as.identifier) != NULL) {
@@ -7882,6 +8337,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
         case FENG_EXPR_SELF:
             if (allow_self) {
+                if (context->lambda_frame_count > 0U) {
+                    resolver_record_self_capture(context);
+                }
                 return true;
             }
 
@@ -8227,6 +8685,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
     size_t previous_finally_depth = context->finally_depth;
+    bool previous_self_capturable = context->self_capturable;
     bool ok;
 
     context->current_callable_signature = callable;
@@ -8235,6 +8694,10 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
     context->finally_depth = 0U;
+    /* Inside a member method or constructor body, lambdas may capture self. */
+    if (allow_self && context->current_type_decl != NULL) {
+        context->self_capturable = true;
+    }
 
     if (!resolve_type_ref(context, callable->return_type, true)) {
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
@@ -8243,6 +8706,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
+        context->self_capturable = previous_self_capturable;
         return false;
     }
 
@@ -8254,6 +8718,7 @@ static bool resolve_callable(ResolveContext *context,
             context->exception_capture_depth = previous_exception_capture_depth;
             context->finally_depth = previous_finally_depth;
             context->current_callable_signature = previous_callable_signature;
+            context->self_capturable = previous_self_capturable;
             return false;
         }
     }
@@ -8265,6 +8730,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
+        context->self_capturable = previous_self_capturable;
         return true;
     }
 
@@ -8282,6 +8748,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->finally_depth = previous_finally_depth;
         context->current_callable_signature = previous_callable_signature;
+        context->self_capturable = previous_self_capturable;
         return false;
     }
 
@@ -8321,6 +8788,7 @@ static bool resolve_callable(ResolveContext *context,
     context->exception_capture_depth = previous_exception_capture_depth;
     context->finally_depth = previous_finally_depth;
     context->current_callable_signature = previous_callable_signature;
+    context->self_capturable = previous_self_capturable;
     return ok;
 }
 
@@ -8992,12 +9460,41 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-                    if (!resolve_type_ref(context, member->as.field.type, false) ||
-                        !resolve_expr(context, member->as.field.initializer, false) ||
-                        !validate_expr_against_expected_type(context,
-                                                            member->as.field.initializer,
-                                                            member->as.field.type)) {
+                    bool field_is_callable_spec = false;
+                    bool prev_self_capturable = context->self_capturable;
+                    bool init_is_lambda = member->as.field.initializer != NULL &&
+                                          member->as.field.initializer->kind == FENG_EXPR_LAMBDA;
+
+                    if (!resolve_type_ref(context, member->as.field.type, false)) {
                         return false;
+                    }
+                    /* Per docs/feng-function.md: a callable-spec field whose
+                     * initializer is a lambda may capture the enclosing
+                     * type's `self`, because the lambda runs only when the
+                     * callable is invoked, after the object is constructed.
+                     * Direct `self` references in the initializer expression
+                     * itself remain disallowed. */
+                    if (init_is_lambda &&
+                        resolve_function_type_decl(context, member->as.field.type) != NULL) {
+                        field_is_callable_spec = true;
+                        context->current_type_decl = decl;
+                        context->self_capturable = true;
+                    }
+                    {
+                        bool init_ok = resolve_expr(context, member->as.field.initializer, false);
+                        bool match_ok = init_ok &&
+                                         validate_expr_against_expected_type(
+                                             context,
+                                             member->as.field.initializer,
+                                             member->as.field.type);
+
+                        if (field_is_callable_spec) {
+                            context->self_capturable = prev_self_capturable;
+                            context->current_type_decl = previous_type_decl;
+                        }
+                        if (!init_ok || !match_ok) {
+                            return false;
+                        }
                     }
                     continue;
                 }
@@ -9019,6 +9516,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             }
 
             if (!validate_fixed_type_declaration(context, decl)) {
+                return false;
+            }
+            if (!validate_type_member_overloads(context, decl)) {
                 return false;
             }
             if (!validate_type_finalizer_constraints(context, decl)) {
@@ -9662,8 +10162,118 @@ static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analy
     return true;
 }
 
+static bool type_ref_is_named_simple(const FengTypeRef *type_ref, const char *name) {
+    size_t len;
+
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U) {
+        return false;
+    }
+    len = strlen(name);
+    return type_ref->as.named.segments[0].length == len &&
+           memcmp(type_ref->as.named.segments[0].data, name, len) == 0;
+}
+
+static bool main_param_type_is_string_array(const FengTypeRef *type_ref) {
+    return type_ref != NULL && type_ref->kind == FENG_TYPE_REF_ARRAY &&
+           type_ref_is_named_simple(type_ref->as.inner, "string");
+}
+
+static bool validate_main_entry(const FengSemanticAnalysis *analysis,
+                                FengCompileTarget target,
+                                FengSemanticError **errors,
+                                size_t *error_count,
+                                size_t *error_capacity) {
+    static const FengToken kEmptyToken = {0};
+    const FengDecl *first_main = NULL;
+    const char *first_main_path = NULL;
+    size_t main_count = 0U;
+    size_t module_index;
+    bool ok = true;
+
+    if (target != FENG_COMPILE_TARGET_BIN || analysis == NULL) {
+        return true;
+    }
+
+    for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+                const FengCallableSignature *sig;
+
+                if (decl == NULL || decl->kind != FENG_DECL_FUNCTION) {
+                    continue;
+                }
+                sig = &decl->as.function_decl;
+                if (sig->name.length != 4U || memcmp(sig->name.data, "main", 4U) != 0) {
+                    continue;
+                }
+                main_count += 1U;
+                if (main_count == 1U) {
+                    first_main = decl;
+                    first_main_path = program->path;
+                } else {
+                    ok = append_error(errors, error_count, error_capacity,
+                                      program->path, sig->token,
+                                      format_message(
+                                          "duplicate 'main' entry: target 'bin' requires exactly one 'main(args: string[])' across all programs"));
+                    if (!ok) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    if (main_count == 0U) {
+        ok = append_error(errors, error_count, error_capacity,
+                          NULL, kEmptyToken,
+                          format_message(
+                              "target 'bin' requires a 'main(args: string[])' entry function but none was found"));
+        return ok;
+    }
+
+    {
+        const FengCallableSignature *sig = &first_main->as.function_decl;
+
+        if (sig->param_count != 1U ||
+            sig->params[0].name.length != 4U ||
+            memcmp(sig->params[0].name.data, "args", 4U) != 0 ||
+            !main_param_type_is_string_array(sig->params[0].type)) {
+            ok = append_error(errors, error_count, error_capacity,
+                              first_main_path, sig->token,
+                              format_message(
+                                  "'main' entry must have signature 'main(args: string[])'"));
+            if (!ok) {
+                return false;
+            }
+        }
+        if (sig->return_type != NULL && !type_ref_is_void(sig->return_type)) {
+            ok = append_error(errors, error_count, error_capacity,
+                              first_main_path, sig->token,
+                              format_message(
+                                  "'main' entry must return void"));
+            if (!ok) {
+                return false;
+            }
+        }
+        if (decl_is_public(first_main)) {
+            /* main is the program entry; visibility is irrelevant here. */
+        }
+    }
+
+    return ok;
+}
+
 bool feng_semantic_analyze(const FengProgram *const *programs,
                            size_t program_count,
+                           FengCompileTarget target,
                            FengSemanticAnalysis **out_analysis,
                            FengSemanticError **out_errors,
                            size_t *out_error_count) {
@@ -9749,6 +10359,13 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
                                                 &errors,
                                                 &error_count,
                                                 &error_capacity);
+    }
+
+    if (ok && error_count == 0U) {
+        ok = validate_main_entry(analysis, target,
+                                 &errors,
+                                 &error_count,
+                                 &error_capacity);
     }
 
 finish:

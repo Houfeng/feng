@@ -218,7 +218,7 @@ static void test_duplicate_type_across_files_same_module(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis == NULL);
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "type_b.f") == 0);
@@ -244,7 +244,7 @@ static void test_duplicate_binding_across_files_same_module(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "binding_b.f") == 0);
     ASSERT(errors[0].token.line == 2U);
@@ -270,7 +270,7 @@ static void test_function_return_only_overload_error(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "cannot differ only by return type") != NULL);
@@ -291,7 +291,7 @@ static void test_extern_function_accepts_module_string_library_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -310,7 +310,7 @@ static void test_extern_function_requires_calling_convention_annotation(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_missing_callconv_error.f") == 0);
     ASSERT(errors[0].token.line == 2U);
@@ -333,7 +333,7 @@ static void test_extern_function_rejects_multiple_calling_convention_annotations
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_multiple_callconv_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -356,7 +356,7 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_non_string_binding_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -378,7 +378,7 @@ static void test_extern_function_rejects_array_parameter_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_array_param_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -399,7 +399,7 @@ static void test_extern_function_rejects_array_return_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_array_return_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -424,7 +424,7 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "extern_fn_non_fixed_object_param_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
@@ -452,7 +452,7 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -475,7 +475,7 @@ static void test_fixed_type_accepts_abi_stable_fields(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -497,7 +497,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_type_managed_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -519,7 +519,7 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_function_type_union_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -542,7 +542,7 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -565,7 +565,7 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_callconv_arg_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -589,7 +589,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_method_managed_signature_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -617,7 +617,7 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -643,7 +643,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_callback_plain_fn_error.f") == 0);
     ASSERT(errors[0].token.line == 8U);
@@ -667,7 +667,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_callback_lambda_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -692,7 +692,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_callback_captured_lambda_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -715,7 +715,7 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -742,7 +742,7 @@ static void test_fixed_function_allows_locally_caught_throw(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -767,7 +767,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -797,7 +797,7 @@ static void test_fixed_function_allows_call_to_catching_function(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -821,7 +821,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_method_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -848,7 +848,7 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -874,7 +874,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_invoked_lambda_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -902,7 +902,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_local_function_value_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
@@ -933,7 +933,7 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -956,7 +956,7 @@ static void test_throw_rejects_void_expression(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "throw_void_expression_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -982,7 +982,7 @@ static void test_finally_rejects_return(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "finally_return_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -1007,7 +1007,7 @@ static void test_finally_rejects_throw(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "finally_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -1034,7 +1034,7 @@ static void test_finally_rejects_break(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "finally_break_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -1061,7 +1061,7 @@ static void test_finally_rejects_continue(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "finally_continue_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -1086,7 +1086,7 @@ static void test_top_level_function_auto_infers_return_type_for_forward_call(voi
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1113,7 +1113,7 @@ static void test_top_level_function_rejects_conflicting_inferred_return_types(vo
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "auto_return_conflict_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -1140,7 +1140,7 @@ static void test_method_auto_infers_return_type_for_forward_call(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1168,7 +1168,7 @@ static void test_imported_function_auto_infers_return_type_across_modules(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1195,7 +1195,7 @@ static void test_omitted_return_function_can_infer_lambda_signature(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1221,7 +1221,7 @@ static void test_omitted_return_function_value_matches_named_function_type(void)
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1242,7 +1242,7 @@ static void test_explicit_non_void_return_rejects_empty_return(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "explicit_non_void_empty_return_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -1267,7 +1267,7 @@ static void test_match_expression_rejects_non_constant_label(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "match_non_constant_label_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -1292,7 +1292,7 @@ static void test_match_expression_rejects_incomparable_label_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "match_incomparable_label_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -1317,7 +1317,7 @@ static void test_match_expression_rejects_inconsistent_result_types(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "match_inconsistent_result_types_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -1340,7 +1340,7 @@ static void test_untyped_lambda_binding_is_callable(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1364,7 +1364,7 @@ static void test_untyped_lambda_binding_matches_named_function_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1383,7 +1383,7 @@ static void test_module_visibility_conflict(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "visibility_b.f") == 0);
     ASSERT(errors[0].token.line == 1U);
@@ -1409,7 +1409,7 @@ static void test_valid_function_overload_by_parameter_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1436,7 +1436,7 @@ static void test_top_level_function_call_selects_overload_by_literal_type(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1464,7 +1464,7 @@ static void test_top_level_function_call_selects_overload_by_inferred_local_bind
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1491,7 +1491,7 @@ static void test_top_level_function_call_reports_type_mismatch(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "call_overload_type_mismatch.f") == 0);
     ASSERT(errors[0].token.line == 9U);
@@ -1523,7 +1523,7 @@ static void test_imported_function_call_selects_overload_by_literal_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1555,7 +1555,7 @@ static void test_alias_function_call_selects_overload_by_literal_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1585,7 +1585,7 @@ static void test_method_call_selects_overload_by_literal_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1608,7 +1608,7 @@ static void test_function_typed_local_binding_is_callable(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1630,7 +1630,7 @@ static void test_non_callable_local_binding_reports_error(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "non_callable_local_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -1661,7 +1661,7 @@ static void test_private_method_is_inaccessible_across_modules(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "private_method_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -1692,7 +1692,7 @@ static void test_top_level_function_value_selects_overload_by_explicit_binding_t
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1723,7 +1723,7 @@ static void test_top_level_function_value_selects_overload_by_parameter_context(
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1751,7 +1751,7 @@ static void test_top_level_function_value_selects_overload_by_return_type_contex
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1778,7 +1778,7 @@ static void test_top_level_function_value_requires_explicit_type_when_overloaded
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "function_value_requires_type_error.f") == 0);
     ASSERT(errors[0].token.line == 9U);
@@ -1806,7 +1806,7 @@ static void test_method_value_selects_overload_by_explicit_binding_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1835,7 +1835,7 @@ static void test_method_value_selects_overload_by_parameter_context(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1861,7 +1861,7 @@ static void test_method_value_selects_overload_by_return_type_context(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -1886,7 +1886,7 @@ static void test_method_value_requires_explicit_type_when_overloaded(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "method_value_requires_type_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
@@ -1915,7 +1915,7 @@ static void test_top_level_function_value_binding_rejects_non_matching_target_ty
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "function_value_binding_mismatch_error.f") == 0);
     ASSERT(errors[0].token.line == 10U);
@@ -1944,7 +1944,7 @@ static void test_top_level_function_value_return_rejects_non_matching_target_typ
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "function_value_return_mismatch_error.f") == 0);
     ASSERT(errors[0].token.line == 10U);
@@ -1969,7 +1969,7 @@ static void test_top_level_function_value_rejects_non_function_binding_type(void
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "function_value_non_function_binding_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -1995,7 +1995,7 @@ static void test_lambda_body_rejects_function_value_for_non_function_return_type
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "lambda_body_function_value_return_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
@@ -2029,7 +2029,7 @@ static void test_alias_function_value_argument_rejects_non_matching_target_type(
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_function_value_main.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -2058,7 +2058,7 @@ static void test_method_value_argument_rejects_non_matching_target_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "method_value_argument_mismatch_error.f") == 0);
     ASSERT(errors[0].token.line == 9U);
@@ -2085,7 +2085,7 @@ static void test_function_typed_call_result_rejects_non_matching_binding_type(vo
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "call_result_binding_mismatch_error.f") == 0);
     ASSERT(errors[0].token.line == 8U);
@@ -2110,7 +2110,7 @@ static void test_top_level_call_result_rejects_non_matching_binding_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "top_level_call_result_binding_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -2135,7 +2135,7 @@ static void test_top_level_call_result_rejects_non_matching_return_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "top_level_call_result_return_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -2162,7 +2162,7 @@ static void test_method_call_result_rejects_non_matching_binding_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "method_call_result_binding_error.f") == 0);
     ASSERT(errors[0].token.line == 8U);
@@ -2185,7 +2185,7 @@ static void test_local_assignment_rejects_non_matching_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "local_assign_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2210,7 +2210,7 @@ static void test_member_assignment_rejects_non_matching_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "member_assign_type_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -2235,7 +2235,7 @@ static void test_object_literal_field_value_rejects_non_matching_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_literal_field_type_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -2258,7 +2258,7 @@ static void test_local_let_assignment_rejects_non_writable_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "local_let_assign_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2280,7 +2280,7 @@ static void test_default_parameter_assignment_rejects_non_writable_target(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "default_param_assign_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2302,7 +2302,7 @@ static void test_var_parameter_assignment_is_writable(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2324,7 +2324,7 @@ static void test_top_level_let_assignment_rejects_non_writable_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "top_level_let_assign_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2349,7 +2349,7 @@ static void test_instance_let_member_assignment_rejects_non_writable_target(void
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "instance_let_member_assign_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -2376,7 +2376,7 @@ static void test_alias_public_let_binding_assignment_rejects_non_writable_target
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_assign_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2401,7 +2401,7 @@ static void test_index_assignment_accepts_explicit_array_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2423,7 +2423,7 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_assign_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2447,7 +2447,7 @@ static void test_inferred_array_literal_binding_supports_index_read_write(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2469,7 +2469,7 @@ static void test_inferred_array_literal_binding_rejects_non_matching_index_assig
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "inferred_array_index_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2491,7 +2491,7 @@ static void test_inferred_array_literal_rejects_mixed_element_types(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "mixed_array_literal_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2516,7 +2516,7 @@ static void test_inferred_nested_array_literal_supports_nested_index_read_write(
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2537,7 +2537,7 @@ static void test_empty_array_literal_binding_requires_explicit_target_type(void)
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "empty_array_literal_type_context_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2560,7 +2560,7 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2586,7 +2586,7 @@ static void test_explicit_numeric_and_exact_casts_pass(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -2607,7 +2607,7 @@ static void test_cast_rejects_bool_to_numeric(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_bool_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2629,7 +2629,7 @@ static void test_cast_rejects_numeric_to_bool(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_numeric_to_bool_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2651,7 +2651,7 @@ static void test_cast_rejects_string_to_numeric(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_string_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2674,7 +2674,7 @@ static void test_cast_rejects_array_to_numeric(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_array_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2696,7 +2696,7 @@ static void test_cast_rejects_numeric_to_string(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'i32' to 'string' is not allowed") != NULL);
 
@@ -2716,7 +2716,7 @@ static void test_cast_rejects_numeric_to_array(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'i32' to 'int[]' is not allowed") != NULL);
 
@@ -2736,7 +2736,7 @@ static void test_cast_rejects_string_to_bool(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'string' to 'bool' is not allowed") != NULL);
 
@@ -2756,7 +2756,7 @@ static void test_cast_rejects_bool_to_string(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'bool' to 'string' is not allowed") != NULL);
 
@@ -2777,7 +2777,7 @@ static void test_cast_rejects_numeric_to_object(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'i32' to 'Point' is not allowed") != NULL);
 
@@ -2798,7 +2798,7 @@ static void test_cast_rejects_object_to_numeric(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "cast from 'Point' to 'int' is not allowed") != NULL);
 
@@ -2820,7 +2820,7 @@ static void test_cast_same_type_passes(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -2840,7 +2840,7 @@ static void test_index_expression_rejects_float_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_float_operand_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2863,7 +2863,7 @@ static void test_index_expression_rejects_bool_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_bool_operand_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2886,7 +2886,7 @@ static void test_index_expression_rejects_non_array_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_non_array_target_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2909,7 +2909,7 @@ static void test_index_assignment_rejects_non_array_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_assign_non_array_target_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -2931,7 +2931,7 @@ static void test_unary_minus_rejects_non_numeric_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "unary_minus_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2953,7 +2953,7 @@ static void test_unary_not_rejects_non_bool_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "unary_not_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2975,7 +2975,7 @@ static void test_binary_plus_rejects_non_matching_operands(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "binary_plus_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -2998,7 +2998,7 @@ static void test_binary_and_rejects_non_bool_operands(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "binary_and_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3025,7 +3025,7 @@ static void test_bitwise_ops_accept_same_integer_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -3044,7 +3044,7 @@ static void test_bitwise_and_rejects_mismatched_integer_types(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "binary operator '&' requires operands of the same integer type") != NULL);
@@ -3065,7 +3065,7 @@ static void test_bitwise_or_rejects_non_integer_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "binary operator '|' requires operands of the same integer type") != NULL);
@@ -3086,7 +3086,7 @@ static void test_unary_tilde_rejects_non_integer_operand(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "unary operator '~' requires an integer operand") != NULL);
@@ -3107,7 +3107,7 @@ static void test_shift_amount_out_of_range_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "shift amount") != NULL);
     ASSERT(strstr(errors[0].message, "out of range") != NULL);
@@ -3128,7 +3128,7 @@ static void test_const_fold_arithmetic_fits_narrow_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -3147,7 +3147,7 @@ static void test_const_fold_arithmetic_overflows_narrow_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
 
     feng_semantic_errors_free(errors, error_count);
@@ -3166,7 +3166,7 @@ static void test_const_fold_division_by_zero_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "division by zero") != NULL);
 
@@ -3186,7 +3186,7 @@ static void test_const_fold_modulo_by_zero_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "modulo by zero") != NULL);
 
@@ -3206,7 +3206,7 @@ static void test_const_fold_i64_overflow_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "integer overflow") != NULL);
 
@@ -3226,7 +3226,7 @@ static void test_const_fold_shift_amount_via_const_expr(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "shift amount 32") != NULL);
     ASSERT(strstr(errors[0].message, "out of range for type 'i32'") != NULL);
@@ -3247,7 +3247,7 @@ static void test_const_fold_cast_truncation_then_target_check(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -3267,7 +3267,7 @@ static void test_const_fold_propagates_immutable_local_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -3287,7 +3287,7 @@ static void test_const_fold_does_not_propagate_var_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
 
     feng_semantic_errors_free(errors, error_count);
@@ -3306,7 +3306,7 @@ static void test_if_expression_rejects_non_bool_condition(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "if_expr_condition_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3328,7 +3328,7 @@ static void test_if_expression_requires_matching_branch_types(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "if_expr_branch_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3351,7 +3351,7 @@ static void test_valid_unary_binary_and_if_expressions_pass(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3372,7 +3372,7 @@ static void test_if_statement_rejects_non_bool_condition(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "if_stmt_condition_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3394,7 +3394,7 @@ static void test_while_statement_rejects_non_bool_condition(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "while_stmt_condition_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3416,7 +3416,7 @@ static void test_for_statement_rejects_non_bool_condition(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "for_stmt_condition_type_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3440,7 +3440,7 @@ static void test_valid_statement_conditions_pass(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3461,7 +3461,7 @@ static void test_for_statement_accepts_empty_condition(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3481,7 +3481,7 @@ static void test_missing_use_target_module(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 2U);
     ASSERT(strstr(errors[0].message, "use target module 'demo.base' was not found") != NULL);
@@ -3505,7 +3505,7 @@ static void test_imported_type_conflicts_with_local_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_type_conflict.f") == 0);
     ASSERT(errors[0].token.line == 2U);
@@ -3535,7 +3535,7 @@ static void test_imported_value_conflicts_with_local_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_value_conflict.f") == 0);
     ASSERT(errors[0].token.line == 2U);
@@ -3570,7 +3570,7 @@ static void test_imported_name_conflicts_between_modules(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 3U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "import_conflict_main.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3601,7 +3601,7 @@ static void test_alias_import_does_not_inject_short_names(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3635,7 +3635,7 @@ static void test_duplicate_use_alias_in_same_file(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 3U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_dup_main.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3659,7 +3659,7 @@ static void test_undefined_identifier_in_function_body(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "undefined_identifier.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3681,7 +3681,7 @@ static void test_unknown_type_reference_in_function_signature(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "unknown_type.f") == 0);
     ASSERT(errors[0].token.line == 2U);
@@ -3706,7 +3706,7 @@ static void test_self_is_valid_inside_type_method(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3727,7 +3727,7 @@ static void test_self_is_invalid_outside_type_method(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "self_top_level_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
@@ -3737,7 +3737,9 @@ static void test_self_is_invalid_outside_type_method(void) {
     feng_program_free(program);
 }
 
-static void test_self_is_invalid_inside_lambda(void) {
+static void test_self_is_capturable_inside_method_lambda(void) {
+    /* Per docs/feng-function.md, lambdas declared inside a member method
+     * (or constructor) body may capture the enclosing object's `self`. */
     const char *source =
         "mod demo.main;\n"
         "type User {\n"
@@ -3747,19 +3749,18 @@ static void test_self_is_invalid_inside_lambda(void) {
         "        return 0;\n"
         "    }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("self_lambda_error.f", source);
+    FengProgram *program = parse_program_or_die("self_lambda_method_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "self_lambda_error.f") == 0);
-    ASSERT(errors[0].token.line == 5U);
-    ASSERT(strstr(errors[0].message, "'self' is only available") != NULL);
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
 
-    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -3780,7 +3781,7 @@ static void test_alias_member_access_resolves_public_names(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -3809,7 +3810,7 @@ static void test_alias_member_access_reports_missing_public_name(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_missing_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -3839,7 +3840,7 @@ static void test_alias_identifier_requires_member_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_ident_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -3865,7 +3866,7 @@ static void test_self_reports_unknown_member(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "self_unknown_member.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -3898,7 +3899,7 @@ static void test_spec_typed_param_supports_field_and_method_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_errors_free(errors, error_count);
@@ -3923,7 +3924,7 @@ static void test_spec_typed_param_rejects_let_field_assignment(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "is not writable") != NULL);
 
@@ -3948,7 +3949,7 @@ static void test_spec_typed_param_reports_unknown_member_with_spec_name(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "spec 'Named' has no member 'unknown'") != NULL);
 
@@ -3971,7 +3972,7 @@ static void test_callable_form_spec_typed_param_rejects_member_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "callable-form") != NULL);
 
@@ -4000,7 +4001,7 @@ static void test_numeric_literal_adapts_to_explicit_integer_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_errors_free(errors, error_count);
@@ -4024,7 +4025,7 @@ static void test_numeric_literal_adapts_to_explicit_alias_targets(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_errors_free(errors, error_count);
@@ -4044,7 +4045,7 @@ static void test_numeric_literal_overflowing_target_is_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "does not match expected type 'i8'") != NULL);
@@ -4065,7 +4066,7 @@ static void test_numeric_literal_negative_to_unsigned_target_is_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "does not match expected type 'u8'") != NULL);
@@ -4088,7 +4089,7 @@ static void test_numeric_literal_overflows_default_int_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
@@ -4112,7 +4113,7 @@ static void test_object_literal_reports_unknown_field(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_literal_unknown_field.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -4135,7 +4136,7 @@ static void test_object_literal_requires_object_type_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_literal_non_object_target.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -4161,7 +4162,7 @@ static void test_object_literal_accepts_constructor_call_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4183,7 +4184,7 @@ static void test_constructor_call_uses_implicit_default_constructor(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4207,7 +4208,7 @@ static void test_constructor_call_reports_missing_zero_arg_constructor(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "ctor_missing_zero_arg.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -4233,7 +4234,7 @@ static void test_constructor_call_selects_overload_by_literal_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4259,7 +4260,7 @@ static void test_constructor_call_selects_overload_by_inferred_local_binding(voi
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4284,7 +4285,7 @@ static void test_constructor_call_reports_type_mismatch(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "ctor_type_mismatch.f") == 0);
     ASSERT(errors[0].token.line == 7U);
@@ -4307,7 +4308,7 @@ static void test_constructor_call_rejects_function_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "ctor_non_object_type.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -4332,7 +4333,7 @@ static void test_constructor_call_rejects_object_form_spec(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message, "spec 'CommitOptions' is not an object type and cannot be constructed") != NULL);
@@ -4360,7 +4361,7 @@ static void test_object_literal_reports_inaccessible_imported_constructor(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "ctor_import_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -4386,7 +4387,7 @@ static void test_object_literal_rejects_decl_bound_let_member(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_decl_object_literal_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -4411,7 +4412,7 @@ static void test_constructor_rejects_decl_bound_let_member_assignment(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_decl_ctor_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -4437,7 +4438,7 @@ static void test_constructor_rejects_repeated_let_member_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_repeat_ctor_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -4462,7 +4463,7 @@ static void test_method_rejects_let_member_assignment(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_method_assign_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
@@ -4490,7 +4491,7 @@ static void test_object_literal_rejects_ctor_bound_let_member(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_ctor_object_literal_error.f") == 0);
     ASSERT(errors[0].token.line == 9U);
@@ -4522,7 +4523,7 @@ static void test_object_literal_rejects_ctor_bound_let_member_for_selected_overl
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "let_ctor_selected_overload_error.f") == 0);
     ASSERT(errors[0].token.line == 13U);
@@ -4547,7 +4548,7 @@ static void test_object_literal_allows_unbound_let_member(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4571,7 +4572,7 @@ static void test_object_literal_rejects_duplicate_fields(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_literal_duplicate_field_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
@@ -4601,7 +4602,7 @@ static void test_object_literal_rejects_inaccessible_private_field(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_literal_private_main.f") == 0);
     ASSERT(errors[0].token.line == 4U);
@@ -4631,7 +4632,7 @@ static void test_object_literal_allows_private_field_inside_same_module(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -4660,7 +4661,7 @@ static void test_spec_type_satisfaction_succeeds(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -4677,7 +4678,7 @@ static void test_spec_parent_specs_must_be_spec(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "spec 'Bad' parent spec list must contain only spec types") != NULL);
@@ -4696,7 +4697,7 @@ static void test_spec_parent_specs_rejects_duplicate(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "lists 'A' more than once") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4714,7 +4715,7 @@ static void test_spec_parent_specs_rejects_cycle(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "forms a cycle") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4732,7 +4733,7 @@ static void test_type_declared_specs_must_be_spec(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "type 'User' declared spec list must contain only spec types") != NULL);
@@ -4751,7 +4752,7 @@ static void test_type_declared_specs_rejects_duplicate(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "lists 'A' more than once") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4771,7 +4772,7 @@ static void test_type_declared_specs_missing_field_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "type 'User' is missing field 'name' required by spec 'Named'") != NULL);
@@ -4794,7 +4795,7 @@ static void test_type_declared_specs_field_mutability_mismatch_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "mutability does not match") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4818,7 +4819,7 @@ static void test_type_declared_specs_method_signature_mismatch_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "signature does not match") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4843,7 +4844,7 @@ static void test_type_declared_specs_transitive_satisfaction_required(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "type 'User' is missing method 'id' required by spec 'Identified'") != NULL);
@@ -4871,7 +4872,7 @@ static void test_type_declared_specs_cross_spec_method_conflict(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     /* Either the missing-spec-B-method message or the conflict message is acceptable;
        both indicate the conflict was detected. */
@@ -4893,7 +4894,7 @@ static void test_fit_target_must_be_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "fit target must be a concrete type") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4912,7 +4913,7 @@ static void test_fit_specs_must_be_spec(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "fit specs list must contain only spec types") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4931,7 +4932,7 @@ static void test_fit_specs_rejects_duplicate(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "fit lists 'A' more than once") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -4959,7 +4960,7 @@ static void test_fit_body_methods_satisfy_spec(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -4979,7 +4980,7 @@ static void test_fit_missing_method_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "type 'User' is missing method 'greet' required by spec 'Named'") != NULL);
@@ -5016,7 +5017,7 @@ static void test_orphan_pu_fit_emits_info_and_downgrades(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 3U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     ASSERT(analysis != NULL);
     ASSERT(analysis->info_count == 1U);
@@ -5048,7 +5049,7 @@ static void test_local_fit_emits_no_orphan_info(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     ASSERT(analysis != NULL);
     ASSERT(analysis->info_count == 0U);
@@ -5076,7 +5077,7 @@ static void test_fit_method_callable_on_instance(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -5102,7 +5103,7 @@ static void test_fit_method_unknown_member_still_rejected(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "no member 'farewell'") != NULL);
     feng_semantic_errors_free(errors, error_count);
@@ -5129,7 +5130,7 @@ static void test_fit_body_rejects_self_private_field_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message,
                   "fit body cannot access private member 'secret' of target type 'User'") != NULL);
@@ -5157,7 +5158,7 @@ static void test_fit_body_rejects_self_private_method_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message,
                   "fit body cannot access private member 'whisper' of target type 'User'") != NULL);
@@ -5185,7 +5186,7 @@ static void test_fit_body_rejects_other_param_private_field_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message,
                   "fit body cannot access private member 'secret' of target type 'User'") != NULL);
@@ -5214,7 +5215,7 @@ static void test_fit_body_rejects_object_literal_private_field(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message,
                   "object literal field 'secret' is not accessible for type 'User'") != NULL);
@@ -5244,7 +5245,7 @@ static void test_fit_body_allows_public_member_access(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -5272,7 +5273,7 @@ static void test_spec_at_type_position_accepts_satisfying_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -5300,7 +5301,7 @@ static void test_spec_at_type_position_rejects_unrelated_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5329,7 +5330,7 @@ static void test_spec_at_type_position_accepts_via_fit(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -5383,7 +5384,7 @@ static void test_resolved_callable_attached_to_call_exprs(void) {
     const FengExpr *call_shout;
     const FengExpr *call_helper;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     run_decl = find_function_decl_by_name(program, "run");
@@ -5461,7 +5462,7 @@ static void test_finalizer_basic_ok(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -5481,7 +5482,7 @@ static void test_finalizer_rejects_multiple_per_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "declares more than one finalizer") != NULL);
 
@@ -5503,7 +5504,7 @@ static void test_finalizer_rejected_on_fixed_type(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "@fixed") != NULL);
     ASSERT(strstr(errors[0].message, "finalizer") != NULL);
@@ -5526,7 +5527,7 @@ static void test_finalizer_rejects_return_with_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "finalizer body must use 'return;' without a value") != NULL);
 
@@ -5548,7 +5549,7 @@ static void test_constructor_rejects_return_with_value(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message, "constructor body must use 'return;' without a value") != NULL);
 
@@ -5572,7 +5573,289 @@ static void test_constructor_with_explicit_void_return_ok(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* ===== New behaviour added with --target / lambda block-body / overload checks ===== */
+
+static void test_lambda_block_body_returns_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let f = (a: int) {\n"
+        "        let b = a + 1;\n"
+        "        return b;\n"
+        "    };\n"
+        "    return f(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("lambda_block_body_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_lambda_block_body_records_local_capture(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let x = 1;\n"
+        "    let f = () {\n"
+        "        return x;\n"
+        "    };\n"
+        "    return f();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("lambda_capture_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengStmt *stmt;
+    const FengExpr *lambda_expr;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    /* Drill into AST: program -> fn run -> body -> stmts[1] (let f = lambda) */
+    ASSERT(program->declaration_count >= 1U);
+    {
+        const FengDecl *decl = program->declarations[0];
+        const FengCallableSignature *sig = &decl->as.function_decl;
+
+        ASSERT(sig->body != NULL);
+        ASSERT(sig->body->statement_count >= 2U);
+        stmt = sig->body->statements[1];
+        ASSERT(stmt->kind == FENG_STMT_BINDING);
+        lambda_expr = stmt->as.binding.initializer;
+        ASSERT(lambda_expr != NULL && lambda_expr->kind == FENG_EXPR_LAMBDA);
+        ASSERT(lambda_expr->as.lambda.is_block_body);
+        ASSERT(lambda_expr->as.lambda.capture_count == 1U);
+        ASSERT(lambda_expr->as.lambda.captures[0].kind == FENG_LAMBDA_CAPTURE_LOCAL);
+        ASSERT(lambda_expr->as.lambda.captures[0].name.length == 1U);
+        ASSERT(lambda_expr->as.lambda.captures[0].name.data[0] == 'x');
+        ASSERT(!lambda_expr->as.lambda.captures_self);
+    }
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_lambda_in_method_records_self_capture(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    var id: int;\n"
+        "    fn read(): int {\n"
+        "        let f = () -> self.id;\n"
+        "        return f();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("lambda_self_capture_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    {
+        const FengDecl *type_decl = program->declarations[0];
+        const FengTypeMember *method = type_decl->as.type_decl.members[1];
+        const FengStmt *binding_stmt = method->as.callable.body->statements[0];
+        const FengExpr *lambda_expr = binding_stmt->as.binding.initializer;
+
+        ASSERT(lambda_expr->kind == FENG_EXPR_LAMBDA);
+        ASSERT(lambda_expr->as.lambda.captures_self);
+    }
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_field_init_lambda_captures_self_when_callable_spec(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Reader(): int;\n"
+        "type Box {\n"
+        "    var n: int;\n"
+        "    let read: Reader = () -> self.n;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("field_lambda_self_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_field_init_bare_self_is_invalid(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    var n: int;\n"
+        "    let m: int = self.n;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("field_bare_self_err.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "self") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_duplicate_method_signature_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type T {\n"
+        "    fn pick(a: int): int { return a; }\n"
+        "    fn pick(a: int): int { return a + 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("dup_method.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "duplicate method signature") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_method_overload_return_only_difference_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type T {\n"
+        "    fn pick(a: int): int { return a; }\n"
+        "    fn pick(a: int): bool { return true; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ret_only_method.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "differ only by return type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_main_entry_required_for_bin_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int { return 0; }\n";
+    FengProgram *program = parse_program_or_die("no_main.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "main") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_main_entry_valid_signature_passes_for_bin(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(args: string[]) {\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("main_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_main_entry_bad_signature_is_rejected_for_bin(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn main(): int { return 0; }\n";
+    FengProgram *program = parse_program_or_die("main_bad_sig.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_multiple_main_entries_rejected_for_bin(void) {
+    const char *source_a =
+        "mod demo.main;\n"
+        "fn main(args: string[]) { return; }\n";
+    const char *source_b =
+        "mod demo.other;\n"
+        "fn main(args: string[]) { return; }\n";
+    FengProgram *program_a = parse_program_or_die("main_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("main_b.f", source_b);
+    const FengProgram *programs[] = {program_a, program_b};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_BIN, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "duplicate 'main'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+}
+
+static void test_lib_target_skips_main_check(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn helper(): int { return 0; }\n";
+    FengProgram *program = parse_program_or_die("lib_no_main.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -5725,7 +6008,7 @@ int main(void) {
     test_unknown_type_reference_in_function_signature();
     test_self_is_valid_inside_type_method();
     test_self_is_invalid_outside_type_method();
-    test_self_is_invalid_inside_lambda();
+    test_self_is_capturable_inside_method_lambda();
     test_alias_member_access_resolves_public_names();
     test_alias_member_access_reports_missing_public_name();
     test_alias_identifier_requires_member_access();
@@ -5795,6 +6078,20 @@ int main(void) {
     test_finalizer_rejects_return_with_value();
     test_constructor_rejects_return_with_value();
     test_constructor_with_explicit_void_return_ok();
+
+    test_lambda_block_body_returns_value();
+    test_lambda_block_body_records_local_capture();
+    test_lambda_in_method_records_self_capture();
+    test_field_init_lambda_captures_self_when_callable_spec();
+    test_field_init_bare_self_is_invalid();
+    test_duplicate_method_signature_is_rejected();
+    test_method_overload_return_only_difference_is_rejected();
+    test_main_entry_required_for_bin_target();
+    test_main_entry_valid_signature_passes_for_bin();
+    test_main_entry_bad_signature_is_rejected_for_bin();
+    test_multiple_main_entries_rejected_for_bin();
+    test_lib_target_skips_main_check();
+
     puts("semantic tests passed");
     return 0;
 }
