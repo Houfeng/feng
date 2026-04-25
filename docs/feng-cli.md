@@ -19,6 +19,7 @@ feng <源文件列表> --target <目标> --out <输出路径> --release [--pkg <
 
 ```text
 feng <command> [options]
+feng <源文件列表> --target <目标> --out <输出路径> --release [--pkg <.fb路径>]... [--lib <库路径>]...
 
 命令:
   init       在当前目录初始化 Feng 项目
@@ -80,12 +81,13 @@ feng build [<path>] [--release]
 
 选项:
 
-- `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--release`: 以发布模式构建,透传给编译器。
 
 说明:
 
 - `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置,不接受编译器级别的细粒度选项。
+- `build` 执行前会检查依赖是否已安装;若存在未安装依赖,先完成安装再构建。
 
 ### 4.3 `feng run`
 
@@ -99,7 +101,7 @@ feng run [<path>] [--release] [-- <program-args>...]
 
 选项:
 
-- `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--release`: 以发布模式构建,透传给编译器。
 
 说明:
@@ -120,13 +122,14 @@ feng check [<path>] [--format <text|json>]
 
 选项:
 
-- `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--format <text|json>`: 指定诊断输出格式,`text` 为人类可读,`json` 适合编辑器或 CI 消费,默认 `text`。
 
 说明:
 
 - 面向日常编辑-检查循环。
 - 语义上等价于“走完整依赖解析与检查流程,但跳过最终制品生成”。
+- `check` 执行前会检查依赖是否已安装;若存在未安装依赖,先完成安装再检查。
 
 ### 4.5 `feng clean`
 
@@ -140,7 +143,7 @@ feng clean [<path>]
 
 选项:
 
-- `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 ### 4.6 `feng pack`
 
@@ -154,7 +157,7 @@ feng pack [<path>]
 
 选项:
 
-- `<path>`: 显式指定 `feng.fm` 路径;若省略,自动查找当前目录下的 `feng.fm`;若找不到,报错退出。
+- `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 说明:
 
@@ -177,7 +180,11 @@ feng deps add <pkg-name[@version]>
 
 选项:
 
-- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录。
+- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录并重新拉取该依赖。
+
+说明:
+
+- `deps add` 在写入 `feng.fm` 后立即拉取依赖,确保本地安装状态与清单一致。
 
 ### 5.2 `feng deps remove`
 
