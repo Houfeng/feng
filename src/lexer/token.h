@@ -101,7 +101,8 @@ typedef enum FengTokenKind {
     FENG_TOKEN_NE,
     FENG_TOKEN_AND_AND,
     FENG_TOKEN_OR_OR,
-    FENG_TOKEN_ARROW
+    FENG_TOKEN_ARROW,
+    FENG_TOKEN_TILDE
 } FengTokenKind;
 
 typedef enum FengAnnotationKind {

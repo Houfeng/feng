@@ -2491,6 +2491,20 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
         return true;
     }
 
+    if (context->current_callable_member != NULL &&
+        (context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+         context->current_callable_member->kind == FENG_TYPE_MEMBER_FINALIZER) &&
+        stmt->as.return_value != NULL) {
+        const char *member_kind_name =
+            (context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR)
+                ? "constructor"
+                : "finalizer";
+        return resolver_append_error(
+            context,
+            stmt->token,
+            format_message("%s body must use 'return;' without a value", member_kind_name));
+    }
+
     if (context->current_callable_signature->return_type != NULL) {
         if (stmt->as.return_value == NULL) {
             if (type_ref_is_void(context->current_callable_signature->return_type)) {
@@ -2736,6 +2750,52 @@ static size_t count_declared_constructors(const FengDecl *type_decl) {
     }
 
     return count;
+}
+
+static bool validate_type_finalizer_constraints(ResolveContext *context, const FengDecl *type_decl) {
+    size_t member_index;
+    const FengTypeMember *first_finalizer = NULL;
+    bool type_is_fixed;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    type_is_fixed = annotations_contain_kind(type_decl->annotations,
+                                             type_decl->annotation_count,
+                                             FENG_ANNOTATION_FIXED);
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+
+        if (member->kind != FENG_TYPE_MEMBER_FINALIZER) {
+            continue;
+        }
+
+        if (type_is_fixed) {
+            return resolver_append_error(
+                context,
+                member->token,
+                format_message(
+                    "type '%.*s' is marked as @fixed and cannot declare a finalizer",
+                    (int)decl_typeish_name(type_decl).length,
+                    decl_typeish_name(type_decl).data));
+        }
+
+        if (first_finalizer != NULL) {
+            return resolver_append_error(
+                context,
+                member->token,
+                format_message(
+                    "type '%.*s' declares more than one finalizer",
+                    (int)decl_typeish_name(type_decl).length,
+                    decl_typeish_name(type_decl).data));
+        }
+
+        first_finalizer = member;
+    }
+
+    return true;
 }
 
 static bool function_type_decl_is_fixed_abi_callable_type(const FengDecl *function_type_decl) {
@@ -6120,6 +6180,20 @@ static bool validate_fixed_callable_member(ResolveContext *context, const FengTy
                 member->as.callable.name.data));
     }
 
+    if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
+        if (!has_fixed && !has_union && callconv_count == 0U) {
+            return true;
+        }
+
+        return resolver_append_error(
+            context,
+            member->token,
+            format_message(
+                "finalizer '~%.*s' cannot use ABI annotations",
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
+
     return validate_fixed_callable_signature(context,
                                              member->token,
                                              member->as.callable.name,
@@ -8327,6 +8401,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (!validate_fixed_type_declaration(context, decl)) {
                 return false;
             }
+            if (!validate_type_finalizer_constraints(context, decl)) {
+                return false;
+            }
             return validate_type_declared_specs_and_satisfaction(context, decl);
 
         case FENG_DECL_SPEC:
@@ -8842,7 +8919,8 @@ static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
                             decl->as.type_decl.members[member_index];
 
                         if (member->kind == FENG_TYPE_MEMBER_METHOD ||
-                            member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                            member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+                            member->kind == FENG_TYPE_MEMBER_FINALIZER) {
                             ++count;
                         }
                     }

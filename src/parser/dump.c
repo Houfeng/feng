@@ -463,7 +463,19 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                         }
                         fputc('\n', stream);
                     } else {
-                        fputs(member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "constructor\n" : "method\n", stream);
+                        const char *kind_label;
+                        switch (member->kind) {
+                            case FENG_TYPE_MEMBER_CONSTRUCTOR:
+                                kind_label = "constructor\n";
+                                break;
+                            case FENG_TYPE_MEMBER_FINALIZER:
+                                kind_label = "finalizer\n";
+                                break;
+                            default:
+                                kind_label = "method\n";
+                                break;
+                        }
+                        fputs(kind_label, stream);
                         dump_callable(stream, &member->as.callable, 3);
                     }
                 }

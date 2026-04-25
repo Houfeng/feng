@@ -397,6 +397,135 @@ static void test_parse_error_missing_identifier_in_member_access(void) {
     ASSERT(strstr(error.message, "expected an identifier after '.' in member access") != NULL);
 }
 
+static void test_finalizer_declaration(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Buffer {\n"
+        "    pu var size: int;\n"
+        "    fn Buffer(s: int) {}\n"
+        "    fn ~Buffer() {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    FengDecl *decl;
+
+    ASSERT(feng_parse_source(source, strlen(source), "fin.f", &program, &error));
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl->kind == FENG_DECL_TYPE);
+    ASSERT(decl->as.type_decl.member_count == 3U);
+    ASSERT(decl->as.type_decl.members[1]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
+    ASSERT(decl->as.type_decl.members[2]->kind == FENG_TYPE_MEMBER_FINALIZER);
+    ASSERT(decl->as.type_decl.members[2]->as.callable.param_count == 0U);
+    ASSERT(decl->as.type_decl.members[2]->as.callable.return_type == NULL);
+
+    feng_program_free(program);
+}
+
+static void test_finalizer_declaration_with_void_return(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Buffer {\n"
+        "    fn ~Buffer(): void {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "fin_void.f", &program, &error));
+    ASSERT(program->declarations[0]->as.type_decl.members[0]->kind == FENG_TYPE_MEMBER_FINALIZER);
+    feng_program_free(program);
+}
+
+static void test_constructor_with_void_return_type(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Box {\n"
+        "    fn Box(): void {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "ctor_void.f", &program, &error));
+    ASSERT(program->declarations[0]->as.type_decl.members[0]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
+    feng_program_free(program);
+}
+
+static void test_parse_error_constructor_with_non_void_return(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Box {\n"
+        "    fn Box(): int { return 0; }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "ctor_bad.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "constructor must not declare a non-void return type") != NULL);
+}
+
+static void test_parse_error_finalizer_with_params(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Box {\n"
+        "    fn ~Box(x: int) {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "fin_params.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "finalizer must not declare any parameters") != NULL);
+}
+
+static void test_parse_error_finalizer_with_non_void_return(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Box {\n"
+        "    fn ~Box(): int { return 0; }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "fin_ret.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "finalizer return type must be omitted or ': void'") != NULL);
+}
+
+static void test_parse_error_finalizer_name_mismatch(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "type Box {\n"
+        "    fn ~Other() {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "fin_name.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "finalizer name must match the enclosing type name") != NULL);
+}
+
+static void test_parse_error_direct_finalizer_call(void) {
+    const char *source =
+        "mod demo.user;\n"
+        "fn main(args: string[]) {\n"
+        "    let b: Box = Box();\n"
+        "    b.~Box();\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "direct_fin.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "finalizer cannot be invoked directly via '.~'") != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -416,6 +545,14 @@ int main(void) {
     test_parse_error_missing_local_binding_keyword();
     test_parse_error_missing_identifier_in_qualified_name();
     test_parse_error_missing_identifier_in_member_access();
+    test_finalizer_declaration();
+    test_finalizer_declaration_with_void_return();
+    test_constructor_with_void_return_type();
+    test_parse_error_constructor_with_non_void_return();
+    test_parse_error_finalizer_with_params();
+    test_parse_error_finalizer_with_non_void_return();
+    test_parse_error_finalizer_name_mismatch();
+    test_parse_error_direct_finalizer_call();
     puts("parser tests passed");
     return 0;
 }

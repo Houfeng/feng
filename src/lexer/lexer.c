@@ -443,6 +443,8 @@ static FengToken scan_token_internal(FengLexer *lexer) {
             return make_token(lexer, FENG_TOKEN_SLASH, start_offset, start_line, start_column);
         case '%':
             return make_token(lexer, FENG_TOKEN_PERCENT, start_offset, start_line, start_column);
+        case '~':
+            return make_token(lexer, FENG_TOKEN_TILDE, start_offset, start_line, start_column);
         case '-':
             if (lexer_match(lexer, '>')) {
                 return make_token(lexer, FENG_TOKEN_ARROW, start_offset, start_line, start_column);

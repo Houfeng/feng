@@ -259,7 +259,8 @@ struct FengStmt {
 typedef enum FengTypeMemberKind {
     FENG_TYPE_MEMBER_FIELD = 0,
     FENG_TYPE_MEMBER_METHOD,
-    FENG_TYPE_MEMBER_CONSTRUCTOR
+    FENG_TYPE_MEMBER_CONSTRUCTOR,
+    FENG_TYPE_MEMBER_FINALIZER
 } FengTypeMemberKind;
 
 typedef struct FengCallableSignature {

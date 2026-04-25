@@ -95,6 +95,8 @@ const char *feng_token_kind_name(FengTokenKind kind) {
             return "OR_OR";
         case FENG_TOKEN_ARROW:
             return "ARROW";
+        case FENG_TOKEN_TILDE:
+            return "TILDE";
     }
 
     return "UNKNOWN";

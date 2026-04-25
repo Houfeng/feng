@@ -604,6 +604,19 @@ fail:
     return false;
 }
 
+static bool type_ref_is_void_named(const FengTypeRef *type_ref) {
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED) {
+        return false;
+    }
+    if (type_ref->as.named.segment_count != 1U) {
+        return false;
+    }
+    {
+        FengSlice seg = type_ref->as.named.segments[0];
+        return seg.length == 4U && memcmp(seg.data, "void", 4U) == 0;
+    }
+}
+
 static FengDecl *parse_type_declaration(Parser *parser,
                                         FengVisibility visibility,
                                         bool is_extern,
@@ -720,6 +733,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             FengSlice name;
             FengToken member_name_token = parser_current_token(parser);
             FengTypeMemberKind member_kind = FENG_TYPE_MEMBER_METHOD;
+            bool is_finalizer = false;
 
             if (is_extern) {
                 free_annotations(member_annotations, member_annotation_count);
@@ -729,11 +743,28 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 free_decl(decl);
                 return NULL;
             }
+
+            if (parser_match(parser, FENG_TOKEN_TILDE)) {
+                is_finalizer = true;
+                member_name_token = parser_previous_token(parser);
+            }
+
             if (!parser_expect_identifier_like(parser,
                                                &name,
                                                false,
-                                               "expected a method or constructor name after 'fn'")) {
+                                               is_finalizer
+                                                   ? "expected the type name after 'fn ~' to declare a finalizer"
+                                                   : "expected a method or constructor name after 'fn'")) {
                 free_annotations(member_annotations, member_annotation_count);
+                free_decl(decl);
+                return NULL;
+            }
+
+            if (is_finalizer && !slice_equals(name, type_name)) {
+                free_annotations(member_annotations, member_annotation_count);
+                (void)parser_error_current(
+                    parser,
+                    "finalizer name must match the enclosing type name");
                 free_decl(decl);
                 return NULL;
             }
@@ -743,15 +774,54 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 member_name_token,
                 name,
                 true,
-                "type methods and constructors must provide a body '{...}'");
+                is_finalizer
+                    ? "type finalizers must provide a body '{...}'"
+                    : "type methods and constructors must provide a body '{...}'");
             if (parser->error.message != NULL) {
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
                 return NULL;
             }
 
-            if (slice_equals(name, type_name) && callable.return_type == NULL) {
-                member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+            if (is_finalizer) {
+                if (callable.param_count != 0U) {
+                    free_parameters(callable.params, callable.param_count);
+                    free_type_ref(callable.return_type);
+                    free_block(callable.body);
+                    free_annotations(member_annotations, member_annotation_count);
+                    (void)parser_error_at(parser,
+                                          &callable.token,
+                                          "finalizer must not declare any parameters");
+                    free_decl(decl);
+                    return NULL;
+                }
+                if (callable.return_type != NULL && !type_ref_is_void_named(callable.return_type)) {
+                    free_parameters(callable.params, callable.param_count);
+                    free_type_ref(callable.return_type);
+                    free_block(callable.body);
+                    free_annotations(member_annotations, member_annotation_count);
+                    (void)parser_error_at(parser,
+                                          &callable.token,
+                                          "finalizer return type must be omitted or ': void'");
+                    free_decl(decl);
+                    return NULL;
+                }
+                member_kind = FENG_TYPE_MEMBER_FINALIZER;
+            } else if (slice_equals(name, type_name)) {
+                if (callable.return_type == NULL || type_ref_is_void_named(callable.return_type)) {
+                    member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+                } else {
+                    free_parameters(callable.params, callable.param_count);
+                    free_type_ref(callable.return_type);
+                    free_block(callable.body);
+                    free_annotations(member_annotations, member_annotation_count);
+                    (void)parser_error_at(
+                        parser,
+                        &callable.token,
+                        "constructor must not declare a non-void return type");
+                    free_decl(decl);
+                    return NULL;
+                }
             }
 
             member = new_type_member(parser, member_kind, callable.token);
@@ -1855,7 +1925,17 @@ static FengExpr *parse_postfix(Parser *parser) {
 
         if (parser_match(parser, FENG_TOKEN_DOT)) {
             FengToken member_token = parser_current_token(parser);
-            FengExpr *member = new_expr(parser, FENG_EXPR_MEMBER, member_token);
+            FengExpr *member;
+
+            if (parser_check(parser, FENG_TOKEN_TILDE)) {
+                free_expr(expr);
+                (void)parser_error_current(
+                    parser,
+                    "finalizer cannot be invoked directly via '.~'");
+                return NULL;
+            }
+
+            member = new_expr(parser, FENG_EXPR_MEMBER, member_token);
 
             if (member == NULL) {
                 free_expr(expr);

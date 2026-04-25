@@ -4873,6 +4873,142 @@ static void test_resolved_callable_attached_to_call_exprs(void) {
     feng_program_free(program);
 }
 
+static void test_finalizer_basic_ok(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Buffer {\n"
+        "    pu var size: int;\n"
+        "    fn Buffer(s: int) {\n"
+        "        self.size = s;\n"
+        "    }\n"
+        "    fn ~Buffer() {\n"
+        "        return;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fin_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_finalizer_rejects_multiple_per_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Buffer {\n"
+        "    fn ~Buffer() {}\n"
+        "    fn ~Buffer() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fin_dup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "declares more than one finalizer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finalizer_rejected_on_fixed_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Buffer {\n"
+        "    pu let size: int;\n"
+        "    fn ~Buffer() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fin_fixed.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "@fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "finalizer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finalizer_rejects_return_with_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Buffer {\n"
+        "    fn ~Buffer() {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fin_retval.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "finalizer body must use 'return;' without a value") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_rejects_return_with_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    fn Box() {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_retval.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "constructor body must use 'return;' without a value") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_constructor_with_explicit_void_return_ok(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    pu var v: int;\n"
+        "    fn Box(): void {\n"
+        "        self.v = 1;\n"
+        "        return;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_void.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
@@ -5057,6 +5193,12 @@ int main(void) {
     test_spec_at_type_position_rejects_unrelated_type();
     test_spec_at_type_position_accepts_via_fit();
     test_resolved_callable_attached_to_call_exprs();
+    test_finalizer_basic_ok();
+    test_finalizer_rejects_multiple_per_type();
+    test_finalizer_rejected_on_fixed_type();
+    test_finalizer_rejects_return_with_value();
+    test_constructor_rejects_return_with_value();
+    test_constructor_with_explicit_void_return_ok();
     puts("semantic tests passed");
     return 0;
 }
