@@ -17,7 +17,7 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 
 编译器接受以下输入:
 
-```
+```bash
 feng compile <源文件列表> --target <目标> --out <输出路径> [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
@@ -39,7 +39,7 @@ feng compile <源文件列表> --target <目标> --out <输出路径> [--pkg <.f
 
 若两个不同 `--pkg` 注册了相同模块名,编译器在索引阶段立即报错:
 
-```
+```bash
 error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 ```
 
@@ -97,7 +97,7 @@ extern fn ssl_connect(fd: int): int;
 构建工具从 `feng.fm` 读取以下构建配置字段（仅开发阶段有效，不出现在分发包内）:
 
 | 字段 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
+| ------ | ------ | ------ | ------ |
 | `target` | 是 | — | 构建目标，取值 `bin`（可执行文件）或 `lib`（库；进一步打包为 `.fb` 分发包） |
 | `src` | 否 | `src/` | 源文件根目录，构建工具对此目录 glob 展开 `.ff` 文件 |
 | `out` | 否 | `build/` | 输出根目录；`target bin` 时输出 `<out>/<name>`，`target lib` 时输出 `<out>/<name>-<version>.fb` |
@@ -119,7 +119,7 @@ extern fn ssl_connect(fd: int): int;
 
 将解析完成的依赖图转换为编译器参数:
 
-```
+```bash
 feng compile src/*.ff   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/base-2.1.0.fb
 ```
 
@@ -137,7 +137,7 @@ feng compile src/*.ff   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache
 
 ## 4 交互协议总览
 
-```
+```bash
 feng.fm (项目)
     │
     ▼
