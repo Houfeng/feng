@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <title>Feng file icon</title>
+  <desc>Document-shaped file icon for Feng, optimized for VS Code tree display.</desc>
+
+    <g transform="translate(8 7)">
+      <g transform="translate(95 96.5) scale(1.26 1.192) translate(-95 -96.5)">
+      <path d="M56 23H122L158 59V155C158 166.046 149.046 175 138 175H56C44.954 175 36 166.046 36 155V43C36 31.954 44.954 23 56 23Z"
+        fill="#8B7A58" opacity="0.10"/>
+      <path d="M52 18H118L154 54V150C154 161.046 145.046 170 134 170H52C40.954 170 32 161.046 32 150V38C32 26.954 40.954 18 52 18Z"
+        fill="#FCFAF2"/>
+      <path d="M52 18H118L154 54V150C154 161.046 145.046 170 134 170H52C40.954 170 32 161.046 32 150V38C32 26.954 40.954 18 52 18Z"
+        fill="#E7DDBE" opacity="0.16"/>
+
+          <path d="M118 18V54H154L118 18Z"
+        fill="#F5EFD9"/>
+          <path d="M118 18V54H154L118 18Z"
+        fill="#D8CCA7" opacity="0.45"/>
+
+      <path d="M52 18H118L154 54V150C154 161.046 145.046 170 134 170H52C40.954 170 32 161.046 32 150V38C32 26.954 40.954 18 52 18Z"
+        fill="none" stroke="#B4A886" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M118 18V54H154"
+        fill="none" stroke="#B4A886" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <g transform="translate(-6 0)">
+        <rect x="68" y="47" width="26" height="104" rx="8" fill="#50E3C2"/>
+        <path d="M92 59H130C133.314 59 136 61.686 136 65V78C136 81.314 133.314 84 130 84H92Z"
+          fill="#3388D8"/>
+        <path d="M92 101H121C124.314 101 127 103.686 127 107V120C127 123.314 124.314 126 121 126H92Z"
+          fill="#0A3D7D"/>
+        <path d="M72 51V143" fill="none" stroke="#DFFFF8" stroke-width="3" opacity="0.32" stroke-linecap="round"/>
+        <path d="M96 63H127" fill="none" stroke="#D7F4FF" stroke-width="3" opacity="0.28" stroke-linecap="round"/>
+        <path d="M96 105H118" fill="none" stroke="#D7F4FF" stroke-width="3" opacity="0.24" stroke-linecap="round"/>
+      </g>
+      </g>
+    </g>
+</svg>
