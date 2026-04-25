@@ -3,7 +3,7 @@
   "displayName": "Feng Language",
   "description": "Syntax highlighting and document formatting support for the Feng language.",
   "icon": "./icons/feng-logo.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "houfeng",
   "license": "UNLICENSED",
   "engines": {
