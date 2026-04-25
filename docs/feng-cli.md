@@ -28,7 +28,7 @@ feng <源文件列表> --target <目标> --out <输出路径> --release [--pkg <
   check      检查当前项目,不产出最终制品
   clean      清理构建产物
   pack       构建并打包为 .fb
-  deps       管理项目依赖（add / remove 为二级子命令）
+  deps       管理项目依赖（add / remove / install 为二级子命令）
   tool       编译器调试与高级诊断子命令集合
 
 选项:
@@ -87,7 +87,7 @@ feng build [<path>] [--release]
 说明:
 
 - `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置,不接受编译器级别的细粒度选项。
-- `build` 执行前会检查依赖是否已安装;若存在未安装依赖,先完成安装再构建。
+- `build` 总是先执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 
 ### 4.3 `feng run`
 
@@ -128,8 +128,8 @@ feng check [<path>] [--format <text|json>]
 说明:
 
 - 面向日常编辑-检查循环。
-- 语义上等价于“走完整依赖解析与检查流程,但跳过最终制品生成”。
-- `check` 执行前会检查依赖是否已安装;若存在未安装依赖,先完成安装再检查。
+- `check` 总是先执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
+- 完成依赖安装后执行语义检查,但跳过最终制品生成。
 
 ### 4.5 `feng clean`
 
@@ -166,7 +166,7 @@ feng pack [<path>]
 
 ## 5 依赖管理命令
 
-`deps` 是管理 `feng.fm` 依赖的统一入口,`add`、`remove` 均作为其二级子命令。
+`deps` 是管理 `feng.fm` 依赖的统一入口,`add`、`remove`、`install` 均作为其二级子命令。
 
 ### 5.1 `feng deps add`
 
@@ -199,6 +199,25 @@ feng deps remove <pkg-name>
 说明:
 
 - 一个项目只允许依赖同一包的一个版本,因此移除时只需指定包名。
+
+### 5.3 `feng deps install`
+
+用途: 按 `feng.fm` 中的声明安装项目依赖。
+
+用法:
+
+```text
+feng deps install [--force]
+```
+
+选项:
+
+- `--force`: 强制重新安装 `feng.fm` 中声明的全部依赖,即使这些依赖已经安装。
+
+说明:
+
+- `deps install` 按 `feng.fm` 中声明的精确版本安装所有依赖。
+- 默认情况下,已安装的依赖不会重新安装。
 
 ## 6 调试与分析命令
 
@@ -243,7 +262,7 @@ Project Commands:
   pack      Create a .fb package
 
 Dependency Commands:
-  deps      Manage dependencies (add / remove)
+  deps      Manage dependencies (add / remove / install)
 
 Developer Tools:
   tool      Compiler debugging and advanced diagnostic tools

@@ -112,7 +112,7 @@ extern fn ssl_connect(fd: int): int;
 4. 递归读取每个依赖包内的 `feng.fm`,展开完整依赖图,并按同样规则安装其传递依赖
 5. 若两个不同包依赖同一包的不同精确版本,构建工具报冲突错误,要求用户显式消解版本分歧
 
-`feng deps add` 在写入 `feng.fm` 后立即触发该安装流程。`feng build`、`feng run`、`feng check` 与 `feng pack` 在执行前也会补装所有尚未安装的依赖,确保本地安装状态与清单一致。
+`feng deps add` 在写入 `feng.fm` 后立即触发该安装流程。`feng deps install` 会按 `feng.fm` 中声明的精确版本检查并安装全部依赖;默认只安装尚未安装的依赖,传入 `--force` 时强制重新安装全部依赖。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`;其中 `feng pack` 固定使用 `feng build --release`。
 
 ### 3.3 模块名冲突预检
 
