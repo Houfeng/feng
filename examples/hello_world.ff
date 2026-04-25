@@ -1,4 +1,4 @@
-mod org.houfeng;
+mod feng.examples;
 
 spec X {
   let a: int;
