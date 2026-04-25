@@ -26,7 +26,7 @@ feng <command> [options]
   run        构建并运行当前项目
   check      检查当前项目,不产出最终制品
   clean      清理构建产物
-  pack       打包为 .fb
+  pack       构建并打包为 .fb
   deps       管理项目依赖（add / remove 为二级子命令）
   tool       编译器调试与高级诊断子命令集合
 
