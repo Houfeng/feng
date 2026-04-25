@@ -21,8 +21,14 @@
   "keywords": [
     "feng",
     "language",
+    "lang",
+    "feng-lang",
+    "feng-language",
     "formatter",
-    "syntax"
+    "syntax",
+    "ff",
+    "fm",
+    "fi"
   ],
   "contributes": {
     "languages": [

@@ -1,31 +1,31 @@
 # Feng VS Code Extension
 
-Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、基于 Feng CLI 的诊断信息，以及 Feng 专用文件图标支持。
+Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, diagnostics powered by the Feng CLI, and dedicated Feng file icon support.
 
-## 功能一览
+## Features
 
-- 语法高亮：覆盖 Feng 常见关键字、字符串、注释和基础语法结构。
-- 文档格式化：统一缩进、空白和常见语法间距，适合日常编辑时快速整理代码。
-- 诊断信息：如果本机可用 `feng check`，打开或保存文件时会自动显示检查结果。
-- 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会回退到内置 Feng 文件图标。
+- Syntax highlighting: Covers common Feng keywords, strings, comments, and basic language structures.
+- Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing.
+- Diagnostics: If `feng check` is available on your machine, diagnostics are shown automatically when a file is opened or saved.
+- Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
 
-## 支持的文件后缀
+## Supported File Extensions
 
 - `.feng`
 - `.ff`
 - `.fm`
 - `.fi`
 
-## 快速开始
+## Quick Start
 
-1. 在 VS Code 扩展市场安装 Feng Language。
-2. 打开任意 Feng 源文件，扩展会自动启用语法高亮。
-3. 需要整理代码时，执行 VS Code 的“格式化文档”。
-4. 如果你已经安装 Feng CLI，打开或保存文件时会自动看到诊断信息。
+1. Install Feng Language from the VS Code Marketplace.
+2. Open any Feng source file and syntax highlighting will be enabled automatically.
+3. When you want to clean up code, run VS Code's Format Document command.
+4. If you already have the Feng CLI installed, diagnostics will appear automatically when files are opened or saved.
 
-## 可选配置
+## Optional Configuration
 
-如果 `feng` 可执行文件不在系统 `PATH` 中，可以通过 VS Code 设置指定路径：
+If the `feng` executable is not available in your system `PATH`, you can configure it explicitly in VS Code settings:
 
 ```json
 {
@@ -33,23 +33,23 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 }
 ```
 
-这个路径既可以是绝对路径，也可以是相对于工作区根目录的路径。
+This path can be either an absolute path or a path relative to the workspace root.
 
-## 格式化说明
+## Formatting Behavior
 
-当前格式化能力主要覆盖日常开发中最常见的整理需求：
+The formatter is designed to cover the most common cleanup tasks in everyday development:
 
-- 按 `{}`、`()`、`[]` 结构整理缩进
-- 清理每行尾部多余空白
-- 统一文件换行符为 `\n`
-- 规范二元运算符空格，例如 `a+b` → `a + b`
-- 规范参数列表与实参列表，例如 `fn add(a:int,b:int)` → `fn add(a: int, b: int)`
-- 规范对象字面量与类型标注中的 `:`、`,`、`{}` 周边空格
+- Adjust indentation around `{}`, `()`, and `[]`
+- Remove trailing whitespace at the end of each line
+- Normalize line endings to `\n`
+- Normalize binary operator spacing, for example `a+b` → `a + b`
+- Normalize parameter and argument lists, for example `fn add(a:int,b:int)` → `fn add(a: int, b: int)`
+- Normalize spacing around `:`, `,`, and `{}` in object literals and type annotations
 
-它的目标是提供稳定、可预期的日常格式化体验；当前不会主动重排复杂表达式的整体换行布局，也不会做跨行对齐。
+Its goal is to provide a stable and predictable formatting experience for daily use. It does not currently reflow complex expressions across lines or perform multi-line alignment.
 
-## 诊断说明
+## Diagnostics
 
-- 诊断能力依赖 Feng CLI 的 `check` 子命令。
-- 默认执行程序名为 `feng`。
-- 如果你的 CLI 不在默认路径中，请通过 `feng.executablePath` 指定可执行文件位置。
+- Diagnostics depend on the Feng CLI `check` subcommand.
+- The default executable name is `feng`.
+- If your CLI is not in the default lookup path, set `feng.executablePath` to the correct executable location.
