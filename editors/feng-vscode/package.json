@@ -33,9 +33,9 @@
           "feng"
         ],
         "extensions": [
-          ".ff",
           ".feng",
-          ".f",
+          ".ff",
+          ".fm",
           ".fi"
         ],
         "icon": {
