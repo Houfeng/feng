@@ -48,17 +48,68 @@ function entriesToDiagnostics(entries) {
     });
 }
 
+function isCheckableFengDocument(document) {
+    return document.languageId === 'feng' && document.uri.scheme === 'file';
+}
+
+function createDiagnosticController({ collection, runCheckEntries }) {
+    const generationByUri = new Map();
+
+    function bumpGeneration(uri) {
+        const key = uri.toString();
+        const generation = (generationByUri.get(key) || 0) + 1;
+        generationByUri.set(key, generation);
+        return { key, generation };
+    }
+
+    async function checkDocument(document) {
+        if (!isCheckableFengDocument(document)) {
+            return;
+        }
+
+        const { key, generation } = bumpGeneration(document.uri);
+        const entries = await runCheckEntries(document.uri.fsPath);
+
+        // Ignore stale results once the document changes or a newer check starts.
+        if (generationByUri.get(key) !== generation) {
+            return;
+        }
+
+        collection.set(document.uri, entriesToDiagnostics(entries));
+    }
+
+    function clearDocument(document) {
+        if (!isCheckableFengDocument(document)) {
+            return;
+        }
+
+        bumpGeneration(document.uri);
+        collection.delete(document.uri);
+    }
+
+    function closeDocument(document) {
+        if (!isCheckableFengDocument(document)) {
+            return;
+        }
+
+        generationByUri.delete(document.uri.toString());
+        collection.delete(document.uri);
+    }
+
+    return {
+        checkDocument,
+        clearDocument,
+        closeDocument
+    };
+}
+
 function activate(context) {
     const collection = vscode.languages.createDiagnosticCollection('feng');
     context.subscriptions.push(collection);
-
-    async function checkDocument(document) {
-        if (document.languageId !== 'feng' || document.uri.scheme !== 'file') {
-            return;
-        }
-        const entries = await runCheck(document.uri.fsPath);
-        collection.set(document.uri, entriesToDiagnostics(entries));
-    }
+    const diagnostics = createDiagnosticController({
+        collection,
+        runCheckEntries: runCheck
+    });
 
     const selector = [
         { language: 'feng', scheme: 'file' },
@@ -85,15 +136,16 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.languages.registerDocumentFormattingEditProvider(selector, formatter),
-        vscode.workspace.onDidOpenTextDocument(checkDocument),
-        vscode.workspace.onDidSaveTextDocument(checkDocument),
-        vscode.workspace.onDidCloseTextDocument(document => {
-            collection.delete(document.uri);
-        })
+        vscode.workspace.onDidOpenTextDocument(diagnostics.checkDocument),
+        vscode.workspace.onDidChangeTextDocument(event => {
+            diagnostics.clearDocument(event.document);
+        }),
+        vscode.workspace.onDidSaveTextDocument(diagnostics.checkDocument),
+        vscode.workspace.onDidCloseTextDocument(diagnostics.closeDocument)
     );
 
     // 对已打开的文档立即做一次检查
-    vscode.workspace.textDocuments.forEach(checkDocument);
+    vscode.workspace.textDocuments.forEach(diagnostics.checkDocument);
 }
 
 function deactivate() {
@@ -101,5 +153,10 @@ function deactivate() {
 
 module.exports = {
     activate,
-    deactivate
+    deactivate,
+    __test__: {
+        createDiagnosticController,
+        entriesToDiagnostics,
+        isCheckableFengDocument
+    }
 };

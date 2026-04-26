@@ -6,7 +6,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 
 - Syntax highlighting: Covers common Feng keywords, strings, comments, and basic language structures.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing.
-- Diagnostics: If `feng check` is available on your machine, diagnostics are shown automatically when a file is opened or saved.
+- Diagnostics: If `feng check` is available on your machine, diagnostics are shown automatically when a file is opened or saved, and are cleared as soon as you start editing.
 - Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
 
 ## Supported File Extensions
@@ -18,7 +18,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 1. Install Feng Language from the VS Code Marketplace.
 2. Open any Feng source file and syntax highlighting will be enabled automatically.
 3. When you want to clean up code, run VS Code's Format Document command.
-4. If you already have the Feng CLI installed, diagnostics will appear automatically when files are opened or saved.
+4. If you already have the Feng CLI installed, diagnostics will appear automatically when files are opened, disappear while you edit, and reappear after you save.
 
 ## Optional Configuration
 
@@ -50,3 +50,5 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 - Diagnostics depend on the Feng CLI `check` subcommand.
 - The default executable name is `feng`.
 - If your CLI is not in the default lookup path, set `feng.executablePath` to the correct executable location.
+- Diagnostics are triggered when a Feng file is opened and when it is saved.
+- As soon as the document changes, the extension clears existing diagnostics for that file to avoid showing stale red underlines.

@@ -15,7 +15,7 @@
     "Linters"
   ],
   "scripts": {
-    "test": "node ./test/formatter.test.js"
+    "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js"
   },
   "main": "./extension.js",
   "keywords": [
