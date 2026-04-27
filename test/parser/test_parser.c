@@ -710,12 +710,31 @@ static void test_for_in_loop(void) {
     feng_program_free(program);
 }
 
+static void test_block_yield_omits_trailing_semicolon(void) {
+    /* Per docs/feng-flow.md: trailing ';' on the last expression statement
+     * of a block may be omitted. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    let x = if value > 0 { 1 } else { 2 };\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "block_yield.f", &program, &error));
+    ASSERT(program != NULL);
+
+    feng_program_free(program);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
     test_match_with_range_and_list_labels();
     test_match_statement_form();
     test_for_in_loop();
+    test_block_yield_omits_trailing_semicolon();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
     test_parse_error();

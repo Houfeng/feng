@@ -2787,6 +2787,12 @@ static FengStmt *parse_statement(Parser *parser) {
     if (stmt == NULL) {
         return NULL;
     }
+    /* Per docs/feng-flow.md: the trailing ';' on the last expression statement
+     * of a block may be omitted (the value is still the block's yield). */
+    if (stmt->kind == FENG_STMT_EXPR &&
+        parser_current_token(parser).kind == FENG_TOKEN_RBRACE) {
+        return stmt;
+    }
     if (!parser_expect(parser,
                        FENG_TOKEN_SEMICOLON,
                        "expression statements and local bindings must end with ';'")) {
