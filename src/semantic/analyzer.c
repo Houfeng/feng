@@ -9370,6 +9370,206 @@ static bool detect_cross_spec_method_conflicts(ResolveContext *ctx,
     return true;
 }
 
+/* Two parameter type references potentially overlap when there exists at
+ * least one concrete type T (visible in the current analysis) that can be
+ * supplied as an argument to both parameters under the visible explicit
+ * contract relations (declared spec lists and `fit` declarations). This
+ * mirrors docs/feng-function.md §5: "若同一重载集合中的两个候选在当前可见
+ * 的显式契约关系下可能同时匹配同一实参类型，必须视为签名冲突". The check
+ * is intentionally nominal — duck typing is not considered. */
+static bool param_type_refs_potentially_overlap(const ResolveContext *ctx,
+                                                const FengTypeRef *a,
+                                                const FengTypeRef *b) {
+    const FengDecl *da;
+    const FengDecl *db;
+    size_t module_index;
+    size_t program_index;
+    size_t decl_index;
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        return false;
+    }
+    if (type_refs_semantically_equal(ctx, a, b)) {
+        return true;
+    }
+
+    da = resolve_type_ref_decl(ctx, a);
+    db = resolve_type_ref_decl(ctx, b);
+    if (da == NULL || db == NULL) {
+        return false;
+    }
+    if (da == db) {
+        return true;
+    }
+    if (da->kind == FENG_DECL_TYPE && db->kind == FENG_DECL_SPEC) {
+        return type_decl_satisfies_spec_decl(ctx, da, db);
+    }
+    if (db->kind == FENG_DECL_TYPE && da->kind == FENG_DECL_SPEC) {
+        return type_decl_satisfies_spec_decl(ctx, db, da);
+    }
+    if (da->kind != FENG_DECL_SPEC || db->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+
+    /* Both parameters are object specs — they overlap when at least one
+     * concrete type in the analysis satisfies both specs (either via its
+     * declared spec list, transitive parents, or a visible fit). */
+    for (module_index = 0U; module_index < ctx->analysis->module_count; ++module_index) {
+        const FengSemanticModule *m = &ctx->analysis->modules[module_index];
+
+        for (program_index = 0U; program_index < m->program_count; ++program_index) {
+            const FengProgram *prog = m->programs[program_index];
+
+            if (prog == NULL) {
+                continue;
+            }
+            for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
+                const FengDecl *t = prog->declarations[decl_index];
+
+                if (t == NULL || t->kind != FENG_DECL_TYPE) {
+                    continue;
+                }
+                if (type_decl_satisfies_spec_decl(ctx, t, da) &&
+                    type_decl_satisfies_spec_decl(ctx, t, db)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool signatures_potentially_overlap(const ResolveContext *ctx,
+                                           const FengCallableSignature *a,
+                                           const FengCallableSignature *b) {
+    size_t i;
+
+    if (a == NULL || b == NULL || a->param_count != b->param_count) {
+        return false;
+    }
+    for (i = 0U; i < a->param_count; ++i) {
+        if (!param_type_refs_potentially_overlap(ctx, a->params[i].type, b->params[i].type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool validate_type_member_overload_overlap(ResolveContext *context,
+                                                  const FengDecl *decl) {
+    size_t i;
+    size_t j;
+    bool ok = true;
+
+    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *mi = decl->as.type_decl.members[i];
+        const FengCallableSignature *si;
+
+        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        si = &mi->as.callable;
+
+        for (j = 0U; j < i; ++j) {
+            const FengTypeMember *mj = decl->as.type_decl.members[j];
+            const FengCallableSignature *sj;
+
+            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_METHOD) {
+                continue;
+            }
+            sj = &mj->as.callable;
+            if (!slice_equals(si->name, sj->name)) {
+                continue;
+            }
+            /* Identical-parameter pairs are already reported by
+             * validate_type_member_overloads with a more specific message. */
+            if (parameters_equal(si, sj)) {
+                continue;
+            }
+            if (signatures_potentially_overlap(context, si, sj)) {
+                ok = resolver_append_error(
+                         context,
+                         si->token,
+                         format_message(
+                             "method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s'",
+                             (int)decl->as.type_decl.name.length,
+                             decl->as.type_decl.name.data,
+                             (int)si->name.length, si->name.data)) && ok;
+            }
+        }
+    }
+    return ok;
+}
+
+static bool validate_top_level_overload_overlap(ResolveContext *context,
+                                                const FengProgram *program) {
+    size_t decl_index;
+    size_t set_index;
+    size_t k;
+    bool ok = true;
+
+    if (context == NULL || program == NULL) {
+        return true;
+    }
+
+    for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+        const FengDecl *decl = program->declarations[decl_index];
+        const FunctionOverloadSetEntry *set;
+        const FengCallableSignature *current;
+
+        if (decl == NULL || decl->kind != FENG_DECL_FUNCTION) {
+            continue;
+        }
+        current = &decl->as.function_decl;
+
+        for (set_index = 0U; set_index < context->function_set_count; ++set_index) {
+            if (slice_equals(context->function_sets[set_index].name, current->name)) {
+                break;
+            }
+        }
+        if (set_index == context->function_set_count) {
+            continue;
+        }
+        set = &context->function_sets[set_index];
+
+        for (k = 0U; k < set->decl_count; ++k) {
+            const FengDecl *other = set->decls[k];
+            const FengCallableSignature *other_sig;
+
+            /* The function_sets array is populated by check_symbol_conflicts
+             * in declaration order. To report each pair exactly once we stop
+             * at the current decl and only compare against earlier-registered
+             * candidates. */
+            if (other == decl) {
+                break;
+            }
+            if (other == NULL || other->kind != FENG_DECL_FUNCTION) {
+                continue;
+            }
+            other_sig = &other->as.function_decl;
+            /* Identical-parameter pairs are already reported by
+             * check_symbol_conflicts with a more specific message. */
+            if (parameters_equal(current, other_sig)) {
+                continue;
+            }
+            if (signatures_potentially_overlap(context, current, other_sig)) {
+                ok = resolver_append_error(
+                         context,
+                         current->token,
+                         format_message(
+                             "function overloads may both match the same arguments under visible contract relations: '%.*s'",
+                             (int)current->name.length,
+                             current->name.data)) && ok;
+            }
+        }
+    }
+    return ok;
+}
+
 static bool validate_type_declared_specs_and_satisfaction(ResolveContext *context,
                                                           const FengDecl *type_decl) {
     size_t i;
@@ -9615,6 +9815,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (!validate_type_member_overloads(context, decl)) {
                 return false;
             }
+            if (!validate_type_member_overload_overlap(context, decl)) {
+                return false;
+            }
             if (!validate_type_finalizer_constraints(context, decl)) {
                 return false;
             }
@@ -9817,6 +10020,10 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
     for (decl_index = 0U; decl_index < program->declaration_count && ok; ++decl_index) {
         ok = resolve_declaration(&context, program->declarations[decl_index]);
+    }
+
+    if (ok) {
+        ok = validate_top_level_overload_overlap(&context, program);
     }
 
     resolver_free_scopes(&context);

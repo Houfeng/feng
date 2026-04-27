@@ -279,6 +279,156 @@ static void test_function_return_only_overload_error(void) {
     feng_program_free(program);
 }
 
+static void test_top_level_overload_overlap_via_fit_rejected(void) {
+    /* docs/feng-function.md §5: "若同一重载集合中的两个候选在当前可见的显式
+     * 契约关系下可能同时匹配同一实参类型，必须视为签名冲突". A Dog argument
+     * could match both `pet(a: Animal)` and `pet(d: Dog)` because the visible
+     * fit makes Dog satisfy Animal. The conflict must be reported at the
+     * declaration site, not deferred to call resolution. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Animal {\n"
+        "    fn name(): string;\n"
+        "}\n"
+        "type Dog {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fit Dog: Animal {\n"
+        "    fn name(): string {\n"
+        "        return self.name;\n"
+        "    }\n"
+        "}\n"
+        "fn pet(a: Animal) {\n"
+        "}\n"
+        "fn pet(d: Dog) {\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("overload_overlap_via_fit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "function overloads may both match the same arguments") != NULL);
+    ASSERT(strstr(errors[0].message, "'pet'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_overload_overlap_via_two_specs_rejected(void) {
+    /* When both candidates take spec parameters and at least one visible
+     * concrete type satisfies both specs, the overload set is ambiguous and
+     * must be rejected at declaration time. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn name(): string;\n"
+        "}\n"
+        "spec Sized {\n"
+        "    fn size(): int;\n"
+        "}\n"
+        "type Box {\n"
+        "    let label: string;\n"
+        "    let count: int;\n"
+        "}\n"
+        "fit Box: Named {\n"
+        "    fn name(): string { return self.label; }\n"
+        "}\n"
+        "fit Box: Sized {\n"
+        "    fn size(): int { return self.count; }\n"
+        "}\n"
+        "fn show(x: Named) {}\n"
+        "fn show(x: Sized) {}\n";
+    FengProgram *program = parse_program_or_die("overload_overlap_two_specs.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "function overloads may both match the same arguments") != NULL);
+    ASSERT(strstr(errors[0].message, "'show'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_top_level_overload_two_specs_no_common_type_accepted(void) {
+    /* When two spec parameters have no common satisfying type visible in
+     * the analysis, the overload set is unambiguous and must not be flagged. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn name(): string;\n"
+        "}\n"
+        "spec Sized {\n"
+        "    fn size(): int;\n"
+        "}\n"
+        "type Tag {\n"
+        "    let label: string;\n"
+        "}\n"
+        "fit Tag: Named {\n"
+        "    fn name(): string { return self.label; }\n"
+        "}\n"
+        "type Bucket {\n"
+        "    let count: int;\n"
+        "}\n"
+        "fit Bucket: Sized {\n"
+        "    fn size(): int { return self.count; }\n"
+        "}\n"
+        "fn show(x: Named) {}\n"
+        "fn show(x: Sized) {}\n";
+    FengProgram *program = parse_program_or_die("overload_two_specs_disjoint_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_member_method_overload_overlap_via_fit_rejected(void) {
+    /* Same overlap rule applies to member method overload sets. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Animal {\n"
+        "    fn name(): string;\n"
+        "}\n"
+        "type Dog {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fit Dog: Animal {\n"
+        "    fn name(): string { return self.name; }\n"
+        "}\n"
+        "type Owner {\n"
+        "    fn pet(a: Animal) {}\n"
+        "    fn pet(d: Dog) {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("member_overload_overlap.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "method overloads in type 'Owner' may both match the same arguments") != NULL);
+    ASSERT(strstr(errors[0].message, "'pet'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_accepts_module_string_library_binding(void) {
     const char *source =
         "mod demo.main;\n"
@@ -6166,6 +6316,10 @@ int main(void) {
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
+    test_top_level_overload_overlap_via_fit_rejected();
+    test_top_level_overload_overlap_via_two_specs_rejected();
+    test_top_level_overload_two_specs_no_common_type_accepted();
+    test_member_method_overload_overlap_via_fit_rejected();
     test_extern_function_accepts_module_string_library_binding();
     test_extern_function_requires_calling_convention_annotation();
     test_extern_function_rejects_multiple_calling_convention_annotations();
