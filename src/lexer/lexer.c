@@ -577,6 +577,11 @@ static FengToken scan_token_internal(FengLexer *lexer) {
         case ';':
             return make_token(lexer, FENG_TOKEN_SEMICOLON, start_offset, start_line, start_column);
         case '.':
+            if (lexer_peek_raw(lexer, 0) == '.' && lexer_peek_raw(lexer, 1) == '.') {
+                (void)lexer_advance(lexer);
+                (void)lexer_advance(lexer);
+                return make_token(lexer, FENG_TOKEN_ELLIPSIS, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_DOT, start_offset, start_line, start_column);
         case '+':
             return make_token(lexer, FENG_TOKEN_PLUS, start_offset, start_line, start_column);

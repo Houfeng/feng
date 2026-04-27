@@ -106,11 +106,27 @@ typedef struct FengLambdaCapture {
     FengMutability mutability;  /* original binding mutability for LOCAL captures */
 } FengLambdaCapture;
 
-typedef struct FengMatchCase {
+typedef enum FengMatchLabelKind {
+    FENG_MATCH_LABEL_VALUE = 0,
+    FENG_MATCH_LABEL_RANGE
+} FengMatchLabelKind;
+
+typedef struct FengMatchLabel {
     FengToken token;
-    FengExpr *label;
+    FengMatchLabelKind kind;
+    /* VALUE: literal-or-let-bound expression evaluated to a single value. */
     FengExpr *value;
-} FengMatchCase;
+    /* RANGE (closed [low, high], integer-only): low and high constant exprs. */
+    FengExpr *range_low;
+    FengExpr *range_high;
+} FengMatchLabel;
+
+typedef struct FengMatchBranch {
+    FengToken token;
+    FengMatchLabel *labels;
+    size_t label_count;
+    FengBlock *body;
+} FengMatchBranch;
 
 typedef enum FengExprKind {
     FENG_EXPR_IDENTIFIER = 0,
@@ -189,14 +205,14 @@ struct FengExpr {
         } cast;
         struct {
             FengExpr *condition;
-            FengExpr *then_expr;
-            FengExpr *else_expr;
+            FengBlock *then_block;
+            FengBlock *else_block;
         } if_expr;
         struct {
             FengExpr *target;
-            FengMatchCase *cases;
-            size_t case_count;
-            FengExpr *else_expr;
+            FengMatchBranch *branches;
+            size_t branch_count;
+            FengBlock *else_block;
         } match_expr;
     } as;
 };
@@ -221,6 +237,7 @@ typedef enum FengStmtKind {
     FENG_STMT_ASSIGN,
     FENG_STMT_EXPR,
     FENG_STMT_IF,
+    FENG_STMT_MATCH,
     FENG_STMT_WHILE,
     FENG_STMT_FOR,
     FENG_STMT_TRY,
@@ -253,14 +270,26 @@ struct FengStmt {
             FengBlock *else_block;
         } if_stmt;
         struct {
+            FengExpr *target;
+            FengMatchBranch *branches;
+            size_t branch_count;
+            FengBlock *else_block;
+        } match_stmt;
+        struct {
             FengExpr *condition;
             FengBlock *body;
         } while_stmt;
         struct {
+            /* Common to both forms. */
+            bool is_for_in;
+            FengBlock *body;
+            /* Three-clause form (when is_for_in == false). */
             FengStmt *init;
             FengExpr *condition;
             FengStmt *update;
-            FengBlock *body;
+            /* for/in form (when is_for_in == true). */
+            FengBinding iter_binding; /* name + mutability + type (NULL until inferred) */
+            FengExpr *iter_expr;
         } for_stmt;
         struct {
             FengBlock *try_block;

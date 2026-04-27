@@ -30,7 +30,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 25U);
+    ASSERT(feng_keyword_count() == 26U);
     ASSERT(feng_reserved_word_count() == 16U);
     ASSERT(feng_builtin_annotation_count() == 6U);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
@@ -386,6 +386,34 @@ static void test_numeric_literal_rejects_trailing_underscore(void) {
     ASSERT(strstr(token.message, "numeric") != NULL);
 }
 
+static void test_flow_control_tokens(void) {
+    const char *source = "for let it in items 1...10";
+    FengLexer lexer;
+    FengToken token;
+    FengTokenKind keyword_kind;
+
+    ASSERT(feng_lookup_keyword("in", 2U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_IN);
+
+    feng_lexer_init(&lexer, source, strlen(source), "flow_tokens.f");
+    token = next_token(&lexer, FENG_TOKEN_KW_FOR);
+    assert_lexeme(&token, "for");
+    (void)next_token(&lexer, FENG_TOKEN_KW_LET);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "it");
+    token = next_token(&lexer, FENG_TOKEN_KW_IN);
+    assert_lexeme(&token, "in");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "items");
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    assert_lexeme(&token, "1");
+    token = next_token(&lexer, FENG_TOKEN_ELLIPSIS);
+    assert_lexeme(&token, "...");
+    token = next_token(&lexer, FENG_TOKEN_INTEGER);
+    assert_lexeme(&token, "10");
+    (void)next_token(&lexer, FENG_TOKEN_EOF);
+}
+
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
@@ -397,6 +425,7 @@ int main(void) {
     test_bitwise_tokens();
     test_numeric_literal_bases_and_separators();
     test_numeric_literal_rejects_trailing_underscore();
+    test_flow_control_tokens();
 
     puts("lexer tests passed");
     return 0;

@@ -27,6 +27,7 @@ extern "C" {
     X(ELSE, "else") \
     X(WHILE, "while") \
     X(FOR, "for") \
+    X(IN, "in") \
     X(BREAK, "break") \
     X(CONTINUE, "continue") \
     X(TRY, "try") \
@@ -107,7 +108,8 @@ typedef enum FengTokenKind {
     FENG_TOKEN_SHL,
     FENG_TOKEN_SHR,
     FENG_TOKEN_ARROW,
-    FENG_TOKEN_TILDE
+    FENG_TOKEN_TILDE,
+    FENG_TOKEN_ELLIPSIS
 } FengTokenKind;
 
 typedef enum FengAnnotationKind {

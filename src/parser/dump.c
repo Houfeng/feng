@@ -79,6 +79,7 @@ static void dump_type_ref(FILE *stream, const FengTypeRef *type_ref) {
 static void dump_expr(FILE *stream, const FengExpr *expr, int indent);
 static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent);
 static void dump_block(FILE *stream, const FengBlock *block, int indent);
+static void dump_match_branch(FILE *stream, const FengMatchBranch *branch, int indent);
 
 static void dump_annotations(FILE *stream, const FengAnnotation *annotations, size_t count, int indent) {
     size_t index;
@@ -222,30 +223,28 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
         case FENG_EXPR_IF:
             fputs("if ", stream);
             dump_expr(stream, expr->as.if_expr.condition, 0);
-            fputs(" { ", stream);
-            dump_expr(stream, expr->as.if_expr.then_expr, 0);
-            fputs(" } else { ", stream);
-            dump_expr(stream, expr->as.if_expr.else_expr, 0);
-            fputs(" }", stream);
+            fputs(" ", stream);
+            dump_block(stream, expr->as.if_expr.then_block, indent);
+            if (expr->as.if_expr.else_block != NULL) {
+                dump_indent(stream, indent);
+                fputs("else ", stream);
+                dump_block(stream, expr->as.if_expr.else_block, indent);
+            }
             break;
         case FENG_EXPR_MATCH:
             fputs("if ", stream);
             dump_expr(stream, expr->as.match_expr.target, 0);
-            fputs(" { ", stream);
-            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-                if (index != 0U) {
-                    fputs(", ", stream);
-                }
-                dump_expr(stream, expr->as.match_expr.cases[index].label, 0);
-                fputs(": ", stream);
-                dump_expr(stream, expr->as.match_expr.cases[index].value, 0);
+            fputs(" {\n", stream);
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                dump_match_branch(stream, &expr->as.match_expr.branches[index], indent + 1);
             }
-            if (expr->as.match_expr.case_count > 0U) {
-                fputs(", ", stream);
+            if (expr->as.match_expr.else_block != NULL) {
+                dump_indent(stream, indent + 1);
+                fputs("else ", stream);
+                dump_block(stream, expr->as.match_expr.else_block, indent + 1);
             }
-            fputs("else: ", stream);
-            dump_expr(stream, expr->as.match_expr.else_expr, 0);
-            fputs(" }", stream);
+            dump_indent(stream, indent);
+            fputc('}', stream);
             break;
     }
 }
@@ -260,6 +259,26 @@ static void dump_block(FILE *stream, const FengBlock *block, int indent) {
     }
     dump_indent(stream, indent);
     fputs("}\n", stream);
+}
+
+static void dump_match_branch(FILE *stream, const FengMatchBranch *branch, int indent) {
+    size_t index;
+
+    dump_indent(stream, indent);
+    for (index = 0U; index < branch->label_count; ++index) {
+        if (index != 0U) {
+            fputs(", ", stream);
+        }
+        if (branch->labels[index].kind == FENG_MATCH_LABEL_RANGE) {
+            dump_expr(stream, branch->labels[index].range_low, 0);
+            fputs("...", stream);
+            dump_expr(stream, branch->labels[index].range_high, 0);
+        } else {
+            dump_expr(stream, branch->labels[index].value, 0);
+        }
+    }
+    fputc(' ', stream);
+    dump_block(stream, branch->body, indent);
 }
 
 static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
@@ -308,6 +327,21 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
                 dump_block(stream, stmt->as.if_stmt.else_block, indent);
             }
             break;
+        case FENG_STMT_MATCH:
+            fputs("if ", stream);
+            dump_expr(stream, stmt->as.match_stmt.target, 0);
+            fputs(" {\n", stream);
+            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
+                dump_match_branch(stream, &stmt->as.match_stmt.branches[index], indent + 1);
+            }
+            if (stmt->as.match_stmt.else_block != NULL) {
+                dump_indent(stream, indent + 1);
+                fputs("else ", stream);
+                dump_block(stream, stmt->as.match_stmt.else_block, indent + 1);
+            }
+            dump_indent(stream, indent);
+            fputs("}\n", stream);
+            break;
         case FENG_STMT_WHILE:
             fputs("while ", stream);
             dump_expr(stream, stmt->as.while_stmt.condition, 0);
@@ -315,22 +349,32 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
             dump_block(stream, stmt->as.while_stmt.body, indent);
             break;
         case FENG_STMT_FOR:
-            fputs("for (...)\n", stream);
-            if (stmt->as.for_stmt.init != NULL) {
-                dump_indent(stream, indent + 1);
-                fputs("init:\n", stream);
-                dump_stmt(stream, stmt->as.for_stmt.init, indent + 2);
-            }
-            if (stmt->as.for_stmt.condition != NULL) {
-                dump_indent(stream, indent + 1);
-                fputs("cond: ", stream);
-                dump_expr(stream, stmt->as.for_stmt.condition, 0);
+            if (stmt->as.for_stmt.is_for_in) {
+                fputs("for ", stream);
+                fputs(mutability_name(stmt->as.for_stmt.iter_binding.mutability), stream);
+                fputc(' ', stream);
+                dump_slice(stream, stmt->as.for_stmt.iter_binding.name);
+                fputs(" in ", stream);
+                dump_expr(stream, stmt->as.for_stmt.iter_expr, 0);
                 fputc('\n', stream);
-            }
-            if (stmt->as.for_stmt.update != NULL) {
-                dump_indent(stream, indent + 1);
-                fputs("update:\n", stream);
-                dump_stmt(stream, stmt->as.for_stmt.update, indent + 2);
+            } else {
+                fputs("for (...)\n", stream);
+                if (stmt->as.for_stmt.init != NULL) {
+                    dump_indent(stream, indent + 1);
+                    fputs("init:\n", stream);
+                    dump_stmt(stream, stmt->as.for_stmt.init, indent + 2);
+                }
+                if (stmt->as.for_stmt.condition != NULL) {
+                    dump_indent(stream, indent + 1);
+                    fputs("cond: ", stream);
+                    dump_expr(stream, stmt->as.for_stmt.condition, 0);
+                    fputc('\n', stream);
+                }
+                if (stmt->as.for_stmt.update != NULL) {
+                    dump_indent(stream, indent + 1);
+                    fputs("update:\n", stream);
+                    dump_stmt(stream, stmt->as.for_stmt.update, indent + 2);
+                }
             }
             dump_block(stream, stmt->as.for_stmt.body, indent);
             break;

@@ -95,16 +95,15 @@ static void collect_calls_in_expr(const FengExpr *expr, CallList *out) {
             break;
         case FENG_EXPR_IF:
             collect_calls_in_expr(expr->as.if_expr.condition, out);
-            collect_calls_in_expr(expr->as.if_expr.then_expr, out);
-            collect_calls_in_expr(expr->as.if_expr.else_expr, out);
+            collect_calls_in_block(expr->as.if_expr.then_block, out);
+            collect_calls_in_block(expr->as.if_expr.else_block, out);
             break;
         case FENG_EXPR_MATCH:
             collect_calls_in_expr(expr->as.match_expr.target, out);
-            for (i = 0U; i < expr->as.match_expr.case_count; ++i) {
-                collect_calls_in_expr(expr->as.match_expr.cases[i].label, out);
-                collect_calls_in_expr(expr->as.match_expr.cases[i].value, out);
+            for (i = 0U; i < expr->as.match_expr.branch_count; ++i) {
+                collect_calls_in_block(expr->as.match_expr.branches[i].body, out);
             }
-            collect_calls_in_expr(expr->as.match_expr.else_expr, out);
+            collect_calls_in_block(expr->as.match_expr.else_block, out);
             break;
         case FENG_EXPR_LAMBDA:
             collect_calls_in_expr(expr->as.lambda.body, out);
@@ -143,10 +142,21 @@ static void collect_calls_in_stmt(const FengStmt *stmt, CallList *out) {
             collect_calls_in_block(stmt->as.while_stmt.body, out);
             break;
         case FENG_STMT_FOR:
-            collect_calls_in_stmt(stmt->as.for_stmt.init, out);
-            collect_calls_in_expr(stmt->as.for_stmt.condition, out);
-            collect_calls_in_stmt(stmt->as.for_stmt.update, out);
+            if (stmt->as.for_stmt.is_for_in) {
+                collect_calls_in_expr(stmt->as.for_stmt.iter_expr, out);
+            } else {
+                collect_calls_in_stmt(stmt->as.for_stmt.init, out);
+                collect_calls_in_expr(stmt->as.for_stmt.condition, out);
+                collect_calls_in_stmt(stmt->as.for_stmt.update, out);
+            }
             collect_calls_in_block(stmt->as.for_stmt.body, out);
+            break;
+        case FENG_STMT_MATCH:
+            collect_calls_in_expr(stmt->as.match_stmt.target, out);
+            for (i = 0U; i < stmt->as.match_stmt.branch_count; ++i) {
+                collect_calls_in_block(stmt->as.match_stmt.branches[i].body, out);
+            }
+            collect_calls_in_block(stmt->as.match_stmt.else_block, out);
             break;
         case FENG_STMT_TRY:
             collect_calls_in_block(stmt->as.try_stmt.try_block, out);
@@ -1715,9 +1725,10 @@ static void test_match_expression_rejects_non_constant_label(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run(value: int, other: int): int {\n"
+        "    let pivot = other + 1;\n"
         "    return if value {\n"
-        "        other + 1: 1,\n"
-        "        else: 0\n"
+        "        pivot { 1; }\n"
+        "        else { 0; }\n"
         "    };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("match_non_constant_label_error.f", source);
@@ -1729,8 +1740,8 @@ static void test_match_expression_rejects_non_constant_label(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "match_non_constant_label_error.f") == 0);
-    ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "match case label must be a constant expression") != NULL);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "match label must be a literal or a 'let' binding to a literal") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1741,8 +1752,8 @@ static void test_match_expression_rejects_incomparable_label_type(void) {
         "mod demo.main;\n"
         "fn run(value: int): int {\n"
         "    return if value {\n"
-        "        \"one\": 1,\n"
-        "        else: 0\n"
+        "        \"one\" { 1; }\n"
+        "        else { 0; }\n"
         "    };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("match_incomparable_label_error.f", source);
@@ -1766,8 +1777,8 @@ static void test_match_expression_rejects_inconsistent_result_types(void) {
         "mod demo.main;\n"
         "fn run(value: int): int {\n"
         "    return if value {\n"
-        "        1: 1,\n"
-        "        else: \"zero\"\n"
+        "        1 { 1; }\n"
+        "        else { \"zero\"; }\n"
         "    };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("match_inconsistent_result_types_error.f", source);
@@ -3757,7 +3768,7 @@ static void test_if_expression_rejects_non_bool_condition(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    let value = if 1 { 2 } else { 3 };\n"
+        "    let value = if 1 { 2; } else { 3; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("if_expr_condition_type_error.f", source);
     const FengProgram *programs[] = {program};
@@ -3779,7 +3790,7 @@ static void test_if_expression_requires_matching_branch_types(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    let value = if true { 1 } else { \"two\" };\n"
+        "    let value = if true { 1; } else { \"two\"; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("if_expr_branch_type_error.f", source);
     const FengProgram *programs[] = {program};
@@ -3802,7 +3813,7 @@ static void test_valid_unary_binary_and_if_expressions_pass(void) {
         "mod demo.main;\n"
         "fn run() {\n"
         "    let flag: bool = !false && 1 < 2;\n"
-        "    let value: int = if flag { 1 + 2 } else { 3 + 4 };\n"
+        "    let value: int = if flag { 1 + 2; } else { 3 + 4; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("valid_expr_type_checks_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -6483,7 +6494,175 @@ static void test_lib_target_skips_main_check(void) {
     feng_program_free(program);
 }
 
+static void test_match_range_label_overlap_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    return if value {\n"
+        "        1...10 { 1; }\n"
+        "        5...15 { 2; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_overlap_range.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "overlaps with an earlier label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_single_label_overlap_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    return if value {\n"
+        "        1, 2, 3 { 1; }\n"
+        "        2 { 2; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_overlap_single.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "overlaps with an earlier label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_range_invalid_bounds_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    return if value {\n"
+        "        10...1 { 1; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_range_bounds.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_target_type_disallowed(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: f64): int {\n"
+        "    return if value {\n"
+        "        1 { 1; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_target_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match target type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_let_bound_label_accepted(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int): int {\n"
+        "    let one = 1;\n"
+        "    return if value {\n"
+        "        one { 100; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_let_bound.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_for_in_loop_array_accepted(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(items: int[]) {\n"
+        "    for let it in items {\n"
+        "        print(it);\n"
+        "    }\n"
+        "}\n"
+        "fn print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("for_in_array.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_for_in_loop_non_array_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(value: int) {\n"
+        "    for let it in value {\n"
+        "        print(it);\n"
+        "    }\n"
+        "}\n"
+        "fn print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("for_in_non_array.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "for/in sequence must be an array") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
+    test_match_range_label_overlap_rejected();
+    test_match_single_label_overlap_rejected();
+    test_match_range_invalid_bounds_rejected();
+    test_match_target_type_disallowed();
+    test_match_let_bound_label_accepted();
+    test_for_in_loop_array_accepted();
+    test_for_in_loop_non_array_rejected();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();

@@ -62,8 +62,8 @@ static void test_statements_and_expressions(void) {
     const char *source =
         "mod demo.main;\n"
         "fn main(args: string[]) {\n"
-        "    let label = if age >= 18 { \"adult\" } else { \"minor\" };\n"
-        "    let stage = if age { 0: \"婴儿\", 18: \"成年\", else: \"青年\" };\n"
+        "    let label = if age >= 18 { \"adult\"; } else { \"minor\"; };\n"
+        "    let stage = if age { 0 { \"婴儿\"; } 18 { \"成年\"; } else { \"青年\"; } };\n"
         "    for var i = 0; i < 3; i = i + 1 {\n"
         "        if i == 1 {\n"
         "            continue;\n"
@@ -624,9 +624,98 @@ static void test_lambda_block_body_with_arrow_is_rejected(void) {
     ASSERT(strstr(error.message, "multi-line lambda") != NULL);
 }
 
+static void test_match_with_range_and_list_labels(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(age: int): string {\n"
+        "    return if age {\n"
+        "        0 { \"婴儿\"; }\n"
+        "        1...17 { \"未成年\"; }\n"
+        "        18, 20, 22 { \"青年\"; }\n"
+        "        else { \"其他\"; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *return_stmt;
+    const FengExpr *match_expr;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_labels.f", &program, &error));
+    ASSERT(program != NULL);
+    return_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_expr = return_stmt->as.return_value;
+    ASSERT(match_expr->kind == FENG_EXPR_MATCH);
+    ASSERT(match_expr->as.match_expr.branch_count == 3U);
+    /* Branch 0: single literal 0 */
+    ASSERT(match_expr->as.match_expr.branches[0].label_count == 1U);
+    ASSERT(match_expr->as.match_expr.branches[0].labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    /* Branch 1: range 1...17 */
+    ASSERT(match_expr->as.match_expr.branches[1].label_count == 1U);
+    ASSERT(match_expr->as.match_expr.branches[1].labels[0].kind == FENG_MATCH_LABEL_RANGE);
+    /* Branch 2: list 18, 20, 22 */
+    ASSERT(match_expr->as.match_expr.branches[2].label_count == 3U);
+    ASSERT(match_expr->as.match_expr.branches[2].labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_expr->as.match_expr.branches[2].labels[1].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_expr->as.match_expr.branches[2].labels[2].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_expr->as.match_expr.else_block != NULL);
+
+    feng_program_free(program);
+}
+
+static void test_match_statement_form(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(age: int) {\n"
+        "    if age {\n"
+        "        0 { print(\"zero\"); }\n"
+        "        1...10 { print(\"small\"); }\n"
+        "        else { print(\"other\"); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *match_stmt;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_stmt.f", &program, &error));
+    ASSERT(program != NULL);
+    match_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(match_stmt->kind == FENG_STMT_MATCH);
+    ASSERT(match_stmt->as.match_stmt.branch_count == 2U);
+    ASSERT(match_stmt->as.match_stmt.else_block != NULL);
+
+    feng_program_free(program);
+}
+
+static void test_for_in_loop(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(items: int[]) {\n"
+        "    for let it in items {\n"
+        "        print(it);\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *for_stmt;
+
+    ASSERT(feng_parse_source(source, strlen(source), "for_in.f", &program, &error));
+    ASSERT(program != NULL);
+    for_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(for_stmt->kind == FENG_STMT_FOR);
+    ASSERT(for_stmt->as.for_stmt.is_for_in);
+    ASSERT(for_stmt->as.for_stmt.iter_expr != NULL);
+    ASSERT(for_stmt->as.for_stmt.body != NULL);
+
+    feng_program_free(program);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
+    test_match_with_range_and_list_labels();
+    test_match_statement_form();
+    test_for_in_loop();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
     test_parse_error();

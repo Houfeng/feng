@@ -107,6 +107,8 @@ const char *feng_token_kind_name(FengTokenKind kind) {
             return "ARROW";
         case FENG_TOKEN_TILDE:
             return "TILDE";
+        case FENG_TOKEN_ELLIPSIS:
+            return "ELLIPSIS";
     }
 
     return "UNKNOWN";

@@ -1671,16 +1671,276 @@ static FengExpr *parse_lambda(Parser *parser) {
     return expr;
 }
 
+/* ---------------- if / match shared helpers ---------------- */
+
+static bool is_match_label_atom_token(FengTokenKind kind) {
+    return kind == FENG_TOKEN_INTEGER || kind == FENG_TOKEN_STRING ||
+           kind == FENG_TOKEN_BOOL || kind == FENG_TOKEN_IDENTIFIER;
+}
+
+/* Parser cursor must be positioned at the first token after the consumed '{'.
+ * Returns true when the body looks like a match branch list (label/else
+ * followed by '{', ',' or '...'); returns false to indicate a plain block
+ * body for the conditional `if` form. */
+static bool peek_match_body(Parser *parser) {
+    size_t base = parser->current;
+    size_t i = base;
+    const FengToken *t = &parser->tokens[i];
+
+    if (t->kind == FENG_TOKEN_KW_ELSE) {
+        return true;
+    }
+    if (t->kind == FENG_TOKEN_MINUS) {
+        ++i;
+        t = &parser->tokens[i];
+    }
+    if (!is_match_label_atom_token(t->kind)) {
+        return false;
+    }
+    ++i;
+    t = &parser->tokens[i];
+    if (t->kind == FENG_TOKEN_ELLIPSIS) {
+        ++i;
+        t = &parser->tokens[i];
+        if (t->kind == FENG_TOKEN_MINUS) {
+            ++i;
+            t = &parser->tokens[i];
+        }
+        if (t->kind != FENG_TOKEN_INTEGER) {
+            return false;
+        }
+        ++i;
+        t = &parser->tokens[i];
+    }
+    return t->kind == FENG_TOKEN_COMMA || t->kind == FENG_TOKEN_LBRACE;
+}
+
+/* Parse a single label atom (literal or identifier, optionally negated). */
+static FengExpr *parse_match_label_atom(Parser *parser) {
+    FengToken token = *parser_current(parser);
+
+    if (token.kind == FENG_TOKEN_MINUS) {
+        FengExpr *expr = new_expr(parser, FENG_EXPR_UNARY, token);
+
+        if (expr == NULL) {
+            return NULL;
+        }
+        (void)parser_advance(parser);
+        expr->as.unary.op = FENG_TOKEN_MINUS;
+        expr->as.unary.operand = parse_match_label_atom(parser);
+        if (expr->as.unary.operand == NULL) {
+            free_expr(expr);
+            return NULL;
+        }
+        return expr;
+    }
+
+    switch (token.kind) {
+        case FENG_TOKEN_INTEGER: {
+            FengExpr *expr = new_expr(parser, FENG_EXPR_INTEGER, token);
+            if (expr != NULL) {
+                expr->as.integer = token.value.integer;
+                (void)parser_advance(parser);
+            }
+            return expr;
+        }
+        case FENG_TOKEN_STRING: {
+            FengExpr *expr = new_expr(parser, FENG_EXPR_STRING, token);
+            if (expr != NULL) {
+                expr->as.string = slice_from_token(&token);
+                (void)parser_advance(parser);
+            }
+            return expr;
+        }
+        case FENG_TOKEN_BOOL: {
+            FengExpr *expr = new_expr(parser, FENG_EXPR_BOOL, token);
+            if (expr != NULL) {
+                expr->as.boolean = token.value.boolean;
+                (void)parser_advance(parser);
+            }
+            return expr;
+        }
+        case FENG_TOKEN_IDENTIFIER: {
+            FengExpr *expr = new_expr(parser, FENG_EXPR_IDENTIFIER, token);
+            if (expr != NULL) {
+                expr->as.identifier = slice_from_token(&token);
+                (void)parser_advance(parser);
+            }
+            return expr;
+        }
+        default:
+            (void)parser_error_current(parser,
+                "match label must be an integer, string, bool literal or named constant");
+            return NULL;
+    }
+}
+
+static bool parse_match_label(Parser *parser, FengMatchLabel *out_label) {
+    FengToken token = *parser_current(parser);
+    FengExpr *first;
+
+    out_label->token = token;
+    out_label->kind = FENG_MATCH_LABEL_VALUE;
+    out_label->value = NULL;
+    out_label->range_low = NULL;
+    out_label->range_high = NULL;
+
+    first = parse_match_label_atom(parser);
+    if (first == NULL) {
+        return false;
+    }
+
+    if (parser_check(parser, FENG_TOKEN_ELLIPSIS)) {
+        FengExpr *high;
+
+        (void)parser_advance(parser);
+        high = parse_match_label_atom(parser);
+        if (high == NULL) {
+            free_expr(first);
+            return false;
+        }
+        out_label->kind = FENG_MATCH_LABEL_RANGE;
+        out_label->range_low = first;
+        out_label->range_high = high;
+        return true;
+    }
+
+    out_label->value = first;
+    return true;
+}
+
+static void free_match_branch_contents(FengMatchBranch *branch) {
+    size_t i;
+
+    if (branch == NULL) {
+        return;
+    }
+    for (i = 0U; i < branch->label_count; ++i) {
+        free_expr(branch->labels[i].value);
+        free_expr(branch->labels[i].range_low);
+        free_expr(branch->labels[i].range_high);
+    }
+    free(branch->labels);
+    free_block(branch->body);
+}
+
+static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
+    size_t label_capacity = 0U;
+
+    out_branch->token = *parser_current(parser);
+    out_branch->labels = NULL;
+    out_branch->label_count = 0U;
+    out_branch->body = NULL;
+
+    for (;;) {
+        FengMatchLabel label;
+
+        if (!parse_match_label(parser, &label)) {
+            free_match_branch_contents(out_branch);
+            return false;
+        }
+        if (!APPEND_VALUE(parser, out_branch->labels, out_branch->label_count, label_capacity, label)) {
+            free_expr(label.value);
+            free_expr(label.range_low);
+            free_expr(label.range_high);
+            free_match_branch_contents(out_branch);
+            return false;
+        }
+        if (!parser_match(parser, FENG_TOKEN_COMMA)) {
+            break;
+        }
+    }
+
+    out_branch->body = parse_block(parser);
+    if (out_branch->body == NULL) {
+        free_match_branch_contents(out_branch);
+        return false;
+    }
+    return true;
+}
+
+/* Parses a match body's contents from the current token (after the `{` is
+ * already consumed) up to and including the closing `}`. Branches are
+ * appended to *branches, and *out_else_block receives the optional else body
+ * (NULL if none). */
+static bool parse_match_body(Parser *parser,
+                             FengMatchBranch **branches,
+                             size_t *branch_count,
+                             FengBlock **out_else_block) {
+    size_t branch_capacity = 0U;
+    bool seen_else = false;
+
+    *out_else_block = NULL;
+
+    while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+        if (parser_check(parser, FENG_TOKEN_KW_ELSE)) {
+            if (seen_else) {
+                (void)parser_error_current(parser,
+                    "match expression cannot declare more than one 'else' branch");
+                return false;
+            }
+            (void)parser_advance(parser);
+            *out_else_block = parse_block(parser);
+            if (*out_else_block == NULL) {
+                return false;
+            }
+            seen_else = true;
+        } else {
+            FengMatchBranch branch;
+
+            if (!parse_match_branch(parser, &branch)) {
+                return false;
+            }
+            if (!APPEND_VALUE(parser, *branches, *branch_count, branch_capacity, branch)) {
+                free_match_branch_contents(&branch);
+                return false;
+            }
+        }
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close match body")) {
+        return false;
+    }
+    return true;
+}
+
 static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
     FengExpr *condition = parse_expression(parser);
-    size_t mark;
     FengExpr *expr;
 
     if (condition == NULL) {
         return NULL;
     }
 
-    mark = parser->current;
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "if expressions must use '{...}' after the condition")) {
+        free_expr(condition);
+        return NULL;
+    }
+
+    if (peek_match_body(parser)) {
+        expr = new_expr(parser, FENG_EXPR_MATCH, if_token);
+        if (expr == NULL) {
+            free_expr(condition);
+            return NULL;
+        }
+        expr->as.match_expr.target = condition;
+        if (!parse_match_body(parser,
+                              &expr->as.match_expr.branches,
+                              &expr->as.match_expr.branch_count,
+                              &expr->as.match_expr.else_block)) {
+            free_expr(expr);
+            return NULL;
+        }
+        if (expr->as.match_expr.else_block == NULL) {
+            (void)parser_error_at(parser, &if_token,
+                                  "if-match expressions require an 'else' branch");
+            free_expr(expr);
+            return NULL;
+        }
+        return expr;
+    }
 
     expr = new_expr(parser, FENG_EXPR_IF, if_token);
     if (expr == NULL) {
@@ -1688,109 +1948,45 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
         return NULL;
     }
     expr->as.if_expr.condition = condition;
-
-    if (parser_expect(parser,
-                      FENG_TOKEN_LBRACE,
-                      "if expressions must use '{...}' after the condition") &&
-        (expr->as.if_expr.then_expr = parse_expression(parser)) != NULL &&
-        parser_expect(parser,
-                      FENG_TOKEN_RBRACE,
-                      "expected '}' to close the true branch of if expression") &&
-        parser_expect(parser, FENG_TOKEN_KW_ELSE, "if expressions require an 'else' branch") &&
-        parser_expect(parser,
-                      FENG_TOKEN_LBRACE,
-                      "if expression else branch must use '{...}'") &&
-        (expr->as.if_expr.else_expr = parse_expression(parser)) != NULL &&
-        parser_expect(parser,
-                      FENG_TOKEN_RBRACE,
-                      "expected '}' to close the else branch of if expression")) {
-        return expr;
-    }
-
-    expr->as.if_expr.condition = NULL;
-    free_expr(expr);
-    parser->current = mark;
-    parser->error.message = NULL;
-
-    expr = new_expr(parser, FENG_EXPR_MATCH, if_token);
-    if (expr == NULL) {
-        free_expr(condition);
-        return NULL;
-    }
-    expr->as.match_expr.target = condition;
-
-    if (!parser_expect(parser,
-                       FENG_TOKEN_LBRACE,
-                       "match expressions must use '{...}' after the target expression")) {
+    expr->as.if_expr.then_block = new_block(parser, parser_current_token(parser));
+    if (expr->as.if_expr.then_block == NULL) {
         free_expr(expr);
         return NULL;
     }
-
     {
-    size_t case_capacity = 0U;
-    while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-        if (parser_match(parser, FENG_TOKEN_KW_ELSE)) {
-            if (!parser_expect(parser,
-                               FENG_TOKEN_COLON,
-                               "expected ':' after else in match expression")) {
-                free_expr(expr);
-                return NULL;
-            }
-            expr->as.match_expr.else_expr = parse_expression(parser);
-            if (expr->as.match_expr.else_expr == NULL) {
-                free_expr(expr);
-                return NULL;
-            }
-        } else {
-            FengMatchCase match_case;
-
-            match_case.label = parse_expression(parser);
-            if (match_case.label == NULL) {
-                free_expr(expr);
-                return NULL;
-            }
-            match_case.token = match_case.label->token;
-            if (!parser_expect(parser,
-                               FENG_TOKEN_COLON,
-                               "expected ':' after match case label")) {
-                free_expr(match_case.label);
-                free_expr(expr);
-                return NULL;
-            }
-            match_case.value = parse_expression(parser);
-            if (match_case.value == NULL) {
-                free_expr(match_case.label);
+        size_t capacity = 0U;
+        while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+            FengStmt *stmt = parse_statement(parser);
+            if (stmt == NULL) {
                 free_expr(expr);
                 return NULL;
             }
             if (!APPEND_VALUE(parser,
-                              expr->as.match_expr.cases,
-                              expr->as.match_expr.case_count,
-                              case_capacity,
-                              match_case)) {
-                free_expr(match_case.label);
-                free_expr(match_case.value);
+                              expr->as.if_expr.then_block->statements,
+                              expr->as.if_expr.then_block->statement_count,
+                              capacity,
+                              stmt)) {
+                free_stmt(stmt);
                 free_expr(expr);
                 return NULL;
             }
         }
-
-        if (!parser_match(parser, FENG_TOKEN_COMMA)) {
-            break;
-        }
     }
-    }
-
-    if (expr->as.match_expr.else_expr == NULL) {
-        (void)parser_error_current(parser, "match expressions require an else branch");
+    if (!parser_expect(parser,
+                       FENG_TOKEN_RBRACE,
+                       "expected '}' to close the true branch of if expression")) {
         free_expr(expr);
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close match expression")) {
+    if (!parser_expect(parser, FENG_TOKEN_KW_ELSE, "if expressions require an 'else' branch")) {
         free_expr(expr);
         return NULL;
     }
-
+    expr->as.if_expr.else_block = parse_block(parser);
+    if (expr->as.if_expr.else_block == NULL) {
+        free_expr(expr);
+        return NULL;
+    }
     return expr;
 }
 
@@ -2164,51 +2360,137 @@ static FengBlock *parse_block(Parser *parser) {
 }
 
 static FengStmt *parse_if_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_IF, parser_previous_token(parser));
-    size_t capacity = 0U;
+    FengToken if_token = parser_previous_token(parser);
+    FengExpr *first_condition;
 
-    if (stmt == NULL) {
+    /* Parse the head expression first; it may be either a boolean condition
+     * (cond-if statement) or the match target (match statement). */
+    first_condition = parse_expression(parser);
+    if (first_condition == NULL) {
+        return NULL;
+    }
+    if (!parser_expect(parser,
+                       FENG_TOKEN_LBRACE,
+                       "expected '{' after if condition or match target")) {
+        free_expr(first_condition);
         return NULL;
     }
 
-    for (;;) {
+    if (peek_match_body(parser)) {
+        FengStmt *stmt = new_stmt(parser, FENG_STMT_MATCH, if_token);
+
+        if (stmt == NULL) {
+            free_expr(first_condition);
+            return NULL;
+        }
+        stmt->as.match_stmt.target = first_condition;
+        if (!parse_match_body(parser,
+                              &stmt->as.match_stmt.branches,
+                              &stmt->as.match_stmt.branch_count,
+                              &stmt->as.match_stmt.else_block)) {
+            free_stmt(stmt);
+            return NULL;
+        }
+        return stmt;
+    }
+
+    {
+        FengStmt *stmt = new_stmt(parser, FENG_STMT_IF, if_token);
+        size_t capacity = 0U;
         FengIfClause clause;
 
-        clause.condition = parse_expression(parser);
-        if (clause.condition == NULL) {
-            free_stmt(stmt);
+        if (stmt == NULL) {
+            free_expr(first_condition);
             return NULL;
         }
-        clause.token = clause.condition->token;
-        clause.block = parse_block(parser);
+
+        clause.condition = first_condition;
+        clause.token = first_condition->token;
+        clause.block = new_block(parser, parser_current_token(parser));
         if (clause.block == NULL) {
-            free_expr(clause.condition);
+            free_expr(first_condition);
             free_stmt(stmt);
             return NULL;
         }
-        if (!APPEND_VALUE(parser, stmt->as.if_stmt.clauses, stmt->as.if_stmt.clause_count, capacity, clause)) {
-            free_expr(clause.condition);
+        {
+            size_t block_capacity = 0U;
+            while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+                FengStmt *body_stmt = parse_statement(parser);
+                if (body_stmt == NULL) {
+                    free_block(clause.block);
+                    free_expr(first_condition);
+                    free_stmt(stmt);
+                    return NULL;
+                }
+                if (!APPEND_VALUE(parser,
+                                  clause.block->statements,
+                                  clause.block->statement_count,
+                                  block_capacity,
+                                  body_stmt)) {
+                    free_stmt(body_stmt);
+                    free_block(clause.block);
+                    free_expr(first_condition);
+                    free_stmt(stmt);
+                    return NULL;
+                }
+            }
+        }
+        if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close if block")) {
+            free_block(clause.block);
+            free_expr(first_condition);
+            free_stmt(stmt);
+            return NULL;
+        }
+        if (!APPEND_VALUE(parser,
+                          stmt->as.if_stmt.clauses,
+                          stmt->as.if_stmt.clause_count,
+                          capacity,
+                          clause)) {
+            free_expr(first_condition);
             free_block(clause.block);
             free_stmt(stmt);
             return NULL;
         }
 
-        if (!parser_match(parser, FENG_TOKEN_KW_ELSE)) {
+        while (parser_match(parser, FENG_TOKEN_KW_ELSE)) {
+            if (parser_match(parser, FENG_TOKEN_KW_IF)) {
+                FengIfClause more;
+
+                more.condition = parse_expression(parser);
+                if (more.condition == NULL) {
+                    free_stmt(stmt);
+                    return NULL;
+                }
+                more.token = more.condition->token;
+                more.block = parse_block(parser);
+                if (more.block == NULL) {
+                    free_expr(more.condition);
+                    free_stmt(stmt);
+                    return NULL;
+                }
+                if (!APPEND_VALUE(parser,
+                                  stmt->as.if_stmt.clauses,
+                                  stmt->as.if_stmt.clause_count,
+                                  capacity,
+                                  more)) {
+                    free_expr(more.condition);
+                    free_block(more.block);
+                    free_stmt(stmt);
+                    return NULL;
+                }
+                continue;
+            }
+
+            stmt->as.if_stmt.else_block = parse_block(parser);
+            if (stmt->as.if_stmt.else_block == NULL) {
+                free_stmt(stmt);
+                return NULL;
+            }
             break;
         }
-        if (parser_match(parser, FENG_TOKEN_KW_IF)) {
-            continue;
-        }
 
-        stmt->as.if_stmt.else_block = parse_block(parser);
-        if (stmt->as.if_stmt.else_block == NULL) {
-            free_stmt(stmt);
-            return NULL;
-        }
-        break;
+        return stmt;
     }
-
-    return stmt;
 }
 
 static FengStmt *parse_while_statement(Parser *parser) {
@@ -2236,6 +2518,45 @@ static FengStmt *parse_for_statement(Parser *parser) {
     if (stmt == NULL) {
         return NULL;
     }
+
+    /* Detect for/in: `for let|var IDENT in EXPR { ... }`. The lookahead must
+     * be unambiguous because three-clause `for` may also start with `let`/`var`. */
+    if ((parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) &&
+        parser_peek(parser, 1U)->kind == FENG_TOKEN_IDENTIFIER &&
+        parser_peek(parser, 2U)->kind == FENG_TOKEN_KW_IN) {
+        FengToken kw_token = *parser_current(parser);
+        FengMutability mutability = (kw_token.kind == FENG_TOKEN_KW_LET)
+                                        ? FENG_MUTABILITY_LET
+                                        : FENG_MUTABILITY_VAR;
+        FengToken name_token;
+
+        (void)parser_advance(parser); /* consume let/var */
+        name_token = *parser_current(parser);
+        (void)parser_advance(parser); /* consume identifier */
+        (void)parser_advance(parser); /* consume 'in' */
+
+        stmt->as.for_stmt.is_for_in = true;
+        stmt->as.for_stmt.iter_binding.token = name_token;
+        stmt->as.for_stmt.iter_binding.mutability = mutability;
+        stmt->as.for_stmt.iter_binding.name = slice_from_token(&name_token);
+        stmt->as.for_stmt.iter_binding.type = NULL;
+        stmt->as.for_stmt.iter_binding.initializer = NULL;
+
+        stmt->as.for_stmt.iter_expr = parse_expression(parser);
+        if (stmt->as.for_stmt.iter_expr == NULL) {
+            free_stmt(stmt);
+            return NULL;
+        }
+
+        stmt->as.for_stmt.body = parse_block(parser);
+        if (stmt->as.for_stmt.body == NULL) {
+            free_stmt(stmt);
+            return NULL;
+        }
+        return stmt;
+    }
+
+    stmt->as.for_stmt.is_for_in = false;
 
     if (!parser_check(parser, FENG_TOKEN_SEMICOLON)) {
         stmt->as.for_stmt.init = parse_simple_statement(parser, FENG_TOKEN_SEMICOLON);
@@ -2702,17 +3023,16 @@ static void free_expr(FengExpr *expr) {
             break;
         case FENG_EXPR_IF:
             free_expr(expr->as.if_expr.condition);
-            free_expr(expr->as.if_expr.then_expr);
-            free_expr(expr->as.if_expr.else_expr);
+            free_block(expr->as.if_expr.then_block);
+            free_block(expr->as.if_expr.else_block);
             break;
         case FENG_EXPR_MATCH:
             free_expr(expr->as.match_expr.target);
-            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-                free_expr(expr->as.match_expr.cases[index].label);
-                free_expr(expr->as.match_expr.cases[index].value);
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                free_match_branch_contents(&expr->as.match_expr.branches[index]);
             }
-            free(expr->as.match_expr.cases);
-            free_expr(expr->as.match_expr.else_expr);
+            free(expr->as.match_expr.branches);
+            free_block(expr->as.match_expr.else_block);
             break;
         default:
             break;
@@ -2764,14 +3084,27 @@ static void free_stmt(FengStmt *stmt) {
             free(stmt->as.if_stmt.clauses);
             free_block(stmt->as.if_stmt.else_block);
             break;
+        case FENG_STMT_MATCH:
+            free_expr(stmt->as.match_stmt.target);
+            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
+                free_match_branch_contents(&stmt->as.match_stmt.branches[index]);
+            }
+            free(stmt->as.match_stmt.branches);
+            free_block(stmt->as.match_stmt.else_block);
+            break;
         case FENG_STMT_WHILE:
             free_expr(stmt->as.while_stmt.condition);
             free_block(stmt->as.while_stmt.body);
             break;
         case FENG_STMT_FOR:
-            free_stmt(stmt->as.for_stmt.init);
-            free_expr(stmt->as.for_stmt.condition);
-            free_stmt(stmt->as.for_stmt.update);
+            if (stmt->as.for_stmt.is_for_in) {
+                free_type_ref(stmt->as.for_stmt.iter_binding.type);
+                free_expr(stmt->as.for_stmt.iter_expr);
+            } else {
+                free_stmt(stmt->as.for_stmt.init);
+                free_expr(stmt->as.for_stmt.condition);
+                free_stmt(stmt->as.for_stmt.update);
+            }
             free_block(stmt->as.for_stmt.body);
             break;
         case FENG_STMT_TRY:

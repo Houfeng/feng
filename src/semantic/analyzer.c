@@ -1767,6 +1767,7 @@ static void resolver_free_scopes(ResolveContext *context) {
 }
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
+static bool resolve_block(ResolveContext *context, const FengBlock *block, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
@@ -2472,10 +2473,42 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
     return resolver_append_error(context, expr->token, message);
 }
 
+static const FengExpr *block_yield_expression(const FengBlock *block) {
+    const FengStmt *last;
+
+    if (block == NULL || block->statement_count == 0U) {
+        return NULL;
+    }
+    last = block->statements[block->statement_count - 1U];
+    if (last == NULL || last->kind != FENG_STMT_EXPR) {
+        return NULL;
+    }
+    return last->as.expr;
+}
+
+static InferredExprType block_yield_inferred_type(ResolveContext *context, const FengBlock *block) {
+    const FengExpr *yield = block_yield_expression(block);
+
+    return yield != NULL ? infer_expr_type(context, yield) : inferred_expr_type_unknown();
+}
+
+static bool validate_block_yields_expression(ResolveContext *context,
+                                             const FengBlock *block,
+                                             FengToken anchor,
+                                             const char *ctx_label) {
+    if (block_yield_expression(block) != NULL) {
+        return true;
+    }
+    return resolver_append_error(
+        context,
+        anchor,
+        format_message("%s branch block must end with an expression statement", ctx_label));
+}
+
 static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
-    InferredExprType then_type = infer_expr_type(context, expr->as.if_expr.then_expr);
-    InferredExprType else_type = infer_expr_type(context, expr->as.if_expr.else_expr);
+    InferredExprType then_type;
+    InferredExprType else_type;
 
     if (!inferred_expr_type_is_bool(condition_type)) {
         char *condition_type_name = format_inferred_expr_type_name(condition_type);
@@ -2485,6 +2518,27 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         free(condition_type_name);
         return resolver_append_error(context, expr->token, message);
     }
+
+    if (expr->as.if_expr.else_block == NULL) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("if expressions require an else branch"));
+    }
+
+    if (!validate_block_yields_expression(context,
+                                          expr->as.if_expr.then_block,
+                                          expr->token,
+                                          "if expression then") ||
+        !validate_block_yields_expression(context,
+                                          expr->as.if_expr.else_block,
+                                          expr->token,
+                                          "if expression else")) {
+        return false;
+    }
+
+    then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
+    else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
 
     if (inferred_expr_types_equal(context, then_type, else_type)) {
         return true;
@@ -2503,179 +2557,433 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 }
 
-static bool expr_is_constant(const FengExpr *expr) {
+/* Match label literal extraction.
+ *
+ * Per docs/feng-flow.md, a match label single value must be a literal, or a `let`
+ * binding whose initializer is itself a literal (no operator-based constant folding,
+ * no propagation across multiple bindings). Range labels share the same rules and
+ * are restricted to integer endpoints. */
+typedef enum MatchConstKind {
+    MATCH_CONST_INT = 0,
+    MATCH_CONST_BOOL,
+    MATCH_CONST_STRING
+} MatchConstKind;
+
+typedef struct MatchConstValue {
+    MatchConstKind kind;
+    int64_t i;
+    bool b;
+    FengSlice s;
+    FengToken token;
+} MatchConstValue;
+
+static bool match_label_literal_from_literal_expr(const FengExpr *expr, MatchConstValue *out) {
+    if (expr == NULL || out == NULL) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_INTEGER:
+            out->kind = MATCH_CONST_INT;
+            out->i = expr->as.integer;
+            out->token = expr->token;
+            return true;
+        case FENG_EXPR_BOOL:
+            out->kind = MATCH_CONST_BOOL;
+            out->b = expr->as.boolean;
+            out->token = expr->token;
+            return true;
+        case FENG_EXPR_STRING:
+            out->kind = MATCH_CONST_STRING;
+            out->s = expr->as.string;
+            out->token = expr->token;
+            return true;
+        case FENG_EXPR_UNARY:
+            /* Allow `-INTEGER_LITERAL` as a single negative integer literal. */
+            if (expr->as.unary.op == FENG_TOKEN_MINUS &&
+                expr->as.unary.operand != NULL &&
+                expr->as.unary.operand->kind == FENG_EXPR_INTEGER) {
+                int64_t v = expr->as.unary.operand->as.integer;
+
+                out->kind = MATCH_CONST_INT;
+                /* Mirror unary-minus const-eval: negate via unsigned to avoid UB on
+                 * INT64_MIN. */
+                out->i = (int64_t)(-(uint64_t)v);
+                out->token = expr->token;
+                return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static bool extract_match_label_literal(ResolveContext *context,
+                                        const FengExpr *expr,
+                                        MatchConstValue *out) {
     if (expr == NULL) {
         return false;
     }
-
-    switch (expr->kind) {
-        case FENG_EXPR_BOOL:
-        case FENG_EXPR_INTEGER:
-        case FENG_EXPR_FLOAT:
-        case FENG_EXPR_STRING:
-            return true;
-
-        case FENG_EXPR_UNARY:
-            return expr_is_constant(expr->as.unary.operand);
-
-        case FENG_EXPR_BINARY:
-            return expr_is_constant(expr->as.binary.left) &&
-                   expr_is_constant(expr->as.binary.right);
-
-        case FENG_EXPR_CAST:
-            return expr_is_constant(expr->as.cast.value);
-
-        case FENG_EXPR_IF:
-            return expr_is_constant(expr->as.if_expr.condition) &&
-                   expr_is_constant(expr->as.if_expr.then_expr) &&
-                   expr_is_constant(expr->as.if_expr.else_expr);
-
-        case FENG_EXPR_IDENTIFIER:
-        case FENG_EXPR_SELF:
-        case FENG_EXPR_ARRAY_LITERAL:
-        case FENG_EXPR_OBJECT_LITERAL:
-        case FENG_EXPR_CALL:
-        case FENG_EXPR_MEMBER:
-        case FENG_EXPR_INDEX:
-        case FENG_EXPR_LAMBDA:
-        case FENG_EXPR_MATCH:
-            return false;
+    if (match_label_literal_from_literal_expr(expr, out)) {
+        return true;
     }
+    if (expr->kind == FENG_EXPR_IDENTIFIER) {
+        const LocalNameEntry *local =
+            resolver_find_local_name_entry(context, expr->as.identifier);
 
+        if (local != NULL) {
+            if (local->mutability != FENG_MUTABILITY_LET || local->source_expr == NULL) {
+                return false;
+            }
+            if (!match_label_literal_from_literal_expr(local->source_expr, out)) {
+                return false;
+            }
+            out->token = expr->token;
+            return true;
+        }
+
+        {
+            const VisibleValueEntry *visible =
+                find_visible_value(context->visible_values,
+                                   context->visible_value_count,
+                                   expr->as.identifier);
+
+            if (visible == NULL || visible->is_function || visible->decl == NULL ||
+                visible->decl->kind != FENG_DECL_GLOBAL_BINDING) {
+                return false;
+            }
+            if (visible->decl->as.binding.mutability != FENG_MUTABILITY_LET ||
+                visible->decl->as.binding.initializer == NULL) {
+                return false;
+            }
+            if (!match_label_literal_from_literal_expr(visible->decl->as.binding.initializer, out)) {
+                return false;
+            }
+            out->token = expr->token;
+            return true;
+        }
+    }
     return false;
 }
 
-static bool validate_match_case_label(ResolveContext *context,
-                                      const FengExpr *target,
-                                      const FengMatchCase *match_case) {
-    InferredExprType target_type;
-    InferredExprType label_type;
-    char *target_type_name;
-    char *label_type_name;
-    char *message;
+static bool match_target_type_is_allowed(InferredExprType target_type) {
+    return inferred_expr_type_is_integer(target_type) ||
+           inferred_expr_type_is_bool(target_type) ||
+           inferred_expr_type_is_string(target_type);
+}
 
-    if (match_case == NULL || match_case->label == NULL) {
+static const char *match_const_kind_name(MatchConstKind kind) {
+    switch (kind) {
+        case MATCH_CONST_INT:
+            return "integer";
+        case MATCH_CONST_BOOL:
+            return "bool";
+        case MATCH_CONST_STRING:
+            return "string";
+    }
+    return "unknown";
+}
+
+static bool match_const_kind_matches_target(MatchConstKind kind, InferredExprType target_type) {
+    switch (kind) {
+        case MATCH_CONST_INT:
+            return inferred_expr_type_is_integer(target_type);
+        case MATCH_CONST_BOOL:
+            return inferred_expr_type_is_bool(target_type);
+        case MATCH_CONST_STRING:
+            return inferred_expr_type_is_string(target_type);
+    }
+    return false;
+}
+
+/* Aggregated label record used for cross-branch overlap detection. Single values are
+ * stored as [v, v]; ranges are stored as [low, high]. The branch index is preserved
+ * so that diagnostic messages can refer to "branch N" pairs. */
+typedef struct MatchLabelRecord {
+    size_t branch_index;
+    FengToken token;
+    MatchConstKind kind;
+    /* INT: low/high are valid (low == high for single value). */
+    int64_t low;
+    int64_t high;
+    /* BOOL */
+    bool b;
+    /* STRING */
+    FengSlice s;
+} MatchLabelRecord;
+
+static bool slices_equal(FengSlice a, FengSlice b) {
+    return a.length == b.length &&
+           (a.length == 0U || memcmp(a.data, b.data, a.length) == 0);
+}
+
+static bool match_label_records_overlap(const MatchLabelRecord *a, const MatchLabelRecord *b) {
+    if (a->kind != b->kind) {
+        return false;
+    }
+    switch (a->kind) {
+        case MATCH_CONST_INT:
+            return !(a->high < b->low || b->high < a->low);
+        case MATCH_CONST_BOOL:
+            return a->b == b->b;
+        case MATCH_CONST_STRING:
+            return slices_equal(a->s, b->s);
+    }
+    return false;
+}
+
+static bool validate_match_label_record_target(ResolveContext *context,
+                                               InferredExprType target_type,
+                                               const MatchLabelRecord *record) {
+    if (!match_const_kind_matches_target(record->kind, target_type)) {
+        char *target_name = format_inferred_expr_type_name(target_type);
+        char *message = format_message(
+            "match label of type '%s' is not comparable with target type '%s'",
+            match_const_kind_name(record->kind),
+            target_name != NULL ? target_name : "<unknown>");
+
+        free(target_name);
+        return resolver_append_error(context, record->token, message);
+    }
+    return true;
+}
+
+static bool collect_match_branch_label_records(ResolveContext *context,
+                                               const FengMatchBranch *branch,
+                                               size_t branch_index,
+                                               MatchLabelRecord **records,
+                                               size_t *record_count,
+                                               size_t *record_capacity) {
+    size_t label_index;
+
+    for (label_index = 0U; label_index < branch->label_count; ++label_index) {
+        const FengMatchLabel *label = &branch->labels[label_index];
+        MatchLabelRecord record;
+
+        record.branch_index = branch_index;
+
+        if (label->kind == FENG_MATCH_LABEL_RANGE) {
+            MatchConstValue lo;
+            MatchConstValue hi;
+
+            if (!extract_match_label_literal(context, label->range_low, &lo) ||
+                !extract_match_label_literal(context, label->range_high, &hi)) {
+                return resolver_append_error(
+                    context,
+                    label->token,
+                    format_message("match range label endpoints must be integer literals or 'let' bindings to integer literals"));
+            }
+            if (lo.kind != MATCH_CONST_INT || hi.kind != MATCH_CONST_INT) {
+                return resolver_append_error(
+                    context,
+                    label->token,
+                    format_message("match range label endpoints must be integer values"));
+            }
+            if (lo.i > hi.i) {
+                return resolver_append_error(
+                    context,
+                    label->token,
+                    format_message("match range label requires low <= high, got %lld and %lld",
+                                   (long long)lo.i,
+                                   (long long)hi.i));
+            }
+            record.token = label->token;
+            record.kind = MATCH_CONST_INT;
+            record.low = lo.i;
+            record.high = hi.i;
+        } else {
+            MatchConstValue value;
+
+            if (!extract_match_label_literal(context, label->value, &value)) {
+                return resolver_append_error(
+                    context,
+                    label->value != NULL ? label->value->token : label->token,
+                    format_message("match label must be a literal or a 'let' binding to a literal"));
+            }
+            record.token = value.token;
+            record.kind = value.kind;
+            switch (value.kind) {
+                case MATCH_CONST_INT:
+                    record.low = value.i;
+                    record.high = value.i;
+                    break;
+                case MATCH_CONST_BOOL:
+                    record.b = value.b;
+                    break;
+                case MATCH_CONST_STRING:
+                    record.s = value.s;
+                    break;
+            }
+        }
+
+        {
+            if (*record_count == *record_capacity) {
+                size_t new_capacity = (*record_capacity == 0U) ? 4U : (*record_capacity * 2U);
+                MatchLabelRecord *grown =
+                    (MatchLabelRecord *)realloc(*records, new_capacity * sizeof(MatchLabelRecord));
+
+                if (grown == NULL) {
+                    return false;
+                }
+                *records = grown;
+                *record_capacity = new_capacity;
+            }
+            (*records)[*record_count] = record;
+            *record_count += 1U;
+        }
+    }
+    return true;
+}
+
+static bool validate_match_label_records(ResolveContext *context,
+                                         InferredExprType target_type,
+                                         const MatchLabelRecord *records,
+                                         size_t record_count) {
+    size_t i;
+    size_t j;
+
+    for (i = 0U; i < record_count; ++i) {
+        if (!validate_match_label_record_target(context, target_type, &records[i])) {
+            return false;
+        }
+    }
+    for (i = 0U; i < record_count; ++i) {
+        for (j = i + 1U; j < record_count; ++j) {
+            if (match_label_records_overlap(&records[i], &records[j])) {
+                return resolver_append_error(
+                    context,
+                    records[j].token,
+                    format_message("match label overlaps with an earlier label and is unreachable"));
+            }
+        }
+    }
+    return true;
+}
+
+static bool resolve_match_branch_body(ResolveContext *context,
+                                      const FengMatchBranch *branch,
+                                      bool allow_self) {
+    if (branch == NULL || branch->body == NULL) {
         return true;
     }
-    if (!expr_is_constant(match_case->label)) {
-        return resolver_append_error(context,
-                                     match_case->token,
-                                     format_message("match case label must be a constant expression")) &&
-               false;
+    return resolve_block(context, branch->body, allow_self);
+}
+
+static bool resolve_and_validate_match_common(ResolveContext *context,
+                                              const FengExpr *target,
+                                              const FengMatchBranch *branches,
+                                              size_t branch_count,
+                                              const FengBlock *else_block,
+                                              FengToken anchor,
+                                              bool is_expression_form,
+                                              bool allow_self) {
+    InferredExprType target_type;
+    MatchLabelRecord *records = NULL;
+    size_t record_count = 0U;
+    size_t record_capacity = 0U;
+    size_t branch_index;
+    bool ok = true;
+
+    if (!resolve_expr(context, (FengExpr *)target, allow_self)) {
+        return false;
     }
 
     target_type = infer_expr_type(context, target);
-    label_type = infer_expr_type(context, match_case->label);
-    if (!inferred_expr_type_is_known(target_type) || !inferred_expr_type_is_known(label_type) ||
-        binary_expr_types_are_valid(context, FENG_TOKEN_EQ, target_type, label_type)) {
-        return true;
+    if (inferred_expr_type_is_known(target_type) && !match_target_type_is_allowed(target_type)) {
+        char *target_name = format_inferred_expr_type_name(target_type);
+        char *message = format_message(
+            "match target type '%s' is not allowed; allowed types are integers, 'string' and 'bool'",
+            target_name != NULL ? target_name : "<unknown>");
+
+        free(target_name);
+        return resolver_append_error(context, target->token, message);
     }
 
-    target_type_name = format_inferred_expr_type_name(target_type);
-    label_type_name = format_inferred_expr_type_name(label_type);
-    message = format_message("match case label type '%s' is not comparable with target type '%s'",
-                             label_type_name != NULL ? label_type_name : "<unknown>",
-                             target_type_name != NULL ? target_type_name : "<unknown>");
-    free(target_type_name);
-    free(label_type_name);
-    return resolver_append_error(context, match_case->token, message) && false;
-}
-
-static bool validate_match_expr_result_types(ResolveContext *context, const FengExpr *expr) {
-    InferredExprType expected_type = inferred_expr_type_unknown();
-    InferredExprType else_type;
-    size_t index;
-
-    if (expr == NULL || expr->kind != FENG_EXPR_MATCH || expr->as.match_expr.else_expr == NULL) {
-        return true;
+    for (branch_index = 0U; branch_index < branch_count && ok; ++branch_index) {
+        if (!collect_match_branch_label_records(context,
+                                                &branches[branch_index],
+                                                branch_index,
+                                                &records,
+                                                &record_count,
+                                                &record_capacity)) {
+            ok = false;
+            break;
+        }
+        if (!resolve_match_branch_body(context, &branches[branch_index], allow_self)) {
+            ok = false;
+            break;
+        }
+        if (is_expression_form &&
+            !validate_block_yields_expression(context,
+                                              branches[branch_index].body,
+                                              branches[branch_index].token,
+                                              "match expression")) {
+            ok = false;
+            break;
+        }
     }
 
-    else_type = infer_expr_type(context, expr->as.match_expr.else_expr);
-    if (inferred_expr_type_is_known(else_type)) {
-        expected_type = else_type;
-    } else {
-        for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-            InferredExprType case_type =
-                infer_expr_type(context, expr->as.match_expr.cases[index].value);
+    if (ok && inferred_expr_type_is_known(target_type)) {
+        ok = validate_match_label_records(context, target_type, records, record_count);
+    }
 
-            if (inferred_expr_type_is_known(case_type)) {
-                expected_type = case_type;
-                break;
+    free(records);
+
+    if (!ok) {
+        return false;
+    }
+
+    if (else_block != NULL) {
+        if (!resolve_block(context, else_block, allow_self)) {
+            return false;
+        }
+        if (is_expression_form &&
+            !validate_block_yields_expression(context, else_block, anchor, "match expression else")) {
+            return false;
+        }
+    } else if (is_expression_form) {
+        return resolver_append_error(
+            context,
+            anchor,
+            format_message("match expressions require an else branch"));
+    }
+
+    if (is_expression_form) {
+        InferredExprType expected = block_yield_inferred_type(context, else_block);
+        size_t i;
+
+        if (!inferred_expr_type_is_known(expected)) {
+            for (i = 0U; i < branch_count; ++i) {
+                expected = block_yield_inferred_type(context, branches[i].body);
+                if (inferred_expr_type_is_known(expected)) {
+                    break;
+                }
+            }
+        }
+        if (inferred_expr_type_is_known(expected)) {
+            for (i = 0U; i < branch_count; ++i) {
+                InferredExprType branch_type =
+                    block_yield_inferred_type(context, branches[i].body);
+
+                if (!inferred_expr_type_is_known(branch_type)) {
+                    continue;
+                }
+                if (!inferred_expr_types_equal(context, expected, branch_type)) {
+                    char *expected_name = format_inferred_expr_type_name(expected);
+                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    char *message = format_message(
+                        "match expression branches must have the same type, got '%s' and '%s'",
+                        expected_name != NULL ? expected_name : "<unknown>",
+                        branch_name != NULL ? branch_name : "<unknown>");
+
+                    free(expected_name);
+                    free(branch_name);
+                    return resolver_append_error(context, branches[i].token, message);
+                }
             }
         }
     }
 
-    if (!inferred_expr_type_is_known(expected_type)) {
-        return true;
-    }
-
-    for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-        InferredExprType case_type = infer_expr_type(context, expr->as.match_expr.cases[index].value);
-
-        if (!inferred_expr_type_is_known(case_type) ||
-            inferred_expr_types_equal(context, expected_type, case_type)) {
-            continue;
-        }
-
-        {
-            char *expected_type_name = format_inferred_expr_type_name(expected_type);
-            char *case_type_name = format_inferred_expr_type_name(case_type);
-            char *message = format_message(
-                "match expression branches must have the same type, got '%s' and '%s'",
-                expected_type_name != NULL ? expected_type_name : "<unknown>",
-                case_type_name != NULL ? case_type_name : "<unknown>");
-
-            free(expected_type_name);
-            free(case_type_name);
-            return resolver_append_error(context,
-                                         expr->as.match_expr.cases[index].value->token,
-                                         message) &&
-                   false;
-        }
-    }
-
-    if (!inferred_expr_type_is_known(else_type) ||
-        inferred_expr_types_equal(context, expected_type, else_type)) {
-        return true;
-    }
-
-    {
-        char *expected_type_name = format_inferred_expr_type_name(expected_type);
-        char *else_type_name = format_inferred_expr_type_name(else_type);
-        char *message = format_message(
-            "match expression branches must have the same type, got '%s' and '%s'",
-            expected_type_name != NULL ? expected_type_name : "<unknown>",
-            else_type_name != NULL ? else_type_name : "<unknown>");
-
-        free(expected_type_name);
-        free(else_type_name);
-        return resolver_append_error(context, expr->as.match_expr.else_expr->token, message) &&
-               false;
-    }
-}
-
-static bool validate_match_expr(ResolveContext *context, const FengExpr *expr) {
-    size_t index;
-
-    if (expr == NULL || expr->kind != FENG_EXPR_MATCH) {
-        return true;
-    }
-    if (expr->as.match_expr.else_expr == NULL) {
-        return resolver_append_error(context,
-                                     expr->token,
-                                     format_message("match expressions require an else branch")) &&
-               false;
-    }
-
-    for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-        if (!validate_match_case_label(context,
-                                       expr->as.match_expr.target,
-                                       &expr->as.match_expr.cases[index])) {
-            return false;
-        }
-    }
-
-    return validate_match_expr_result_types(context, expr);
+    return true;
 }
 
 static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
@@ -3279,27 +3587,32 @@ static bool callable_value_expr_may_escape_exception(ResolveContext *context,
         case FENG_EXPR_LAMBDA:
             return lambda_expr_may_escape_exception(context, expr);
 
-        case FENG_EXPR_IF:
-            return callable_value_expr_may_escape_exception(
-                       context, expr->as.if_expr.then_expr, expected_type_ref, depth + 1U) ||
-                   callable_value_expr_may_escape_exception(
-                       context, expr->as.if_expr.else_expr, expected_type_ref, depth + 1U);
+        case FENG_EXPR_IF: {
+            const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
+            const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
+
+            return (then_yield != NULL && callable_value_expr_may_escape_exception(
+                                              context, then_yield, expected_type_ref, depth + 1U)) ||
+                   (else_yield != NULL && callable_value_expr_may_escape_exception(
+                                              context, else_yield, expected_type_ref, depth + 1U));
+        }
 
         case FENG_EXPR_MATCH: {
-            size_t case_index;
+            size_t branch_index;
+            const FengExpr *else_yield = block_yield_expression(expr->as.match_expr.else_block);
 
-            for (case_index = 0U; case_index < expr->as.match_expr.case_count; ++case_index) {
-                if (callable_value_expr_may_escape_exception(
-                        context,
-                        expr->as.match_expr.cases[case_index].value,
-                        expected_type_ref,
-                        depth + 1U)) {
+            for (branch_index = 0U; branch_index < expr->as.match_expr.branch_count; ++branch_index) {
+                const FengExpr *branch_yield =
+                    block_yield_expression(expr->as.match_expr.branches[branch_index].body);
+
+                if (branch_yield != NULL && callable_value_expr_may_escape_exception(
+                                                context, branch_yield, expected_type_ref, depth + 1U)) {
                     return true;
                 }
             }
 
-            return callable_value_expr_may_escape_exception(
-                context, expr->as.match_expr.else_expr, expected_type_ref, depth + 1U);
+            return else_yield != NULL && callable_value_expr_may_escape_exception(
+                                             context, else_yield, expected_type_ref, depth + 1U);
         }
 
         case FENG_EXPR_CAST:
@@ -4324,6 +4637,37 @@ static InferredExprType infer_stmt_return_type(ResolveContext *context, const Fe
         }
         case FENG_STMT_WHILE:
             return infer_block_return_type(context, stmt->as.while_stmt.body);
+        case FENG_STMT_MATCH: {
+            size_t branch_index;
+            bool any_known = false;
+
+            for (branch_index = 0U; branch_index < stmt->as.match_stmt.branch_count; ++branch_index) {
+                InferredExprType branch = infer_block_return_type(
+                    context, stmt->as.match_stmt.branches[branch_index].body);
+
+                if (inferred_expr_type_is_known(branch)) {
+                    if (!any_known) {
+                        current = branch;
+                        any_known = true;
+                    } else if (!inferred_expr_types_equal(context, current, branch)) {
+                        return inferred_expr_type_unknown();
+                    }
+                }
+            }
+            if (stmt->as.match_stmt.else_block != NULL) {
+                InferredExprType branch =
+                    infer_block_return_type(context, stmt->as.match_stmt.else_block);
+
+                if (inferred_expr_type_is_known(branch)) {
+                    if (!any_known) {
+                        current = branch;
+                    } else if (!inferred_expr_types_equal(context, current, branch)) {
+                        return inferred_expr_type_unknown();
+                    }
+                }
+            }
+            return current;
+        }
         case FENG_STMT_FOR:
             return infer_block_return_type(context, stmt->as.for_stmt.body);
         case FENG_STMT_TRY: {
@@ -4725,25 +5069,33 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
         case FENG_EXPR_CAST:
             return expr_type_inference_is_pending(context, expr->as.cast.value);
 
-        case FENG_EXPR_IF:
-            return expr_type_inference_is_pending(context, expr->as.if_expr.condition) ||
-                   expr_type_inference_is_pending(context, expr->as.if_expr.then_expr) ||
-                   expr_type_inference_is_pending(context, expr->as.if_expr.else_expr);
+        case FENG_EXPR_IF: {
+            const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
+            const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
 
-        case FENG_EXPR_MATCH:
+            return expr_type_inference_is_pending(context, expr->as.if_expr.condition) ||
+                   (then_yield != NULL && expr_type_inference_is_pending(context, then_yield)) ||
+                   (else_yield != NULL && expr_type_inference_is_pending(context, else_yield));
+        }
+
+        case FENG_EXPR_MATCH: {
+            const FengExpr *else_yield = block_yield_expression(expr->as.match_expr.else_block);
+
             if (expr_type_inference_is_pending(context, expr->as.match_expr.target) ||
-                expr_type_inference_is_pending(context, expr->as.match_expr.else_expr)) {
+                (else_yield != NULL && expr_type_inference_is_pending(context, else_yield))) {
                 return true;
             }
-            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-                if (expr_type_inference_is_pending(context,
-                                                   expr->as.match_expr.cases[index].label) ||
-                    expr_type_inference_is_pending(context,
-                                                   expr->as.match_expr.cases[index].value)) {
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                const FengExpr *branch_yield =
+                    block_yield_expression(expr->as.match_expr.branches[index].body);
+
+                if (branch_yield != NULL &&
+                    expr_type_inference_is_pending(context, branch_yield)) {
                     return true;
                 }
             }
             return false;
+        }
 
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_SELF:
@@ -4970,11 +5322,35 @@ static bool collect_constructor_bound_lets_from_stmt(const FengDecl *type_decl,
             return collect_constructor_bound_lets_from_block(
                 type_decl, stmt->as.if_stmt.else_block, bound_names, bound_count, bound_capacity);
 
+        case FENG_STMT_MATCH: {
+            size_t branch_index;
+
+            for (branch_index = 0U; branch_index < stmt->as.match_stmt.branch_count; ++branch_index) {
+                if (!collect_constructor_bound_lets_from_block(
+                        type_decl,
+                        stmt->as.match_stmt.branches[branch_index].body,
+                        bound_names,
+                        bound_count,
+                        bound_capacity)) {
+                    return false;
+                }
+            }
+            return collect_constructor_bound_lets_from_block(
+                type_decl, stmt->as.match_stmt.else_block, bound_names, bound_count, bound_capacity);
+        }
+
         case FENG_STMT_WHILE:
             return collect_constructor_bound_lets_from_block(
                 type_decl, stmt->as.while_stmt.body, bound_names, bound_count, bound_capacity);
 
         case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                return collect_constructor_bound_lets_from_block(type_decl,
+                                                                 stmt->as.for_stmt.body,
+                                                                 bound_names,
+                                                                 bound_count,
+                                                                 bound_capacity);
+            }
             return collect_constructor_bound_lets_from_stmt(type_decl,
                                                             stmt->as.for_stmt.init,
                                                             bound_names,
@@ -5638,8 +6014,10 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
         case FENG_EXPR_IF: {
             InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
-            InferredExprType then_type = infer_expr_type(context, expr->as.if_expr.then_expr);
-            InferredExprType else_type = infer_expr_type(context, expr->as.if_expr.else_expr);
+            InferredExprType then_type =
+                block_yield_inferred_type(context, expr->as.if_expr.then_block);
+            InferredExprType else_type =
+                block_yield_inferred_type(context, expr->as.if_expr.else_block);
 
             return inferred_expr_type_is_bool(condition_type) &&
                        inferred_expr_types_equal(context, then_type, else_type)
@@ -5648,17 +6026,18 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         }
 
         case FENG_EXPR_MATCH: {
-            InferredExprType result_type = infer_expr_type(context, expr->as.match_expr.else_expr);
+            InferredExprType result_type =
+                block_yield_inferred_type(context, expr->as.match_expr.else_block);
 
             if (!inferred_expr_type_is_known(result_type)) {
                 return result_type;
             }
 
-            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-                InferredExprType case_type =
-                    infer_expr_type(context, expr->as.match_expr.cases[index].value);
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                InferredExprType branch_type =
+                    block_yield_inferred_type(context, expr->as.match_expr.branches[index].body);
 
-                if (!inferred_expr_types_equal(context, result_type, case_type)) {
+                if (!inferred_expr_types_equal(context, result_type, branch_type)) {
                     return inferred_expr_type_unknown();
                 }
             }
@@ -8639,23 +9018,22 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    validate_cast_expr(context, expr);
 
         case FENG_EXPR_IF:
-            return resolve_expr(context, expr->as.if_expr.condition, allow_self) &&
-                   resolve_expr(context, expr->as.if_expr.then_expr, allow_self) &&
-                   resolve_expr(context, expr->as.if_expr.else_expr, allow_self) &&
-                   validate_if_expr(context, expr);
-
-        case FENG_EXPR_MATCH:
-            if (!resolve_expr(context, expr->as.match_expr.target, allow_self)) {
+            if (!resolve_expr(context, expr->as.if_expr.condition, allow_self) ||
+                !resolve_block(context, expr->as.if_expr.then_block, allow_self) ||
+                !resolve_block(context, expr->as.if_expr.else_block, allow_self)) {
                 return false;
             }
-            for (index = 0U; index < expr->as.match_expr.case_count; ++index) {
-                if (!resolve_expr(context, expr->as.match_expr.cases[index].label, allow_self) ||
-                    !resolve_expr(context, expr->as.match_expr.cases[index].value, allow_self)) {
-                    return false;
-                }
-            }
-            return resolve_expr(context, expr->as.match_expr.else_expr, allow_self) &&
-                   validate_match_expr(context, expr);
+            return validate_if_expr(context, expr);
+
+        case FENG_EXPR_MATCH:
+            return resolve_and_validate_match_common(context,
+                                                     expr->as.match_expr.target,
+                                                     expr->as.match_expr.branches,
+                                                     expr->as.match_expr.branch_count,
+                                                     expr->as.match_expr.else_block,
+                                                     expr->token,
+                                                     true,
+                                                     allow_self);
     }
 
     return true;
@@ -8810,6 +9188,16 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             }
             return resolve_block(context, stmt->as.if_stmt.else_block, allow_self);
 
+        case FENG_STMT_MATCH:
+            return resolve_and_validate_match_common(context,
+                                                     stmt->as.match_stmt.target,
+                                                     stmt->as.match_stmt.branches,
+                                                     stmt->as.match_stmt.branch_count,
+                                                     stmt->as.match_stmt.else_block,
+                                                     stmt->token,
+                                                     false,
+                                                     allow_self);
+
         case FENG_STMT_WHILE: {
             bool ok;
 
@@ -8831,11 +9219,46 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 return false;
             }
 
-            ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&
-                 resolve_expr(context, stmt->as.for_stmt.condition, allow_self) &&
-                 validate_stmt_condition_expr(
-                     context, stmt->token, stmt->as.for_stmt.condition, "for statement") &&
-                 resolve_stmt(context, stmt->as.for_stmt.update, allow_self);
+            if (stmt->as.for_stmt.is_for_in) {
+                InferredExprType iter_type;
+                const FengTypeRef *element_type_ref = NULL;
+
+                ok = resolve_expr(context, stmt->as.for_stmt.iter_expr, allow_self);
+                if (ok) {
+                    iter_type = infer_expr_type(context, stmt->as.for_stmt.iter_expr);
+                    if (iter_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                        iter_type.type_ref != NULL &&
+                        iter_type.type_ref->kind == FENG_TYPE_REF_ARRAY) {
+                        element_type_ref = iter_type.type_ref->as.inner;
+                    } else {
+                        char *type_name = format_inferred_expr_type_name(iter_type);
+
+                        ok = resolver_append_error(
+                            context,
+                            stmt->as.for_stmt.iter_expr->token,
+                            format_message(
+                                "for/in sequence must be an array 'T[]', got '%s'",
+                                type_name != NULL ? type_name : "<unknown>"));
+                        free(type_name);
+                    }
+                }
+                if (ok && element_type_ref != NULL) {
+                    InferredExprType element_type =
+                        inferred_expr_type_from_type_ref(element_type_ref);
+
+                    ok = resolver_add_local_typed_name(
+                        context,
+                        stmt->as.for_stmt.iter_binding.name,
+                        element_type,
+                        stmt->as.for_stmt.iter_binding.mutability);
+                }
+            } else {
+                ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&
+                     resolve_expr(context, stmt->as.for_stmt.condition, allow_self) &&
+                     validate_stmt_condition_expr(
+                         context, stmt->token, stmt->as.for_stmt.condition, "for statement") &&
+                     resolve_stmt(context, stmt->as.for_stmt.update, allow_self);
+            }
             if (ok) {
                 context->loop_depth += 1U;
                 ok = resolve_block(context, stmt->as.for_stmt.body, allow_self);
