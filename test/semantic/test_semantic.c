@@ -5195,6 +5195,168 @@ static void test_local_fit_emits_no_orphan_info(void) {
     feng_program_free(program);
 }
 
+/* Cross-module pu fit becomes effective in the consumer when the consumer
+ * imports the fit's owning module via `use`. The consumer can then call
+ * the spec method on a value of the imported type. The fit module owns
+ * the spec so it is not an orphan adapter. */
+static void test_pu_fit_visible_after_use_enables_method_call(void) {
+    const char *src_types =
+        "pu mod demo.types;\n"
+        "pu type User {}\n";
+    const char *src_adapter =
+        "pu mod demo.adapter;\n"
+        "use demo.types;\n"
+        "pu spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    const char *src_consumer =
+        "pu mod demo.consumer;\n"
+        "use demo.types;\n"
+        "use demo.adapter;\n"
+        "fn run(): string {\n"
+        "    let u: User = User();\n"
+        "    return u.greet();\n"
+        "}\n";
+    FengProgram *p1 = parse_program_or_die("types.f", src_types);
+    FengProgram *p3 = parse_program_or_die("adapter.f", src_adapter);
+    FengProgram *p4 = parse_program_or_die("consumer.f", src_consumer);
+    const FengProgram *programs[] = {p1, p3, p4};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(p1);
+    feng_program_free(p3);
+    feng_program_free(p4);
+}
+
+/* Without `use` of the fit's owning module, the pu fit must not bridge
+ * the type to the spec; calling the spec method on the type's value is
+ * rejected because the contract relation is not in scope. */
+static void test_pu_fit_invisible_without_use_rejects_method_call(void) {
+    const char *src_types =
+        "pu mod demo.types;\n"
+        "pu type User {}\n";
+    const char *src_adapter =
+        "pu mod demo.adapter;\n"
+        "use demo.types;\n"
+        "pu spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    const char *src_consumer =
+        "pu mod demo.consumer;\n"
+        "use demo.types;\n"
+        "fn run(): string {\n"
+        "    let u: User = User();\n"
+        "    return u.greet();\n"
+        "}\n";
+    FengProgram *p1 = parse_program_or_die("types.f", src_types);
+    FengProgram *p3 = parse_program_or_die("adapter.f", src_adapter);
+    FengProgram *p4 = parse_program_or_die("consumer.f", src_consumer);
+    const FengProgram *programs[] = {p1, p3, p4};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "no member 'greet'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(p1);
+    feng_program_free(p3);
+    feng_program_free(p4);
+}
+
+/* Spec satisfaction at type position must consider pu fits from any
+ * module the consumer has `use`d, not only fits declared in the
+ * consumer's own module. */
+static void test_imported_pu_fit_satisfies_spec_typed_parameter(void) {
+    const char *src_types =
+        "pu mod demo.types;\n"
+        "pu type User {}\n";
+    const char *src_adapter =
+        "pu mod demo.adapter;\n"
+        "use demo.types;\n"
+        "pu spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    const char *src_consumer =
+        "pu mod demo.consumer;\n"
+        "use demo.types;\n"
+        "use demo.adapter;\n"
+        "fn use_named(n: Named): void { return; }\n"
+        "fn run(): void {\n"
+        "    let u: User = User();\n"
+        "    use_named(u);\n"
+        "}\n";
+    FengProgram *p1 = parse_program_or_die("types.f", src_types);
+    FengProgram *p3 = parse_program_or_die("adapter.f", src_adapter);
+    FengProgram *p4 = parse_program_or_die("consumer.f", src_consumer);
+    const FengProgram *programs[] = {p1, p3, p4};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(p1);
+    feng_program_free(p3);
+    feng_program_free(p4);
+}
+
+/* Aliased `use` must also activate the imported module's pu fit
+ * contracts, even though the imported short names go through the
+ * alias instead of being injected into the current scope. */
+static void test_pu_fit_visible_via_alias_use(void) {
+    const char *src_types =
+        "pu mod demo.types;\n"
+        "pu type User {}\n";
+    const char *src_adapter =
+        "pu mod demo.adapter;\n"
+        "use demo.types;\n"
+        "pu spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "pu fit User: Named {\n"
+        "    fn greet(): string { return \"hi\"; }\n"
+        "}\n";
+    const char *src_consumer =
+        "pu mod demo.consumer;\n"
+        "use demo.types;\n"
+        "use demo.adapter as adapter;\n"
+        "fn run(): string {\n"
+        "    let u: User = User();\n"
+        "    return u.greet();\n"
+        "}\n";
+    FengProgram *p1 = parse_program_or_die("types.f", src_types);
+    FengProgram *p3 = parse_program_or_die("adapter.f", src_adapter);
+    FengProgram *p4 = parse_program_or_die("consumer.f", src_consumer);
+    const FengProgram *programs[] = {p1, p3, p4};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(p1);
+    feng_program_free(p3);
+    feng_program_free(p4);
+}
+
 static void test_fit_method_callable_on_instance(void) {
     const char *source =
         "mod demo.main;\n"
@@ -6205,6 +6367,10 @@ int main(void) {
     test_fit_missing_method_rejected();
     test_orphan_pu_fit_emits_info_and_downgrades();
     test_local_fit_emits_no_orphan_info();
+    test_pu_fit_visible_after_use_enables_method_call();
+    test_pu_fit_invisible_without_use_rejects_method_call();
+    test_imported_pu_fit_satisfies_spec_typed_parameter();
+    test_pu_fit_visible_via_alias_use();
     test_fit_method_callable_on_instance();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();

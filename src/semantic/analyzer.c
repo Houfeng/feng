@@ -56,6 +56,14 @@ typedef struct AliasEntry {
     const FengUseDecl *use_decl;
 } AliasEntry;
 
+/* Per-program record of every module referenced by a `use` declaration in
+ * the current file (whether short-name or aliased). Cross-module visibility
+ * checks against external modules require an entry here in addition to the
+ * target being declared `pu mod`. */
+typedef struct ImportedModuleEntry {
+    const FengSemanticModule *target_module;
+} ImportedModuleEntry;
+
 typedef enum InferredExprTypeKind {
     FENG_INFERRED_EXPR_TYPE_UNKNOWN = 0,
     FENG_INFERRED_EXPR_TYPE_BUILTIN,
@@ -183,6 +191,11 @@ typedef struct ResolveContext {
     size_t function_set_count;
     const AliasEntry *aliases;
     size_t alias_count;
+    /* Modules the current file imported via `use` (short-name or aliased).
+     * Used to enforce that cross-module symbol/contract visibility requires
+     * an explicit `use`, not just the target being `pu mod`. */
+    const ImportedModuleEntry *imported_modules;
+    size_t imported_module_count;
     ScopeFrame *scopes;
     size_t scope_count;
     size_t scope_capacity;
@@ -972,8 +985,30 @@ static bool builtin_type_name_is_integer(FengSlice name) {
             strcmp(canonical_name, "u32") == 0 || strcmp(canonical_name, "u64") == 0);
 }
 
-static bool module_is_visible_from(const FengSemanticModule *from, const FengSemanticModule *target) {
-    return from == target || target->visibility == FENG_VISIBILITY_PUBLIC;
+/* Stronger check than the legacy "target is public" predicate: a target
+ * module is *use-visible* from the current resolve context only if either
+ * (a) it is the same module, or (b) the target is `pu mod` AND the current
+ * file imported it via a `use` declaration. Required by docs/feng-module.md
+ * to prevent ambient access to any public module without an explicit import. */
+static bool module_is_use_visible_from(const ResolveContext *ctx,
+                                       const FengSemanticModule *target) {
+    size_t i;
+
+    if (ctx == NULL || target == NULL) {
+        return false;
+    }
+    if (ctx->module == target) {
+        return true;
+    }
+    if (target->visibility != FENG_VISIBILITY_PUBLIC) {
+        return false;
+    }
+    for (i = 0U; i < ctx->imported_module_count; ++i) {
+        if (ctx->imported_modules[i].target_module == target) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries,
@@ -1810,7 +1845,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
         size_t module_index = find_module_index_by_path(context->analysis, segments, segment_count - 1U);
 
         if (module_index < context->analysis->module_count &&
-            module_is_visible_from(context->module, &context->analysis->modules[module_index])) {
+            module_is_use_visible_from(context, &context->analysis->modules[module_index])) {
             return find_module_public_type_decl(&context->analysis->modules[module_index], name);
         }
     }
@@ -3699,8 +3734,12 @@ static bool fit_decl_is_visible_from(const ResolveContext *ctx,
     if (fit_module == ctx->module) {
         return true;
     }
+    /* Cross-module fits become effective in the consumer only when (a) the
+     * fit itself is `pu fit`, and (b) the consumer file imported the fit's
+     * owning module via `use`. Mirrors docs/feng-fit.md §4: "其他 mod 通过
+     * use 引入当前模块后，该契约关系在其作用域内生效". */
     return fit_decl->visibility == FENG_VISIBILITY_PUBLIC &&
-           module_is_visible_from(ctx->module, fit_module);
+           module_is_use_visible_from(ctx, fit_module);
 }
 
 static bool visit_visible_fit_methods_for_type(const ResolveContext *ctx,
@@ -9188,29 +9227,40 @@ static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
         }
     }
 
-    /* Specs from visible fit declarations whose target is this type. */
-    if (ctx->module != NULL) {
-        for (p = 0U; p < ctx->module->program_count; ++p) {
-            const FengProgram *prog = ctx->module->programs[p];
+    /* Specs from every visible fit declaration (current module + cross-module
+     * `pu fit`s the consumer has imported via `use`). Mirrors docs/feng-fit.md
+     * §4 — a `pu fit` activates in the importing module after `use`. */
+    if (ctx->analysis != NULL) {
+        size_t m_idx;
 
-            if (prog == NULL) {
-                continue;
-            }
-            for (d = 0U; d < prog->declaration_count; ++d) {
-                const FengDecl *fd = prog->declarations[d];
-                size_t s;
+        for (m_idx = 0U; m_idx < ctx->analysis->module_count; ++m_idx) {
+            const FengSemanticModule *m = &ctx->analysis->modules[m_idx];
 
-                if (fd == NULL || fd->kind != FENG_DECL_FIT) {
+            for (p = 0U; p < m->program_count; ++p) {
+                const FengProgram *prog = m->programs[p];
+
+                if (prog == NULL) {
                     continue;
                 }
-                if (resolve_type_ref_decl(ctx, fd->as.fit_decl.target) != type_decl) {
-                    continue;
-                }
-                for (s = 0U; s < fd->as.fit_decl.spec_count; ++s) {
-                    const FengDecl *spec = resolve_type_ref_decl(ctx, fd->as.fit_decl.specs[s]);
+                for (d = 0U; d < prog->declaration_count; ++d) {
+                    const FengDecl *fd = prog->declarations[d];
+                    size_t s;
 
-                    if (!spec_collect_closure(ctx, spec, out_set, out_count, out_capacity)) {
-                        return false;
+                    if (fd == NULL || fd->kind != FENG_DECL_FIT) {
+                        continue;
+                    }
+                    if (!fit_decl_is_visible_from(ctx, m, fd)) {
+                        continue;
+                    }
+                    if (resolve_type_ref_decl(ctx, fd->as.fit_decl.target) != type_decl) {
+                        continue;
+                    }
+                    for (s = 0U; s < fd->as.fit_decl.spec_count; ++s) {
+                        const FengDecl *spec = resolve_type_ref_decl(ctx, fd->as.fit_decl.specs[s]);
+
+                        if (!spec_collect_closure(ctx, spec, out_set, out_count, out_capacity)) {
+                            return false;
+                        }
                     }
                 }
             }
@@ -9696,7 +9746,11 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     AliasEntry *aliases = NULL;
     size_t alias_count = 0U;
     size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    size_t imported_module_capacity = 0U;
     size_t decl_index;
+    size_t use_index;
     bool ok;
 
     memset(&context, 0, sizeof(context));
@@ -9721,8 +9775,45 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
         return false;
     }
 
+    /* Collect every `use`-imported target module (short-name and aliased)
+     * so that cross-module visibility checks can require an explicit `use`. */
+    for (use_index = 0U; use_index < program->use_count && ok; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+        size_t target_index =
+            find_module_index_by_path(analysis, use_decl->segments, use_decl->segment_count);
+        ImportedModuleEntry entry;
+        size_t scan;
+        bool already = false;
+
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        entry.target_module = &analysis->modules[target_index];
+        for (scan = 0U; scan < imported_module_count; ++scan) {
+            if (imported_modules[scan].target_module == entry.target_module) {
+                already = true;
+                break;
+            }
+        }
+        if (already) {
+            continue;
+        }
+        ok = append_raw((void **)&imported_modules,
+                        &imported_module_count,
+                        &imported_module_capacity,
+                        sizeof(entry),
+                        &entry);
+    }
+    if (!ok) {
+        free(aliases);
+        free(imported_modules);
+        return false;
+    }
+
     context.aliases = aliases;
     context.alias_count = alias_count;
+    context.imported_modules = imported_modules;
+    context.imported_module_count = imported_module_count;
 
     for (decl_index = 0U; decl_index < program->declaration_count && ok; ++decl_index) {
         ok = resolve_declaration(&context, program->declarations[decl_index]);
@@ -9730,6 +9821,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
     resolver_free_scopes(&context);
     free(aliases);
+    free(imported_modules);
     return ok;
 }
 
