@@ -1247,8 +1247,8 @@ static bool extern_library_annotation_arg_is_valid(ResolveContext *context, cons
     visible_value = find_visible_value(context->visible_values,
                                        context->visible_value_count,
                                        expr->as.identifier);
-    if (visible_value == NULL || visible_value->provider_module != context->module ||
-        visible_value->is_function || visible_value->decl == NULL ||
+    if (visible_value == NULL || visible_value->is_function ||
+        visible_value->decl == NULL ||
         visible_value->decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return false;
     }
@@ -1299,7 +1299,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         context,
         calling_convention->token,
         format_message(
-            "extern function annotation '@%.*s' library argument must be a string literal or a module-level let binding initialized directly with a string literal",
+            "extern function annotation '@%.*s' library argument must be a string literal or a visible let binding initialized directly with a string literal",
             (int)calling_convention->name.length,
             calling_convention->name.data));
 }

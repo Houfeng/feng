@@ -521,10 +521,62 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
     ASSERT(strcmp(errors[0].path, "extern_fn_non_string_binding_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message,
-                  "library argument must be a string literal or a module-level let binding") != NULL);
+                  "library argument must be a string literal or a visible let binding") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
+}
+
+static void test_extern_function_accepts_imported_string_library_binding(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu let math_lib = \"m\";\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "@cdecl(math_lib)\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *base_program = parse_program_or_die("extern_fn_imported_binding_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("extern_fn_imported_binding_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_extern_function_rejects_imported_var_library_binding(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu var math_lib = \"m\";\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "@cdecl(math_lib)\n"
+        "extern fn sin(x: float): float;\n";
+    FengProgram *base_program = parse_program_or_die("extern_fn_imported_var_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("extern_fn_imported_var_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "library argument must be a string literal or a visible let binding") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
 }
 
 static void test_extern_function_rejects_array_parameter_type(void) {
@@ -6674,6 +6726,8 @@ int main(void) {
     test_extern_function_requires_calling_convention_annotation();
     test_extern_function_rejects_multiple_calling_convention_annotations();
     test_extern_function_rejects_non_string_library_binding();
+    test_extern_function_accepts_imported_string_library_binding();
+    test_extern_function_rejects_imported_var_library_binding();
     test_extern_function_rejects_array_parameter_type();
     test_extern_function_rejects_array_return_type();
     test_extern_function_rejects_non_fixed_object_parameter();
