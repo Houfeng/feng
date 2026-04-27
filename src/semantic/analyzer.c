@@ -6614,6 +6614,15 @@ static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
         return false;
     }
 
+    /* Object-form `spec` only constrains visible shape, not memory layout or
+     * ABI value layout, so it can never be a fixed ABI-stable type even if the
+     * annotation is present. The actual diagnostic is emitted by
+     * `validate_fixed_type_declaration`; here we simply refuse to treat it as
+     * stable so dependent types do not transitively appear ABI-stable. */
+    if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        return false;
+    }
+
     next_trace.decl = decl;
     next_trace.parent = trace;
 
@@ -6724,6 +6733,41 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
     has_fixed = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED);
     has_union = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(decl->annotations, decl->annotation_count);
+
+    /* Object-form `spec` only describes a visible shape contract; it does not
+     * fix memory layout or ABI value layout, so it cannot enter the C ABI
+     * boundary. Reject @fixed, @union and calling-convention annotations on
+     * object-form spec declarations with an explicit, actionable diagnostic. */
+    if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        if (has_fixed) {
+            return resolver_append_error(
+                context,
+                decl->token,
+                format_message(
+                    "object-form spec '%.*s' cannot be marked as @fixed; @fixed only applies to type declarations and callable-form spec",
+                    (int)decl_typeish_name(decl).length,
+                    decl_typeish_name(decl).data));
+        }
+        if (has_union) {
+            return resolver_append_error(
+                context,
+                decl->token,
+                format_message(
+                    "spec '%.*s' cannot use @union; @union only applies to object-form @fixed type declarations",
+                    (int)decl_typeish_name(decl).length,
+                    decl_typeish_name(decl).data));
+        }
+        if (callconv_count != 0U) {
+            return resolver_append_error(
+                context,
+                decl->token,
+                format_message(
+                    "spec '%.*s' cannot use calling convention annotations",
+                    (int)decl_typeish_name(decl).length,
+                    decl_typeish_name(decl).data));
+        }
+        return true;
+    }
 
     if (!has_fixed) {
         if (has_union) {
@@ -9571,7 +9615,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     }
                 }
             }
-            return true;
+            return validate_fixed_type_declaration(context, decl);
 
         case FENG_DECL_FIT: {
             size_t fit_index;

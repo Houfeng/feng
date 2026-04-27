@@ -702,6 +702,144 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     feng_program_free(program);
 }
 
+static void test_object_form_spec_rejects_fixed_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "spec Shape {\n"
+        "    var x: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_spec_fixed_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_spec_fixed_error.f") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "object-form spec 'Shape' cannot be marked as @fixed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_form_spec_rejects_union_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@union\n"
+        "spec Shape {\n"
+        "    var x: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_spec_union_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "spec 'Shape' cannot use @union") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@fixed\n"
+        "spec PointHandler(p: Point): int;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Bag {\n"
+        "    var name: string;\n"
+        "}\n"
+        "@fixed\n"
+        "spec Cb(b: Bag): int;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'Cb' cannot be marked as @fixed because parameter 'b' uses non-ABI-stable type 'Bag'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Shape {\n"
+        "    var x: int;\n"
+        "}\n"
+        "@fixed\n"
+        "spec Cb(s: Shape): int;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_object_spec_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'Cb' cannot be marked as @fixed because parameter 's' uses non-ABI-stable type 'Shape'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Bag {\n"
+        "    var name: string;\n"
+        "}\n"
+        "@fixed\n"
+        "spec Cb(x: int): Bag;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'Cb' cannot be marked as @fixed because return type 'Bag' is not ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fixed_function_rejects_uncaught_throw(void) {
     const char *source =
         "mod demo.main;\n"
@@ -5884,6 +6022,12 @@ int main(void) {
     test_fixed_function_type_rejects_plain_function_value();
     test_fixed_function_type_rejects_direct_lambda_value();
     test_fixed_function_type_rejects_captured_lambda_binding();
+    test_object_form_spec_rejects_fixed_annotation();
+    test_object_form_spec_rejects_union_annotation();
+    test_fixed_callable_spec_accepts_fixed_type_parameter();
+    test_fixed_callable_spec_rejects_non_fixed_type_parameter();
+    test_fixed_callable_spec_rejects_object_spec_parameter();
+    test_fixed_callable_spec_rejects_non_fixed_return_type();
     test_fixed_function_rejects_uncaught_throw();
     test_fixed_function_allows_locally_caught_throw();
     test_fixed_function_rejects_call_to_throwing_function();

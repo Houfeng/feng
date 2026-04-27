@@ -200,7 +200,7 @@ type Point {
 
 // C 兼容函数指针类型
 @fixed
-type PointCB(p: Point);
+spec PointCB(p: Point): void;
 
 let point_lib = "./libpoint.so";
 

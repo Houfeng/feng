@@ -8,9 +8,9 @@
 ## 1 C互操作概览
 
 - `extern fn` 仅用于声明 C 语言实现的外部函数,必须无函数体。
-- `@fixed` 用于标记 `type`、`fn` 或方法希望进入 ABI 固定边界; 它表达的是语义资格,不是新的语法类别。
+- `@fixed` 用于标记 `type`、`spec`、`fn` 或方法希望进入 ABI 固定边界; 它表达的是语义资格,不是新的语法类别。
 - 对象形式的 `@fixed type` 用于定义 C 兼容结构体; `@fixed @union type` 用于定义 C 兼容联合体。
-- 函数形式的 `@fixed type` 用于定义 C 兼容函数指针类型。
+- 可调用形状的 `@fixed spec` 用于定义 C 兼容函数指针类型; 对象形状的 `spec` 不得标记 `@fixed`。
 - 带函数体的 `@fixed fn` 可用于定义 Feng 实现的 ABI 兼容回调函数; 顶层 `pu @fixed fn` 可用于定义公开导出的 C ABI 函数。
 - 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 只用于无函数体的 `extern fn` 导入声明; 无参数形式只用于 `@fixed fn` 或 `@fixed` 方法的 ABI 调用方式。
 - `@fixed` 的合法性由语义分析检查。诊断应表述为“某声明不能标记为 `@fixed`”,而不是“`@fixed` 改写了语法”。
@@ -58,8 +58,8 @@ extern fn curl_global_init(flags: u64): int;
 
 - `@fixed` 不改变 `type` 的语法形式。某个 `type` 能否标记为 `@fixed`,由语义分析按 ABI 稳定类型集合检查。
 - 对象形式的 `@fixed type` 的直接字段类型必须属于 ABI 稳定类型集合。
-- 在当前语言版本中,ABI 稳定类型集合至少包含: 基础类型、其他合法的 `@fixed type`、合法的 `@fixed` 函数类型和固定长度数组。
-- `@union` 仅适用于对象形式的 `@fixed type`,不适用于函数指针形式的 `@fixed type`。
+- 在当前语言版本中,ABI 稳定类型集合至少包含: 基础类型、其他合法的 `@fixed type`、合法的可调用形状 `@fixed spec` 和固定长度数组。
+- `@union` 仅适用于对象形式的 `@fixed type`,不适用于可调用形状的 `@fixed spec`。
 - 联合体的所有成员共享同一块内存,其有效成员语义与 C 联合体保持一致。
 - `@fixed type` 和 `@fixed @union type` 的实例布局仅由字段决定; 方法、构造函数、访问控制和注解本身都不参与实例内存布局计算。
 - 编译器不得为 `@fixed type` 或 `@fixed @union type` 注入对象头、虚表指针、判别标签或其他隐藏实例字段。
@@ -91,22 +91,24 @@ type IntOrFloat {
 }
 ```
 
-## 4 C函数指针类型定义(@fixed type)
+## 4 C函数指针类型定义(@fixed spec)
 
-函数形式的 `type` 在标注 `@fixed` 后,用于定义与 C 函数指针兼容的函数类型,以支持回调函数传递。函数指针类型本身不使用 `@union` 或调用方式注解; 调用方式由与之匹配的 `extern fn` 导入声明,或 `@fixed fn` / `@fixed` 方法定义负责标注。
+可调用形状的 `spec` 在标注 `@fixed` 后,用于定义与 C 函数指针兼容的函数契约,以支持回调函数传递。函数指针类型本身不使用 `@union` 或调用方式注解; 调用方式由与之匹配的 `extern fn` 导入声明,或 `@fixed fn` / `@fixed` 方法定义负责标注。
 
 规则说明:
 
-- `@fixed type Name(参数): 返回值;` 定义 C 兼容函数指针类型。
-- 函数指针类型的直接参数类型和返回类型必须属于 ABI 稳定类型集合。
-- `@union` 不适用于函数形式的 `@fixed type`。
+- `@fixed spec Name(参数): 返回值;` 定义 C 兼容函数指针类型。
+- `@fixed spec` 的直接参数类型与返回类型必须属于 ABI 稳定类型集合,即基础类型、其他合法的 `@fixed type` 或可调用形状的 `@fixed spec`。
+- 对象形状的 `spec` 不得标记 `@fixed`。对象形状的 `spec` 在语言语义上只约束可见形状、不约束物理布局,不能作为 C ABI 边界上的数据类型。
+- `@union` 不适用于可调用形状的 `@fixed spec`。
+- 带参数的 `@cdecl` / `@stdcall` / `@fastcall` 不得出现在 `@fixed spec` 定义上; 调用方式仅由实际传入该契约位置的 `extern fn` 或 `@fixed fn` / `@fixed` 方法决定。
 
 ```feng
 @fixed
-type CmpFunc(a: int, b: int): int;
+spec CmpFunc(a: int, b: int): int;
 
 @fixed
-type PointCallback(p: Point);
+spec PointCallback(p: Point): void;
 ```
 
 ## 5 Feng实现的 `@fixed fn` 调用方式注解
@@ -175,6 +177,7 @@ extern fn set_point_callback(cb: PointCallback);
 - 方法只有在其自身标记为 `@fixed` 时,才会进入 ABI 兼容检查; 普通方法即使定义在 `@fixed type` 上,也不自动成为 C ABI 接口。
 - `@fixed fn`、`@fixed` 方法和 `pu @fixed fn` 的直接参数类型与返回类型必须属于 ABI 稳定类型集合。
 - `@fixed fn` 和 `@fixed` 方法不得捕获外部变量,也不得使用闭包作为 ABI 可调用值。
+- 在需要 `@fixed spec` 契约的位置上,只能传入顶层 `@fixed fn` 或 `@fixed` 方法,不能直接传入 lambda 或闭包。
 - 未捕获异常不得穿越 `@fixed` ABI 边界传播。
 - `.fb` 包中的头文件与导出清单由公开 `@fixed` 接口自动生成。
 
@@ -199,9 +202,9 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 
 规则说明:
 
-- `@fixed type` 的直接字段类型、固定数组元素类型和 `@fixed` 函数类型的直接参数/返回值,必须属于 ABI 稳定类型集合。
+- `@fixed type` 的直接字段类型、固定数组元素类型,以及可调用形状 `@fixed spec` 的直接参数/返回值,必须属于 ABI 稳定类型集合。
 - 某个具名类型只有在其自身也通过 `@fixed` 合法性校验后,才属于 ABI 稳定类型集合。
-- 普通 `type` 可以包含 `@fixed` 值字段; 但 `@fixed` 声明不能直接依赖普通 `type`、`string`、动态数组、闭包或其他托管对象类型。
+- 普通 `type` 可以包含 `@fixed` 值字段; 但 `@fixed` 声明不能直接依赖普通 `type`、对象形状 `spec`、`string`、动态数组、闭包或其他托管对象类型。
 - 生命周期不由 `@fixed` 自动变成“总是手动释放”; 更准确的规则是: `@fixed` ABI 值不受运行时托管,其生命周期由存储位置和资源拥有关系决定。
 - 若 `@fixed` 值通过外部分配获得或内部持有外部资源,则应通过显式的 `free`、`close` 或同类协议释放。
 
@@ -209,6 +212,7 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 
 - `type BufferList` 含有非 `@fixed` 的成员 `items`,因此不能标记为 `@fixed`。
 - `fn point_sum` 的参数 `user` 类型不是 ABI 稳定类型,因此该函数不能标记为 `@fixed`。
+- `spec PointHandler` 是对象形状 spec,不能标记为 `@fixed`; `@fixed` 仅适用于可调用形状的 `spec`。
 
 ## 9 C互操作完整示例
 
@@ -222,7 +226,7 @@ type Point {
 }
 
 @fixed
-type PointOperate(p: Point);
+spec PointOperate(p: Point): void;
 
 let point_lib = "./libpoint.so";
 
