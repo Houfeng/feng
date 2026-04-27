@@ -22,6 +22,20 @@
       ")"
     ]
   ],
+  "colorizedBracketPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
   "autoClosingPairs": [
     {
       "open": "{",

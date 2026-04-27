@@ -260,12 +260,28 @@
           "match": "[,:;.]"
         },
         {
-          "name": "punctuation.section.block.begin.feng",
-          "match": "[\\{\\(\\[]"
+          "name": "punctuation.section.braces.begin.feng",
+          "match": "\\{"
         },
         {
-          "name": "punctuation.section.block.end.feng",
-          "match": "[\\}\\)\\]]"
+          "name": "punctuation.section.braces.end.feng",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.parens.begin.feng",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.feng",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.section.brackets.begin.feng",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.brackets.end.feng",
+          "match": "\\]"
         }
       ]
     }
