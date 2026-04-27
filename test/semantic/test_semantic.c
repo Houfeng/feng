@@ -1359,6 +1359,177 @@ static void test_finally_rejects_continue(void) {
     feng_program_free(program);
 }
 
+static void test_break_outside_loop_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    break;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_outside_loop_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "break_outside_loop_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "'break' statement is only allowed inside a 'while' or 'for' loop") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_continue_outside_loop_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    if (true) {\n"
+        "        continue;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("continue_outside_loop_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "continue_outside_loop_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "'continue' statement is only allowed inside a 'while' or 'for' loop") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_break_inside_lambda_in_loop_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Action(): void;\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        let action: Action = () { break; };\n"
+        "        action();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_in_lambda_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "break_in_lambda_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message,
+                  "'break' statement is only allowed inside a 'while' or 'for' loop") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_break_and_continue_inside_for_loop_are_accepted(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    for var i = 0; i < 10; i = i + 1 {\n"
+        "        if (i == 1) { continue; }\n"
+        "        if (i == 5) { break; }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_continue_in_for_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_throw_rejects_pointer_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(p: *int) {\n"
+        "    throw p;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("throw_pointer_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "throw_pointer_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
+    ASSERT(strstr(errors[0].message, "pointer values cannot be thrown") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_throw_rejects_fixed_type_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@fixed type Handle { let id: int; }\n"
+        "fn run(h: Handle) {\n"
+        "    throw h;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("throw_fixed_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "throw_fixed_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
+    ASSERT(strstr(errors[0].message, "@fixed types are ABI-bound") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_throw_accepts_string_and_managed_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Err { let message: string; }\n"
+        "fn run_string() {\n"
+        "    throw \"boom\";\n"
+        "}\n"
+        "fn run_managed() {\n"
+        "    throw Err { message: \"x\" };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("throw_managed_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
         "mod demo.main;\n"
@@ -6358,6 +6529,13 @@ int main(void) {
     test_finally_rejects_throw();
     test_finally_rejects_break();
     test_finally_rejects_continue();
+    test_break_outside_loop_is_rejected();
+    test_continue_outside_loop_is_rejected();
+    test_break_inside_lambda_in_loop_is_rejected();
+    test_break_and_continue_inside_for_loop_are_accepted();
+    test_throw_rejects_pointer_value();
+    test_throw_rejects_fixed_type_value();
+    test_throw_accepts_string_and_managed_type();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();
