@@ -59,7 +59,7 @@ Feng 采用单一标准化包格式 `.fb`（Feng Bundle）,通过包内目录结
 - 包名用于分发、安装与包管理,不要求与任何具体模块名相同,也不要求一个包只对应一个模块。
 - `target` 字段声明构建目标,取值为 `bin`（可执行文件）或 `lib`（分发包）; 该字段为**开发阶段必填**,由构建工具读取后转换为编译器 `--target` 参数; 分发包内的 `feng.fm` 不含此字段。
 - `src` 字段指定源文件根目录; 省略时默认为 `src/`; 仅开发阶段有效,不出现在分发包内。
-- `out` 字段指定输出根目录; 省略时默认为 `build/`; `target bin` 时最终文件为 `<out>/<name>`,`target fb` 时为 `<out>/<name>-<version>.fb`; 仅开发阶段有效,不出现在分发包内。
+- `out` 字段指定输出根目录; 省略时默认为 `build/`; `target bin` 时最终文件为 `<out>/<name>`,`target lib` 时为 `<out>/<name>-<version>.fb`; 仅开发阶段有效,不出现在分发包内。
 - `abi` 字段声明本包携带哪些能力层,取值为 `feng`、`c` 或 `feng,c`; `feng` 表示存在 `lib/` 目录,`c` 表示存在 `clib/` 与 `include/` 目录; 该字段必须与包内实际目录结构一致,声明与实际不符则该包非法; 开发项目若不作为包发布可省略此字段。
 - `dependency` 表示当前包对其他 feng 包的直接依赖; 同包内模块之间的引用不属于 `dependency`。
 - `dependency` 可重复出现零次到多次,每一行表示一个直接依赖包; 同一依赖包名不得重复出现。
@@ -84,8 +84,8 @@ name:mylib
 version:1.0.0
 arch:linux-x64,windows-x64,macos-arm64
 abi:feng,c
-dependency:base@^1.0.0
-dependency:json@^2.1.0
+dependency:base@1.0.0
+dependency:json@2.1.0
 ```
 
 示例（分发包，仅携带自有 ABI 层）:
@@ -95,7 +95,7 @@ name:mylib
 version:1.0.0
 arch:linux-x64,windows-x64,macos-arm64
 abi:feng
-dependency:base@^1.0.0
+dependency:base@1.0.0
 ```
 
 ## 5 接口声明目录与 `.fi` 文件

@@ -63,9 +63,7 @@
 
 ## 7 C 互操作边界
 
-- `string` 与数组可按 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的桥接规则出现在 `extern fn`、`@fixed fn`、`@fixed` 方法与 `@fixed spec` 的参数和返回值位置。
-- 除 `string` 与数组这类桥接类型外，其他托管对象不得直接出现在 `@fixed fn` 的参数、返回值位置，也不得出现在 `@fixed` 函数类型签名中；托管对象同样不得成为 `@fixed type` 的直接成员。
-- 需要与 C 交换数据时，可直接使用 [Feng 语言 C 互操作规范](./feng-interop.md) 允许的 ABI 稳定类型或 ABI 桥接类型；开发者无需手写字符串或数组的中间表示。
+- 托管对象在 `extern fn`、`@fixed fn`、`@fixed` 方法与 `@fixed spec` 等 C ABI 边界上的允许位置、桥接类型与禁止位置统一见 [Feng 语言 C 互操作规范](./feng-interop.md)。
 - ARC 的 retain/release 语义可按约定暴露给 C 侧：C 代码通过调用约定的 retain/release 函数管理对 Feng 对象的引用，不需要 barrier 机制。
 - C 代码长期持有 Feng 对象引用时，必须在持有期间保持相应的 retain；未按约定 retain 而直接持有 Feng 对象引用属于未定义行为。
 - 当前语言版本不提供内建 pin、borrow 或裸引用导出机制。
@@ -89,15 +87,14 @@
 分为「必须、禁止」。
 
 - [必须] 托管对象的生命周期由 ARC 管理；程序员不得手动释放 ARC 托管对象。
-- [必须] `string` 与数组可按 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的桥接规则出现在可调用 C ABI 边界的参数与返回值位置。
-- [必须] 除 `string` 与数组这类桥接类型外，其他托管对象不得直接出现在 `@fixed fn` 的参数或返回值位置，也不得作为 `@fixed type` 的直接成员。
+- [必须] 托管对象在 `@fixed` 相关 C ABI 边界上的允许位置、桥接类型与禁止位置统一遵循 [Feng 语言 C 互操作规范](./feng-interop.md)。
 - [必须] C 侧持有 Feng 托管对象引用时，必须按约定调用 retain/release 以维护引用计数正确性。
 - [必须] 持有外部资源的对象必须提供显式释放方法，调用方须负责主动调用。
 - [禁止] 将 ARC 托管对象暴露给 C 侧长期持有而不遵循 retain/release 约定。
 
 ## 11 编译期
 
-- 编译器必须检查托管对象是否出现在 `@fixed` 边界的允许或禁止位置：`string` 与数组可按 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的桥接规则出现在可调用 ABI 边界上；其他托管对象若出现在禁止位置则必须报错。
+- 编译器必须按 [Feng 语言 C 互操作规范](./feng-interop.md) 检查托管对象是否出现在 `@fixed` 边界的允许或禁止位置；不符合该规范的用法必须报错。
 - 编译器对全部托管类型构造类型引用图（节点为托管类型，有向边为"类型 A 的字段中包含类型 B 的托管引用"），在该图上求强连通分量（SCC）；落于非平凡 SCC 中的类型标记为 **potentially-cyclic**，其余标记为 **acyclic**；分析基于 `.fi` 字段类型信息，可跨包进行，不需要全程序分析；编译器对 potentially-cyclic 类型结构可发出信息性提示（不影响编译结果）。
 - 编译器为每个托管 `type` 生成引用枚举元数据（托管字段的偏移与类型描述符列表），供运行时循环检测器遍历对象引用时使用。
 - 编译器自动插入 retain/release 操作，不需要程序员手动标注。
