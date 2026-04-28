@@ -399,6 +399,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
+static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, const UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
@@ -905,6 +906,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
         /* Register in scope so it gets released on scope exit. */
         scope_add(cg->cur_scope, tmp, tmp, r->type, false);
         r->type = NULL; /* moved */
+        cg_emit_cleanup_push_for_managed_local(cg, tmp);
     } else if (cgtype_is_managed(r->type)) {
         /* Borrowed: don't register for release. */
     }
@@ -1671,12 +1673,17 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 /* ===================== statement emission ===================== */
 
 static void cg_release_scope(CG *cg, const Scope *scope) {
-    /* Walk in reverse insertion order to mirror C destruction. */
+    /* Walk in reverse insertion order to mirror C destruction. Each managed
+     * non-param local was paired with a feng_cleanup_push at declaration; we
+     * must pop the chain in strict LIFO order, then release+NULL the slot so
+     * any later throw-driven walk skips it. */
     for (size_t i = scope->count; i > 0; i--) {
         const Local *l = &scope->items[i - 1];
         if (l->is_param) continue;
         if (cgtype_is_managed(l->type)) {
-            buf_append_fmt(cg->cur_body, "    feng_release(%s);\n", l->c_name);
+            buf_append_fmt(cg->cur_body,
+                           "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
+                           l->c_name, l->c_name);
         }
     }
 }
@@ -1687,6 +1694,16 @@ static void cg_release_through(CG *cg, const Scope *stop) {
     for (const Scope *s = cg->cur_scope; s && s != stop; s = s->parent) {
         cg_release_scope(cg, s);
     }
+}
+
+/* Register a managed local on the per-thread cleanup chain so a throw passing
+ * through the current scope releases it. The companion feng_cleanup_pop is
+ * emitted by cg_release_scope. The companion node lives on the C stack right
+ * next to the local so its lifetime matches. */
+static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
+    buf_append_fmt(cg->cur_body,
+                   "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
+                   cname, cname, cname);
 }
 
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
@@ -1759,6 +1776,9 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
     free(added->name);
     added->name = strndup(b->name.data, b->name.length);
+    if (cgtype_is_managed(decl_type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, cname);
+    }
     free(cname);
     return true;
 }
@@ -2158,10 +2178,15 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
  *   }
  *
  * Limitations recorded for follow-up phases:
- *  - Locals declared inside the try body and live at the throw point leak
- *    one reference each. We do NOT release them on the longjmp path.
  *  - `return` from inside try and `break`/`continue` crossing a try frame
  *    are rejected by codegen (see cg_emit_return / cg_emit_break_continue).
+ *
+ * ARC on the throw path:
+ *  Every managed local registers itself on the per-thread cleanup chain at
+ *  declaration (see cg_emit_cleanup_push_for_managed_local). On longjmp,
+ *  feng_exception_throw walks the chain down to the frame's snapshot,
+ *  releasing each live slot. Locals declared between the try-frame push and
+ *  the throw site are therefore released exactly once.
  */
 static bool cg_emit_try(CG *cg, const FengStmt *stmt) {
     const FengBlock *try_block     = stmt->as.try_stmt.try_block;

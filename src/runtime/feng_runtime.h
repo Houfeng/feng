@@ -105,15 +105,36 @@ void *feng_object_new(const FengTypeDescriptor *desc);
 
 /* --- Exceptions -------------------------------------------------------- */
 
+/* Linked-list node living on the C stack. Generated code pushes one of these
+ * at every managed local's declaration site (binding or materialised
+ * temporary) and pops it on the corresponding scope exit. On throw, the
+ * runtime walks the chain back to the catching frame's snapshot and releases
+ * every non-NULL `*slot`, then nulls the slot to avoid double-free. This is
+ * how Phase 1A guarantees "exception path cleanup" without hoisting locals
+ * to the function prologue. */
+typedef struct FengCleanupNode {
+    struct FengCleanupNode *prev;
+    void                  **slot;
+} FengCleanupNode;
+
 typedef struct FengExceptionFrame {
     struct FengExceptionFrame *prev;
     jmp_buf jb;
     void   *value;
     int     is_managed;
+    /* Snapshot of the cleanup chain top at the moment this frame was pushed.
+     * On throw, the runtime walks down to (but not past) this node. */
+    struct FengCleanupNode *cleanup_top;
 } FengExceptionFrame;
 
 void feng_exception_push(FengExceptionFrame *frame);
 void feng_exception_pop(void);
+
+/* Push/pop a managed local onto the cleanup chain. `node` must outlive the
+ * scope of `slot` and is typically a stack-allocated FengCleanupNode adjacent
+ * to the local. Pop must be called in strict LIFO order. */
+void feng_cleanup_push(FengCleanupNode *node, void **slot);
+void feng_cleanup_pop(void);
 
 #if defined(__GNUC__) || defined(__clang__)
 void feng_exception_throw(void *value, int is_managed) __attribute__((noreturn));
