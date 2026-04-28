@@ -254,6 +254,10 @@ typedef struct Scope {
     size_t        count;
     size_t        capacity;
     bool          is_loop;       /* this scope is a loop body root */
+    /* try_depth observed at the moment this scope was pushed. Used by
+     * break/continue to refuse jumping across an enclosing try frame in
+     * Phase 1A (where stack-based exception cleanup is not yet wired). */
+    int           try_depth_at_entry;
     /* Each scope frame also holds a list of indices into items[] in original
      * insertion order; release-on-exit walks them in reverse. */
 } Scope;
@@ -262,6 +266,7 @@ static Scope *scope_push(Scope *parent) {
     Scope *s = calloc(1, sizeof *s);
     if (!s) return NULL;
     s->parent = parent;
+    s->try_depth_at_entry = parent ? parent->try_depth_at_entry : 0;
     return s;
 }
 
@@ -1922,6 +1927,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
+    if (cg->try_depth > 0) {
+        return cg_fail(cg, stmt->token,
+            "codegen: 'return' inside try/catch/finally is not yet supported in Phase 1A");
+    }
     if (!cg->cur_return_type ||
         cg->cur_return_type->kind == CG_TYPE_VOID) {
         if (stmt->as.return_value) {
@@ -2053,6 +2062,13 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
     for (const Scope *s = cg->cur_scope; s; s = s->parent) {
         if (s->is_loop) { stop = s; break; }
     }
+    /* Refuse to jump across an enclosing try frame: longjmp-based unwind is
+     * not wired into break/continue paths yet (Phase 1A limitation). */
+    if (stop != NULL && cg->try_depth > stop->try_depth_at_entry) {
+        return cg_fail(cg, stmt->token,
+            "codegen: '%s' that crosses a try/catch/finally is not yet supported in Phase 1A",
+            is_break ? "break" : "continue");
+    }
     cg_release_through(cg, stop);
     buf_append_fmt(cg->cur_body, "    %s;\n", is_break ? "break" : "continue");
     return true;
@@ -2085,6 +2101,154 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/* throw <expr>;
+ *
+ * Phase 1A only supports managed payloads (string / array / object) — the
+ * runtime carries the value as `void *` plus an `is_managed` flag, and
+ * Phase 1A has no boxing path for unmanaged scalars. Codegen takes a +1
+ * ownership of the value and hands it to `feng_exception_throw`, which
+ * `longjmp`s to the nearest pushed frame and is marked `noreturn` so the
+ * C compiler treats subsequent code as unreachable. */
+static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
+    if (stmt->as.throw_value == NULL) {
+        return cg_fail(cg, stmt->token,
+            "codegen: 'throw' requires a value");
+    }
+    ExprResult r;
+    if (!cg_emit_expr(cg, stmt->as.throw_value, &r)) return false;
+    if (!cgtype_is_managed(r.type)) {
+        er_free(&r);
+        return cg_fail(cg, stmt->token,
+            "codegen: throwing non-managed values is not yet supported in Phase 1A");
+    }
+    char *tmp = cg_fresh_temp(cg, "_thr");
+    char *cty = cg_ctype_dup(r.type);
+    if (r.owns_ref) {
+        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                       cty, tmp, r.c_expr, tmp);
+    }
+    free(cty);
+    er_free(&r);
+    buf_append_fmt(cg->cur_body,
+                   "    feng_exception_throw((void *)%s, 1);\n", tmp);
+    free(tmp);
+    return true;
+}
+
+/* try { ... } [ catch { ... } ] [ finally { ... } ]
+ *
+ * Compilation strategy (Phase 1A, single-frame, no rethrow-from-catch):
+ *
+ *   {
+ *       FengExceptionFrame _exc_frame_N;
+ *       volatile int       _setjmp_N;
+ *       feng_exception_push(&_exc_frame_N);
+ *       _setjmp_N = setjmp(_exc_frame_N.jb);
+ *       if (_setjmp_N == 0) {
+ *           // try body — Feng scope releases happen on this normal path
+ *           feng_exception_pop();
+ *       } else {
+ *           feng_exception_pop();
+ *           // catch body (if present); release exception value at end
+ *       }
+ *       // finally body (if present)
+ *       // if no catch and exception fired, rethrow into outer frame
+ *   }
+ *
+ * Limitations recorded for follow-up phases:
+ *  - Locals declared inside the try body and live at the throw point leak
+ *    one reference each. We do NOT release them on the longjmp path.
+ *  - `return` from inside try and `break`/`continue` crossing a try frame
+ *    are rejected by codegen (see cg_emit_return / cg_emit_break_continue).
+ */
+static bool cg_emit_try(CG *cg, const FengStmt *stmt) {
+    const FengBlock *try_block     = stmt->as.try_stmt.try_block;
+    const FengBlock *catch_block   = stmt->as.try_stmt.catch_block;
+    const FengBlock *finally_block = stmt->as.try_stmt.finally_block;
+
+    if (try_block == NULL) {
+        return cg_fail(cg, stmt->token,
+            "codegen: 'try' requires a body block");
+    }
+
+    int id = cg->label_counter++;
+    char frame[64];
+    char setjmp_var[64];
+    snprintf(frame, sizeof frame, "_exc_frame_%d", id);
+    snprintf(setjmp_var, sizeof setjmp_var, "_exc_setjmp_%d", id);
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+    buf_append_fmt(cg->cur_body, "        FengExceptionFrame %s;\n", frame);
+    buf_append_fmt(cg->cur_body, "        volatile int %s;\n", setjmp_var);
+    buf_append_fmt(cg->cur_body, "        feng_exception_push(&%s);\n", frame);
+    buf_append_fmt(cg->cur_body, "        %s = setjmp(%s.jb);\n",
+                   setjmp_var, frame);
+    buf_append_fmt(cg->cur_body, "        if (%s == 0) {\n", setjmp_var);
+
+    cg->try_depth++;
+    Scope *try_scope = scope_push(cg->cur_scope);
+    if (!try_scope) {
+        cg->try_depth--;
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    try_scope->try_depth_at_entry = cg->try_depth;
+    cg->cur_scope = try_scope;
+    bool ok = cg_emit_block(cg, try_block);
+    if (ok) cg_release_scope(cg, try_scope);
+    cg->cur_scope = try_scope->parent;
+    scope_pop_free(try_scope);
+    cg->try_depth--;
+    if (!ok) return false;
+
+    buf_append_cstr(cg->cur_body, "            feng_exception_pop();\n");
+    buf_append_cstr(cg->cur_body, "        } else {\n");
+    buf_append_cstr(cg->cur_body, "            feng_exception_pop();\n");
+
+    if (catch_block != NULL) {
+        Scope *catch_scope = scope_push(cg->cur_scope);
+        if (!catch_scope) {
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        cg->cur_scope = catch_scope;
+        bool cok = cg_emit_block(cg, catch_block);
+        if (cok) cg_release_scope(cg, catch_scope);
+        cg->cur_scope = catch_scope->parent;
+        scope_pop_free(catch_scope);
+        if (!cok) return false;
+        /* Caught: drop the +1 reference the throw site retained. */
+        buf_append_fmt(cg->cur_body,
+                       "            if (%s.is_managed && %s.value) feng_release(%s.value);\n",
+                       frame, frame, frame);
+    }
+
+    buf_append_cstr(cg->cur_body, "        }\n");
+
+    if (finally_block != NULL) {
+        Scope *fin_scope = scope_push(cg->cur_scope);
+        if (!fin_scope) {
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        cg->cur_scope = fin_scope;
+        bool fok = cg_emit_block(cg, finally_block);
+        if (fok) cg_release_scope(cg, fin_scope);
+        cg->cur_scope = fin_scope->parent;
+        scope_pop_free(fin_scope);
+        if (!fok) return false;
+    }
+
+    if (catch_block == NULL) {
+        /* No catch: re-throw to outer frame after finally has run. */
+        buf_append_fmt(cg->cur_body,
+                       "        if (%s != 0) feng_exception_throw(%s.value, %s.is_managed);\n",
+                       setjmp_var, frame, frame);
+    }
+
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
     if (cg->failed) return false;
     switch (stmt->kind) {
@@ -2108,6 +2272,8 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_WHILE:    return cg_emit_while(cg, stmt);
         case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);
         case FENG_STMT_CONTINUE: return cg_emit_break_continue(cg, stmt, false);
+        case FENG_STMT_THROW:    return cg_emit_throw(cg, stmt);
+        case FENG_STMT_TRY:      return cg_emit_try(cg, stmt);
         default:
             return cg_fail(cg, stmt->token,
                 "codegen: statement kind not yet supported in this iteration");

@@ -1,0 +1,41 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn maybe_throw(should_throw: bool) {
+    if should_throw {
+        throw "boom";
+    }
+}
+
+fn main(args: string[]) {
+    // 1) try-catch-finally with throw inside try -> catch fires, finally runs.
+    try {
+        maybe_throw(true);
+        puts("unreachable-1");
+    } catch {
+        puts("caught-1");
+    } finally {
+        puts("finally-1");
+    }
+
+    // 2) try-catch-finally without throw -> body runs to completion, finally runs.
+    try {
+        maybe_throw(false);
+        puts("ok-2");
+    } catch {
+        puts("unreachable-2");
+    } finally {
+        puts("finally-2");
+    }
+
+    // 3) try-finally without catch, no throw -> body + finally, no propagation.
+    try {
+        puts("ok-3");
+    } finally {
+        puts("finally-3");
+    }
+
+    puts("done");
+}
