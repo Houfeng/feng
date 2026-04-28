@@ -467,7 +467,11 @@ static void phase1_run_finalizers(WhiteList *wl) {
     for (size_t i = 0U; i < wl->count; ++i) {
         FengManagedHeader *h = wl->buf[i];
         if (h->desc != NULL && h->desc->finalizer != NULL) {
-            h->desc->finalizer((void *)h);
+            /* Route through the runtime barrier so an uncaught exception in
+             * the user finalizer aborts deterministically instead of
+             * longjmp-ing across the collector and leaving g_cycle_lock
+             * held. See docs/feng-lifetime.md §13.2. */
+            feng_finalizer_invoke(h->desc, (void *)h);
         }
     }
 }
@@ -810,4 +814,23 @@ void feng_cycle_runtime_shutdown(void) {
     g_candidate_count = 0U;
     g_candidate_capacity = 0U;
     feng_cycle_unlock();
+}
+
+void feng_cycle_set_threshold_for_test(size_t threshold) {
+    /* Caller holds feng_cycle_lock per the declaration in
+     * feng_runtime_internal.h; the lock guards every other reader of
+     * g_threshold. A zero argument is rejected to keep the spec invariant
+     * (§13.1: threshold must be ≥ 1). */
+    if (threshold == 0U) {
+        feng_panic("feng_cycle_set_threshold_for_test: threshold must be >= 1");
+    }
+    g_threshold = threshold;
+}
+
+void feng_runtime_shutdown(void) {
+    /* Public ABI: codegen-emitted main() invokes this before exit so that
+     * any potentially-cyclic candidates still buffered get a final
+     * collection cycle. Idempotent — safe to call from tests during
+     * teardown even if no candidates were enqueued. */
+    feng_cycle_runtime_shutdown();
 }

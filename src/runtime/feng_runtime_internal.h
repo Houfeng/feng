@@ -28,6 +28,24 @@ struct FengArray {
 void feng_string_finalize_internal(struct FengString *s);
 void feng_array_finalize_internal(struct FengArray *a);
 
+/* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
+ * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let
+ * an exception propagate past its body; if one does, the runtime panics
+ * immediately rather than longjmp-ing across ARC/collector C frames (which
+ * would skip all subsequent ARC bookkeeping and corrupt the candidate
+ * buffer). Both the ARC release path and the cycle collector's Phase 1
+ * route every user-finalizer call through this helper. Caller is responsible
+ * for the NULL-check on `desc->finalizer` only as an optimisation; the
+ * helper itself is a no-op when either `desc` or `desc->finalizer` is NULL. */
+void feng_finalizer_invoke(const FengTypeDescriptor *desc, void *self);
+
+/* Test-only override for the cycle collector candidate-buffer threshold.
+ * Replaces whatever value cycle_init_once read from FENG_GC_THRESHOLD (or
+ * the default). Caller MUST hold feng_cycle_lock; intended for regression
+ * tests that need to exercise the threshold-triggered collection path
+ * deterministically. Production code MUST NOT call this. */
+void feng_cycle_set_threshold_for_test(size_t threshold);
+
 /* --- Phase 1B cycle collector internal API ------------------------------
  *
  * The collector lives entirely inside the runtime TU set; codegen never sees

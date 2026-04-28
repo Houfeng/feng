@@ -209,6 +209,12 @@ typedef struct UserType {
      * when the type has no managed fields (no callback is generated and the
      * descriptor's release_children slot is left NULL). */
     char   *c_release_children_name;
+    /* User finalizer (`fn ~T()`). NULL when the type declares none.
+     * c_finalizer_name is the symbol of the codegen-emitted thunk that
+     * adapts the runtime FengFinalizerFn(void *self) signature to the
+     * generated method body; it owns the malloc'd string. */
+    const FengTypeMember *finalizer;
+    char   *c_finalizer_name;
     UserField  *fields;
     size_t      field_count;
     UserMethod *methods;
@@ -410,6 +416,7 @@ static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
+static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 
 /* ===================== error helpers ===================== */
 
@@ -736,9 +743,18 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
                 "codegen: user-defined constructors not yet supported in Phase 1A");
         }
         else if (m->kind == FENG_TYPE_MEMBER_FINALIZER) {
-            return cg_fail(cg, m->token,
-                "codegen: user-defined finalizers not yet supported in Phase 1A");
+            if (t->finalizer) {
+                return cg_fail(cg, m->token,
+                    "codegen: type already declares a finalizer");
+            }
+            t->finalizer = m;
         }
+    }
+    if (t->finalizer) {
+        Buf fb; buf_init(&fb);
+        buf_append_fmt(&fb, "%s__finalize", t->c_struct_name);
+        t->c_finalizer_name = fb.data;
+        if (!t->c_finalizer_name) return false;
     }
     t->fields = fcount ? calloc(fcount, sizeof *t->fields) : NULL;
     t->methods = mcount ? calloc(mcount, sizeof *t->methods) : NULL;
@@ -2527,6 +2543,7 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
                 for (size_t mi = 0; mi < ut->method_count; mi++) {
                     if (!cg_emit_user_method(cg, ut, &ut->methods[mi])) return false;
                 }
+                if (!cg_emit_user_finalizer(cg, ut)) return false;
                 break;
             }
             case FENG_DECL_SPEC:
@@ -2692,6 +2709,8 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
         }
     }
     buf_append_cstr(b, "    feng_release(_args);\n");
+    buf_append_cstr(b,
+        "    feng_runtime_shutdown();\n");
     if (main_fn->return_type->kind == CG_TYPE_I32) {
         buf_append_cstr(b, "    return (int)_rc;\n}\n");
     } else {
@@ -2752,6 +2771,20 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "}\n\n");
     }
 
+    /* User finalizer (`fn ~T()`). The thunk body is emitted later in Pass 4
+     * — alongside methods — so it can resolve module-level externs and free
+     * functions; here we only emit a forward declaration so the descriptor
+     * below can take its address. The runtime invokes this through
+     * descriptor.finalizer with `void *self` pointing at the
+     * FengManagedHeader-prefixed instance. Per docs/feng-lifetime.md §13.2,
+     * any uncaught exception escaping the body is a deterministic crash; that
+     * barrier is enforced one layer up by feng_finalizer_invoke
+     * (src/runtime/feng_object.c). */
+    if (t->finalizer) {
+        buf_append_fmt(td, "static void %s(void *_self);\n\n",
+                       t->c_finalizer_name);
+    }
+
     /* Phase 1B managed-field metadata: enumerate every slot of this type that
      * holds a managed reference. The cycle collector reads this table to do
      * non-mutating object traversal during trial deletion. The deterministic
@@ -2804,13 +2837,14 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         "const FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s\",\n"
         "    .size = sizeof(struct %s),\n"
-        "    .finalizer = NULL,\n"
+        "    .finalizer = %s,\n"
         "    .release_children = %s,\n"
         "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
         t->c_desc_name,
         cg->module_dot_name, t->feng_name,
         t->c_struct_name,
+        t->c_finalizer_name ? t->c_finalizer_name : "NULL",
         t->c_release_children_name ? t->c_release_children_name : "NULL",
         is_cyclic ? "true" : "false",
         managed_count);
@@ -2895,6 +2929,64 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
     return true;
 }
 
+/* Emit the user finalizer thunk body. Mirrors cg_emit_user_method but with
+ * the runtime FengFinalizerFn(void *self) entry signature and a synthetic
+ * `self` binding. The forward declaration is emitted earlier in
+ * cg_emit_user_type_definition so the descriptor can take the symbol's
+ * address before the body exists. */
+static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
+    if (!t->finalizer) return true;
+    const FengTypeMember *fm = t->finalizer;
+    Buf *body = &cg->fn_defs;
+    buf_append_fmt(body, "static void %s(void *_self) {\n",
+                   t->c_finalizer_name);
+    buf_append_fmt(body, "    struct %s *self = (struct %s *)_self;\n",
+                   t->c_struct_name, t->c_struct_name);
+    buf_append_cstr(body, "    (void)self;\n");
+
+    cg->cur_body = body;
+    CGType *void_t = cgtype_new(CG_TYPE_VOID);
+    if (!void_t) return cg_fail(cg, fm->token, "codegen: out of memory");
+    cg->cur_return_type = void_t;
+    cg->cur_fn_is_main = false;
+    cg->tmp_counter = 0;
+    cg->loop_depth = 0;
+    cg->try_depth = 0;
+
+    Scope *fn_scope = scope_push(NULL);
+    if (!fn_scope) {
+        cgtype_free(void_t);
+        cg->cur_body = NULL; cg->cur_return_type = NULL;
+        return cg_fail(cg, fm->token, "codegen: out of memory");
+    }
+    cg->cur_scope = fn_scope;
+    {
+        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
+        if (!self_t) {
+            cg->cur_scope = NULL; scope_pop_free(fn_scope);
+            cgtype_free(void_t);
+            cg->cur_body = NULL; cg->cur_return_type = NULL;
+            return false;
+        }
+        self_t->user = t;
+        scope_add(fn_scope, "self", "self", self_t, true);
+    }
+    if (!cg_emit_block(cg, fm->as.callable.body)) {
+        cg->cur_scope = NULL; scope_pop_free(fn_scope);
+        cgtype_free(void_t);
+        cg->cur_body = NULL; cg->cur_return_type = NULL;
+        return false;
+    }
+    cg_release_scope(cg, fn_scope);
+    buf_append_cstr(body, "    return;\n}\n\n");
+
+    cg->cur_scope = NULL; scope_pop_free(fn_scope);
+    cgtype_free(void_t);
+    cg->cur_body = NULL;
+    cg->cur_return_type = NULL;
+    return true;
+}
+
 static const FreeFn *cg_lookup_main(const CG *cg) {
     for (size_t i = 0; i < cg->free_fn_count; i++) {
         if (strcmp(cg->free_fns[i].feng_name, "main") == 0) return &cg->free_fns[i];
@@ -2957,6 +3049,7 @@ static void cg_dispose(CG *cg) {
         free(ut->c_struct_name);
         free(ut->c_desc_name);
         free(ut->c_release_children_name);
+        free(ut->c_finalizer_name);
         for (size_t j = 0; j < ut->field_count; j++) {
             free(ut->fields[j].feng_name);
             free(ut->fields[j].c_name);

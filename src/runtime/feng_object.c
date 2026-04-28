@@ -5,9 +5,37 @@
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
+#include <setjmp.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+
+void feng_finalizer_invoke(const FengTypeDescriptor *desc, void *self) {
+    if (desc == NULL || desc->finalizer == NULL) {
+        return;
+    }
+
+    /* Sentinel exception frame: if the finalizer body throws and does not
+     * catch its own exception, the throw will land here instead of
+     * longjmp-ing across ARC/collector C frames (which would skip refcount
+     * bookkeeping, leave the candidate buffer inconsistent, and on the
+     * cycle path leave g_cycle_lock held forever). Per
+     * docs/feng-lifetime.md §13.2 the spec response is fatal-by-design:
+     * report and abort, do not attempt to continue with sibling finalizers. */
+    FengExceptionFrame frame;
+    feng_exception_push(&frame);
+    if (setjmp(frame.jb) == 0) {
+        desc->finalizer(self);
+        feng_exception_pop();
+        return;
+    }
+
+    /* Reached only via longjmp from feng_exception_throw: the finalizer
+     * propagated an uncaught exception. The exception value (if any) is
+     * intentionally leaked because the process is about to abort. */
+    feng_panic("finalizer of '%s' propagated an uncaught exception",
+               desc->name != NULL ? desc->name : "<unknown>");
+}
 
 static void feng_finalize_managed(FengManagedHeader *header) {
     void *self = (void *)header;
@@ -21,7 +49,7 @@ static void feng_finalize_managed(FengManagedHeader *header) {
      * been resurrected and MUST NOT be freed in this pass; the next time the
      * refcount falls to zero, the finalizer will run again. */
     if (has_user_finalizer) {
-        header->desc->finalizer(self);
+        feng_finalizer_invoke(header->desc, self);
 
         /* Acquire fences pair with the release-CAS in feng_retain so that any
          * stores another thread published before its retain become visible

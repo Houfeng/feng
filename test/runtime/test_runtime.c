@@ -712,6 +712,194 @@ static void test_cycle_collector_acyclic_object_never_enqueued(void) {
     feng_cycle_unlock();
 }
 
+/* --- Finalizer exception escape (docs/feng-lifetime.md §13.2) ---------- */
+
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* A finalizer that throws an unmanaged exception value and never catches it.
+ * The runtime barrier in feng_finalizer_invoke must intercept the throw and
+ * panic; the process must exit via abort() (SIGABRT). */
+static void throwing_finalizer(void *self) {
+    (void)self;
+    feng_exception_throw((void *)"finalizer-throw", 0);
+}
+
+static const FengTypeDescriptor throwing_descriptor = {
+    .name = "test.Throwing",
+    .size = sizeof(TestObject),
+    .finalizer = throwing_finalizer,
+    /* Acyclic: forces the ARC release path. */
+    .is_potentially_cyclic = false,
+};
+
+static const FengTypeDescriptor throwing_cyclic_descriptor = {
+    .name = "test.ThrowingCyc",
+    .size = sizeof(CycNode),
+    .finalizer = throwing_finalizer,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
+/* Run `body` in a forked child and assert it terminated via SIGABRT. The
+ * parent process is unaffected so subsequent tests still execute normally.
+ * stderr from the child is silenced so the test log only shows pass/fail. */
+static void assert_child_aborts(void (*body)(void)) {
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        exit(1);
+    }
+    if (pid == 0) {
+        /* Child: silence the panic message so test output stays clean. */
+        FILE *null_err = freopen("/dev/null", "w", stderr);
+        (void)null_err;
+        body();
+        /* Body returned without aborting — that itself is a failure. */
+        _exit(99);
+    }
+    int status = 0;
+    pid_t got = waitpid(pid, &status, 0);
+    ASSERT(got == pid);
+    ASSERT(WIFSIGNALED(status));
+    ASSERT(WTERMSIG(status) == SIGABRT);
+}
+
+static void arc_throw_body(void) {
+    TestObject *o = (TestObject *)feng_object_new(&throwing_descriptor);
+    feng_release(o); /* triggers throwing_finalizer */
+}
+
+static void cycle_throw_body(void) {
+    /* Build a 2-node cycle whose nodes carry the throwing finalizer; force
+     * collection so Phase 1 invokes the finalizer through the cycle path. */
+    CycNode *a = (CycNode *)feng_object_new(&throwing_cyclic_descriptor);
+    CycNode *b = (CycNode *)feng_object_new(&throwing_cyclic_descriptor);
+    a->child_a = feng_retain(b);
+    b->child_a = feng_retain(a);
+    feng_release(a);
+    feng_release(b);
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+}
+
+static void test_finalizer_throw_on_arc_path_aborts(void) {
+    assert_child_aborts(arc_throw_body);
+}
+
+static void test_finalizer_throw_on_cycle_path_aborts(void) {
+    assert_child_aborts(cycle_throw_body);
+}
+
+/* --- Threshold-triggered collection ------------------------------------ */
+
+/* Verify that feng_release-induced threshold trigger actually collects the
+ * cycle without requiring an explicit feng_cycle_collect_locked() call.
+ * Uses the test-only threshold setter to force collection on the very next
+ * candidate enqueue. */
+static void test_cycle_collector_threshold_triggers_collection(void) {
+    g_cyc_fin_count = 0;
+
+    feng_cycle_lock();
+    feng_cycle_set_threshold_for_test(1U);
+    feng_cycle_unlock();
+
+    /* Build a 2-node cycle of finalizer-bearing nodes. */
+    CycNode *a = (CycNode *)feng_object_new(&cyc_node_fin_descriptor);
+    CycNode *b = (CycNode *)feng_object_new(&cyc_node_fin_descriptor);
+    a->child_a = feng_retain(b); /* a -> b */
+    b->child_a = feng_retain(a); /* b -> a */
+
+    /* Drop our external refs. The first feng_release puts a node into the
+     * candidate buffer (a still has b's link, so it survives the dec) and
+     * threshold=1 triggers collection inline. The cycle is not yet closed
+     * from the collector's POV (b still externally held), so this first
+     * collection must NOT free anything. */
+    feng_release(a);
+    ASSERT(g_cyc_fin_count == 0);
+
+    /* Drop the second external. Now release dec's b's rc to 1, enqueues b,
+     * threshold=1 triggers collection — and this time the cycle is fully
+     * closed so both finalizers must run and both nodes must be freed. */
+    feng_release(b);
+    ASSERT(g_cyc_fin_count == 2);
+
+    /* Restore the default for subsequent tests. */
+    feng_cycle_lock();
+    feng_cycle_set_threshold_for_test(256U);
+    feng_cycle_unlock();
+    feng_cycle_runtime_shutdown();
+}
+
+/* --- Multi-threaded retain/release stress ------------------------------ */
+
+#include <pthread.h>
+
+typedef struct {
+    CycNode *shared;       /* externally pinned for the duration of the run */
+    int      iterations;
+} StressArgs;
+
+static void *stress_worker(void *arg) {
+    StressArgs *a = (StressArgs *)arg;
+    for (int i = 0; i < a->iterations; ++i) {
+        /* retain/release on a potentially-cyclic object exercises the
+         * STW lock acquisition path. We also build and tear down a
+         * short-lived 2-node cycle each iteration so the candidate
+         * buffer grows and the threshold-trigger path runs concurrently
+         * with other threads. */
+        feng_retain(a->shared);
+        feng_release(a->shared);
+
+        CycNode *x = (CycNode *)feng_object_new(&cyc_node_descriptor);
+        CycNode *y = (CycNode *)feng_object_new(&cyc_node_descriptor);
+        x->child_a = feng_retain(y);
+        y->child_a = feng_retain(x);
+        feng_release(x);
+        feng_release(y);
+    }
+    return NULL;
+}
+
+static void test_cycle_collector_multithreaded_stress(void) {
+    /* The collector serialises on a single recursive mutex (§13.1 STW
+     * model). This test spawns several writers to assert that
+     * concurrent retain/release on potentially-cyclic objects plus
+     * concurrent cycle creation never crashes, never double-frees, and
+     * leaves the candidate buffer drainable at shutdown. */
+    feng_cycle_lock();
+    feng_cycle_set_threshold_for_test(1U);
+    feng_cycle_unlock();
+
+    CycNode *shared = (CycNode *)feng_object_new(&cyc_node_descriptor);
+    enum { N_THREADS = 4, ITERATIONS = 2000 };
+    pthread_t tids[N_THREADS];
+    StressArgs args = { .shared = shared, .iterations = ITERATIONS };
+
+    for (int i = 0; i < N_THREADS; ++i) {
+        int rc = pthread_create(&tids[i], NULL, stress_worker, &args);
+        ASSERT(rc == 0);
+    }
+    for (int i = 0; i < N_THREADS; ++i) {
+        ASSERT(pthread_join(tids[i], NULL) == 0);
+    }
+
+    /* shared survived because every retain was paired with a release and
+     * we still hold the original +1. Drop it and let shutdown verify the
+     * collector reaches a clean state. */
+    feng_release(shared);
+
+    feng_cycle_lock();
+    feng_cycle_set_threshold_for_test(256U);
+    feng_cycle_unlock();
+    feng_cycle_runtime_shutdown();
+}
+
 int main(void) {
     test_object_retain_release();
     test_retain_release_nullsafe();
@@ -734,6 +922,10 @@ int main(void) {
     test_cycle_collector_finalizer_resurrects_self();
     test_cycle_collector_partial_resurrection_frees_unsurvived();
     test_cycle_collector_acyclic_object_never_enqueued();
+    test_finalizer_throw_on_arc_path_aborts();
+    test_finalizer_throw_on_cycle_path_aborts();
+    test_cycle_collector_threshold_triggers_collection();
+    test_cycle_collector_multithreaded_stress();
 
     fputs("test_runtime: ok\n", stdout);
     return 0;

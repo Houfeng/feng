@@ -225,6 +225,15 @@ void feng_panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1,
 void feng_panic(const char *fmt, ...);
 #endif
 
+/* --- Lifecycle --------------------------------------------------------- */
+
+/* Drains any potentially-cyclic objects still sitting in the cycle
+ * collector's candidate buffer and releases collector-owned heap. Codegen
+ * emits a call to this from main() immediately before returning, so user
+ * cycles formed but never reclaimed during normal execution still reach
+ * their finalizers at process exit. Idempotent and thread-safe. */
+void feng_runtime_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif
