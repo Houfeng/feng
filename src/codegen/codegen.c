@@ -795,7 +795,6 @@ static const UserMethod *cg_user_type_method(const UserType *t, const char *name
 
 /* ----- module bindings ----- */
 
-static bool cg_register_module_binding(CG *cg, const FengDecl *decl) __attribute__((unused));
 static bool cg_register_module_binding(CG *cg, const FengDecl *decl) {
     if (cg->module_binding_count + 1 > cg->module_binding_capacity) {
         size_t cap = cg->module_binding_capacity ? cg->module_binding_capacity * 2 : 4;
@@ -847,7 +846,6 @@ static bool cg_register_module_binding(CG *cg, const FengDecl *decl) {
     return true;
 }
 
-static const ModuleBinding *cg_find_module_binding(const CG *cg, const char *name, size_t len) __attribute__((unused));
 static const ModuleBinding *cg_find_module_binding(const CG *cg, const char *name, size_t len) {
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         if (strlen(cg->module_bindings[i].feng_name) == len &&
@@ -1144,8 +1142,16 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->owns_ref = false;  /* borrow from local slot */
         return out->c_expr && out->type;
     }
+    const ModuleBinding *mb = cg_find_module_binding(cg,
+        e->as.identifier.data, e->as.identifier.length);
+    if (mb) {
+        out->c_expr = strdup(mb->c_name);
+        out->type = cgtype_clone(mb->type);
+        out->owns_ref = false;  /* borrow from static slot */
+        return out->c_expr && out->type;
+    }
     return cg_fail(cg, e->token,
-        "codegen: identifier '%.*s' not found (only locals/params supported in this iteration)",
+        "codegen: identifier '%.*s' not found",
         (int)e->as.identifier.length, e->as.identifier.data);
 }
 
@@ -1409,6 +1415,188 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     return true;
 }
 
+/* Returns the FengTypeDescriptor C expression for an array element type, or
+ * the literal "NULL" if no descriptor is meaningful (descriptor is purely
+ * diagnostic in the runtime). Caller-frees via free(). */
+static char *cg_array_element_descriptor(const CGType *elem) {
+    Buf b; buf_init(&b);
+    if (!elem) { buf_append_cstr(&b, "NULL"); return b.data; }
+    switch (elem->kind) {
+        case CG_TYPE_STRING: buf_append_cstr(&b, "&feng_string_descriptor"); break;
+        case CG_TYPE_ARRAY:  buf_append_cstr(&b, "&feng_array_descriptor"); break;
+        case CG_TYPE_OBJECT:
+            if (elem->user) {
+                buf_append_fmt(&b, "&%s", elem->user->c_desc_name);
+            } else {
+                buf_append_cstr(&b, "NULL");
+            }
+            break;
+        default: buf_append_cstr(&b, "NULL"); break;
+    }
+    return b.data;
+}
+
+static bool cg_types_equal(const CGType *a, const CGType *b) {
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    if (a->kind == CG_TYPE_OBJECT) return a->user == b->user;
+    if (a->kind == CG_TYPE_ARRAY) return cg_types_equal(a->element, b->element);
+    return true;
+}
+
+static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
+                                        const CGType *expected_elem,
+                                        ExprResult *out) {
+    er_init(out);
+    if (e->as.array_literal.count == 0) {
+        return cg_fail(cg, e->token,
+            "codegen: empty array literal needs an explicit element type"
+            " (not yet supported in this iteration)");
+    }
+    /* Evaluate every element and ensure the inferred element type is
+     * uniform. We materialize +1 owners up-front so they are released
+     * exactly once after the slot writes complete. */
+    size_t n = e->as.array_literal.count;
+    ExprResult *items = calloc(n, sizeof *items);
+    if (!items) return cg_fail(cg, e->token, "codegen: out of memory");
+    /* When narrowing into a nested array element, recurse with the inner
+     * element type. Otherwise emit each item with the default rules. */
+    bool nested_narrow = (expected_elem != NULL &&
+                          expected_elem->kind == CG_TYPE_ARRAY &&
+                          expected_elem->element != NULL);
+    for (size_t i = 0; i < n; i++) {
+        const FengExpr *item_expr = e->as.array_literal.items[i];
+        bool ok;
+        if (nested_narrow && item_expr->kind == FENG_EXPR_ARRAY_LITERAL) {
+            ok = cg_emit_array_literal_typed(cg, item_expr,
+                                             expected_elem->element, &items[i]);
+        } else {
+            ok = cg_emit_expr(cg, item_expr, &items[i]);
+        }
+        if (!ok) {
+            for (size_t k = 0; k < i; k++) er_free(&items[k]);
+            free(items); return false;
+        }
+        if (i > 0 && !cg_types_equal(items[0].type, items[i].type)) {
+            for (size_t k = 0; k <= i; k++) er_free(&items[k]);
+            free(items);
+            return cg_fail(cg, e->as.array_literal.items[i]->token,
+                "codegen: heterogeneous array literal (all elements must share a type)");
+        }
+        if (cgtype_is_managed(items[i].type) && items[i].owns_ref) {
+            cg_materialize_to_local(cg, &items[i], "_t");
+        }
+    }
+    /* Choose the slot type. If a non-array narrowing target was supplied
+     * (e.g. expected i32 but items are i64 numeric literals), the slot
+     * uses expected_elem so that allocation size and read access agree. */
+    CGType *elem;
+    if (expected_elem != NULL && !nested_narrow &&
+        cgtype_is_integer(expected_elem->kind) &&
+        cgtype_is_integer(items[0].type->kind)) {
+        elem = cgtype_clone(expected_elem);
+    } else if (nested_narrow) {
+        /* Items already match expected_elem after recursive emit. */
+        elem = cgtype_clone(items[0].type);
+    } else {
+        elem = cgtype_clone(items[0].type);
+    }
+    if (!elem) {
+        for (size_t k = 0; k < n; k++) er_free(&items[k]);
+        free(items);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    char *arr_tmp = cg_fresh_temp(cg, "_arr");
+    char *slots_tmp = cg_fresh_temp(cg, "_slots");
+    char *elem_cty = cg_ctype_dup(elem);
+    char *desc_expr = cg_array_element_descriptor(elem);
+    if (!arr_tmp || !slots_tmp || !elem_cty || !desc_expr) {
+        free(arr_tmp); free(slots_tmp); free(elem_cty); free(desc_expr);
+        cgtype_free(elem);
+        for (size_t k = 0; k < n; k++) er_free(&items[k]);
+        free(items);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    bool elem_managed = cgtype_is_managed(elem);
+    buf_append_fmt(cg->cur_body,
+        "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+        arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
+    buf_append_fmt(cg->cur_body,
+        "    %s *%s = (%s *)feng_array_data(%s);\n",
+        elem_cty, slots_tmp, elem_cty, arr_tmp);
+    for (size_t i = 0; i < n; i++) {
+        if (elem_managed) {
+            /* Slots own +1 each: retain (items already materialised). */
+            buf_append_fmt(cg->cur_body,
+                "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
+                slots_tmp, i, items[i].c_expr, slots_tmp, i);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    %s[%zu] = (%s)(%s);\n",
+                slots_tmp, i, elem_cty, items[i].c_expr);
+        }
+    }
+    free(slots_tmp); free(elem_cty); free(desc_expr);
+    for (size_t k = 0; k < n; k++) er_free(&items[k]);
+    free(items);
+
+    out->c_expr = strdup(arr_tmp);
+    free(arr_tmp);
+    out->type = cgtype_new(CG_TYPE_ARRAY);
+    if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
+    out->type->element = elem;
+    out->owns_ref = true;
+    return true;
+}
+
+static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+    return cg_emit_array_literal_typed(cg, e, NULL, out);
+}
+
+static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    ExprResult recv;
+    if (!cg_emit_expr(cg, e->as.index.object, &recv)) return false;
+    if (recv.type->kind != CG_TYPE_ARRAY || !recv.type->element) {
+        er_free(&recv);
+        return cg_fail(cg, e->token,
+            "codegen: indexing requires an array value");
+    }
+    if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+        cg_materialize_to_local(cg, &recv, "_t");
+    }
+    ExprResult idx;
+    if (!cg_emit_expr(cg, e->as.index.index, &idx)) {
+        er_free(&recv); return false;
+    }
+    if (!cgtype_is_integer(idx.type->kind)) {
+        er_free(&idx); er_free(&recv);
+        return cg_fail(cg, e->token, "codegen: array index must be an integer");
+    }
+    /* Materialize index into a `size_t` local so we can both bounds-check
+     * and slot-load using the same value. */
+    char *idx_tmp = cg_fresh_temp(cg, "_idx");
+    if (!idx_tmp) { er_free(&idx); er_free(&recv); return false; }
+    buf_append_fmt(cg->cur_body, "    size_t %s = (size_t)(%s);\n",
+                   idx_tmp, idx.c_expr);
+    buf_append_fmt(cg->cur_body, "    feng_array_check_index(%s, %s);\n",
+                   recv.c_expr, idx_tmp);
+
+    char *elem_cty = cg_ctype_dup(recv.type->element);
+    if (!elem_cty) {
+        free(idx_tmp); er_free(&idx); er_free(&recv); return false;
+    }
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "(((%s *)feng_array_data(%s))[%s])",
+                   elem_cty, recv.c_expr, idx_tmp);
+    free(elem_cty); free(idx_tmp);
+    out->c_expr = b.data;
+    out->type = cgtype_clone(recv.type->element);
+    out->owns_ref = false;   /* borrowed */
+    er_free(&idx); er_free(&recv);
+    return out->c_expr && out->type;
+}
+
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     CGType *target = NULL;
@@ -1463,6 +1651,10 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_emit_member(cg, e, out);
         case FENG_EXPR_OBJECT_LITERAL:
             return cg_emit_object_literal(cg, e, out);
+        case FENG_EXPR_ARRAY_LITERAL:
+            return cg_emit_array_literal(cg, e, out);
+        case FENG_EXPR_INDEX:
+            return cg_emit_index(cg, e, out);
         case FENG_EXPR_CAST:
             return cg_emit_cast(cg, e, out);
         default:
@@ -1502,7 +1694,19 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     ExprResult init;
     bool has_init = b->initializer != NULL;
     if (has_init) {
-        if (!cg_emit_expr(cg, b->initializer, &init)) {
+        /* If the binding declares an array type and the initializer is an
+         * array literal, narrow the literal's element type to the declared
+         * one so allocation slot size matches subsequent reads. */
+        bool ok;
+        if (decl_type != NULL && decl_type->kind == CG_TYPE_ARRAY &&
+            decl_type->element != NULL &&
+            b->initializer->kind == FENG_EXPR_ARRAY_LITERAL) {
+            ok = cg_emit_array_literal_typed(cg, b->initializer,
+                                             decl_type->element, &init);
+        } else {
+            ok = cg_emit_expr(cg, b->initializer, &init);
+        }
+        if (!ok) {
             cgtype_free(decl_type); return false;
         }
         if (!decl_type) {
@@ -1556,6 +1760,61 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
 
 static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     const FengExpr *target = stmt->as.assign.target;
+    if (target->kind == FENG_EXPR_INDEX) {
+        ExprResult recv;
+        if (!cg_emit_expr(cg, target->as.index.object, &recv)) return false;
+        if (recv.type->kind != CG_TYPE_ARRAY || !recv.type->element) {
+            er_free(&recv);
+            return cg_fail(cg, stmt->token,
+                "codegen: indexed assignment requires an array value");
+        }
+        if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+            cg_materialize_to_local(cg, &recv, "_t");
+        }
+        ExprResult ix;
+        if (!cg_emit_expr(cg, target->as.index.index, &ix)) {
+            er_free(&recv); return false;
+        }
+        if (!cgtype_is_integer(ix.type->kind)) {
+            er_free(&ix); er_free(&recv);
+            return cg_fail(cg, stmt->token,
+                "codegen: array index must be an integer");
+        }
+        char *idx_tmp = cg_fresh_temp(cg, "_idx");
+        if (!idx_tmp) { er_free(&ix); er_free(&recv); return false; }
+        buf_append_fmt(cg->cur_body, "    size_t %s = (size_t)(%s);\n",
+                       idx_tmp, ix.c_expr);
+        buf_append_fmt(cg->cur_body, "    feng_array_check_index(%s, %s);\n",
+                       recv.c_expr, idx_tmp);
+        ExprResult v;
+        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            free(idx_tmp); er_free(&ix); er_free(&recv); return false;
+        }
+        char *elem_cty = cg_ctype_dup(recv.type->element);
+        if (!elem_cty) {
+            free(idx_tmp); er_free(&v); er_free(&ix); er_free(&recv); return false;
+        }
+        if (cgtype_is_managed(recv.type->element)) {
+            if (v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { %s *_slots = (%s *)feng_array_data(%s);"
+                    " void *_old = _slots[%s]; _slots[%s] = %s;"
+                    " feng_release(_old); }\n",
+                    elem_cty, elem_cty, recv.c_expr, idx_tmp, idx_tmp, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_assign((void**)&((%s *)feng_array_data(%s))[%s], %s);\n",
+                    elem_cty, recv.c_expr, idx_tmp, v.c_expr);
+            }
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
+                elem_cty, recv.c_expr, idx_tmp, elem_cty, v.c_expr);
+        }
+        free(elem_cty); free(idx_tmp);
+        er_free(&v); er_free(&ix); er_free(&recv);
+        return true;
+    }
     if (target->kind == FENG_EXPR_MEMBER) {
         ExprResult recv;
         if (!cg_emit_expr(cg, target->as.member.object, &recv)) return false;
@@ -1609,9 +1868,36 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     const FengSlice n = target->as.identifier;
     const Local *l = scope_lookup(cg->cur_scope, n.data, n.length);
     if (!l) {
-        return cg_fail(cg, stmt->token,
-            "codegen: assignment to undefined identifier '%.*s'",
-            (int)n.length, n.data);
+        const ModuleBinding *mb = cg_find_module_binding(cg, n.data, n.length);
+        if (!mb) {
+            return cg_fail(cg, stmt->token,
+                "codegen: assignment to undefined identifier '%.*s'",
+                (int)n.length, n.data);
+        }
+        if (!mb->is_var) {
+            return cg_fail(cg, stmt->token,
+                "codegen: cannot assign to immutable module binding '%s'",
+                mb->feng_name);
+        }
+        ExprResult v;
+        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
+        if (cgtype_is_managed(mb->type)) {
+            if (v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { void *_old = %s; %s = %s; feng_release(_old); }\n",
+                    mb->c_name, mb->c_name, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_assign((void**)&%s, %s);\n", mb->c_name, v.c_expr);
+            }
+        } else {
+            char *cty = cg_ctype_dup(mb->type);
+            buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                           mb->c_name, cty, v.c_expr);
+            free(cty);
+        }
+        er_free(&v);
+        return true;
     }
     ExprResult v;
     if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
@@ -1993,6 +2279,28 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
     for (size_t i = 0; i < cg->user_type_count; i++) {
         if (!cg_register_user_type_members(cg, &cg->user_types[i])) return false;
     }
+    /* Pass 2b: register every module-level let/var so identifiers can resolve
+     * across function bodies regardless of source order, and emit their
+     * static storage. Initialisation runs from the main wrapper in source
+     * order. */
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        if (d->kind != FENG_DECL_GLOBAL_BINDING) continue;
+        if (d->is_extern) {
+            return cg_fail(cg, d->token,
+                "codegen: extern module-level bindings not supported in Phase 1A");
+        }
+        if (!cg_register_module_binding(cg, d)) return false;
+        const ModuleBinding *mb = &cg->module_bindings[cg->module_binding_count - 1];
+        char *cty = cg_ctype_dup(mb->type);
+        if (!cty) return cg_fail(cg, d->token, "codegen: out of memory");
+        if (cgtype_is_managed(mb->type)) {
+            buf_append_fmt(&cg->statics, "static %s %s = NULL;\n", cty, mb->c_name);
+        } else {
+            buf_append_fmt(&cg->statics, "static %s %s = 0;\n", cty, mb->c_name);
+        }
+        free(cty);
+    }
     /* Pass 3: emit forward decls + struct/finalizer/descriptor for every type. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         cg_emit_user_type_forward(cg, &cg->user_types[i]);
@@ -2007,8 +2315,9 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
         const FengDecl *d = prog->declarations[i];
         switch (d->kind) {
             case FENG_DECL_GLOBAL_BINDING:
-                return cg_fail(cg, d->token,
-                    "codegen: top-level let/var not yet supported in this iteration");
+                /* Already registered + storage emitted in Pass 2b; the
+                 * initializer runs from the main wrapper. */
+                continue;
             case FENG_DECL_TYPE: {
                 /* Find the registered UserType by AST identity. */
                 const UserType *ut = NULL;
@@ -2071,8 +2380,90 @@ static void cg_emit_string_literal_init(CG *cg, Buf *body) {
     }
 }
 
-static void cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
+static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
+    const FengExpr *init = mb->binding->initializer;
+    if (!init) return true;  /* zero/NULL static init suffices */
+
+    /* Use a transient scope so any temporaries from the expression get
+     * released after the assignment. */
+    Scope *fn_scope = scope_push(NULL);
+    if (!fn_scope) return cg_fail(cg, mb->binding->token,
+                                  "codegen: out of memory");
+    cg->cur_scope = fn_scope;
+    /* Caller is responsible for setting cg->cur_body to the destination
+     * buffer (typically a side buffer that is later spliced into main()). */
+    cg->cur_return_type = NULL;
+    cg->cur_fn_is_main = false;
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+    ExprResult r;
+    if (!cg_emit_expr(cg, init, &r)) {
+        cg->cur_scope = NULL; scope_pop_free(fn_scope);
+        cg->cur_body = NULL;
+        return false;
+    }
+    /* Type compatibility: require kinds to match (and for OBJECT, same user
+     * type). Numeric narrowing/widening is not auto-applied at module scope
+     * to avoid silent surprises. */
+    bool compatible = (r.type->kind == mb->type->kind);
+    if (compatible && mb->type->kind == CG_TYPE_OBJECT) {
+        compatible = (r.type->user == mb->type->user);
+    }
+    if (compatible && mb->type->kind == CG_TYPE_ARRAY) {
+        compatible = (r.type->element && mb->type->element &&
+                      r.type->element->kind == mb->type->element->kind);
+    }
+    if (!compatible) {
+        er_free(&r);
+        cg_release_scope(cg, fn_scope);
+        buf_append_cstr(cg->cur_body, "    }\n");
+        cg->cur_scope = NULL; scope_pop_free(fn_scope);
+        cg->cur_body = NULL;
+        return cg_fail(cg, mb->binding->token,
+            "codegen: module binding '%s' initializer type does not match its declared type",
+            mb->feng_name);
+    }
+    if (cgtype_is_managed(mb->type)) {
+        if (r.owns_ref) {
+            buf_append_fmt(cg->cur_body, "        %s = %s;\n", mb->c_name, r.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "        %s = %s; feng_retain(%s);\n",
+                mb->c_name, r.c_expr, mb->c_name);
+        }
+    } else {
+        char *cty = cg_ctype_dup(mb->type);
+        buf_append_fmt(cg->cur_body, "        %s = (%s)(%s);\n",
+                       mb->c_name, cty, r.c_expr);
+        free(cty);
+    }
+    er_free(&r);
+    cg_release_scope(cg, fn_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    cg->cur_scope = NULL; scope_pop_free(fn_scope);
+    cg->cur_body = NULL;
+    return true;
+}
+
+static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
     Buf *b = &cg->fn_defs;
+    /* Emit module-binding initialisers into a side buffer first so that any
+     * string literals embedded in their expressions get interned BEFORE we
+     * write the string-literal init prelude. The captured body is then
+     * appended after the literal init below. */
+    Buf module_init_body;
+    buf_init(&module_init_body);
+    Buf *prev_body = cg->cur_body;
+    cg->cur_body = &module_init_body;
+    for (size_t i = 0; i < cg->module_binding_count; i++) {
+        if (!cg_emit_module_binding_init(cg, &cg->module_bindings[i])) {
+            buf_free(&module_init_body);
+            cg->cur_body = prev_body;
+            return false;
+        }
+    }
+    cg->cur_body = prev_body;
+
     buf_append_cstr(b,
         "int main(int argc, char **argv) {\n");
     /* Initialise string literal slots once. */
@@ -2083,13 +2474,31 @@ static void cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
         "    for (int _i = 0; _i < argc; _i++) {\n"
         "        _slots[_i] = feng_string_literal(argv[_i], strlen(argv[_i]));\n"
         "    }\n");
+    /* Now splice in the previously captured module-binding init code. */
+    if (module_init_body.length > 0) {
+        buf_append(b, module_init_body.data, module_init_body.length);
+    }
+    buf_free(&module_init_body);
     if (main_fn->return_type->kind == CG_TYPE_I32) {
         buf_append_fmt(b, "    int32_t _rc = %s(_args);\n", main_fn->c_name);
-        buf_append_cstr(b, "    feng_release(_args);\n    return (int)_rc;\n}\n");
     } else {
         buf_append_fmt(b, "    %s(_args);\n", main_fn->c_name);
-        buf_append_cstr(b, "    feng_release(_args);\n    return 0;\n}\n");
     }
+    /* Release globals so leak-checkers stay quiet. */
+    for (size_t i = 0; i < cg->module_binding_count; i++) {
+        const ModuleBinding *mb = &cg->module_bindings[i];
+        if (cgtype_is_managed(mb->type)) {
+            buf_append_fmt(b, "    feng_release(%s); %s = NULL;\n",
+                           mb->c_name, mb->c_name);
+        }
+    }
+    buf_append_cstr(b, "    feng_release(_args);\n");
+    if (main_fn->return_type->kind == CG_TYPE_I32) {
+        buf_append_cstr(b, "    return (int)_rc;\n}\n");
+    } else {
+        buf_append_cstr(b, "    return 0;\n}\n");
+    }
+    return true;
 }
 
 /* ===================== USER TYPE EMISSION (Phase 1A iter 2a) ===================== */
@@ -2342,8 +2751,6 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         return false;
     }
 
-    cg_emit_string_literal_table(&cg);
-
     if (target == FENG_COMPILE_TARGET_BIN) {
         const FreeFn *main_fn = cg_lookup_main(&cg);
         if (!main_fn) {
@@ -2351,8 +2758,16 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
             cg_dispose(&cg);
             return false;
         }
-        cg_emit_main_wrapper(&cg, main_fn);
+        if (!cg_emit_main_wrapper(&cg, main_fn)) {
+            cg_dispose(&cg);
+            return false;
+        }
     }
+
+    /* Emit the string literal storage table after all bodies are generated
+     * so that strings interned during module-binding initialisers are
+     * captured. The init prelude inside `main()` references these slots. */
+    cg_emit_string_literal_table(&cg);
 
     char *src = cg_finalize(&cg);
     if (!src) {

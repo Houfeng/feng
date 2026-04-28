@@ -2913,7 +2913,7 @@ static void test_index_assignment_accepts_explicit_array_target(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[] = [1, 2, 3];\n"
+        "    var items: int[]! = [1, 2, 3]!;\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
         "}\n";
@@ -2936,7 +2936,7 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[] = [1, 2, 3];\n"
+        "    var items: int[]! = [1, 2, 3]!;\n"
         "    items[0] = true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("index_assign_type_error.f", source);
@@ -2959,7 +2959,7 @@ static void test_inferred_array_literal_binding_supports_index_read_write(void) 
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items = [1, 2, 3];\n"
+        "    var items = [1, 2, 3]!;\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
         "}\n";
@@ -2982,7 +2982,7 @@ static void test_inferred_array_literal_binding_rejects_non_matching_index_assig
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items = [1, 2, 3];\n"
+        "    var items = [1, 2, 3]!;\n"
         "    items[0] = true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("inferred_array_index_type_error.f", source);
@@ -3028,7 +3028,7 @@ static void test_inferred_nested_array_literal_supports_nested_index_read_write(
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var matrix = [[1, 2], [3, 4]];\n"
+        "    var matrix = [[1, 2]!, [3, 4]!]!;\n"
         "    matrix[0][1] = 5;\n"
         "    let value: int = matrix[1][0];\n"
         "}\n";
@@ -3085,6 +3085,114 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* docs/feng-builtin-type.md §5: writing through `[i] =` is rejected when the
+ * indexed array layer lacks the writable mark `!`. */
+static void test_index_assignment_rejects_readonly_array(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3];\n"
+        "    items[0] = 4;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("readonly_array_index_write_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* `T[]!` and `T[]` are distinct types; binding a writable literal to a
+ * readonly slot without an explicit cast is rejected per docs §5. */
+static void test_writable_array_literal_does_not_match_readonly_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[] = [1, 2, 3]!;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("writable_literal_to_readonly_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cast may STRIP `!` (writable → readonly): allowed. */
+static void test_cast_strips_writable_array_to_readonly(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var src: int[]! = [1, 2, 3]!;\n"
+        "    let view: int[] = (int[])src;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_strip_writable_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Cast must not ADD `!` (readonly → writable): rejected. */
+static void test_cast_rejects_adding_writable_to_readonly_array(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var src: int[] = [1, 2, 3];\n"
+        "    let view: int[]! = (int[]!)src;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cast_add_writable_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "cast from") != NULL);
+    ASSERT(strstr(errors[0].message, "is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Empty `[]!` requires an explicit writable target type. */
+static void test_empty_writable_array_literal_requires_writable_target(void) {
+    const char *ok_source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var items: int[]! = []!;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("empty_writable_literal_ok.f", ok_source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
@@ -6827,6 +6935,11 @@ int main(void) {
     test_inferred_nested_array_literal_supports_nested_index_read_write();
     test_empty_array_literal_binding_requires_explicit_target_type();
     test_empty_array_literal_binding_accepts_explicit_target_type();
+    test_index_assignment_rejects_readonly_array();
+    test_writable_array_literal_does_not_match_readonly_target();
+    test_cast_strips_writable_array_to_readonly();
+    test_cast_rejects_adding_writable_to_readonly_array();
+    test_empty_writable_array_literal_requires_writable_target();
     test_explicit_numeric_and_exact_casts_pass();
     test_cast_rejects_bool_to_numeric();
     test_cast_rejects_numeric_to_bool();

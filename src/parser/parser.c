@@ -393,6 +393,12 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
             return NULL;
         }
         wrapper->as.inner = type_ref;
+        /* Optional `!` marks this array layer's elements as writable
+         * (docs/feng-builtin-type.md §5). The flag binds to the nearest
+         * preceding `[]` only and does not propagate across layers. */
+        if (parser_match(parser, FENG_TOKEN_NOT)) {
+            wrapper->array_element_writable = true;
+        }
         type_ref = wrapper;
     }
 
@@ -1492,6 +1498,11 @@ static bool looks_like_type_ref_at(const Parser *parser, size_t *index) {
             return false;
         }
         ++cursor;
+        /* Optional `!` marks the array layer's elements writable; consume it
+         * so the cast/look-ahead does not stop in the middle of a typeref. */
+        if (parser->tokens[cursor].kind == FENG_TOKEN_NOT) {
+            ++cursor;
+        }
     }
 
     *index = cursor;
@@ -1619,6 +1630,12 @@ static FengExpr *parse_array_literal(Parser *parser) {
     if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' to close array literal")) {
         free_expr(expr);
         return NULL;
+    }
+
+    /* Optional trailing `!` marks the literal's element layer writable
+     * (docs/feng-expression.md §6.2; docs/feng-builtin-type.md §5). */
+    if (parser_match(parser, FENG_TOKEN_NOT)) {
+        expr->as.array_literal.element_writable = true;
     }
 
     return expr;

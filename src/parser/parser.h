@@ -80,6 +80,10 @@ typedef struct FengAnnotation {
 struct FengTypeRef {
     FengToken token;
     FengTypeRefKind kind;
+    /* Per docs/feng-builtin-type.md §5: a writable element layer is marked
+     * with `!` after the corresponding `[]`. Only meaningful when kind ==
+     * FENG_TYPE_REF_ARRAY; ignored otherwise. */
+    bool array_element_writable;
     union {
         struct {
             FengSlice *segments;
@@ -160,6 +164,9 @@ struct FengExpr {
         struct {
             FengExpr **items;
             size_t count;
+            /* `[1, 2, 3]!` per docs/feng-expression.md §6.2: trailing `!`
+             * marks the literal's element layer writable. */
+            bool element_writable;
         } array_literal;
         struct {
             FengExpr *target;

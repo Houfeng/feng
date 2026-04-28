@@ -658,7 +658,7 @@ static char *format_type_ref_name(const FengTypeRef *type_ref) {
             }
 
             inner_length = strlen(inner_name);
-            buffer = (char *)malloc(inner_length + 3U);
+            buffer = (char *)malloc(inner_length + 4U);
             if (buffer == NULL) {
                 free(inner_name);
                 return NULL;
@@ -667,7 +667,12 @@ static char *format_type_ref_name(const FengTypeRef *type_ref) {
             memcpy(buffer, inner_name, inner_length);
             buffer[inner_length] = '[';
             buffer[inner_length + 1U] = ']';
-            buffer[inner_length + 2U] = '\0';
+            if (type_ref->array_element_writable) {
+                buffer[inner_length + 2U] = '!';
+                buffer[inner_length + 3U] = '\0';
+            } else {
+                buffer[inner_length + 2U] = '\0';
+            }
             free(inner_name);
             return buffer;
     }
@@ -782,6 +787,10 @@ static bool type_ref_equals(const FengTypeRef *left, const FengTypeRef *right) {
             return true;
         case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
+            if (left->kind == FENG_TYPE_REF_ARRAY &&
+                left->array_element_writable != right->array_element_writable) {
+                return false;
+            }
             return type_ref_equals(left->as.inner, right->as.inner);
     }
 
@@ -1639,6 +1648,7 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
 
         case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
+            clone->array_element_writable = type_ref->array_element_writable;
             clone->as.inner = clone_type_ref_for_inference(type_ref->as.inner);
             if (clone->as.inner == NULL) {
                 free(clone);
@@ -1717,6 +1727,7 @@ static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *t
 
 static const FengTypeRef *synthesize_array_type_ref(ResolveContext *context,
                                                     const InferredExprType *element_type,
+                                                    bool element_writable,
                                                     FengToken token) {
     FengTypeRef *inner_type_ref;
     FengTypeRef *array_type_ref;
@@ -1738,6 +1749,7 @@ static const FengTypeRef *synthesize_array_type_ref(ResolveContext *context,
 
     array_type_ref->token = token;
     array_type_ref->kind = FENG_TYPE_REF_ARRAY;
+    array_type_ref->array_element_writable = element_writable;
     array_type_ref->as.inner = inner_type_ref;
     if (!resolver_track_synthetic_type_ref(context, array_type_ref)) {
         free_synthetic_type_ref(array_type_ref);
@@ -1920,6 +1932,10 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
 
         case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
+            if (left->kind == FENG_TYPE_REF_ARRAY &&
+                left->array_element_writable != right->array_element_writable) {
+                return false;
+            }
             return type_refs_semantically_equal(context, left->as.inner, right->as.inner);
     }
 
@@ -2992,11 +3008,45 @@ static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
 
+static bool array_cast_writability_subset(const FengTypeRef *source,
+                                          const FengTypeRef *target) {
+    /* docs/feng-builtin-type.md §5: an array cast may STRIP `!` from any
+     * layer but must never ADD `!`. Element type and depth must match. */
+    if (source == NULL || target == NULL) {
+        return false;
+    }
+    if (source->kind != target->kind) {
+        return false;
+    }
+    if (source->kind != FENG_TYPE_REF_ARRAY) {
+        /* Inner-most layer reached. Element types must match exactly. */
+        return type_ref_equals(source, target);
+    }
+    if (target->array_element_writable && !source->array_element_writable) {
+        return false;
+    }
+    return array_cast_writability_subset(source->as.inner, target->as.inner);
+}
+
 static bool cast_expr_types_are_valid(const ResolveContext *context,
                                       InferredExprType value_type,
                                       const FengTypeRef *target_type) {
-    return inferred_expr_type_matches_type_ref(context, value_type, target_type) ||
-           (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type));
+    if (inferred_expr_type_matches_type_ref(context, value_type, target_type)) {
+        return true;
+    }
+    if (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type)) {
+        return true;
+    }
+    /* Array writability strip: source is a known array type, target is also
+     * an array of identical element type and depth, and target's writability
+     * mask is a subset of source's. */
+    if (target_type != NULL && target_type->kind == FENG_TYPE_REF_ARRAY &&
+        value_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+        value_type.type_ref != NULL &&
+        value_type.type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return array_cast_writability_subset(value_type.type_ref, target_type);
+    }
+    return false;
 }
 
 static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
@@ -5567,7 +5617,9 @@ static InferredExprType infer_array_literal_expr_type(ResolveContext *context, c
         }
     }
 
-    array_type_ref = synthesize_array_type_ref(context, &element_type, expr->token);
+    array_type_ref = synthesize_array_type_ref(context, &element_type,
+                                               expr->as.array_literal.element_writable,
+                                               expr->token);
     return array_type_ref != NULL ? inferred_expr_type_from_type_ref(array_type_ref)
                                   : inferred_expr_type_unknown();
 }
@@ -5702,7 +5754,22 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         }
 
         case FENG_EXPR_INDEX:
-            return validate_index_expr(context, target);
+            if (!validate_index_expr(context, target)) {
+                return false;
+            }
+            /* docs/feng-builtin-type.md §5: writes via `[i] =` are only legal
+             * when the indexed array layer is marked writable (`T[]!`). */
+            {
+                InferredExprType object_type =
+                    infer_expr_type(context, target->as.index.object);
+                if (object_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                    object_type.type_ref != NULL &&
+                    object_type.type_ref->kind == FENG_TYPE_REF_ARRAY &&
+                    !object_type.type_ref->array_element_writable) {
+                    return append_assignment_target_not_writable_error(context, target);
+                }
+            }
+            return true;
 
         default:
             return append_assignment_target_not_writable_error(context, target);
@@ -6272,6 +6339,12 @@ static bool expr_matches_expected_type_ref_when_inference_unknown(
         return false;
     }
     if (expr->kind != FENG_EXPR_ARRAY_LITERAL || expected_type_ref->kind != FENG_TYPE_REF_ARRAY) {
+        return false;
+    }
+
+    /* docs/feng-builtin-type.md §5: writable mark must match exactly per layer
+     * for type identity; only explicit casts may strip a `!`. */
+    if (expr->as.array_literal.element_writable != expected_type_ref->array_element_writable) {
         return false;
     }
 
