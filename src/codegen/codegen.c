@@ -205,7 +205,10 @@ typedef struct UserType {
     char   *feng_name;
     char   *c_struct_name;     /* e.g., Feng__feng__examples__User */
     char   *c_desc_name;       /* e.g., FengTypeDesc__feng__examples__User */
-    char   *c_finalizer_name;  /* e.g., Feng__feng__examples__User__finalize */
+    /* Symbol name of the codegen-emitted release_children callback. NULL
+     * when the type has no managed fields (no callback is generated and the
+     * descriptor's release_children slot is left NULL). */
+    char   *c_release_children_name;
     UserField  *fields;
     size_t      field_count;
     UserMethod *methods;
@@ -405,7 +408,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
-static void cg_emit_user_type_definition(CG *cg, const UserType *t);
+static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
 
 /* ===================== error helpers ===================== */
@@ -712,11 +715,12 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     buf_append_fmt(&d, "FengTypeDesc__%s__%s", cg->module_mangle, san);
     t->c_desc_name = d.data;
 
-    Buf f; buf_init(&f);
-    buf_append_fmt(&f, "Feng__%s__%s__finalize", cg->module_mangle, san);
-    t->c_finalizer_name = f.data;
+    /* release_children symbol is materialised lazily in
+     * cg_emit_user_type_definition: types without managed fields don't get a
+     * function emitted and leave the descriptor slot NULL. */
+    t->c_release_children_name = NULL;
     free(san);
-    return t->feng_name && t->c_struct_name && t->c_desc_name && t->c_finalizer_name;
+    return t->feng_name && t->c_struct_name && t->c_desc_name;
 }
 
 static bool cg_register_user_type_members(CG *cg, UserType *t) {
@@ -2707,7 +2711,7 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
 }
 
 /* Emit struct body, finalizer, and descriptor into `type_defs`. */
-static void cg_emit_user_type_definition(CG *cg, const UserType *t) {
+static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
@@ -2718,18 +2722,35 @@ static void cg_emit_user_type_definition(CG *cg, const UserType *t) {
     }
     buf_append_cstr(td, "};\n\n");
 
-    buf_append_fmt(td, "static void %s(void *_self) {\n", t->c_finalizer_name);
-    buf_append_fmt(td, "    struct %s *_o = (struct %s *)_self;\n",
-                   t->c_struct_name, t->c_struct_name);
+    /* release_children: codegen-emitted callback that drops every managed
+     * field of an instance. Only emitted when the type actually holds at
+     * least one managed reference; otherwise the descriptor's
+     * .release_children slot is left NULL so the runtime can skip the call.
+     * This is a separate concept from the user finalizer (which lives in
+     * descriptor.finalizer); see docs/feng-lifetime.md §11/§13.2 and the
+     * FengReleaseChildrenFn typedef in feng_runtime.h. */
     bool any_managed = false;
     for (size_t i = 0; i < t->field_count; i++) {
-        if (cgtype_is_managed(t->fields[i].type)) {
-            buf_append_fmt(td, "    feng_release(_o->%s);\n", t->fields[i].c_name);
-            any_managed = true;
-        }
+        if (cgtype_is_managed(t->fields[i].type)) { any_managed = true; break; }
     }
-    if (!any_managed) buf_append_cstr(td, "    (void)_o;\n");
-    buf_append_cstr(td, "}\n\n");
+    /* UserType is allocated via calloc by the type registry; the cast is safe
+     * because we own the only writer of this field. */
+    if (any_managed) {
+        Buf rcn; buf_init(&rcn);
+        buf_append_fmt(&rcn, "%s__release_children", t->c_struct_name);
+        t->c_release_children_name = rcn.data;
+
+        buf_append_fmt(td, "static void %s(void *_self) {\n",
+                       t->c_release_children_name);
+        buf_append_fmt(td, "    struct %s *_o = (struct %s *)_self;\n",
+                       t->c_struct_name, t->c_struct_name);
+        for (size_t i = 0; i < t->field_count; i++) {
+            if (cgtype_is_managed(t->fields[i].type)) {
+                buf_append_fmt(td, "    feng_release(_o->%s);\n", t->fields[i].c_name);
+            }
+        }
+        buf_append_cstr(td, "}\n\n");
+    }
 
     /* Phase 1B managed-field metadata: enumerate every slot of this type that
      * holds a managed reference. The cycle collector reads this table to do
@@ -2783,13 +2804,14 @@ static void cg_emit_user_type_definition(CG *cg, const UserType *t) {
         "const FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s\",\n"
         "    .size = sizeof(struct %s),\n"
-        "    .finalizer = %s,\n"
+        "    .finalizer = NULL,\n"
+        "    .release_children = %s,\n"
         "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
         t->c_desc_name,
         cg->module_dot_name, t->feng_name,
         t->c_struct_name,
-        t->c_finalizer_name,
+        t->c_release_children_name ? t->c_release_children_name : "NULL",
         is_cyclic ? "true" : "false",
         managed_count);
     if (managed_count > 0U) {
@@ -2934,7 +2956,7 @@ static void cg_dispose(CG *cg) {
         free(ut->feng_name);
         free(ut->c_struct_name);
         free(ut->c_desc_name);
-        free(ut->c_finalizer_name);
+        free(ut->c_release_children_name);
         for (size_t j = 0; j < ut->field_count; j++) {
             free(ut->fields[j].feng_name);
             free(ut->fields[j].c_name);

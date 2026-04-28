@@ -41,7 +41,7 @@ for ff in "$SMOKE_DIR"/*.ff; do
         failures=$((failures + 1))
         continue
     fi
-    if ! $CC $CFLAGS "$cgen" "$RT_LIB" -o "$bin" 2>"$GEN_DIR/$name.cc.log"; then
+    if ! $CC $CFLAGS "$cgen" "$RT_LIB" -lpthread -o "$bin" 2>"$GEN_DIR/$name.cc.log"; then
         echo "FAIL[$name] cc:"
         cat "$GEN_DIR/$name.cc.log"
         failures=$((failures + 1))

@@ -371,6 +371,347 @@ static void test_finalizer_no_resurrection_releases(void) {
     ASSERT(g_finalize_count == 1);
 }
 
+/* --- Phase 1B-3 cycle collector tests ----------------------------------
+ *
+ * The collector internal API lives in src/runtime/feng_runtime_internal.h
+ * (not part of the public ABI), but the test binary links the same runtime
+ * objects so we may include the internal header directly. */
+#include "runtime/feng_runtime_internal.h"
+
+/* A two-field finalizer-less node type: each instance can hold up to two
+ * managed children. We use this to construct arbitrary cyclic graphs.
+ * `is_potentially_cyclic = true` so feng_release routes instances through
+ * the candidate buffer. */
+typedef struct CycNode {
+    FengManagedHeader header;
+    void *child_a;
+    void *child_b;
+} CycNode;
+
+static const FengManagedFieldEntry cyc_node_fields[] = {
+    { offsetof(CycNode, child_a), NULL },
+    { offsetof(CycNode, child_b), NULL },
+};
+
+static const FengTypeDescriptor cyc_node_descriptor = {
+    .name = "test.CycNode",
+    .size = sizeof(CycNode),
+    .finalizer = NULL,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
+/* Same shape but advertises a user finalizer so we can verify that 1B-3
+ * abandons cycles containing finalizers (they leak rather than crash; 1B-4
+ * will replace this branch with two-phase finalizer collection). */
+static int g_cyc_fin_count = 0;
+static void cyc_node_fin_finalize(void *self) {
+    (void)self;
+    ++g_cyc_fin_count;
+}
+
+static const FengTypeDescriptor cyc_node_fin_descriptor = {
+    .name = "test.CycNodeFin",
+    .size = sizeof(CycNode),
+    .finalizer = cyc_node_fin_finalize,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
+/* Build a fresh CycNode with refcount = 1. */
+static CycNode *cyc_new(const FengTypeDescriptor *desc) {
+    CycNode *n = (CycNode *)feng_object_new(desc);
+    return n;
+}
+
+/* Manually link `parent->child_X = child` taking a +1 reference on child. */
+static void cyc_link(void **slot, void *child) {
+    *slot = feng_retain(child);
+}
+
+static void test_cycle_collector_reclaims_two_node_cycle(void) {
+    /* Build A <-> B, then drop external references so only the internal
+     * cycle remains. The collector must free both. */
+    CycNode *a = cyc_new(&cyc_node_descriptor);
+    CycNode *b = cyc_new(&cyc_node_descriptor);
+
+    cyc_link(&a->child_a, b); /* a holds +1 on b -> b.rc = 2 */
+    cyc_link(&b->child_a, a); /* b holds +1 on a -> a.rc = 2 */
+
+    /* Drop external refs. Each release brings rc back to 1 (cycle internal
+     * refs remain) and enqueues the candidate. */
+    feng_release(a);
+    feng_release(b);
+
+    /* Force collection irrespective of threshold. */
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    /* If we got here without a use-after-free / leak crash, the cycle was
+     * reclaimed. We can't assert "memory was freed" without a tracker; the
+     * shutdown call below would catch double-frees on the candidate buffer. */
+    feng_cycle_runtime_shutdown();
+}
+
+static void test_cycle_collector_does_not_collect_externally_referenced(void) {
+    /* Same A <-> B cycle, but keep an external reference on A. The
+     * collector must NOT free either. */
+    CycNode *a = cyc_new(&cyc_node_descriptor);
+    CycNode *b = cyc_new(&cyc_node_descriptor);
+
+    cyc_link(&a->child_a, b); /* a.rc=1, b.rc=2 */
+    cyc_link(&b->child_a, a); /* a.rc=2, b.rc=2 */
+
+    /* Drop b's external ref. b's true rc becomes 1 (only a holds it).
+     * a's true rc remains 2 (test local + b's link). */
+    feng_release(b);
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    /* After collection, scan must have classified a and b as BLACK
+     * (externally reachable through the test-local ref on a) and restored
+     * both refcounts. */
+    ASSERT(a->header.refcount == 2U);
+    ASSERT(b->header.refcount == 1U);
+
+    /* Tear down without leaking: cyc_node has no user finalizer, so we
+     * manually clear every internal link before dropping references. */
+    void *b_via_a = a->child_a; a->child_a = NULL;
+    void *a_via_b = b->child_a; b->child_a = NULL;
+    feng_release(a_via_b); /* a.rc 2 -> 1 (external still held) */
+    feng_release(b_via_a); /* b.rc 1 -> 0 -> freed */
+    feng_release(a);       /* a.rc 1 -> 0 -> freed */
+
+    feng_cycle_runtime_shutdown();
+}
+
+static void test_cycle_collector_reclaims_cycle_with_finalizer(void) {
+    /* Build A <-> B with finalizer-bearing descriptor. 1B-4 must invoke
+     * each finalizer exactly once and free both nodes (no resurrection). */
+    g_cyc_fin_count = 0;
+    CycNode *a = cyc_new(&cyc_node_fin_descriptor);
+    CycNode *b = cyc_new(&cyc_node_fin_descriptor);
+
+    cyc_link(&a->child_a, b);
+    cyc_link(&b->child_a, a);
+
+    feng_release(a);
+    feng_release(b);
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    /* Both finalizers ran exactly once; memory has been freed. (We cannot
+     * dereference a or b — they are gone. A leak / UAF would be caught by
+     * the shutdown drain below or by a subsequent test's allocator state.) */
+    ASSERT(g_cyc_fin_count == 2);
+
+    feng_cycle_runtime_shutdown();
+}
+
+/* --- Phase 1B-4 resurrection tests ------------------------------------- */
+
+/* Slots and counters used by the resurrecting finalizers below. The
+ * finalizers consult `g_cyc_res_*_enabled` so we can disable resurrection
+ * during teardown to avoid an infinite resurrection loop. */
+static CycNode *g_cyc_res_slot_self = NULL;
+static int g_cyc_res_self_fin_count = 0;
+static bool g_cyc_res_self_enabled = false;
+
+static void cyc_node_res_self_finalize(void *self) {
+    ++g_cyc_res_self_fin_count;
+    if (!g_cyc_res_self_enabled) {
+        return;
+    }
+    /* Resurrect self by publishing into a global and bumping the rc. */
+    g_cyc_res_slot_self = (CycNode *)self;
+    feng_retain(self);
+}
+
+static const FengTypeDescriptor cyc_node_res_self_descriptor = {
+    .name = "test.CycNodeResSelf",
+    .size = sizeof(CycNode),
+    .finalizer = cyc_node_res_self_finalize,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
+static void test_cycle_collector_finalizer_resurrects_self(void) {
+    /* A <-> B cycle. A's finalizer resurrects A by publishing to a global.
+     * Per §13.2 BFS propagation, B (held by A) also survives.
+     * After collection: both A and B are BLACK with restored refcounts. */
+    g_cyc_res_self_fin_count = 0;
+    g_cyc_fin_count = 0;
+    g_cyc_res_slot_self = NULL;
+    g_cyc_res_self_enabled = true;
+
+    CycNode *a = cyc_new(&cyc_node_res_self_descriptor);
+    CycNode *b = cyc_new(&cyc_node_fin_descriptor);
+
+    cyc_link(&a->child_a, b);
+    cyc_link(&b->child_a, a);
+
+    feng_release(a); /* drop external refs; both become candidates */
+    feng_release(b);
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    /* Both finalizers ran exactly once. */
+    ASSERT(g_cyc_res_self_fin_count == 1);
+    ASSERT(g_cyc_fin_count == 1);
+    ASSERT(g_cyc_res_slot_self == a);
+    /* A and B both survive (BFS from A reached B via a->child_a). Cycle
+     * links are preserved because both endpoints survive. */
+    ASSERT(a->child_a == b);
+    ASSERT(b->child_a == a);
+    /* a.rc = global(1) + b->child_a(1) = 2; b.rc = a->child_a(1) = 1. */
+    ASSERT(a->header.refcount == 2U);
+    ASSERT(b->header.refcount == 1U);
+
+    /* Teardown: disable resurrection, then break the cycle and drop refs. */
+    g_cyc_res_self_enabled = false;
+    g_cyc_res_slot_self = NULL;
+    void *b_via_a = a->child_a; a->child_a = NULL;
+    void *a_via_b = b->child_a; b->child_a = NULL;
+    feng_release(a_via_b); /* a.rc 2 -> 1 */
+    feng_release(b_via_a); /* b.rc 1 -> 0 -> finalizer + free */
+    feng_release(a);       /* a.rc 1 -> 0 -> finalizer (no-op) + free */
+    ASSERT(g_cyc_res_self_fin_count == 2); /* +1 from final release */
+    ASSERT(g_cyc_fin_count == 2);          /* +1 from b's free */
+
+    feng_cycle_runtime_shutdown();
+}
+
+/* Resurrect-partner finalizer: when armed, publishes a designated target
+ * into a global. This is mounted on a dedicated descriptor so we can build
+ * a topology where only the target is reachable as a survivor seed. */
+static CycNode *g_cyc_res_partner_target = NULL;
+static CycNode *g_cyc_res_slot_partner = NULL;
+static int g_cyc_res_partner_fin_count = 0;
+static bool g_cyc_res_partner_enabled = false;
+
+static void cyc_node_res_partner_finalize(void *self) {
+    (void)self;
+    ++g_cyc_res_partner_fin_count;
+    if (!g_cyc_res_partner_enabled || g_cyc_res_partner_target == NULL) {
+        return;
+    }
+    g_cyc_res_slot_partner = g_cyc_res_partner_target;
+    feng_retain(g_cyc_res_partner_target);
+}
+
+static const FengTypeDescriptor cyc_node_res_partner_descriptor = {
+    .name = "test.CycNodeResPartner",
+    .size = sizeof(CycNode),
+    .finalizer = cyc_node_res_partner_finalize,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
+static void test_cycle_collector_partial_resurrection_frees_unsurvived(void) {
+    /* Topology: cycle A <-> B (both finalizer-bearing), plus a leaf D
+     * reachable only from A via a->child_b. D has no outgoing managed
+     * refs. A's finalizer (res-partner) resurrects D when armed. B has a
+     * plain finalizer.
+     *
+     * Pre-collection refs:
+     *   A.rc = 2 (test-local + B->child_a)
+     *   B.rc = 2 (test-local + A->child_a)
+     *   D.rc = 1 (A->child_b)
+     *
+     * After dropping external refs on A and B, the cycle becomes garbage
+     * and D is reachable only from white A → D joins the white set too.
+     * A's finalizer publishes D externally; A and B do NOT resurrect
+     * themselves.
+     *
+     * Phase 1.5: D.rc(1, from global) > intra_in(1 from A) ? 1 > 1 = false.
+     *
+     * Wait — both A→D and the global ref give D rc=2 post Phase 1, with
+     * intra_in[D]=1 (A still points to D). 2 > 1, so D is a survivor seed.
+     * D has no children, so BFS stops. A and B are not survived → freed.
+     * Sanitise: A's child_b slot points to D (survivor). When freeing A,
+     * the free→survivor pass dec's D.rc by 1. After collection: D.rc = 1
+     * (just the global). */
+    g_cyc_res_partner_fin_count = 0;
+    g_cyc_fin_count = 0;
+    g_cyc_res_slot_partner = NULL;
+    g_cyc_res_partner_target = NULL;
+    g_cyc_res_partner_enabled = false;
+
+    CycNode *a = cyc_new(&cyc_node_res_partner_descriptor);
+    CycNode *b = cyc_new(&cyc_node_fin_descriptor);
+    CycNode *d = cyc_new(&cyc_node_fin_descriptor);
+
+    cyc_link(&a->child_a, b); /* A -> B */
+    cyc_link(&b->child_a, a); /* B -> A (closes cycle) */
+    cyc_link(&a->child_b, d); /* A -> D (leaf) */
+
+    /* We hold one external on D to simulate "D is referenced only via A"?
+     * No — we want D to be unreachable except via the cycle. Drop our
+     * external on D so its rc reflects only A's link. */
+    feng_release(d); /* d.rc 2 -> 1 (only A->child_b remains) */
+
+    g_cyc_res_partner_target = d;
+    g_cyc_res_partner_enabled = true;
+
+    feng_release(a); /* a.rc 2 -> 1, enqueued */
+    feng_release(b); /* b.rc 2 -> 1, enqueued */
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    /* A's finalizer ran (and resurrected D). B's finalizer ran. D may or
+     * may not have had its finalizer run before resurrection-classification
+     * — current implementation runs ALL whites' finalizers in Phase 1
+     * regardless of whether they will survive. So D.fin also ran. */
+    ASSERT(g_cyc_res_partner_fin_count == 1);
+    /* B is fin-desc (g_cyc_fin_count++); D is also fin-desc and is a white
+     * member, so its finalizer also ran. Total: B + D = 2. */
+    ASSERT(g_cyc_fin_count == 2);
+    ASSERT(g_cyc_res_slot_partner == d);
+    /* D survived; its rc reflects only the global hold (A->D edge died
+     * with A). */
+    ASSERT(d->header.refcount == 1U);
+
+    /* Teardown: disable, drop the resurrection ref. */
+    g_cyc_res_partner_enabled = false;
+    g_cyc_res_partner_target = NULL;
+    g_cyc_res_slot_partner = NULL;
+    feng_release(d); /* d.rc 1 -> 0 -> finalizer + free. */
+    ASSERT(g_cyc_fin_count == 3);
+
+    feng_cycle_runtime_shutdown();
+}
+
+static void test_cycle_collector_acyclic_object_never_enqueued(void) {
+    /* Acyclic descriptor: feng_release must take the ARC fast path and NEVER
+     * acquire the cycle mutex. We can verify the latter indirectly by
+     * confirming feng_cycle_collect_locked has nothing to do after a normal
+     * retain/release cycle on test_object_descriptor (which has
+     * is_potentially_cyclic == false). */
+    g_finalize_count = 0;
+    TestObject *o = (TestObject *)feng_object_new(&test_object_descriptor);
+    feng_retain(o);
+    feng_release(o);
+    feng_release(o);
+    ASSERT(g_finalize_count == 1);
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked(); /* must be a no-op (empty buffer) */
+    feng_cycle_unlock();
+}
+
 int main(void) {
     test_object_retain_release();
     test_retain_release_nullsafe();
@@ -387,6 +728,12 @@ int main(void) {
     test_finalizer_resurrection_then_release();
     test_finalizer_resurrection_reruns_on_next_release();
     test_finalizer_no_resurrection_releases();
+    test_cycle_collector_reclaims_two_node_cycle();
+    test_cycle_collector_does_not_collect_externally_referenced();
+    test_cycle_collector_reclaims_cycle_with_finalizer();
+    test_cycle_collector_finalizer_resurrects_self();
+    test_cycle_collector_partial_resurrection_frees_unsurvived();
+    test_cycle_collector_acyclic_object_never_enqueued();
 
     fputs("test_runtime: ok\n", stdout);
     return 0;

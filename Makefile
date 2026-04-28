@@ -2,6 +2,9 @@ CC ?= cc
 CPPFLAGS ?= -Isrc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 LDFLAGS ?=
+# Phase 1B cycle collector relies on pthread (recursive mutex). Linked into
+# every binary that pulls in libfeng_runtime objects.
+RUNTIME_LDLIBS ?= -lpthread
 DEPFLAGS = -MMD -MP
 
 BUILD_DIR := build
@@ -67,7 +70,7 @@ $(BIN_DIR)/test_semantic: $(TEST_SEMANTIC_OBJS)
 
 $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) $(RUNTIME_LDLIBS) -o $@
 
 $(RUNTIME_LIB): $(RUNTIME_OBJS)
 	@mkdir -p $(LIB_DIR)
