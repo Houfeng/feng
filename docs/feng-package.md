@@ -74,7 +74,7 @@ version:0.1.0
 target:bin
 src:src/
 out:build/
-dependency:base@^1.0.0
+dependency:base@1.0.0
 ```
 
 示例（分发包，同时携带两层）:

@@ -124,7 +124,7 @@ extern fn ssl_connect(fd: int): int;
 将解析完成的依赖图转换为编译器参数:
 
 ```bash
-feng src/*.ff   --pkg ~/.feng/cache/utils-1.0.0.fb   --pkg ~/.feng/cache/base-2.1.0.fb
+feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.fb
 ```
 
 构建工具传入的是**已确定的 `.fb` 路径列表**,不传包名、版本或搜索路径。编译器只认路径。

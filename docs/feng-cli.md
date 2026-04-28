@@ -185,7 +185,7 @@ feng deps add <pkg-name[@version]> [<path>]
 
 选项:
 
-- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录并重新拉取该依赖。
+- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录并重新拉取该依赖，省略版本时将安装最新版。
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 说明:
