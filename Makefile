@@ -11,27 +11,43 @@ BIN_DIR := $(BUILD_DIR)/bin
 LEXER_SRCS := $(wildcard src/lexer/*.c)
 PARSER_SRCS := $(wildcard src/parser/*.c)
 SEMANTIC_SRCS := $(wildcard src/semantic/*.c)
+CODEGEN_SRCS := $(wildcard src/codegen/*.c)
+RUNTIME_SRCS := $(wildcard src/runtime/*.c)
 CLI_SRCS := $(wildcard src/cli/*.c)
 TEST_LEXER_SRCS := $(wildcard test/lexer/*.c)
 TEST_PARSER_SRCS := $(wildcard test/parser/*.c)
 TEST_SEMANTIC_SRCS := $(wildcard test/semantic/*.c)
+TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 
-CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CLI_SRCS))
+CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(CLI_SRCS))
+RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS))
 TEST_LEXER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(TEST_LEXER_SRCS))
 TEST_PARSER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(TEST_PARSER_SRCS))
 TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(TEST_SEMANTIC_SRCS))
-DEPS := $(CLI_OBJS:.o=.d) $(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) $(TEST_SEMANTIC_OBJS:.o=.d)
+TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIME_SRCS))
+DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) \
+	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
+	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d)
 
-.PHONY: all cli test clean
+LIB_DIR := $(BUILD_DIR)/lib
+RUNTIME_LIB := $(LIB_DIR)/libfeng_runtime.a
 
-all: cli
+.PHONY: all cli runtime test smoke clean
+
+all: cli runtime
 
 cli: $(BIN_DIR)/feng
 
-test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic
+runtime: $(RUNTIME_LIB)
+
+test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime smoke
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
 	$(BIN_DIR)/test_semantic
+	$(BIN_DIR)/test_runtime
+
+smoke: cli runtime
+	./scritps/run_smoke.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)
@@ -48,6 +64,14 @@ $(BIN_DIR)/test_parser: $(TEST_PARSER_OBJS)
 $(BIN_DIR)/test_semantic: $(TEST_SEMANTIC_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_SEMANTIC_OBJS) $(LDFLAGS) -o $@
+
+$(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) -o $@
+
+$(RUNTIME_LIB): $(RUNTIME_OBJS)
+	@mkdir -p $(LIB_DIR)
+	$(AR) rcs $@ $(RUNTIME_OBJS)
 
 $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)

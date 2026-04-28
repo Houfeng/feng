@@ -7,6 +7,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semantic/semantic.h"
+#include "codegen/codegen.h"
 
 #define FENG_COLOR_RED "\x1b[31m"
 #define FENG_COLOR_RESET "\x1b[0m"
@@ -43,6 +44,7 @@ static void print_usage(const char *program) {
     fprintf(stderr, "  %s parse <file>\n", program);
     fprintf(stderr, "  %s semantic [--target=bin|lib] <file> [more files...]\n", program);
     fprintf(stderr, "  %s check [--target=bin|lib] <file> [more files...]\n", program);
+    fprintf(stderr, "  %s compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stderr, "\n--target defaults to 'bin' (requires 'main(args: string[])'); use 'lib' to skip the main entry check.\n");
 }
 
@@ -629,6 +631,82 @@ done:
     return exit_code;
 }
 
+static int run_compile_command(const char *path,
+                               FengCompileTarget target,
+                               const char *emit_c_path) {
+    LoadedSource src = {0};
+    const FengProgram *prog_ptr = NULL;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    int exit_code = 0;
+
+    src.path = path;
+    src.source = read_entire_file(path, &src.source_length);
+    if (src.source == NULL) {
+        fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
+        return 1;
+    }
+    {
+        FengParseError perr;
+        if (!feng_parse_source(src.source, src.source_length, path,
+                               &src.program, &perr)) {
+            print_diagnostic(stderr, path, "parse error", perr.message,
+                             &perr.token, src.source, src.source_length);
+            exit_code = 1;
+            goto cleanup;
+        }
+    }
+    prog_ptr = src.program;
+    if (!feng_semantic_analyze(&prog_ptr, 1U, target,
+                               &analysis, &errors, &error_count)) {
+        for (size_t i = 0; i < error_count; ++i) {
+            if (i > 0) fputc('\n', stderr);
+            print_diagnostic(stderr, errors[i].path, "semantic error",
+                             errors[i].message, &errors[i].token,
+                             src.source, src.source_length);
+        }
+        exit_code = 1;
+        goto cleanup;
+    }
+    if (!feng_codegen_emit_program(analysis, target, NULL, &out, &cgerr)) {
+        print_diagnostic(stderr, path, "codegen error",
+                         cgerr.message ? cgerr.message : "unknown",
+                         &cgerr.token, src.source, src.source_length);
+        exit_code = 1;
+        goto cleanup;
+    }
+    if (emit_c_path != NULL && strcmp(emit_c_path, "-") != 0) {
+        FILE *f = fopen(emit_c_path, "wb");
+        if (!f) {
+            fprintf(stderr, "failed to open %s for write: %s\n",
+                    emit_c_path, strerror(errno));
+            exit_code = 1;
+            goto cleanup;
+        }
+        size_t w = fwrite(out.c_source, 1U, out.c_source_length, f);
+        fclose(f);
+        if (w != out.c_source_length) {
+            fprintf(stderr, "failed to write %s\n", emit_c_path);
+            exit_code = 1;
+            goto cleanup;
+        }
+    } else {
+        fwrite(out.c_source, 1U, out.c_source_length, stdout);
+    }
+
+cleanup:
+    feng_codegen_error_free(&cgerr);
+    feng_codegen_output_free(&out);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(src.program);
+    free(src.source);
+    return exit_code;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         print_usage(argv[0]);
@@ -686,6 +764,33 @@ int main(int argc, char **argv) {
             return 1;
         }
         return run_check_command(file_argc, file_argv, target);
+    }
+    if (strcmp(argv[1], "compile") == 0) {
+        FengCompileTarget target = FENG_COMPILE_TARGET_BIN;
+        const char *emit_c = NULL;
+        int file_argc = argc - 2;
+        char **file_argv = argv + 2;
+        while (file_argc > 0 && strncmp(file_argv[0], "--", 2) == 0) {
+            if (strncmp(file_argv[0], "--target", 8) == 0) {
+                if (!parse_target_option(file_argv[0], &target)) {
+                    print_usage(argv[0]);
+                    return 1;
+                }
+            } else if (strncmp(file_argv[0], "--emit-c=", 9) == 0) {
+                emit_c = file_argv[0] + 9;
+            } else {
+                fprintf(stderr, "unknown option: %s\n", file_argv[0]);
+                print_usage(argv[0]);
+                return 1;
+            }
+            file_argc -= 1;
+            file_argv += 1;
+        }
+        if (file_argc != 1) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        return run_compile_command(file_argv[0], target, emit_c);
     }
 
     fprintf(stderr, "unknown command: %s\n", argv[1]);

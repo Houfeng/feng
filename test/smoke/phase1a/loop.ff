@@ -1,0 +1,12 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn main(args: string[]) {
+    var i: i32 = 0;
+    while i < 3 {
+        puts("tick");
+        i = i + 1;
+    }
+}

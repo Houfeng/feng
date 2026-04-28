@@ -1,0 +1,1641 @@
+/* Feng codegen implementation. See codegen.h for the supported feature slice.
+ *
+ * Production-grade rules followed:
+ *   - All I/O strings are heap-allocated and freed; no leaks on the success path.
+ *   - All emit_* paths propagate errors via the codegen context; once an error
+ *     is set, subsequent emits become no-ops and the entry returns false.
+ *   - Generated C is portable C11; no compiler-specific extensions are emitted.
+ *   - String literal allocations are deduplicated per literal site via a
+ *     file-static FengString* slot, so each literal allocates exactly once.
+ *   - Strings are managed objects; managed locals are released on scope exit
+ *     (incl. returns and break/continue paths via cleanup-frame walking).
+ */
+#include "codegen/codegen.h"
+
+#include <ctype.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "lexer/token.h"
+#include "parser/parser.h"
+
+/* ===================== string buffer ===================== */
+
+typedef struct Buf {
+    char  *data;
+    size_t length;
+    size_t capacity;
+} Buf;
+
+static void buf_init(Buf *b) {
+    b->data = NULL;
+    b->length = 0;
+    b->capacity = 0;
+}
+
+static void buf_free(Buf *b) {
+    free(b->data);
+    b->data = NULL;
+    b->length = 0;
+    b->capacity = 0;
+}
+
+static bool buf_reserve(Buf *b, size_t extra) {
+    size_t need = b->length + extra + 1;
+    if (need <= b->capacity) return true;
+    size_t cap = b->capacity ? b->capacity : 64;
+    while (cap < need) cap *= 2;
+    char *p = realloc(b->data, cap);
+    if (!p) return false;
+    b->data = p;
+    b->capacity = cap;
+    return true;
+}
+
+static void buf_append(Buf *b, const char *s, size_t n) {
+    if (!buf_reserve(b, n)) return;
+    memcpy(b->data + b->length, s, n);
+    b->length += n;
+    b->data[b->length] = '\0';
+}
+
+static void buf_append_cstr(Buf *b, const char *s) {
+    buf_append(b, s, strlen(s));
+}
+
+static void buf_append_fmt(Buf *b, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (n < 0) { va_end(ap2); return; }
+    if (!buf_reserve(b, (size_t)n)) { va_end(ap2); return; }
+    vsnprintf(b->data + b->length, b->capacity - b->length, fmt, ap2);
+    b->length += (size_t)n;
+    va_end(ap2);
+}
+
+/* ===================== type kinds ===================== */
+
+typedef enum CGTypeKind {
+    CG_TYPE_UNKNOWN = 0,
+    CG_TYPE_VOID,
+    CG_TYPE_BOOL,
+    CG_TYPE_I8, CG_TYPE_I16, CG_TYPE_I32, CG_TYPE_I64,
+    CG_TYPE_U8, CG_TYPE_U16, CG_TYPE_U32, CG_TYPE_U64,
+    CG_TYPE_F32, CG_TYPE_F64,
+    CG_TYPE_STRING,
+    CG_TYPE_ARRAY,        /* element kind held separately when needed */
+    CG_TYPE_OBJECT        /* user-defined type — Phase 1A iter 2 */
+} CGTypeKind;
+
+typedef struct CGType {
+    CGTypeKind kind;
+    /* For arrays: element CGType (heap-owned). NULL otherwise. */
+    struct CGType *element;
+} CGType;
+
+static CGType *cgtype_new(CGTypeKind k) {
+    CGType *t = calloc(1, sizeof *t);
+    if (t) t->kind = k;
+    return t;
+}
+
+static void cgtype_free(CGType *t) {
+    if (!t) return;
+    cgtype_free(t->element);
+    free(t);
+}
+
+static CGType *cgtype_clone(const CGType *t) {
+    if (!t) return NULL;
+    CGType *c = cgtype_new(t->kind);
+    if (!c) return NULL;
+    c->element = cgtype_clone(t->element);
+    return c;
+}
+
+static bool cgtype_is_managed(const CGType *t) {
+    if (!t) return false;
+    return t->kind == CG_TYPE_STRING || t->kind == CG_TYPE_ARRAY ||
+           t->kind == CG_TYPE_OBJECT;
+}
+
+static bool cgtype_is_integer(CGTypeKind k) {
+    return k == CG_TYPE_I8 || k == CG_TYPE_I16 || k == CG_TYPE_I32 || k == CG_TYPE_I64 ||
+           k == CG_TYPE_U8 || k == CG_TYPE_U16 || k == CG_TYPE_U32 || k == CG_TYPE_U64;
+}
+
+static bool cgtype_is_signed(CGTypeKind k) {
+    return k == CG_TYPE_I8 || k == CG_TYPE_I16 || k == CG_TYPE_I32 || k == CG_TYPE_I64;
+}
+
+static bool cgtype_is_float(CGTypeKind k) {
+    return k == CG_TYPE_F32 || k == CG_TYPE_F64;
+}
+
+static bool cgtype_is_numeric(CGTypeKind k) {
+    return cgtype_is_integer(k) || cgtype_is_float(k);
+}
+
+static int cgtype_int_rank(CGTypeKind k) {
+    switch (k) {
+        case CG_TYPE_I8: case CG_TYPE_U8:  return 1;
+        case CG_TYPE_I16: case CG_TYPE_U16: return 2;
+        case CG_TYPE_I32: case CG_TYPE_U32: return 3;
+        case CG_TYPE_I64: case CG_TYPE_U64: return 4;
+        default: return 0;
+    }
+}
+
+static const char *cgtype_to_c(CGTypeKind k) {
+    switch (k) {
+        case CG_TYPE_VOID: return "void";
+        case CG_TYPE_BOOL: return "bool";
+        case CG_TYPE_I8: return "int8_t";
+        case CG_TYPE_I16: return "int16_t";
+        case CG_TYPE_I32: return "int32_t";
+        case CG_TYPE_I64: return "int64_t";
+        case CG_TYPE_U8: return "uint8_t";
+        case CG_TYPE_U16: return "uint16_t";
+        case CG_TYPE_U32: return "uint32_t";
+        case CG_TYPE_U64: return "uint64_t";
+        case CG_TYPE_F32: return "float";
+        case CG_TYPE_F64: return "double";
+        case CG_TYPE_STRING: return "FengString *";
+        case CG_TYPE_ARRAY: return "FengArray *";
+        case CG_TYPE_OBJECT: return "void *";
+        default: return "void";
+    }
+}
+
+/* ===================== local scope ===================== */
+
+typedef struct Local {
+    char     *name;     /* Feng identifier */
+    char     *c_name;   /* mangled C identifier, unique within the function */
+    CGType   *type;
+    bool      is_param; /* parameters are not released by the frame (caller owns) */
+} Local;
+
+typedef struct Scope {
+    struct Scope *parent;
+    Local        *items;
+    size_t        count;
+    size_t        capacity;
+    bool          is_loop;       /* this scope is a loop body root */
+    /* Each scope frame also holds a list of indices into items[] in original
+     * insertion order; release-on-exit walks them in reverse. */
+} Scope;
+
+static Scope *scope_push(Scope *parent) {
+    Scope *s = calloc(1, sizeof *s);
+    if (!s) return NULL;
+    s->parent = parent;
+    return s;
+}
+
+static void scope_pop_free(Scope *s) {
+    if (!s) return;
+    for (size_t i = 0; i < s->count; i++) {
+        free(s->items[i].name);
+        free(s->items[i].c_name);
+        cgtype_free(s->items[i].type);
+    }
+    free(s->items);
+    free(s);
+}
+
+static bool scope_add(Scope *s, const char *name, const char *c_name,
+                      CGType *type, bool is_param) {
+    if (s->count + 1 > s->capacity) {
+        size_t cap = s->capacity ? s->capacity * 2 : 8;
+        Local *p = realloc(s->items, cap * sizeof *p);
+        if (!p) return false;
+        s->items = p;
+        s->capacity = cap;
+    }
+    Local *l = &s->items[s->count++];
+    l->name = strdup(name);
+    l->c_name = strdup(c_name);
+    l->type = type;
+    l->is_param = is_param;
+    return l->name && l->c_name;
+}
+
+static const Local *scope_lookup(const Scope *s, const char *name, size_t len) {
+    for (const Scope *cur = s; cur; cur = cur->parent) {
+        for (size_t i = cur->count; i > 0; i--) {
+            const Local *l = &cur->items[i - 1];
+            if (strlen(l->name) == len && memcmp(l->name, name, len) == 0) {
+                return l;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* ===================== codegen context ===================== */
+
+typedef struct ExternFn {
+    char    *name;          /* Feng name, also C symbol */
+    CGType **param_types;
+    size_t   param_count;
+    CGType  *return_type;
+} ExternFn;
+
+typedef struct FreeFn {
+    char     *feng_name;
+    char     *c_name;
+    CGType  **param_types;
+    char    **param_names;
+    size_t    param_count;
+    CGType   *return_type;
+    const FengDecl *decl;
+} FreeFn;
+
+typedef struct CG {
+    /* Output sections concatenated at the end. */
+    Buf headers;        /* #include / extern decls / forward decls */
+    Buf type_defs;      /* struct/enum defs (Phase 1A iter 2) */
+    Buf statics;        /* static caches: literal slots */
+    Buf fn_protos;      /* forward declarations for free fn / methods */
+    Buf fn_defs;        /* function bodies */
+
+    /* Per-function emission state. */
+    Buf      *cur_body; /* current function body buffer */
+    Scope    *cur_scope;
+    int       tmp_counter;
+    int       label_counter;
+    int       loop_depth;
+    bool      in_loop_with_break;
+    CGType   *cur_return_type;
+    bool      cur_fn_is_main;
+
+    /* Module info. */
+    char     *module_mangle;     /* e.g., "feng__examples" */
+    char     *module_dot_name;   /* e.g., "feng.examples" */
+
+    /* Symbol tables. */
+    ExternFn *externs;
+    size_t    extern_count;
+    size_t    extern_capacity;
+    FreeFn   *free_fns;
+    size_t    free_fn_count;
+    size_t    free_fn_capacity;
+
+    /* String literal cache: each unique literal (by content) gets one static. */
+    struct {
+        char  *content;   /* raw bytes (may include NULs not supported in 1A) */
+        size_t length;
+        char  *c_var;     /* generated static var name */
+    } *string_literals;
+    size_t string_literal_count;
+    size_t string_literal_capacity;
+
+    /* Error state. */
+    FengCodegenError *error;
+    bool failed;
+} CG;
+
+/* Forward decls. */
+static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
+                            CGType **out_type);
+static bool cg_emit_block(CG *cg, const FengBlock *block);
+static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
+typedef struct ExprResult ExprResult;
+static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
+static void cg_release_scope(CG *cg, const Scope *scope);
+
+/* ===================== error helpers ===================== */
+
+static char *cg_vformat(const char *fmt, va_list ap) {
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    if (n < 0) { va_end(ap2); return NULL; }
+    char *p = malloc((size_t)n + 1);
+    if (p) vsnprintf(p, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    return p;
+}
+
+static bool cg_fail(CG *cg, FengToken token, const char *fmt, ...) {
+    if (cg->failed) return false;
+    cg->failed = true;
+    if (cg->error) {
+        va_list ap;
+        va_start(ap, fmt);
+        cg->error->message = cg_vformat(fmt, ap);
+        va_end(ap);
+        cg->error->token = token;
+    }
+    return false;
+}
+
+/* ===================== mangling ===================== */
+
+/* Replace any non-alphanumeric/underscore byte in `src` with '_' to keep C
+ * identifiers valid. Caller frees. */
+static char *cg_sanitize(const char *src, size_t len) {
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)src[i];
+        out[i] = (isalnum(c) || c == '_') ? (char)c : '_';
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static char *cg_module_mangle(const FengSlice *segments, size_t count) {
+    Buf b; buf_init(&b);
+    for (size_t i = 0; i < count; i++) {
+        if (i) buf_append_cstr(&b, "__");
+        char *seg = cg_sanitize(segments[i].data, segments[i].length);
+        if (!seg) { buf_free(&b); return NULL; }
+        buf_append_cstr(&b, seg);
+        free(seg);
+    }
+    return b.data ? b.data : strdup("");
+}
+
+static char *cg_module_dot(const FengSlice *segments, size_t count) {
+    Buf b; buf_init(&b);
+    for (size_t i = 0; i < count; i++) {
+        if (i) buf_append_cstr(&b, ".");
+        buf_append(&b, segments[i].data, segments[i].length);
+    }
+    return b.data ? b.data : strdup("");
+}
+
+static char *cg_fn_mangle(const char *module_mangle, const FengSlice *name) {
+    Buf b; buf_init(&b);
+    buf_append_cstr(&b, "feng__");
+    buf_append_cstr(&b, module_mangle);
+    buf_append_cstr(&b, "__");
+    char *n = cg_sanitize(name->data, name->length);
+    if (!n) { buf_free(&b); return NULL; }
+    buf_append_cstr(&b, n);
+    free(n);
+    return b.data;
+}
+
+static char *cg_local_cname(CG *cg, const char *feng_name, size_t len) {
+    char *base = cg_sanitize(feng_name, len);
+    if (!base) return NULL;
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "_l_%s_%d", base, cg->tmp_counter++);
+    free(base);
+    return b.data;
+}
+
+static char *cg_fresh_temp(CG *cg, const char *prefix) {
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "%s%d", prefix, cg->tmp_counter++);
+    return b.data;
+}
+
+/* ===================== type resolution ===================== */
+
+typedef struct BuiltinTypeMap {
+    const char *name;
+    CGTypeKind  kind;
+} BuiltinTypeMap;
+
+static const BuiltinTypeMap k_builtin_types[] = {
+    {"void",   CG_TYPE_VOID},
+    {"bool",   CG_TYPE_BOOL},
+    {"i8",     CG_TYPE_I8},   {"i16", CG_TYPE_I16},
+    {"i32",    CG_TYPE_I32},  {"i64", CG_TYPE_I64},
+    {"u8",     CG_TYPE_U8},   {"u16", CG_TYPE_U16},
+    {"u32",    CG_TYPE_U32},  {"u64", CG_TYPE_U64},
+    {"int",    CG_TYPE_I32},  {"uint", CG_TYPE_U32},
+    {"f32",    CG_TYPE_F32},  {"f64", CG_TYPE_F64},
+    {"float",  CG_TYPE_F32},  {"double", CG_TYPE_F64},
+    {"string", CG_TYPE_STRING},
+};
+
+static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
+                            CGType **out_type) {
+    *out_type = NULL;
+    if (!ref) {
+        *out_type = cgtype_new(CG_TYPE_VOID);
+        return *out_type != NULL;
+    }
+    if (ref->kind == FENG_TYPE_REF_NAMED) {
+        if (ref->as.named.segment_count != 1) {
+            return cg_fail(cg, ref->token,
+                "codegen: qualified type names not supported in Phase 1A");
+        }
+        const FengSlice *seg = &ref->as.named.segments[0];
+        for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; i++) {
+            const BuiltinTypeMap *m = &k_builtin_types[i];
+            if (strlen(m->name) == seg->length &&
+                memcmp(m->name, seg->data, seg->length) == 0) {
+                *out_type = cgtype_new(m->kind);
+                return *out_type != NULL;
+            }
+        }
+        FengToken tk = fallback ? *fallback : ref->token;
+        (void)tk;
+        return cg_fail(cg, ref->token,
+            "codegen: user-defined type '%.*s' not yet supported in this iteration",
+            (int)seg->length, seg->data);
+    }
+    if (ref->kind == FENG_TYPE_REF_ARRAY) {
+        CGType *elem = NULL;
+        if (!cg_resolve_type(cg, ref->as.inner, fallback, &elem)) return false;
+        CGType *t = cgtype_new(CG_TYPE_ARRAY);
+        if (!t) { cgtype_free(elem); return false; }
+        t->element = elem;
+        *out_type = t;
+        return true;
+    }
+    return cg_fail(cg, ref->token,
+        "codegen: pointer types not supported in Phase 1A");
+}
+
+/* ===================== string literal cache ===================== */
+
+static const char *cg_string_literal_var(CG *cg, const char *content, size_t len) {
+    for (size_t i = 0; i < cg->string_literal_count; i++) {
+        if (cg->string_literals[i].length == len &&
+            memcmp(cg->string_literals[i].content, content, len) == 0) {
+            return cg->string_literals[i].c_var;
+        }
+    }
+    if (cg->string_literal_count + 1 > cg->string_literal_capacity) {
+        size_t cap = cg->string_literal_capacity ? cg->string_literal_capacity * 2 : 8;
+        void *p = realloc(cg->string_literals, cap * sizeof *cg->string_literals);
+        if (!p) return NULL;
+        cg->string_literals = p;
+        cg->string_literal_capacity = cap;
+    }
+    char *cv = NULL;
+    {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "_feng_str_lit_%zu", cg->string_literal_count);
+        cv = b.data;
+    }
+    char *contents_copy = malloc(len + 1);
+    if (!contents_copy || !cv) { free(cv); free(contents_copy); return NULL; }
+    memcpy(contents_copy, content, len);
+    contents_copy[len] = '\0';
+    cg->string_literals[cg->string_literal_count].content = contents_copy;
+    cg->string_literals[cg->string_literal_count].length = len;
+    cg->string_literals[cg->string_literal_count].c_var = cv;
+    cg->string_literal_count++;
+    return cv;
+}
+
+/* ===================== symbol tables ===================== */
+
+static bool cg_register_extern(CG *cg, const FengDecl *decl) {
+    if (cg->extern_count + 1 > cg->extern_capacity) {
+        size_t cap = cg->extern_capacity ? cg->extern_capacity * 2 : 4;
+        void *p = realloc(cg->externs, cap * sizeof *cg->externs);
+        if (!p) return false;
+        cg->externs = p;
+        cg->extern_capacity = cap;
+    }
+    const FengCallableSignature *sig = &decl->as.function_decl;
+    ExternFn *ef = &cg->externs[cg->extern_count++];
+    ef->name = strndup(sig->name.data, sig->name.length);
+    ef->param_count = sig->param_count;
+    ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+    for (size_t i = 0; i < sig->param_count; i++) {
+        if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
+                             &ef->param_types[i])) {
+            return false;
+        }
+    }
+    if (!cg_resolve_type(cg, sig->return_type, &sig->token, &ef->return_type)) {
+        return false;
+    }
+    return true;
+}
+
+static const ExternFn *cg_find_extern(const CG *cg, const char *name, size_t len) {
+    for (size_t i = 0; i < cg->extern_count; i++) {
+        if (strlen(cg->externs[i].name) == len &&
+            memcmp(cg->externs[i].name, name, len) == 0) {
+            return &cg->externs[i];
+        }
+    }
+    return NULL;
+}
+
+static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
+    if (cg->free_fn_count + 1 > cg->free_fn_capacity) {
+        size_t cap = cg->free_fn_capacity ? cg->free_fn_capacity * 2 : 4;
+        void *p = realloc(cg->free_fns, cap * sizeof *cg->free_fns);
+        if (!p) return false;
+        cg->free_fns = p;
+        cg->free_fn_capacity = cap;
+    }
+    const FengCallableSignature *sig = &decl->as.function_decl;
+    FreeFn *f = &cg->free_fns[cg->free_fn_count++];
+    f->feng_name = strndup(sig->name.data, sig->name.length);
+    f->c_name = cg_fn_mangle(cg->module_mangle, &sig->name);
+    f->param_count = sig->param_count;
+    f->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+    f->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
+    for (size_t i = 0; i < sig->param_count; i++) {
+        if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
+                             &f->param_types[i])) {
+            return false;
+        }
+        f->param_names[i] = strndup(sig->params[i].name.data, sig->params[i].name.length);
+    }
+    if (!cg_resolve_type(cg, sig->return_type, &sig->token, &f->return_type)) {
+        return false;
+    }
+    f->decl = decl;
+    return true;
+}
+
+static const FreeFn *cg_find_free_fn(const CG *cg, const char *name, size_t len) {
+    for (size_t i = 0; i < cg->free_fn_count; i++) {
+        if (strlen(cg->free_fns[i].feng_name) == len &&
+            memcmp(cg->free_fns[i].feng_name, name, len) == 0) {
+            return &cg->free_fns[i];
+        }
+    }
+    return NULL;
+}
+
+/* ===================== expression emission ===================== */
+
+struct ExprResult {
+    char   *c_expr;       /* malloc'd */
+    CGType *type;         /* malloc'd */
+    /* When true, the C expression evaluates to a fresh +1 reference that the
+     * caller MUST either store in a slot (transferring ownership) or wrap in
+     * a temporary and release after use. Only meaningful for managed types. */
+    bool    owns_ref;
+};
+
+static void er_init(ExprResult *r) {
+    r->c_expr = NULL;
+    r->type = NULL;
+    r->owns_ref = false;
+}
+
+static void er_free(ExprResult *r) {
+    if (!r) return;
+    free(r->c_expr);
+    cgtype_free(r->type);
+    r->c_expr = NULL;
+    r->type = NULL;
+    r->owns_ref = false;
+}
+
+/* Materialise an ExprResult into a fresh C local so its lifetime spans the
+ * current statement. For managed +1 results this also schedules a release at
+ * the end of the local scope by registering the local in the scope. For
+ * non-managed values, it simply binds to a temp.
+ *
+ * Returns the C expression (identifier of the local), via *out_cexpr (malloc'd
+ * by caller's responsibility — caller must free). The type is transferred to
+ * the local in scope so the caller MUST NOT use r->type afterwards. */
+static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) {
+    char *tmp = cg_fresh_temp(cg, prefix);
+    if (!tmp) return NULL;
+    const char *cty = cgtype_to_c(r->type->kind);
+    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
+    if (cgtype_is_managed(r->type) && r->owns_ref) {
+        /* Register in scope so it gets released on scope exit. */
+        scope_add(cg->cur_scope, tmp, tmp, r->type, false);
+        r->type = NULL; /* moved */
+    } else if (cgtype_is_managed(r->type)) {
+        /* Borrowed: don't register for release. */
+    }
+    /* Free r->c_expr; ownership of r->type may already have moved. */
+    free(r->c_expr);
+    r->c_expr = strdup(tmp);
+    r->owns_ref = false;
+    return tmp;
+}
+
+static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    if (e->kind == FENG_EXPR_BOOL) {
+        out->c_expr = strdup(e->as.boolean ? "true" : "false");
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        return out->c_expr && out->type;
+    }
+    if (e->kind == FENG_EXPR_INTEGER) {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(int64_t)INT64_C(%" PRId64 ")", e->as.integer);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_I64);
+        return out->c_expr && out->type;
+    }
+    if (e->kind == FENG_EXPR_FLOAT) {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(%a)", e->as.floating);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_F64);
+        return out->c_expr && out->type;
+    }
+    if (e->kind == FENG_EXPR_STRING) {
+        /* The parser stores the raw lexeme including the surrounding quotes
+         * and unprocessed escapes. Decode here. The lexer guarantees the
+         * literal is well-formed: starts/ends with '"' and uses only the
+         * supported escape set (\\ \" \n \r \t \0). */
+        const char *raw = e->as.string.data;
+        size_t rlen = e->as.string.length;
+        if (rlen < 2 || raw[0] != '"' || raw[rlen - 1] != '"') {
+            return cg_fail(cg, e->token, "codegen: malformed string literal");
+        }
+        const char *body = raw + 1;
+        size_t blen = rlen - 2;
+        char *decoded = malloc(blen + 1);
+        if (!decoded) return cg_fail(cg, e->token, "codegen: out of memory");
+        size_t di = 0;
+        for (size_t i = 0; i < blen; i++) {
+            char ch = body[i];
+            if (ch == '\\' && i + 1 < blen) {
+                char esc = body[++i];
+                switch (esc) {
+                    case '\\': decoded[di++] = '\\'; break;
+                    case '"':  decoded[di++] = '"';  break;
+                    case 'n':  decoded[di++] = '\n'; break;
+                    case 'r':  decoded[di++] = '\r'; break;
+                    case 't':  decoded[di++] = '\t'; break;
+                    case '0':  decoded[di++] = '\0'; break;
+                    default:
+                        free(decoded);
+                        return cg_fail(cg, e->token,
+                            "codegen: unknown string escape '\\%c'", esc);
+                }
+            } else {
+                decoded[di++] = ch;
+            }
+        }
+        decoded[di] = '\0';
+        const char *cv = cg_string_literal_var(cg, decoded, di);
+        free(decoded);
+        if (!cv) return cg_fail(cg, e->token, "codegen: out of memory");
+        out->c_expr = strdup(cv);
+        out->type = cgtype_new(CG_TYPE_STRING);
+        out->owns_ref = false;   /* immortal */
+        return out->c_expr && out->type;
+    }
+    return cg_fail(cg, e->token, "codegen: unsupported literal kind");
+}
+
+static const char *cg_binop_c(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_PLUS: return "+";
+        case FENG_TOKEN_MINUS: return "-";
+        case FENG_TOKEN_STAR: return "*";
+        case FENG_TOKEN_SLASH: return "/";
+        case FENG_TOKEN_PERCENT: return "%";
+        case FENG_TOKEN_LT: return "<";
+        case FENG_TOKEN_LE: return "<=";
+        case FENG_TOKEN_GT: return ">";
+        case FENG_TOKEN_GE: return ">=";
+        case FENG_TOKEN_EQ: return "==";
+        case FENG_TOKEN_NE: return "!=";
+        case FENG_TOKEN_AND_AND: return "&&";
+        case FENG_TOKEN_OR_OR: return "||";
+        case FENG_TOKEN_AMP: return "&";
+        case FENG_TOKEN_PIPE: return "|";
+        case FENG_TOKEN_CARET: return "^";
+        case FENG_TOKEN_SHL: return "<<";
+        case FENG_TOKEN_SHR: return ">>";
+        default: return NULL;
+    }
+}
+
+static bool cg_unify_numeric(CG *cg, FengToken tok, ExprResult *l, ExprResult *r,
+                             CGType **out_common) {
+    CGTypeKind lk = l->type->kind, rk = r->type->kind;
+    if (lk == CG_TYPE_F64 || rk == CG_TYPE_F64) { *out_common = cgtype_new(CG_TYPE_F64); return true; }
+    if (lk == CG_TYPE_F32 || rk == CG_TYPE_F32) { *out_common = cgtype_new(CG_TYPE_F32); return true; }
+    if (cgtype_is_integer(lk) && cgtype_is_integer(rk)) {
+        int lr = cgtype_int_rank(lk), rr = cgtype_int_rank(rk);
+        CGTypeKind chosen = (lr >= rr) ? lk : rk;
+        /* Mixed-sign promotes to signed of higher rank for Phase 1A. */
+        if (cgtype_is_signed(lk) != cgtype_is_signed(rk)) {
+            chosen = (cgtype_int_rank(chosen) >= 4) ? CG_TYPE_I64 : CG_TYPE_I64;
+        }
+        *out_common = cgtype_new(chosen);
+        return true;
+    }
+    return cg_fail(cg, tok, "codegen: cannot apply numeric op to non-numeric operands");
+}
+
+static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    ExprResult lr; ExprResult rr;
+    if (!cg_emit_expr(cg, e->as.binary.left, &lr)) return false;
+    if (!cg_emit_expr(cg, e->as.binary.right, &rr)) { er_free(&lr); return false; }
+
+    /* String concatenation: '+' on two strings. */
+    if (e->as.binary.op == FENG_TOKEN_PLUS &&
+        lr.type->kind == CG_TYPE_STRING && rr.type->kind == CG_TYPE_STRING) {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "feng_string_concat(%s, %s)", lr.c_expr, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_STRING);
+        out->owns_ref = true;
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
+    /* Equality on strings is not auto-defined here in 1A; require numerics. */
+    const char *cop = cg_binop_c(e->as.binary.op);
+    if (!cop) {
+        er_free(&lr); er_free(&rr);
+        return cg_fail(cg, e->token, "codegen: unsupported binary operator");
+    }
+
+    /* Logical operators: bool && bool, bool || bool. */
+    if (e->as.binary.op == FENG_TOKEN_AND_AND || e->as.binary.op == FENG_TOKEN_OR_OR) {
+        if (lr.type->kind != CG_TYPE_BOOL || rr.type->kind != CG_TYPE_BOOL) {
+            er_free(&lr); er_free(&rr);
+            return cg_fail(cg, e->token, "codegen: && / || require bool operands");
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(%s %s %s)", lr.c_expr, cop, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
+    /* Comparison: produces bool from numeric/bool operands. */
+    bool is_cmp = (e->as.binary.op == FENG_TOKEN_LT || e->as.binary.op == FENG_TOKEN_LE ||
+                   e->as.binary.op == FENG_TOKEN_GT || e->as.binary.op == FENG_TOKEN_GE ||
+                   e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE);
+    if (is_cmp && lr.type->kind == CG_TYPE_BOOL && rr.type->kind == CG_TYPE_BOOL) {
+        if (e->as.binary.op != FENG_TOKEN_EQ && e->as.binary.op != FENG_TOKEN_NE) {
+            er_free(&lr); er_free(&rr);
+            return cg_fail(cg, e->token, "codegen: ordering comparisons require numeric operands");
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(%s %s %s)", lr.c_expr, cop, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
+    /* Numeric arithmetic / bitwise / comparison. */
+    CGType *common = NULL;
+    if (!cg_unify_numeric(cg, e->token, &lr, &rr, &common)) {
+        er_free(&lr); er_free(&rr); return false;
+    }
+    Buf b; buf_init(&b);
+    const char *cty = cgtype_to_c(common->kind);
+    buf_append_fmt(&b, "((%s)%s %s (%s)%s)", cty, lr.c_expr, cop, cty, rr.c_expr);
+    out->c_expr = b.data;
+    if (is_cmp) {
+        cgtype_free(common);
+        out->type = cgtype_new(CG_TYPE_BOOL);
+    } else {
+        out->type = common;
+    }
+    er_free(&lr); er_free(&rr);
+    return out->c_expr && out->type;
+}
+
+static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    ExprResult inner;
+    if (!cg_emit_expr(cg, e->as.unary.operand, &inner)) return false;
+    const char *op = NULL;
+    bool require_bool = false;
+    bool require_int = false;
+    switch (e->as.unary.op) {
+        case FENG_TOKEN_MINUS: op = "-"; break;
+        case FENG_TOKEN_PLUS:  op = "+"; break;
+        case FENG_TOKEN_NOT:   op = "!"; require_bool = true; break;
+        case FENG_TOKEN_TILDE: op = "~"; require_int = true; break;
+        default:
+            er_free(&inner);
+            return cg_fail(cg, e->token, "codegen: unsupported unary operator");
+    }
+    if (require_bool && inner.type->kind != CG_TYPE_BOOL) {
+        er_free(&inner);
+        return cg_fail(cg, e->token, "codegen: '!' requires bool operand");
+    }
+    if (require_int && !cgtype_is_integer(inner.type->kind)) {
+        er_free(&inner);
+        return cg_fail(cg, e->token, "codegen: '~' requires integer operand");
+    }
+    if (!require_bool && !require_int && !cgtype_is_numeric(inner.type->kind)) {
+        er_free(&inner);
+        return cg_fail(cg, e->token, "codegen: unary +/- requires numeric operand");
+    }
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "(%s%s)", op, inner.c_expr);
+    out->c_expr = b.data;
+    out->type = inner.type;
+    inner.type = NULL;
+    er_free(&inner);
+    return out->c_expr && out->type;
+}
+
+static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    const Local *l = scope_lookup(cg->cur_scope, e->as.identifier.data,
+                                  e->as.identifier.length);
+    if (l) {
+        out->c_expr = strdup(l->c_name);
+        out->type = cgtype_clone(l->type);
+        out->owns_ref = false;  /* borrow from local slot */
+        return out->c_expr && out->type;
+    }
+    return cg_fail(cg, e->token,
+        "codegen: identifier '%.*s' not found (only locals/params supported in this iteration)",
+        (int)e->as.identifier.length, e->as.identifier.data);
+}
+
+static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    if (e->as.call.callee->kind != FENG_EXPR_IDENTIFIER) {
+        return cg_fail(cg, e->token,
+            "codegen: only direct function calls supported in this iteration");
+    }
+    const FengSlice name = e->as.call.callee->as.identifier;
+    const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
+    const FreeFn *fn = cg_find_free_fn(cg, name.data, name.length);
+    if (!ext && !fn) {
+        return cg_fail(cg, e->token,
+            "codegen: undefined function '%.*s'", (int)name.length, name.data);
+    }
+    size_t expected = ext ? ext->param_count : fn->param_count;
+    if (e->as.call.arg_count != expected) {
+        return cg_fail(cg, e->token,
+            "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
+            (int)name.length, name.data, expected, e->as.call.arg_count);
+    }
+    /* Emit each argument; managed +1 results are lifted into a temp and
+     * registered for release at scope exit (callee borrows). */
+    Buf args_buf; buf_init(&args_buf);
+    bool ok = true;
+    for (size_t i = 0; i < e->as.call.arg_count; i++) {
+        ExprResult ar;
+        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
+        CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
+        /* For string args to an extern with C type `const char *` (only when
+         * the Feng param type is string and the extern is @cdecl), pass
+         * feng_string_data(s). We keep it simple: the only extern we support
+         * for strings in 1A iter 1 is `@cdecl extern fn name(s: string): T`
+         * where the C symbol expects const char*. */
+        if (i || true) { if (i) buf_append_cstr(&args_buf, ", "); }
+        if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+            cg_materialize_to_local(cg, &ar, "_t");
+        }
+        if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
+            expected_ty && expected_ty->kind == CG_TYPE_STRING) {
+            buf_append_fmt(&args_buf, "feng_string_data(%s)", ar.c_expr);
+        } else {
+            buf_append_cstr(&args_buf, ar.c_expr);
+        }
+        er_free(&ar);
+    }
+    if (!ok) { buf_free(&args_buf); return false; }
+
+    Buf b; buf_init(&b);
+    if (ext) {
+        buf_append_fmt(&b, "%s(%s)", ext->name, args_buf.data ? args_buf.data : "");
+        out->type = cgtype_clone(ext->return_type);
+    } else {
+        buf_append_fmt(&b, "%s(%s)", fn->c_name, args_buf.data ? args_buf.data : "");
+        out->type = cgtype_clone(fn->return_type);
+    }
+    buf_free(&args_buf);
+    out->c_expr = b.data;
+    out->owns_ref = cgtype_is_managed(out->type);
+    return out->c_expr && out->type;
+}
+
+static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    CGType *target = NULL;
+    if (!cg_resolve_type(cg, e->as.cast.type, &e->token, &target)) return false;
+    if (!cgtype_is_numeric(target->kind) && target->kind != CG_TYPE_BOOL) {
+        cgtype_free(target);
+        return cg_fail(cg, e->token, "codegen: only numeric/bool casts supported in 1A iter 1");
+    }
+    ExprResult inner;
+    if (!cg_emit_expr(cg, e->as.cast.value, &inner)) { cgtype_free(target); return false; }
+    if (!cgtype_is_numeric(inner.type->kind) && inner.type->kind != CG_TYPE_BOOL) {
+        er_free(&inner); cgtype_free(target);
+        return cg_fail(cg, e->token, "codegen: cast operand must be numeric/bool");
+    }
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "((%s)%s)", cgtype_to_c(target->kind), inner.c_expr);
+    out->c_expr = b.data;
+    out->type = target;
+    er_free(&inner);
+    return out->c_expr && out->type;
+}
+
+static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+    if (cg->failed) return false;
+    switch (e->kind) {
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return cg_emit_literal(cg, e, out);
+        case FENG_EXPR_IDENTIFIER:
+            return cg_emit_identifier(cg, e, out);
+        case FENG_EXPR_BINARY:
+            return cg_emit_binary(cg, e, out);
+        case FENG_EXPR_UNARY:
+            return cg_emit_unary(cg, e, out);
+        case FENG_EXPR_CALL:
+            return cg_emit_call(cg, e, out);
+        case FENG_EXPR_CAST:
+            return cg_emit_cast(cg, e, out);
+        default:
+            return cg_fail(cg, e->token,
+                "codegen: expression kind not yet supported in this iteration");
+    }
+}
+
+/* ===================== statement emission ===================== */
+
+static void cg_release_scope(CG *cg, const Scope *scope) {
+    /* Walk in reverse insertion order to mirror C destruction. */
+    for (size_t i = scope->count; i > 0; i--) {
+        const Local *l = &scope->items[i - 1];
+        if (l->is_param) continue;
+        if (cgtype_is_managed(l->type)) {
+            buf_append_fmt(cg->cur_body, "    feng_release(%s);\n", l->c_name);
+        }
+    }
+}
+
+/* Release all scopes from cg->cur_scope down to (but not including) `stop`.
+ * Used by return / break / continue. */
+static void cg_release_through(CG *cg, const Scope *stop) {
+    for (const Scope *s = cg->cur_scope; s && s != stop; s = s->parent) {
+        cg_release_scope(cg, s);
+    }
+}
+
+static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
+    const FengBinding *b = &stmt->as.binding;
+    /* Determine type: explicit annotation else inferred from initializer. */
+    CGType *decl_type = NULL;
+    if (b->type) {
+        if (!cg_resolve_type(cg, b->type, &b->token, &decl_type)) return false;
+    }
+    ExprResult init;
+    bool has_init = b->initializer != NULL;
+    if (has_init) {
+        if (!cg_emit_expr(cg, b->initializer, &init)) {
+            cgtype_free(decl_type); return false;
+        }
+        if (!decl_type) {
+            decl_type = cgtype_clone(init.type);
+        }
+    } else {
+        if (!decl_type) {
+            return cg_fail(cg, b->token,
+                "codegen: binding without type or initializer not supported");
+        }
+    }
+    char *cname = cg_local_cname(cg, b->name.data, b->name.length);
+    if (!cname) { if (has_init) er_free(&init); cgtype_free(decl_type); return false; }
+
+    const char *cty = cgtype_to_c(decl_type->kind);
+    if (has_init) {
+        if (cgtype_is_managed(decl_type)) {
+            if (init.owns_ref) {
+                /* Take the +1 directly. */
+                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
+            } else {
+                /* Borrowed; retain into our slot. */
+                buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                               cty, cname, init.c_expr, cname);
+            }
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                           cty, cname, cty, init.c_expr);
+        }
+        er_free(&init);
+    } else {
+        if (cgtype_is_managed(decl_type)) {
+            buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, cname);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = 0;\n", cty, cname);
+        }
+    }
+
+    if (!scope_add(cg->cur_scope, /*feng*/ "_unused_internal_name__", cname,
+                   decl_type, false)) {
+        free(cname); return false;
+    }
+    /* Replace the placeholder with the real Feng name. */
+    Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
+    free(added->name);
+    added->name = strndup(b->name.data, b->name.length);
+    free(cname);
+    return true;
+}
+
+static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
+    if (stmt->as.assign.target->kind != FENG_EXPR_IDENTIFIER) {
+        return cg_fail(cg, stmt->token,
+            "codegen: only identifier assignments supported in this iteration");
+    }
+    const FengSlice n = stmt->as.assign.target->as.identifier;
+    const Local *l = scope_lookup(cg->cur_scope, n.data, n.length);
+    if (!l) {
+        return cg_fail(cg, stmt->token,
+            "codegen: assignment to undefined identifier '%.*s'",
+            (int)n.length, n.data);
+    }
+    ExprResult v;
+    if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
+    if (cgtype_is_managed(l->type)) {
+        if (v.owns_ref) {
+            /* Release old, take +1. */
+            buf_append_fmt(cg->cur_body,
+                "    { void *_old = %s; %s = %s; feng_release(_old); }\n",
+                l->c_name, l->c_name, v.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    feng_assign((void**)&%s, %s);\n", l->c_name, v.c_expr);
+        }
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                       l->c_name, cgtype_to_c(l->type->kind), v.c_expr);
+    }
+    er_free(&v);
+    return true;
+}
+
+static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
+    if (!cg->cur_return_type ||
+        cg->cur_return_type->kind == CG_TYPE_VOID) {
+        if (stmt->as.return_value) {
+            return cg_fail(cg, stmt->token,
+                "codegen: void function cannot return a value");
+        }
+        cg_release_through(cg, NULL);
+        if (cg->cur_fn_is_main) {
+            buf_append_cstr(cg->cur_body, "    return;\n");
+        } else {
+            buf_append_cstr(cg->cur_body, "    return;\n");
+        }
+        return true;
+    }
+    if (!stmt->as.return_value) {
+        return cg_fail(cg, stmt->token,
+            "codegen: non-void function must return a value");
+    }
+    ExprResult r;
+    if (!cg_emit_expr(cg, stmt->as.return_value, &r)) return false;
+    /* Non-managed: emit cleanup then return. Managed: must transfer +1 out:
+     * - if r.owns_ref, store in temp, release scopes, return temp.
+     * - else (borrowed), retain, release scopes, return retained. */
+    if (cgtype_is_managed(r.type)) {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        const char *cty = cgtype_to_c(r.type->kind);
+        if (!r.owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                           cty, tmp, r.c_expr, tmp);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+        }
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
+        free(tmp);
+    } else {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        const char *cty = cgtype_to_c(r.type->kind);
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                       cty, tmp, cty, r.c_expr);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
+        free(tmp);
+    }
+    er_free(&r);
+    return true;
+}
+
+static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
+    for (size_t i = 0; i < stmt->as.if_stmt.clause_count; i++) {
+        const FengIfClause *c = &stmt->as.if_stmt.clauses[i];
+        ExprResult cond;
+        if (!cg_emit_expr(cg, c->condition, &cond)) return false;
+        if (cond.type->kind != CG_TYPE_BOOL) {
+            er_free(&cond);
+            return cg_fail(cg, c->token, "codegen: if condition must be bool");
+        }
+        buf_append_fmt(cg->cur_body, "    %sif (%s) {\n",
+                       i == 0 ? "" : "else ", cond.c_expr);
+        er_free(&cond);
+        if (!cg_emit_block(cg, c->block)) return false;
+        buf_append_cstr(cg->cur_body, "    }\n");
+    }
+    if (stmt->as.if_stmt.else_block) {
+        buf_append_cstr(cg->cur_body, "    else {\n");
+        if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) return false;
+        buf_append_cstr(cg->cur_body, "    }\n");
+    }
+    return true;
+}
+
+static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
+    /* Emit as `for (;;)` so we can re-evaluate the condition each iter
+     * inside a scope that releases temporaries from condition eval. */
+    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    /* Condition scope: any temporaries from cond eval get released here. */
+    Scope *cond_scope = scope_push(cg->cur_scope);
+    if (!cond_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = cond_scope;
+    ExprResult cond;
+    if (!cg_emit_expr(cg, stmt->as.while_stmt.condition, &cond)) {
+        cg->cur_scope = cond_scope->parent;
+        scope_pop_free(cond_scope);
+        return false;
+    }
+    if (cond.type->kind != CG_TYPE_BOOL) {
+        er_free(&cond);
+        cg->cur_scope = cond_scope->parent;
+        scope_pop_free(cond_scope);
+        return cg_fail(cg, stmt->token, "codegen: while condition must be bool");
+    }
+    char *cond_tmp = cg_fresh_temp(cg, "_cond");
+    buf_append_fmt(cg->cur_body, "        bool %s = %s;\n", cond_tmp, cond.c_expr);
+    er_free(&cond);
+    cg_release_scope(cg, cond_scope);
+    cg->cur_scope = cond_scope->parent;
+    scope_pop_free(cond_scope);
+    buf_append_fmt(cg->cur_body, "        if (!%s) break;\n", cond_tmp);
+    free(cond_tmp);
+
+    cg->loop_depth++;
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (!body_scope) { cg->loop_depth--; return cg_fail(cg, stmt->token, "codegen: out of memory"); }
+    body_scope->is_loop = true;
+    cg->cur_scope = body_scope;
+    if (!cg_emit_block(cg, stmt->as.while_stmt.body)) {
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        cg->loop_depth--;
+        return false;
+    }
+    cg_release_scope(cg, body_scope);
+    cg->cur_scope = body_scope->parent;
+    scope_pop_free(body_scope);
+    cg->loop_depth--;
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
+static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) {
+    if (cg->loop_depth == 0) {
+        return cg_fail(cg, stmt->token,
+            "codegen: '%s' outside of loop", is_break ? "break" : "continue");
+    }
+    /* Release scopes up to (but not including) the nearest loop scope. */
+    const Scope *stop = NULL;
+    for (const Scope *s = cg->cur_scope; s; s = s->parent) {
+        if (s->is_loop) { stop = s; break; }
+    }
+    cg_release_through(cg, stop);
+    buf_append_fmt(cg->cur_body, "    %s;\n", is_break ? "break" : "continue");
+    return true;
+}
+
+static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
+    /* Open a fresh inner scope so any +1 temporaries from the expression
+     * are released at the statement boundary. */
+    Scope *st_scope = scope_push(cg->cur_scope);
+    if (!st_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = st_scope;
+    buf_append_cstr(cg->cur_body, "    {\n");
+    ExprResult r;
+    if (!cg_emit_expr(cg, stmt->as.expr, &r)) {
+        cg->cur_scope = st_scope->parent;
+        scope_pop_free(st_scope);
+        return false;
+    }
+    /* Materialise managed +1 results into a temp so they're released. */
+    if (cgtype_is_managed(r.type) && r.owns_ref) {
+        cg_materialize_to_local(cg, &r, "_t");
+    } else {
+        buf_append_fmt(cg->cur_body, "    (void)(%s);\n", r.c_expr);
+    }
+    er_free(&r);
+    cg_release_scope(cg, st_scope);
+    cg->cur_scope = st_scope->parent;
+    scope_pop_free(st_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
+static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
+    if (cg->failed) return false;
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK: {
+            buf_append_cstr(cg->cur_body, "    {\n");
+            Scope *s = scope_push(cg->cur_scope);
+            if (!s) return cg_fail(cg, stmt->token, "codegen: out of memory");
+            cg->cur_scope = s;
+            bool ok = cg_emit_block(cg, stmt->as.block);
+            cg_release_scope(cg, s);
+            cg->cur_scope = s->parent;
+            scope_pop_free(s);
+            buf_append_cstr(cg->cur_body, "    }\n");
+            return ok;
+        }
+        case FENG_STMT_BINDING:  return cg_emit_binding(cg, stmt);
+        case FENG_STMT_ASSIGN:   return cg_emit_assign(cg, stmt);
+        case FENG_STMT_EXPR:     return cg_emit_expr_stmt(cg, stmt);
+        case FENG_STMT_RETURN:   return cg_emit_return(cg, stmt);
+        case FENG_STMT_IF:       return cg_emit_if(cg, stmt);
+        case FENG_STMT_WHILE:    return cg_emit_while(cg, stmt);
+        case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);
+        case FENG_STMT_CONTINUE: return cg_emit_break_continue(cg, stmt, false);
+        default:
+            return cg_fail(cg, stmt->token,
+                "codegen: statement kind not yet supported in this iteration");
+    }
+}
+
+static bool cg_emit_block(CG *cg, const FengBlock *block) {
+    for (size_t i = 0; i < block->statement_count; i++) {
+        if (!cg_emit_stmt(cg, block->statements[i])) return false;
+    }
+    return true;
+}
+
+/* ===================== top-level emission ===================== */
+
+static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
+    if (!cg_register_extern(cg, decl)) return false;
+    const ExternFn *ef = &cg->externs[cg->extern_count - 1];
+    /* Emit `extern <ret> name(<params>);` Strings map to `const char *`. */
+    Buf *h = &cg->headers;
+    const char *ret_c = (ef->return_type->kind == CG_TYPE_STRING)
+                          ? "const char *"
+                          : cgtype_to_c(ef->return_type->kind);
+    buf_append_fmt(h, "extern %s %s(", ret_c, ef->name);
+    if (ef->param_count == 0) {
+        buf_append_cstr(h, "void");
+    } else {
+        for (size_t i = 0; i < ef->param_count; i++) {
+            if (i) buf_append_cstr(h, ", ");
+            const char *pty = (ef->param_types[i]->kind == CG_TYPE_STRING)
+                                ? "const char *"
+                                : cgtype_to_c(ef->param_types[i]->kind);
+            buf_append_cstr(h, pty);
+        }
+    }
+    buf_append_cstr(h, ");\n");
+    return true;
+}
+
+static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
+    if (fn->return_type->kind != CG_TYPE_VOID &&
+        fn->return_type->kind != CG_TYPE_I32) {
+        return cg_fail(cg, fn->decl->token,
+            "codegen: main must return void or i32");
+    }
+    if (fn->param_count != 1 ||
+        fn->param_types[0]->kind != CG_TYPE_ARRAY ||
+        !fn->param_types[0]->element ||
+        fn->param_types[0]->element->kind != CG_TYPE_STRING) {
+        return cg_fail(cg, fn->decl->token,
+            "codegen: main must have signature (args: string[])");
+    }
+    return true;
+}
+
+static bool cg_emit_function(CG *cg, const FengDecl *decl, bool is_main) {
+    if (!cg_register_free_fn(cg, decl)) return false;
+    FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
+    cg->cur_fn_is_main = is_main;
+    cg->cur_return_type = fn->return_type;
+
+    if (is_main && !cg_check_main_signature(cg, fn)) return false;
+
+    /* Forward proto. */
+    Buf *p = &cg->fn_protos;
+    const char *ret_c = cgtype_to_c(fn->return_type->kind);
+    buf_append_fmt(p, "static %s %s(", ret_c, fn->c_name);
+    if (fn->param_count == 0) buf_append_cstr(p, "void");
+    for (size_t i = 0; i < fn->param_count; i++) {
+        if (i) buf_append_cstr(p, ", ");
+        buf_append_fmt(p, "%s %s",
+            cgtype_to_c(fn->param_types[i]->kind),
+            fn->param_names[i] ? fn->param_names[i] : "_p");
+    }
+    buf_append_cstr(p, ");\n");
+
+    /* Body. */
+    Buf *body = &cg->fn_defs;
+    cg->cur_body = body;
+    buf_append_fmt(body, "static %s %s(", ret_c, fn->c_name);
+    if (fn->param_count == 0) buf_append_cstr(body, "void");
+    Scope *fn_scope = scope_push(NULL);
+    if (!fn_scope) return cg_fail(cg, decl->token, "codegen: out of memory");
+    cg->cur_scope = fn_scope;
+    cg->tmp_counter = 0;
+    cg->loop_depth = 0;
+
+    for (size_t i = 0; i < fn->param_count; i++) {
+        if (i) buf_append_cstr(body, ", ");
+        buf_append_fmt(body, "%s %s",
+            cgtype_to_c(fn->param_types[i]->kind),
+            fn->param_names[i] ? fn->param_names[i] : "_p");
+        CGType *pt = cgtype_clone(fn->param_types[i]);
+        scope_add(fn_scope, fn->param_names[i] ? fn->param_names[i] : "_p",
+                  fn->param_names[i] ? fn->param_names[i] : "_p", pt, true);
+    }
+    buf_append_cstr(body, ") {\n");
+
+    /* Suppress -Wunused-parameter for parameters that the body may not
+     * reference. The cast is a no-op at runtime. */
+    for (size_t i = 0; i < fn->param_count; i++) {
+        const char *pn = fn->param_names[i] ? fn->param_names[i] : "_p";
+        buf_append_fmt(body, "    (void)%s;\n", pn);
+    }
+
+    if (!cg_emit_block(cg, decl->as.function_decl.body)) {
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+        return false;
+    }
+
+    /* Implicit fall-off cleanup + return for void/main. */
+    cg_release_scope(cg, fn_scope);
+    if (fn->return_type->kind == CG_TYPE_VOID) {
+        buf_append_cstr(body, "    return;\n");
+    } else if (is_main && fn->return_type->kind == CG_TYPE_I32) {
+        buf_append_cstr(body, "    return 0;\n");
+    } else {
+        /* Non-void without explicit return is rejected by semantic; emit
+         * abort as defensive measure. */
+        buf_append_cstr(body, "    feng_panic(\"function reached end without return\");\n");
+    }
+    buf_append_cstr(body, "}\n\n");
+    cg->cur_scope = NULL;
+    scope_pop_free(fn_scope);
+    cg->cur_body = NULL;
+    cg->cur_return_type = NULL;
+    cg->cur_fn_is_main = false;
+    return true;
+}
+
+/* ===================== driver ===================== */
+
+static bool slice_eq(FengSlice s, const char *cstr) {
+    size_t n = strlen(cstr);
+    return s.length == n && memcmp(s.data, cstr, n) == 0;
+}
+
+static bool cg_emit_module_header(CG *cg, const FengProgram *prog) {
+    free(cg->module_mangle);
+    free(cg->module_dot_name);
+    cg->module_mangle = cg_module_mangle(prog->module_segments,
+                                         prog->module_segment_count);
+    cg->module_dot_name = cg_module_dot(prog->module_segments,
+                                        prog->module_segment_count);
+    if (!cg->module_mangle || !cg->module_dot_name) {
+        return cg_fail(cg, prog->module_token, "codegen: out of memory");
+    }
+    return true;
+}
+
+static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
+                                  FengCompileTarget target) {
+    if (!cg_emit_module_header(cg, prog)) return false;
+
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        switch (d->kind) {
+            case FENG_DECL_GLOBAL_BINDING:
+                return cg_fail(cg, d->token,
+                    "codegen: top-level let/var not yet supported");
+            case FENG_DECL_TYPE:
+                return cg_fail(cg, d->token,
+                    "codegen: type declarations not yet supported in this iteration");
+            case FENG_DECL_SPEC:
+                /* spec is metadata-only; emit nothing. */
+                continue;
+            case FENG_DECL_FIT:
+                return cg_fail(cg, d->token,
+                    "codegen: fit declarations not yet supported");
+            case FENG_DECL_FUNCTION:
+                if (d->is_extern) {
+                    if (!cg_emit_extern_decl(cg, d)) return false;
+                } else {
+                    bool is_main = (target == FENG_COMPILE_TARGET_BIN) &&
+                                   slice_eq(d->as.function_decl.name, "main");
+                    if (!cg_emit_function(cg, d, is_main)) return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
+static void cg_emit_string_literal_table(CG *cg) {
+    Buf *s = &cg->statics;
+    for (size_t i = 0; i < cg->string_literal_count; i++) {
+        buf_append_fmt(s, "static FengString *%s = NULL;\n", cg->string_literals[i].c_var);
+    }
+}
+
+static void cg_emit_string_literal_init(CG *cg, Buf *body) {
+    for (size_t i = 0; i < cg->string_literal_count; i++) {
+        buf_append_fmt(body,
+            "    %s = feng_string_literal(", cg->string_literals[i].c_var);
+        buf_append_cstr(body, "\"");
+        const char *p = cg->string_literals[i].content;
+        size_t n = cg->string_literals[i].length;
+        for (size_t j = 0; j < n; j++) {
+            unsigned char c = (unsigned char)p[j];
+            switch (c) {
+                case '\\': buf_append_cstr(body, "\\\\"); break;
+                case '"':  buf_append_cstr(body, "\\\""); break;
+                case '\n': buf_append_cstr(body, "\\n"); break;
+                case '\r': buf_append_cstr(body, "\\r"); break;
+                case '\t': buf_append_cstr(body, "\\t"); break;
+                default:
+                    if (c < 0x20 || c == 0x7f) buf_append_fmt(body, "\\x%02x", c);
+                    else { char ch = (char)c; buf_append(body, &ch, 1); }
+            }
+        }
+        buf_append_fmt(body, "\", %zu);\n", cg->string_literals[i].length);
+    }
+}
+
+static void cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
+    Buf *b = &cg->fn_defs;
+    buf_append_cstr(b,
+        "int main(int argc, char **argv) {\n");
+    /* Initialise string literal slots once. */
+    cg_emit_string_literal_init(cg, b);
+    buf_append_cstr(b,
+        "    FengArray *_args = feng_array_new(&feng_string_descriptor, sizeof(FengString *), true, (size_t)argc);\n"
+        "    FengString **_slots = (FengString **)feng_array_data(_args);\n"
+        "    for (int _i = 0; _i < argc; _i++) {\n"
+        "        _slots[_i] = feng_string_literal(argv[_i], strlen(argv[_i]));\n"
+        "    }\n");
+    if (main_fn->return_type->kind == CG_TYPE_I32) {
+        buf_append_fmt(b, "    int32_t _rc = %s(_args);\n", main_fn->c_name);
+        buf_append_cstr(b, "    feng_release(_args);\n    return (int)_rc;\n}\n");
+    } else {
+        buf_append_fmt(b, "    %s(_args);\n", main_fn->c_name);
+        buf_append_cstr(b, "    feng_release(_args);\n    return 0;\n}\n");
+    }
+}
+
+static const FreeFn *cg_lookup_main(const CG *cg) {
+    for (size_t i = 0; i < cg->free_fn_count; i++) {
+        if (strcmp(cg->free_fns[i].feng_name, "main") == 0) return &cg->free_fns[i];
+    }
+    return NULL;
+}
+
+static char *cg_finalize(CG *cg) {
+    Buf out; buf_init(&out);
+    buf_append_cstr(&out,
+        "/* Feng generated code — do not edit. */\n"
+        "#include <stdbool.h>\n"
+        "#include <stddef.h>\n"
+        "#include <stdint.h>\n"
+        "#include <string.h>\n"
+        "#include \"runtime/feng_runtime.h\"\n\n");
+    if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
+    buf_append_cstr(&out, "\n");
+    if (cg->statics.length) buf_append(&out, cg->statics.data, cg->statics.length);
+    buf_append_cstr(&out, "\n");
+    if (cg->fn_protos.length) buf_append(&out, cg->fn_protos.data, cg->fn_protos.length);
+    buf_append_cstr(&out, "\n");
+    if (cg->fn_defs.length) buf_append(&out, cg->fn_defs.data, cg->fn_defs.length);
+    return out.data;
+}
+
+static void cg_dispose(CG *cg) {
+    buf_free(&cg->headers);
+    buf_free(&cg->type_defs);
+    buf_free(&cg->statics);
+    buf_free(&cg->fn_protos);
+    buf_free(&cg->fn_defs);
+    free(cg->module_mangle);
+    free(cg->module_dot_name);
+    for (size_t i = 0; i < cg->extern_count; i++) {
+        free(cg->externs[i].name);
+        for (size_t j = 0; j < cg->externs[i].param_count; j++)
+            cgtype_free(cg->externs[i].param_types[j]);
+        free(cg->externs[i].param_types);
+        cgtype_free(cg->externs[i].return_type);
+    }
+    free(cg->externs);
+    for (size_t i = 0; i < cg->free_fn_count; i++) {
+        free(cg->free_fns[i].feng_name);
+        free(cg->free_fns[i].c_name);
+        for (size_t j = 0; j < cg->free_fns[i].param_count; j++) {
+            cgtype_free(cg->free_fns[i].param_types[j]);
+            free(cg->free_fns[i].param_names[j]);
+        }
+        free(cg->free_fns[i].param_types);
+        free(cg->free_fns[i].param_names);
+        cgtype_free(cg->free_fns[i].return_type);
+    }
+    free(cg->free_fns);
+    for (size_t i = 0; i < cg->string_literal_count; i++) {
+        free(cg->string_literals[i].content);
+        free(cg->string_literals[i].c_var);
+    }
+    free(cg->string_literals);
+}
+
+bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
+                               FengCompileTarget target,
+                               const FengCodegenOptions *options,
+                               FengCodegenOutput *out_output,
+                               FengCodegenError *out_error) {
+    (void)options;
+    if (!analysis || !out_output) return false;
+    if (out_error) {
+        out_error->message = NULL;
+        out_error->path = NULL;
+        memset(&out_error->token, 0, sizeof out_error->token);
+    }
+    /* Phase 1A iter 1 supports a single program (single .ff file). */
+    size_t program_total = 0;
+    const FengProgram *single = NULL;
+    for (size_t i = 0; i < analysis->module_count; i++) {
+        for (size_t j = 0; j < analysis->modules[i].program_count; j++) {
+            program_total++;
+            single = analysis->modules[i].programs[j];
+        }
+    }
+    CG cg = {0};
+    cg.error = out_error;
+    if (program_total == 0) {
+        cg_fail(&cg, (FengToken){0}, "codegen: no programs to compile");
+        cg_dispose(&cg);
+        return false;
+    }
+    if (program_total > 1) {
+        cg_fail(&cg, (FengToken){0},
+            "codegen: multi-file compilation not yet supported in this iteration");
+        cg_dispose(&cg);
+        return false;
+    }
+
+    if (!cg_emit_program_decls(&cg, single, target)) {
+        cg_dispose(&cg);
+        return false;
+    }
+
+    cg_emit_string_literal_table(&cg);
+
+    if (target == FENG_COMPILE_TARGET_BIN) {
+        const FreeFn *main_fn = cg_lookup_main(&cg);
+        if (!main_fn) {
+            cg_fail(&cg, single->module_token, "codegen: bin target requires `main` function");
+            cg_dispose(&cg);
+            return false;
+        }
+        cg_emit_main_wrapper(&cg, main_fn);
+    }
+
+    char *src = cg_finalize(&cg);
+    if (!src) {
+        cg_fail(&cg, (FengToken){0}, "codegen: out of memory finalizing output");
+        cg_dispose(&cg);
+        return false;
+    }
+    out_output->c_source = src;
+    out_output->c_source_length = strlen(src);
+    cg_dispose(&cg);
+    return true;
+}
+
+void feng_codegen_output_free(FengCodegenOutput *output) {
+    if (!output) return;
+    free(output->c_source);
+    output->c_source = NULL;
+    output->c_source_length = 0;
+}
+
+void feng_codegen_error_free(FengCodegenError *error) {
+    if (!error) return;
+    free(error->message);
+    error->message = NULL;
+}

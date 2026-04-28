@@ -1,0 +1,19 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn add(a: i32, b: i32): i32 {
+    return a + b;
+}
+
+fn main(args: string[]) {
+    let x: i32 = 40;
+    let y: i32 = 2;
+    let z = add(x, y);
+    if z == 42 {
+        puts("ok");
+    } else {
+        puts("fail");
+    }
+}

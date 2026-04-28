@@ -1,0 +1,8 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn main(args: string[]) {
+    puts("hello, feng");
+}
