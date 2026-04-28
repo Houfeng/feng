@@ -13,6 +13,7 @@
 - 可调用形状的 `@fixed spec` 用于定义 C 兼容函数指针类型; 对象形状的 `spec` 不得标记 `@fixed`。
 - 带函数体的 `@fixed fn` 可用于定义 Feng 实现的 ABI 兼容回调函数; 顶层 `pu @fixed fn` 可用于定义公开导出的 C ABI 函数。
 - 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 只用于无函数体的 `extern fn` 导入声明; 无参数形式只用于 `@fixed fn` 或 `@fixed` 方法的 ABI 调用方式。
+- `string` 与数组可在可调用 C ABI 边界上作为桥接类型使用; 其中数组要求元素类型 ABI 兼容,边界桥接由编译器和运行时自动处理。
 - `@fixed` 的合法性由语义分析检查。诊断应表述为“某声明不能标记为 `@fixed`”,而不是“`@fixed` 改写了语法”。
 
 ## 2 C库来源与调用方式注解
@@ -98,7 +99,7 @@ type IntOrFloat {
 规则说明:
 
 - `@fixed spec Name(参数): 返回值;` 定义 C 兼容函数指针类型。
-- `@fixed spec` 的直接参数类型与返回类型必须属于 ABI 稳定类型集合,即基础类型、其他合法的 `@fixed type` 或可调用形状的 `@fixed spec`。
+- `@fixed spec` 的直接参数类型与返回类型可以使用 ABI 稳定类型,也可以使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
 - 对象形状的 `spec` 不得标记 `@fixed`。对象形状的 `spec` 在语言语义上只约束可见形状、不约束物理布局,不能作为 C ABI 边界上的数据类型。
 - `@union` 不适用于可调用形状的 `@fixed spec`。
 - 带参数的 `@cdecl` / `@stdcall` / `@fastcall` 不得出现在 `@fixed spec` 定义上; 调用方式仅由实际传入该契约位置的 `extern fn` 或 `@fixed fn` / `@fixed` 方法决定。
@@ -147,7 +148,7 @@ pu fn create_point_export(x: int, y: int): Point {
 - `extern fn` 声明必须使用且只能使用一个带参数的 `@cdecl`、`@stdcall` 或 `@fastcall`。
 - 带参数注解的参数可以是字符串字面量,也可以是当前可见作用域中以字符串字面量初始化的 `let` 绑定（来源文件或模块不限）。
 - 带参数注解的注解名本身决定调用方式,不再额外传入字符串形式的调用约定。
-- `extern fn` 的参数和返回值应使用语言已定义的 C 兼容表示。
+- `extern fn` 的参数和返回值应使用语言已定义的 C 兼容表示,也可使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
 - `extern fn` 支持 `pu`/`pr` 可见性修饰符,默认等价于 `pr extern fn`,仅当前模块内可调用; `pu extern fn` 将该外部函数名公开,允许其他模块通过导入当前模块后调用。
 
 ```feng
@@ -175,7 +176,7 @@ extern fn set_point_callback(cb: PointCallback);
 - 顶层非公开 `@fixed fn` 可作为回调函数传给 C。
 - 顶层 `pu @fixed fn` 会生成公开的 C ABI 导出符号。
 - 方法只有在其自身标记为 `@fixed` 时,才会进入 ABI 兼容检查; 普通方法即使定义在 `@fixed type` 上,也不自动成为 C ABI 接口。
-- `@fixed fn`、`@fixed` 方法和 `pu @fixed fn` 的直接参数类型与返回类型必须属于 ABI 稳定类型集合。
+- `@fixed fn`、`@fixed` 方法和 `pu @fixed fn` 的直接参数类型与返回类型可以使用 ABI 稳定类型,也可以使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
 - `@fixed fn` 和 `@fixed` 方法不得捕获外部变量,也不得使用闭包作为 ABI 可调用值。
 - 在需要 `@fixed spec` 契约的位置上,只能传入顶层 `@fixed fn` 或 `@fixed` 方法,不能直接传入 lambda 或闭包。
 - 未捕获异常不得穿越 `@fixed` ABI 边界传播。
@@ -202,9 +203,10 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 
 规则说明:
 
-- `@fixed type` 的直接字段类型、固定数组元素类型,以及可调用形状 `@fixed spec` 的直接参数/返回值,必须属于 ABI 稳定类型集合。
+- `@fixed type` 的直接字段类型与固定数组元素类型必须属于 ABI 稳定类型集合。
 - 某个具名类型只有在其自身也通过 `@fixed` 合法性校验后,才属于 ABI 稳定类型集合。
-- 普通 `type` 可以包含 `@fixed` 值字段; 但 `@fixed` 声明不能直接依赖普通 `type`、对象形状 `spec`、`string`、动态数组、闭包或其他托管对象类型。
+- `string` 与数组不属于直接布局意义上的 ABI 稳定类型,但可按 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的桥接规则用于 `extern fn`、`@fixed fn`、`@fixed` 方法与 `@fixed spec` 的参数/返回值位置。
+- 普通 `type` 可以包含 `@fixed` 值字段; 但 `@fixed type` 的直接字段布局不能直接依赖普通 `type`、对象形状 `spec`、`string`、数组、闭包或其他托管对象类型。
 - 生命周期不由 `@fixed` 自动变成“总是手动释放”; 更准确的规则是: `@fixed` ABI 值不受运行时托管,其生命周期由存储位置和资源拥有关系决定。
 - 若 `@fixed` 值通过外部分配获得或内部持有外部资源,则应通过显式的 `free`、`close` 或同类协议释放。
 
