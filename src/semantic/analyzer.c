@@ -11376,6 +11376,17 @@ finish:
     if (out_errors != NULL) {
         *out_errors = NULL;
     }
+    /* Phase 1B: post-pass that classifies user `type` decls into acyclic vs
+     * potentially-cyclic via Tarjan SCC over the managed-reference graph.
+     * Failure here is treated as fatal — codegen relies on the marker table
+     * being either complete or empty, never partial. */
+    if (out_analysis != NULL && *out_analysis != NULL) {
+        if (!feng_semantic_compute_type_cyclicity(*out_analysis)) {
+            feng_semantic_analysis_free(*out_analysis);
+            *out_analysis = NULL;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -11390,6 +11401,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->modules[index].programs);
     }
     free(analysis->modules);
+    free(analysis->type_markers);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

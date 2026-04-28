@@ -28,10 +28,46 @@ typedef enum FengTypeTag {
 
 typedef void (*FengFinalizerFn)(void *self);
 
+/* Static description of a single managed reference slot inside an object.
+ * `offset` is the byte offset of the slot relative to the object base
+ * (i.e. relative to its FengManagedHeader). `static_desc` is the descriptor
+ * the slot was declared to hold; it MAY be NULL when the slot is polymorphic
+ * (e.g. a closure capture of a managed value whose precise type the codegen
+ * cannot pin down at emission time). The cycle collector treats `static_desc`
+ * as a hint only — the actual descriptor of the pointed-to object is always
+ * read from its own header.
+ *
+ * This metadata is consumed exclusively by the runtime cycle collector
+ * (Phase 1B). The deterministic ARC release path does not consult it; the
+ * codegen-emitted user finalizer remains the sole owner of the per-field
+ * release sequence so the ARC fast path stays Phase 1A compatible. */
+typedef struct FengManagedFieldEntry {
+    size_t offset;
+    const struct FengTypeDescriptor *static_desc;
+} FengManagedFieldEntry;
+
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
     FengFinalizerFn finalizer;   /* optional user-defined finalizer */
+
+    /* --- Phase 1B reference-graph metadata ----------------------------- */
+
+    /* True iff the static type-reference graph places this type in a
+     * non-trivial strongly-connected component (i.e. self-loop or part of a
+     * cycle). The cycle collector only ever enqueues objects whose descriptor
+     * has this flag set; acyclic objects bypass the candidate buffer entirely
+     * and follow the deterministic ARC release path with zero collector
+     * overhead. */
+    bool is_potentially_cyclic;
+
+    /* Static trace table: enumeration of every managed reference slot
+     * directly held by an instance of this type. Fixed-layout types (user
+     * `type`, closures with concrete capture lists) populate it; variable-
+     * layout built-ins (string/array) leave it empty and expose their
+     * managed children through a tag-specific runtime hook instead. */
+    size_t managed_field_count;
+    const FengManagedFieldEntry *managed_fields;
 } FengTypeDescriptor;
 
 /* Built-in descriptors used by string/array helpers. Generated code may also

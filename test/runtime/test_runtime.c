@@ -287,6 +287,90 @@ static void test_exception_nested_propagation(void) {
     ASSERT(feng_exception_current() == NULL);
 }
 
+/* --- Finalizer resurrection (Phase 1B-1) ------------------------------- */
+
+/* Test fixture: a descriptor whose finalizer republishes `self` into a global
+ * slot, simulating user code that accidentally (or intentionally) revives the
+ * object from within its own finalizer. */
+static void *g_resurrect_slot = NULL;
+static int   g_resurrect_calls = 0;
+static int   g_resurrect_remaining = 0; /* how many more times to resurrect */
+
+static void resurrect_finalizer(void *self) {
+    ++g_resurrect_calls;
+    if (g_resurrect_remaining > 0) {
+        --g_resurrect_remaining;
+        /* Republish self by retaining; the slot is a long-lived global. */
+        g_resurrect_slot = feng_retain(self);
+    }
+}
+
+static const FengTypeDescriptor resurrect_descriptor = {
+    .name = "test.Resurrect",
+    .size = sizeof(TestObject),
+    .finalizer = resurrect_finalizer,
+};
+
+static void test_finalizer_resurrection_then_release(void) {
+    TestObject *obj;
+
+    g_resurrect_slot = NULL;
+    g_resurrect_calls = 0;
+    g_resurrect_remaining = 1;
+
+    obj = (TestObject *)feng_object_new(&resurrect_descriptor);
+    ASSERT(obj->header.refcount == 1U);
+
+    /* Drop last reference; finalizer fires, republishes self -> resurrected. */
+    feng_release(obj);
+    ASSERT(g_resurrect_calls == 1);
+    ASSERT(g_resurrect_slot == obj);
+    ASSERT(obj->header.refcount == 1U);
+
+    /* Drop the resurrected reference; this time finalizer does NOT resurrect,
+     * so the object must actually be freed and the finalizer must run again. */
+    g_resurrect_slot = NULL;
+    feng_release(obj);
+    ASSERT(g_resurrect_calls == 2);
+}
+
+static void test_finalizer_resurrection_reruns_on_next_release(void) {
+    TestObject *obj;
+    int i;
+
+    g_resurrect_slot = NULL;
+    g_resurrect_calls = 0;
+    g_resurrect_remaining = 3; /* resurrect three times */
+
+    obj = (TestObject *)feng_object_new(&resurrect_descriptor);
+
+    /* Each release should trigger another finalizer run while resurrections
+     * remain; once they run out the object is finally freed. */
+    for (i = 0; i < 3; ++i) {
+        feng_release(obj);
+        ASSERT(g_resurrect_calls == i + 1);
+        ASSERT(g_resurrect_slot == obj);
+        ASSERT(obj->header.refcount == 1U);
+        g_resurrect_slot = NULL;
+    }
+
+    /* 4th release: g_resurrect_remaining == 0, no resurrection -> free. */
+    feng_release(obj);
+    ASSERT(g_resurrect_calls == 4);
+}
+
+static void test_finalizer_no_resurrection_releases(void) {
+    TestObject *obj;
+
+    /* Reuses test_object_descriptor which has a plain non-resurrecting
+     * finalizer; verifies the new re-check path still frees in the common
+     * case. */
+    g_finalize_count = 0;
+    obj = (TestObject *)feng_object_new(&test_object_descriptor);
+    feng_release(obj);
+    ASSERT(g_finalize_count == 1);
+}
+
 int main(void) {
     test_object_retain_release();
     test_retain_release_nullsafe();
@@ -300,6 +384,9 @@ int main(void) {
     test_exception_caught();
     test_exception_managed_value_caught();
     test_exception_nested_propagation();
+    test_finalizer_resurrection_then_release();
+    test_finalizer_resurrection_reruns_on_next_release();
+    test_finalizer_no_resurrection_releases();
 
     fputs("test_runtime: ok\n", stdout);
     return 0;

@@ -386,6 +386,10 @@ typedef struct CG {
     size_t string_literal_count;
     size_t string_literal_capacity;
 
+    /* Borrowed from feng_codegen_emit_program: lets descriptor emission look
+     * up Phase 1B cyclicity markers without re-running SCC. */
+    const FengSemanticAnalysis *analysis;
+
     /* Error state. */
     FengCodegenError *error;
     bool failed;
@@ -2727,12 +2731,75 @@ static void cg_emit_user_type_definition(CG *cg, const UserType *t) {
     if (!any_managed) buf_append_cstr(td, "    (void)_o;\n");
     buf_append_cstr(td, "}\n\n");
 
+    /* Phase 1B managed-field metadata: enumerate every slot of this type that
+     * holds a managed reference. The cycle collector reads this table to do
+     * non-mutating object traversal during trial deletion. The deterministic
+     * ARC release path does NOT consult it; the user finalizer above remains
+     * the sole owner of per-field release ordering. */
+    size_t managed_count = 0U;
+    for (size_t i = 0; i < t->field_count; i++) {
+        if (cgtype_is_managed(t->fields[i].type)) {
+            managed_count++;
+        }
+    }
+    if (managed_count > 0U) {
+        buf_append_fmt(td,
+            "static const FengManagedFieldEntry %s__managed_fields[] = {\n",
+            t->c_desc_name);
+        for (size_t i = 0; i < t->field_count; i++) {
+            const CGType *ft = t->fields[i].type;
+            if (!cgtype_is_managed(ft)) continue;
+            buf_append_fmt(td, "    { offsetof(struct %s, %s), ",
+                           t->c_struct_name, t->fields[i].c_name);
+            switch (ft->kind) {
+                case CG_TYPE_STRING:
+                    buf_append_cstr(td, "&feng_string_descriptor");
+                    break;
+                case CG_TYPE_ARRAY:
+                    buf_append_cstr(td, "&feng_array_descriptor");
+                    break;
+                case CG_TYPE_OBJECT:
+                    if (ft->user) {
+                        buf_append_fmt(td, "&%s", ft->user->c_desc_name);
+                    } else {
+                        buf_append_cstr(td, "NULL");
+                    }
+                    break;
+                default:
+                    buf_append_cstr(td, "NULL");
+                    break;
+            }
+            buf_append_cstr(td, " },\n");
+        }
+        buf_append_cstr(td, "};\n\n");
+    }
+
+    /* Look up Phase 1B cyclicity marker for this type. Acyclic types yield
+     * zero collector overhead at runtime: feng_release skips the candidate
+     * buffer entirely when descriptor->is_potentially_cyclic == false. */
+    bool is_cyclic = feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl);
+
     buf_append_fmt(td,
-        "const FengTypeDescriptor %s = { \"%s.%s\", sizeof(struct %s), %s };\n\n",
+        "const FengTypeDescriptor %s = {\n"
+        "    .name = \"%s.%s\",\n"
+        "    .size = sizeof(struct %s),\n"
+        "    .finalizer = %s,\n"
+        "    .is_potentially_cyclic = %s,\n"
+        "    .managed_field_count = %zu,\n",
         t->c_desc_name,
         cg->module_dot_name, t->feng_name,
         t->c_struct_name,
-        t->c_finalizer_name);
+        t->c_finalizer_name,
+        is_cyclic ? "true" : "false",
+        managed_count);
+    if (managed_count > 0U) {
+        buf_append_fmt(td,
+            "    .managed_fields = %s__managed_fields,\n",
+            t->c_desc_name);
+    } else {
+        buf_append_cstr(td, "    .managed_fields = NULL,\n");
+    }
+    buf_append_cstr(td, "};\n\n");
 }
 
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
@@ -2925,6 +2992,7 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     }
     CG cg = {0};
     cg.error = out_error;
+    cg.analysis = analysis;
     if (program_total == 0) {
         cg_fail(&cg, (FengToken){0}, "codegen: no programs to compile");
         cg_dispose(&cg);

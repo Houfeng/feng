@@ -6815,6 +6815,152 @@ static void test_for_in_loop_non_array_rejected(void) {
     feng_program_free(program);
 }
 
+/* ============================================================== */
+/* Phase 1B-2: type-cyclicity SCC analysis                         */
+/* ============================================================== */
+
+static const FengDecl *find_type_decl_by_name(
+        const FengSemanticAnalysis *analysis, const char *name) {
+    size_t name_len = strlen(name);
+    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        for (size_t pi = 0U; pi < mod->program_count; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            for (size_t di = 0U; di < prog->declaration_count; ++di) {
+                const FengDecl *d = prog->declarations[di];
+                if (d->kind != FENG_DECL_TYPE) continue;
+                const FengSlice *n = &d->as.type_decl.name;
+                if (n->length == name_len &&
+                    memcmp(n->data, name, name_len) == 0) {
+                    return d;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static void test_cyclicity_acyclic_chain_marks_none(void) {
+    const char *src =
+        "pu mod demo.cyc;\n"
+        "type Leaf { let id: int; }\n"
+        "type Mid { let leaf: Leaf; }\n"
+        "type Top { let mid: Mid; }\n";
+    FengProgram *program = parse_program_or_die("acyc.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    const FengDecl *leaf = find_type_decl_by_name(analysis, "Leaf");
+    const FengDecl *mid = find_type_decl_by_name(analysis, "Mid");
+    const FengDecl *top = find_type_decl_by_name(analysis, "Top");
+    ASSERT(leaf && mid && top);
+    ASSERT(!feng_semantic_type_is_potentially_cyclic(analysis, leaf));
+    ASSERT(!feng_semantic_type_is_potentially_cyclic(analysis, mid));
+    ASSERT(!feng_semantic_type_is_potentially_cyclic(analysis, top));
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_cyclicity_self_loop_marks_self(void) {
+    const char *src =
+        "pu mod demo.cyc;\n"
+        "type Node { var next: Node; }\n"
+        "type Other { let id: int; }\n";
+    FengProgram *program = parse_program_or_die("self.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    const FengDecl *node = find_type_decl_by_name(analysis, "Node");
+    const FengDecl *other = find_type_decl_by_name(analysis, "Other");
+    ASSERT(node && other);
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, node));
+    ASSERT(!feng_semantic_type_is_potentially_cyclic(analysis, other));
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_cyclicity_two_node_cycle_marks_both(void) {
+    const char *src =
+        "pu mod demo.cyc;\n"
+        "type A { var b: B; }\n"
+        "type B { var a: A; }\n"
+        "type C { let id: int; }\n";
+    FengProgram *program = parse_program_or_die("twocyc.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    const FengDecl *a = find_type_decl_by_name(analysis, "A");
+    const FengDecl *b = find_type_decl_by_name(analysis, "B");
+    const FengDecl *c = find_type_decl_by_name(analysis, "C");
+    ASSERT(a && b && c);
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, a));
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, b));
+    ASSERT(!feng_semantic_type_is_potentially_cyclic(analysis, c));
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_cyclicity_three_node_cycle_marks_all(void) {
+    const char *src =
+        "pu mod demo.cyc;\n"
+        "type A { var b: B; }\n"
+        "type B { var c: C; }\n"
+        "type C { var a: A; }\n";
+    FengProgram *program = parse_program_or_die("threecyc.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    const FengDecl *a = find_type_decl_by_name(analysis, "A");
+    const FengDecl *b = find_type_decl_by_name(analysis, "B");
+    const FengDecl *c = find_type_decl_by_name(analysis, "C");
+    ASSERT(a && b && c);
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, a));
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, b));
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, c));
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_cyclicity_array_mediated_cycle_marks_both(void) {
+    /* B contains an array of A, and A back-references B; an array of T is a
+     * managed reference for cyclicity purposes, so {A,B} form an SCC. */
+    const char *src =
+        "pu mod demo.cyc;\n"
+        "type A { var owner: B; }\n"
+        "type B { var children: A[]; }\n";
+    FengProgram *program = parse_program_or_die("arrcyc.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    const FengDecl *a = find_type_decl_by_name(analysis, "A");
+    const FengDecl *b = find_type_decl_by_name(analysis, "B");
+    ASSERT(a && b);
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, a));
+    ASSERT(feng_semantic_type_is_potentially_cyclic(analysis, b));
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -6823,6 +6969,11 @@ int main(void) {
     test_match_let_bound_label_accepted();
     test_for_in_loop_array_accepted();
     test_for_in_loop_non_array_rejected();
+    test_cyclicity_acyclic_chain_marks_none();
+    test_cyclicity_self_loop_marks_self();
+    test_cyclicity_two_node_cycle_marks_both();
+    test_cyclicity_three_node_cycle_marks_all();
+    test_cyclicity_array_mediated_cycle_marks_both();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
