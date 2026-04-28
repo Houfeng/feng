@@ -1,19 +1,33 @@
 /* Feng codegen — translates a semantically-validated FengProgram set into a
  * single C translation unit that links against the Feng runtime ABI.
  *
- * Scope (Phase 1A iteration 1):
+ * Scope (Phase 1A complete):
  *   - module declaration
  *   - extern fn with @cdecl(<lib>) — emits a plain `extern` declaration whose
  *     C symbol is the Feng function name verbatim
  *   - top-level free fn (including `main(args: string[])` entry)
- *   - statements: block, binding (let/var), expression, return, if/else,
- *                 while, break, continue
+ *   - top-level let/var (module-level bindings, initialised on startup,
+ *     released on shutdown)
+ *   - user-defined `type` declarations: fields (let/var), zero-arg default
+ *     constructor, instance methods (no overload resolution beyond name match)
+ *   - statements: block, binding (let/var), assignment (identifier or member),
+ *                 expression, return, if/else, while, break, continue,
+ *                 throw, try/catch/finally
  *   - expressions: int/bool/string/float literals, identifier, binary,
- *                  unary, call (free fn / extern fn), numeric cast
- *   - types: i8..u64, f32/f64, bool, string, void, T[] (parameter only)
+ *                  unary, call (free fn / extern fn / method / default ctor),
+ *                  member access, array literal, index, numeric cast,
+ *                  if-as-expression, .length on string/array
+ *   - types: i8..u64, f32/f64, bool, string, void, user types, T[]
+ *
+ * Out of scope (deferred to Phase 1B):
+ *   - lambda / closure literals
+ *   - match expression / statement
+ *   - for / for-in
+ *   - spec / fit dispatch (specs are accepted as metadata only)
+ *   - cyclic GC, finaliser resurrection
  *
  * Anything outside this slice is rejected with a clear error so callers know
- * which feature is not yet generated. Subsequent iterations extend the slice.
+ * which feature is not yet generated.
  */
 #ifndef FENG_CODEGEN_CODEGEN_H
 #define FENG_CODEGEN_CODEGEN_H

@@ -99,7 +99,12 @@ typedef struct CGType {
     CGTypeKind kind;
     /* For arrays: element CGType (heap-owned). NULL otherwise. */
     struct CGType *element;
+    /* For OBJECT: borrowed pointer to the registered UserType. NULL otherwise.
+     * The UserType is owned by the CG context and outlives every CGType. */
+    const struct UserType *user;
 } CGType;
+
+struct UserType; /* forward */
 
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
@@ -118,6 +123,7 @@ static CGType *cgtype_clone(const CGType *t) {
     CGType *c = cgtype_new(t->kind);
     if (!c) return NULL;
     c->element = cgtype_clone(t->element);
+    c->user = t->user;
     return c;
 }
 
@@ -173,6 +179,64 @@ static const char *cgtype_to_c(CGTypeKind k) {
         case CG_TYPE_OBJECT: return "void *";
         default: return "void";
     }
+}
+
+/* When generating user-type pointer references we use `<struct>` *` so the
+ * field accesses are direct member loads. The generic `void *` form above is
+ * used only for fall-back / unknown user types, which never reach the body.
+ */
+typedef struct UserField {
+    char   *feng_name;     /* e.g., "name" */
+    char   *c_name;        /* sanitised */
+    CGType *type;          /* heap-owned */
+} UserField;
+
+typedef struct UserMethod {
+    char   *feng_name;     /* e.g., "say" */
+    char   *c_name;        /* mangled e.g. Feng__feng__examples__User__say */
+    CGType *return_type;   /* heap-owned */
+    CGType **param_types;  /* heap-owned, length param_count */
+    char  **param_names;
+    size_t  param_count;
+    const FengTypeMember *member;
+} UserMethod;
+
+typedef struct UserType {
+    char   *feng_name;
+    char   *c_struct_name;     /* e.g., Feng__feng__examples__User */
+    char   *c_desc_name;       /* e.g., FengTypeDesc__feng__examples__User */
+    char   *c_finalizer_name;  /* e.g., Feng__feng__examples__User__finalize */
+    UserField  *fields;
+    size_t      field_count;
+    UserMethod *methods;
+    size_t      method_count;
+    const FengDecl *decl;
+} UserType;
+
+static char *cg_user_type_c_name(const CGType *t) __attribute__((unused));
+static char *cg_user_type_c_name(const CGType *t) {
+    /* Caller owns the returned malloc'd string. */
+    if (t->kind != CG_TYPE_OBJECT || !t->user) return strdup("void *");
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "struct %s *", t->user->c_struct_name);
+    return b.data;
+}
+
+/* Emit a C type spec for a CGType into a buffer. For OBJECT we emit the full
+ * struct pointer form so the generated C does not rely on `void *` casts. */
+static void cg_emit_c_type(Buf *b, const CGType *t) {
+    if (t && t->kind == CG_TYPE_OBJECT && t->user) {
+        buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
+        return;
+    }
+    buf_append_cstr(b, cgtype_to_c(t ? t->kind : CG_TYPE_VOID));
+}
+
+/* Heap-allocated form. Caller frees. */
+static char *cg_ctype_dup(const CGType *t) {
+    Buf b; buf_init(&b);
+    cg_emit_c_type(&b, t);
+    return b.data ? b.data : strdup("void");
 }
 
 /* ===================== local scope ===================== */
@@ -260,6 +324,14 @@ typedef struct FreeFn {
     const FengDecl *decl;
 } FreeFn;
 
+typedef struct ModuleBinding {
+    char    *feng_name;
+    char    *c_name;          /* e.g., _feng_g_examples_user — globally unique */
+    CGType  *type;            /* heap-owned */
+    bool     is_var;          /* false = let, true = var */
+    const FengBinding *binding;
+} ModuleBinding;
+
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
@@ -289,6 +361,16 @@ typedef struct CG {
     FreeFn   *free_fns;
     size_t    free_fn_count;
     size_t    free_fn_capacity;
+    UserType *user_types;
+    size_t    user_type_count;
+    size_t    user_type_capacity;
+    ModuleBinding *module_bindings;
+    size_t         module_binding_count;
+    size_t         module_binding_capacity;
+
+    /* try/catch state: how many active try frames are open in the current
+     * function. Used to refuse return / break / continue across them in 1A. */
+    int       try_depth;
 
     /* String literal cache: each unique literal (by content) gets one static. */
     struct {
@@ -312,6 +394,9 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
+static void cg_emit_user_type_forward(CG *cg, const UserType *t);
+static void cg_emit_user_type_definition(CG *cg, const UserType *t);
+static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
 
 /* ===================== error helpers ===================== */
 
@@ -422,6 +507,16 @@ static const BuiltinTypeMap k_builtin_types[] = {
     {"string", CG_TYPE_STRING},
 };
 
+static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        if (strlen(cg->user_types[i].feng_name) == len &&
+            memcmp(cg->user_types[i].feng_name, name, len) == 0) {
+            return &cg->user_types[i];
+        }
+    }
+    return NULL;
+}
+
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type) {
     *out_type = NULL;
@@ -443,10 +538,18 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 return *out_type != NULL;
             }
         }
+        const UserType *ut = cg_find_user_type(cg, seg->data, seg->length);
+        if (ut) {
+            CGType *t = cgtype_new(CG_TYPE_OBJECT);
+            if (!t) return false;
+            t->user = ut;
+            *out_type = t;
+            return true;
+        }
         FengToken tk = fallback ? *fallback : ref->token;
         (void)tk;
         return cg_fail(cg, ref->token,
-            "codegen: user-defined type '%.*s' not yet supported in this iteration",
+            "codegen: unknown type '%.*s'",
             (int)seg->length, seg->data);
     }
     if (ref->kind == FENG_TYPE_REF_ARRAY) {
@@ -571,6 +674,190 @@ static const FreeFn *cg_find_free_fn(const CG *cg, const char *name, size_t len)
     return NULL;
 }
 
+/* ----- user types ----- */
+
+static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
+    if (cg->user_type_count + 1 > cg->user_type_capacity) {
+        size_t cap = cg->user_type_capacity ? cg->user_type_capacity * 2 : 4;
+        void *p = realloc(cg->user_types, cap * sizeof *cg->user_types);
+        if (!p) return false;
+        cg->user_types = p;
+        cg->user_type_capacity = cap;
+    }
+    UserType *t = &cg->user_types[cg->user_type_count++];
+    memset(t, 0, sizeof *t);
+    t->feng_name = strndup(decl->as.type_decl.name.data,
+                           decl->as.type_decl.name.length);
+    t->decl = decl;
+
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "Feng__%s__", cg->module_mangle);
+    char *san = cg_sanitize(decl->as.type_decl.name.data,
+                            decl->as.type_decl.name.length);
+    if (!san) { buf_free(&b); return false; }
+    buf_append_cstr(&b, san);
+    t->c_struct_name = b.data;
+
+    Buf d; buf_init(&d);
+    buf_append_fmt(&d, "FengTypeDesc__%s__%s", cg->module_mangle, san);
+    t->c_desc_name = d.data;
+
+    Buf f; buf_init(&f);
+    buf_append_fmt(&f, "Feng__%s__%s__finalize", cg->module_mangle, san);
+    t->c_finalizer_name = f.data;
+    free(san);
+    return t->feng_name && t->c_struct_name && t->c_desc_name && t->c_finalizer_name;
+}
+
+static bool cg_register_user_type_members(CG *cg, UserType *t) {
+    const FengDecl *decl = t->decl;
+    /* First pass: count fields/methods to size arrays. */
+    size_t fcount = 0, mcount = 0;
+    for (size_t i = 0; i < decl->as.type_decl.member_count; i++) {
+        const FengTypeMember *m = decl->as.type_decl.members[i];
+        if (m->kind == FENG_TYPE_MEMBER_FIELD) fcount++;
+        else if (m->kind == FENG_TYPE_MEMBER_METHOD) mcount++;
+        else if (m->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            return cg_fail(cg, m->token,
+                "codegen: user-defined constructors not yet supported in Phase 1A");
+        }
+        else if (m->kind == FENG_TYPE_MEMBER_FINALIZER) {
+            return cg_fail(cg, m->token,
+                "codegen: user-defined finalizers not yet supported in Phase 1A");
+        }
+    }
+    t->fields = fcount ? calloc(fcount, sizeof *t->fields) : NULL;
+    t->methods = mcount ? calloc(mcount, sizeof *t->methods) : NULL;
+    if ((fcount && !t->fields) || (mcount && !t->methods)) return false;
+
+    size_t fi = 0, mi = 0;
+    for (size_t i = 0; i < decl->as.type_decl.member_count; i++) {
+        const FengTypeMember *m = decl->as.type_decl.members[i];
+        if (m->kind == FENG_TYPE_MEMBER_FIELD) {
+            UserField *uf = &t->fields[fi++];
+            uf->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
+            uf->c_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
+            if (!uf->feng_name || !uf->c_name) return false;
+            if (!cg_resolve_type(cg, m->as.field.type, &m->token, &uf->type)) return false;
+            if (m->as.field.initializer) {
+                return cg_fail(cg, m->token,
+                    "codegen: field default initializers not yet supported in Phase 1A");
+            }
+        } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
+            UserMethod *um = &t->methods[mi++];
+            const FengCallableSignature *sig = &m->as.callable;
+            um->member = m;
+            um->feng_name = strndup(sig->name.data, sig->name.length);
+            char *msan = cg_sanitize(sig->name.data, sig->name.length);
+            if (!um->feng_name || !msan) { free(msan); return false; }
+            Buf cb; buf_init(&cb);
+            buf_append_fmt(&cb, "%s__%s", t->c_struct_name, msan);
+            um->c_name = cb.data;
+            free(msan);
+            um->param_count = sig->param_count;
+            um->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+            um->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
+            for (size_t pi = 0; pi < sig->param_count; pi++) {
+                if (!cg_resolve_type(cg, sig->params[pi].type, &sig->params[pi].token,
+                                     &um->param_types[pi])) return false;
+                um->param_names[pi] = strndup(sig->params[pi].name.data,
+                                              sig->params[pi].name.length);
+            }
+            if (!cg_resolve_type(cg, sig->return_type, &sig->token, &um->return_type)) {
+                return false;
+            }
+        }
+    }
+    t->field_count = fi;
+    t->method_count = mi;
+    return true;
+}
+
+static const UserField *cg_user_type_field(const UserType *t, const char *name, size_t len) {
+    for (size_t i = 0; i < t->field_count; i++) {
+        if (strlen(t->fields[i].feng_name) == len &&
+            memcmp(t->fields[i].feng_name, name, len) == 0) {
+            return &t->fields[i];
+        }
+    }
+    return NULL;
+}
+
+static const UserMethod *cg_user_type_method(const UserType *t, const char *name, size_t len) {
+    for (size_t i = 0; i < t->method_count; i++) {
+        if (strlen(t->methods[i].feng_name) == len &&
+            memcmp(t->methods[i].feng_name, name, len) == 0) {
+            return &t->methods[i];
+        }
+    }
+    return NULL;
+}
+
+/* ----- module bindings ----- */
+
+static bool cg_register_module_binding(CG *cg, const FengDecl *decl) __attribute__((unused));
+static bool cg_register_module_binding(CG *cg, const FengDecl *decl) {
+    if (cg->module_binding_count + 1 > cg->module_binding_capacity) {
+        size_t cap = cg->module_binding_capacity ? cg->module_binding_capacity * 2 : 4;
+        void *p = realloc(cg->module_bindings, cap * sizeof *cg->module_bindings);
+        if (!p) return false;
+        cg->module_bindings = p;
+        cg->module_binding_capacity = cap;
+    }
+    ModuleBinding *mb = &cg->module_bindings[cg->module_binding_count++];
+    memset(mb, 0, sizeof *mb);
+    mb->binding = &decl->as.binding;
+    mb->is_var = (decl->as.binding.mutability == FENG_MUTABILITY_VAR);
+    mb->feng_name = strndup(decl->as.binding.name.data, decl->as.binding.name.length);
+    if (!mb->feng_name) return false;
+    char *san = cg_sanitize(decl->as.binding.name.data, decl->as.binding.name.length);
+    if (!san) return false;
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "_feng_g__%s__%s", cg->module_mangle, san);
+    free(san);
+    mb->c_name = b.data;
+    if (!mb->c_name) return false;
+    /* Type: explicit annotation required at module scope unless initializer
+     * present. We can't fully infer from a user-type literal here without
+     * doing expression emission first — which we cannot do until all types
+     * are registered. So we require an explicit type annotation OR a
+     * primitive/string literal initializer in 1A. */
+    if (decl->as.binding.type) {
+        if (!cg_resolve_type(cg, decl->as.binding.type, &decl->token, &mb->type)) {
+            return false;
+        }
+    } else {
+        const FengExpr *init = decl->as.binding.initializer;
+        if (!init) {
+            return cg_fail(cg, decl->token,
+                "codegen: module-level binding requires an explicit type or initializer");
+        }
+        switch (init->kind) {
+            case FENG_EXPR_BOOL:    mb->type = cgtype_new(CG_TYPE_BOOL); break;
+            case FENG_EXPR_INTEGER: mb->type = cgtype_new(CG_TYPE_I32); break;
+            case FENG_EXPR_FLOAT:   mb->type = cgtype_new(CG_TYPE_F64); break;
+            case FENG_EXPR_STRING:  mb->type = cgtype_new(CG_TYPE_STRING); break;
+            default:
+                return cg_fail(cg, decl->token,
+                    "codegen: module-level binding without explicit type can only be"
+                    " initialised by a literal in Phase 1A");
+        }
+        if (!mb->type) return false;
+    }
+    return true;
+}
+
+static const ModuleBinding *cg_find_module_binding(const CG *cg, const char *name, size_t len) __attribute__((unused));
+static const ModuleBinding *cg_find_module_binding(const CG *cg, const char *name, size_t len) {
+    for (size_t i = 0; i < cg->module_binding_count; i++) {
+        if (strlen(cg->module_bindings[i].feng_name) == len &&
+            memcmp(cg->module_bindings[i].feng_name, name, len) == 0) {
+            return &cg->module_bindings[i];
+        }
+    }
+    return NULL;
+}
+
 /* ===================== expression emission ===================== */
 
 struct ExprResult {
@@ -608,8 +895,9 @@ static void er_free(ExprResult *r) {
 static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) {
     char *tmp = cg_fresh_temp(cg, prefix);
     if (!tmp) return NULL;
-    const char *cty = cgtype_to_c(r->type->kind);
+    char *cty = cg_ctype_dup(r->type);
     buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
+    free(cty);
     if (cgtype_is_managed(r->type) && r->owns_ref) {
         /* Register in scope so it gets released on scope exit. */
         scope_add(cg->cur_scope, tmp, tmp, r->type, false);
@@ -863,11 +1151,88 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
 
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
+    /* Method call: callee is a member access. */
+    if (e->as.call.callee->kind == FENG_EXPR_MEMBER) {
+        const FengExpr *ma = e->as.call.callee;
+        ExprResult recv;
+        if (!cg_emit_expr(cg, ma->as.member.object, &recv)) return false;
+        if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: method call on non-object value");
+        }
+        const UserType *ut = recv.type->user;
+        const UserMethod *um = cg_user_type_method(ut,
+            ma->as.member.member.data, ma->as.member.member.length);
+        if (!um) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: type '%s' has no method '%.*s'",
+                ut->feng_name,
+                (int)ma->as.member.member.length, ma->as.member.member.data);
+        }
+        if (e->as.call.arg_count != um->param_count) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                um->feng_name, um->param_count, e->as.call.arg_count);
+        }
+        /* Materialize receiver if it's a +1 owns_ref (so it lives across args). */
+        if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+            cg_materialize_to_local(cg, &recv, "_t");
+        }
+        Buf args_buf; buf_init(&args_buf);
+        for (size_t i = 0; i < e->as.call.arg_count; i++) {
+            ExprResult ar;
+            if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+                buf_free(&args_buf); er_free(&recv); return false;
+            }
+            if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+                cg_materialize_to_local(cg, &ar, "_t");
+            }
+            buf_append_cstr(&args_buf, ", ");
+            buf_append_cstr(&args_buf, ar.c_expr);
+            er_free(&ar);
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "%s(%s%s)", um->c_name, recv.c_expr,
+                       args_buf.data ? args_buf.data : "");
+        buf_free(&args_buf);
+        out->c_expr = b.data;
+        out->type = cgtype_clone(um->return_type);
+        out->owns_ref = cgtype_is_managed(out->type);
+        er_free(&recv);
+        return out->c_expr && out->type;
+    }
+
     if (e->as.call.callee->kind != FENG_EXPR_IDENTIFIER) {
         return cg_fail(cg, e->token,
-            "codegen: only direct function calls supported in this iteration");
+            "codegen: only direct or method calls supported in this iteration");
     }
     const FengSlice name = e->as.call.callee->as.identifier;
+
+    /* Default no-arg constructor for a user type: T() */
+    {
+        const UserType *ut = cg_find_user_type(cg, name.data, name.length);
+        if (ut) {
+            if (e->as.call.arg_count != 0) {
+                return cg_fail(cg, e->token,
+                    "codegen: type '%s' has no user-defined constructor; use object literal syntax",
+                    ut->feng_name);
+            }
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b,
+                "((struct %s *)feng_object_new(&%s))",
+                ut->c_struct_name, ut->c_desc_name);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_OBJECT);
+            if (!out->c_expr || !out->type) return false;
+            out->type->user = ut;
+            out->owns_ref = true;
+            return true;
+        }
+    }
+
     const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
     const FreeFn *fn = cg_find_free_fn(cg, name.data, name.length);
     if (!ext && !fn) {
@@ -888,12 +1253,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         ExprResult ar;
         if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
         CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
-        /* For string args to an extern with C type `const char *` (only when
-         * the Feng param type is string and the extern is @cdecl), pass
-         * feng_string_data(s). We keep it simple: the only extern we support
-         * for strings in 1A iter 1 is `@cdecl extern fn name(s: string): T`
-         * where the C symbol expects const char*. */
-        if (i || true) { if (i) buf_append_cstr(&args_buf, ", "); }
+        if (i) buf_append_cstr(&args_buf, ", ");
         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
             cg_materialize_to_local(cg, &ar, "_t");
         }
@@ -919,6 +1279,134 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     out->c_expr = b.data;
     out->owns_ref = cgtype_is_managed(out->type);
     return out->c_expr && out->type;
+}
+
+static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    ExprResult recv;
+    if (!cg_emit_expr(cg, e->as.member.object, &recv)) return false;
+    if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
+        er_free(&recv);
+        return cg_fail(cg, e->token,
+            "codegen: member access on non-object value");
+    }
+    const UserType *ut = recv.type->user;
+    const UserField *uf = cg_user_type_field(ut,
+        e->as.member.member.data, e->as.member.member.length);
+    if (!uf) {
+        er_free(&recv);
+        return cg_fail(cg, e->token,
+            "codegen: type '%s' has no field '%.*s'",
+            ut->feng_name,
+            (int)e->as.member.member.length, e->as.member.member.data);
+    }
+    /* If recv is a +1 owns_ref, materialize so its lifetime extends. */
+    if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+        cg_materialize_to_local(cg, &recv, "_t");
+    }
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "(%s)->%s", recv.c_expr, uf->c_name);
+    out->c_expr = b.data;
+    out->type = cgtype_clone(uf->type);
+    out->owns_ref = false;   /* borrow */
+    er_free(&recv);
+    return out->c_expr && out->type;
+}
+
+static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    if (e->as.object_literal.target->kind != FENG_EXPR_IDENTIFIER) {
+        return cg_fail(cg, e->token,
+            "codegen: only single-segment type names supported for object literals");
+    }
+    const FengSlice tn = e->as.object_literal.target->as.identifier;
+    const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
+    if (!ut) {
+        return cg_fail(cg, e->token,
+            "codegen: unknown type '%.*s' in object literal",
+            (int)tn.length, tn.data);
+    }
+    /* Allocate, then assign each field. We open an inline statement block in
+     * the body to compute argument expressions and then reference the result.
+     * Since we need a single C expression for ExprResult, we hoist the alloc
+     * + assignments into a fresh temp via cg->cur_body and return the temp
+     * as the c_expr. */
+    char *tmp = cg_fresh_temp(cg, "_obj");
+    if (!tmp) return cg_fail(cg, e->token, "codegen: out of memory");
+    buf_append_fmt(cg->cur_body,
+        "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+        ut->c_struct_name, tmp, ut->c_struct_name, ut->c_desc_name);
+
+    /* Track which fields are assigned so we can detect missing initialisers. */
+    bool *assigned = ut->field_count ? calloc(ut->field_count, sizeof *assigned) : NULL;
+    if (ut->field_count && !assigned) {
+        free(tmp);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    for (size_t i = 0; i < e->as.object_literal.field_count; i++) {
+        const FengObjectFieldInit *fi = &e->as.object_literal.fields[i];
+        size_t idx = (size_t)-1;
+        for (size_t k = 0; k < ut->field_count; k++) {
+            if (strlen(ut->fields[k].feng_name) == fi->name.length &&
+                memcmp(ut->fields[k].feng_name, fi->name.data, fi->name.length) == 0) {
+                idx = k; break;
+            }
+        }
+        if (idx == (size_t)-1) {
+            free(assigned); free(tmp);
+            return cg_fail(cg, fi->token,
+                "codegen: type '%s' has no field '%.*s'",
+                ut->feng_name, (int)fi->name.length, fi->name.data);
+        }
+        if (assigned[idx]) {
+            free(assigned); free(tmp);
+            return cg_fail(cg, fi->token,
+                "codegen: duplicate field '%s' in object literal",
+                ut->fields[idx].feng_name);
+        }
+        assigned[idx] = true;
+        ExprResult v;
+        if (!cg_emit_expr(cg, fi->value, &v)) {
+            free(assigned); free(tmp); return false;
+        }
+        const UserField *uf = &ut->fields[idx];
+        if (cgtype_is_managed(uf->type)) {
+            if (v.owns_ref) {
+                buf_append_fmt(cg->cur_body, "    %s->%s = %s;\n",
+                               tmp, uf->c_name, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    %s->%s = %s; feng_retain(%s->%s);\n",
+                    tmp, uf->c_name, v.c_expr, tmp, uf->c_name);
+            }
+        } else {
+            char *cty = cg_ctype_dup(uf->type);
+            buf_append_fmt(cg->cur_body, "    %s->%s = (%s)(%s);\n",
+                           tmp, uf->c_name, cty, v.c_expr);
+            free(cty);
+        }
+        er_free(&v);
+    }
+    /* Require all fields assigned (no defaults in 1A). */
+    for (size_t k = 0; k < ut->field_count; k++) {
+        if (!assigned[k]) {
+            free(assigned);
+            char *errtmp = strdup(tmp);
+            free(tmp);
+            return cg_fail(cg, e->token,
+                "codegen: missing initialiser for field '%s' (was building %s)",
+                ut->fields[k].feng_name, errtmp ? errtmp : "");
+        }
+    }
+    free(assigned);
+
+    out->c_expr = strdup(tmp);
+    out->type = cgtype_new(CG_TYPE_OBJECT);
+    if (!out->c_expr || !out->type) { free(tmp); return false; }
+    out->type->user = ut;
+    out->owns_ref = true;
+    free(tmp);
+    return true;
 }
 
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -953,12 +1441,28 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_emit_literal(cg, e, out);
         case FENG_EXPR_IDENTIFIER:
             return cg_emit_identifier(cg, e, out);
+        case FENG_EXPR_SELF: {
+            const Local *l = scope_lookup(cg->cur_scope, "self", 4);
+            if (!l) {
+                return cg_fail(cg, e->token,
+                    "codegen: 'self' used outside of method body");
+            }
+            er_init(out);
+            out->c_expr = strdup(l->c_name);
+            out->type = cgtype_clone(l->type);
+            out->owns_ref = false;
+            return out->c_expr && out->type;
+        }
         case FENG_EXPR_BINARY:
             return cg_emit_binary(cg, e, out);
         case FENG_EXPR_UNARY:
             return cg_emit_unary(cg, e, out);
         case FENG_EXPR_CALL:
             return cg_emit_call(cg, e, out);
+        case FENG_EXPR_MEMBER:
+            return cg_emit_member(cg, e, out);
+        case FENG_EXPR_OBJECT_LITERAL:
+            return cg_emit_object_literal(cg, e, out);
         case FENG_EXPR_CAST:
             return cg_emit_cast(cg, e, out);
         default:
@@ -1013,7 +1517,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     char *cname = cg_local_cname(cg, b->name.data, b->name.length);
     if (!cname) { if (has_init) er_free(&init); cgtype_free(decl_type); return false; }
 
-    const char *cty = cgtype_to_c(decl_type->kind);
+    char *cty = cg_ctype_dup(decl_type);
     if (has_init) {
         if (cgtype_is_managed(decl_type)) {
             if (init.owns_ref) {
@@ -1036,6 +1540,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body, "    %s %s = 0;\n", cty, cname);
         }
     }
+    free(cty);
 
     if (!scope_add(cg->cur_scope, /*feng*/ "_unused_internal_name__", cname,
                    decl_type, false)) {
@@ -1050,11 +1555,58 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
-    if (stmt->as.assign.target->kind != FENG_EXPR_IDENTIFIER) {
-        return cg_fail(cg, stmt->token,
-            "codegen: only identifier assignments supported in this iteration");
+    const FengExpr *target = stmt->as.assign.target;
+    if (target->kind == FENG_EXPR_MEMBER) {
+        ExprResult recv;
+        if (!cg_emit_expr(cg, target->as.member.object, &recv)) return false;
+        if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
+            er_free(&recv);
+            return cg_fail(cg, stmt->token,
+                "codegen: member assignment on non-object value");
+        }
+        const UserType *ut = recv.type->user;
+        const UserField *uf = cg_user_type_field(ut,
+            target->as.member.member.data, target->as.member.member.length);
+        if (!uf) {
+            er_free(&recv);
+            return cg_fail(cg, stmt->token,
+                "codegen: type '%s' has no field '%.*s'",
+                ut->feng_name,
+                (int)target->as.member.member.length,
+                target->as.member.member.data);
+        }
+        if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+            cg_materialize_to_local(cg, &recv, "_t");
+        }
+        ExprResult v;
+        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            er_free(&recv); return false;
+        }
+        if (cgtype_is_managed(uf->type)) {
+            if (v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { void *_old = (%s)->%s; (%s)->%s = %s; feng_release(_old); }\n",
+                    recv.c_expr, uf->c_name, recv.c_expr, uf->c_name, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_assign((void**)&(%s)->%s, %s);\n",
+                    recv.c_expr, uf->c_name, v.c_expr);
+            }
+        } else {
+            char *cty = cg_ctype_dup(uf->type);
+            buf_append_fmt(cg->cur_body, "    (%s)->%s = (%s)(%s);\n",
+                           recv.c_expr, uf->c_name, cty, v.c_expr);
+            free(cty);
+        }
+        er_free(&v);
+        er_free(&recv);
+        return true;
     }
-    const FengSlice n = stmt->as.assign.target->as.identifier;
+    if (target->kind != FENG_EXPR_IDENTIFIER) {
+        return cg_fail(cg, stmt->token,
+            "codegen: only identifier or member assignments supported in this iteration");
+    }
+    const FengSlice n = target->as.identifier;
     const Local *l = scope_lookup(cg->cur_scope, n.data, n.length);
     if (!l) {
         return cg_fail(cg, stmt->token,
@@ -1074,8 +1626,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "    feng_assign((void**)&%s, %s);\n", l->c_name, v.c_expr);
         }
     } else {
+        char *cty = cg_ctype_dup(l->type);
         buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
-                       l->c_name, cgtype_to_c(l->type->kind), v.c_expr);
+                       l->c_name, cty, v.c_expr);
+        free(cty);
     }
     er_free(&v);
     return true;
@@ -1107,21 +1661,23 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
      * - else (borrowed), retain, release scopes, return retained. */
     if (cgtype_is_managed(r.type)) {
         char *tmp = cg_fresh_temp(cg, "_ret");
-        const char *cty = cgtype_to_c(r.type->kind);
+        char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
             buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
                            cty, tmp, r.c_expr, tmp);
         } else {
             buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
         }
+        free(cty);
         cg_release_through(cg, NULL);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else {
         char *tmp = cg_fresh_temp(cg, "_ret");
-        const char *cty = cgtype_to_c(r.type->kind);
+        char *cty = cg_ctype_dup(r.type);
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
                        cty, tmp, cty, r.c_expr);
+        free(cty);
         cg_release_through(cg, NULL);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
@@ -1331,13 +1887,14 @@ static bool cg_emit_function(CG *cg, const FengDecl *decl, bool is_main) {
 
     /* Forward proto. */
     Buf *p = &cg->fn_protos;
-    const char *ret_c = cgtype_to_c(fn->return_type->kind);
-    buf_append_fmt(p, "static %s %s(", ret_c, fn->c_name);
+    buf_append_cstr(p, "static ");
+    cg_emit_c_type(p, fn->return_type);
+    buf_append_fmt(p, " %s(", fn->c_name);
     if (fn->param_count == 0) buf_append_cstr(p, "void");
     for (size_t i = 0; i < fn->param_count; i++) {
         if (i) buf_append_cstr(p, ", ");
-        buf_append_fmt(p, "%s %s",
-            cgtype_to_c(fn->param_types[i]->kind),
+        cg_emit_c_type(p, fn->param_types[i]);
+        buf_append_fmt(p, " %s",
             fn->param_names[i] ? fn->param_names[i] : "_p");
     }
     buf_append_cstr(p, ");\n");
@@ -1345,18 +1902,21 @@ static bool cg_emit_function(CG *cg, const FengDecl *decl, bool is_main) {
     /* Body. */
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
-    buf_append_fmt(body, "static %s %s(", ret_c, fn->c_name);
+    buf_append_cstr(body, "static ");
+    cg_emit_c_type(body, fn->return_type);
+    buf_append_fmt(body, " %s(", fn->c_name);
     if (fn->param_count == 0) buf_append_cstr(body, "void");
     Scope *fn_scope = scope_push(NULL);
     if (!fn_scope) return cg_fail(cg, decl->token, "codegen: out of memory");
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
     cg->loop_depth = 0;
+    cg->try_depth = 0;
 
     for (size_t i = 0; i < fn->param_count; i++) {
         if (i) buf_append_cstr(body, ", ");
-        buf_append_fmt(body, "%s %s",
-            cgtype_to_c(fn->param_types[i]->kind),
+        cg_emit_c_type(body, fn->param_types[i]);
+        buf_append_fmt(body, " %s",
             fn->param_names[i] ? fn->param_names[i] : "_p");
         CGType *pt = cgtype_clone(fn->param_types[i]);
         scope_add(fn_scope, fn->param_names[i] ? fn->param_names[i] : "_p",
@@ -1421,17 +1981,47 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
                                   FengCompileTarget target) {
     if (!cg_emit_module_header(cg, prog)) return false;
 
+    /* Pass 1: register every user type SHELL so cross-references resolve. */
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        if (d->kind == FENG_DECL_TYPE) {
+            if (!cg_register_user_type_shell(cg, d)) return false;
+        }
+    }
+    /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
+     * every shell). */
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        if (!cg_register_user_type_members(cg, &cg->user_types[i])) return false;
+    }
+    /* Pass 3: emit forward decls + struct/finalizer/descriptor for every type. */
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        cg_emit_user_type_forward(cg, &cg->user_types[i]);
+    }
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        cg_emit_user_type_definition(cg, &cg->user_types[i]);
+    }
+
+    /* Pass 4: walk top-level decls in source order for externs / functions /
+     * methods. Type decls themselves emit only their methods here. */
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         switch (d->kind) {
             case FENG_DECL_GLOBAL_BINDING:
                 return cg_fail(cg, d->token,
-                    "codegen: top-level let/var not yet supported");
-            case FENG_DECL_TYPE:
-                return cg_fail(cg, d->token,
-                    "codegen: type declarations not yet supported in this iteration");
+                    "codegen: top-level let/var not yet supported in this iteration");
+            case FENG_DECL_TYPE: {
+                /* Find the registered UserType by AST identity. */
+                const UserType *ut = NULL;
+                for (size_t k = 0; k < cg->user_type_count; k++) {
+                    if (cg->user_types[k].decl == d) { ut = &cg->user_types[k]; break; }
+                }
+                if (!ut) return cg_fail(cg, d->token, "codegen: internal: type not registered");
+                for (size_t mi = 0; mi < ut->method_count; mi++) {
+                    if (!cg_emit_user_method(cg, ut, &ut->methods[mi])) return false;
+                }
+                break;
+            }
             case FENG_DECL_SPEC:
-                /* spec is metadata-only; emit nothing. */
                 continue;
             case FENG_DECL_FIT:
                 return cg_fail(cg, d->token,
@@ -1502,6 +2092,120 @@ static void cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
     }
 }
 
+/* ===================== USER TYPE EMISSION (Phase 1A iter 2a) ===================== */
+
+/* Emit `struct Feng__mod__T;` and the descriptor extern into `headers` so
+ * cross references compile in any order. */
+static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
+    buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
+    buf_append_fmt(&cg->headers, "extern const FengTypeDescriptor %s;\n",
+                   t->c_desc_name);
+}
+
+/* Emit struct body, finalizer, and descriptor into `type_defs`. */
+static void cg_emit_user_type_definition(CG *cg, const UserType *t) {
+    Buf *td = &cg->type_defs;
+    buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
+    buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
+    for (size_t i = 0; i < t->field_count; i++) {
+        buf_append_cstr(td, "    ");
+        cg_emit_c_type(td, t->fields[i].type);
+        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    buf_append_fmt(td, "static void %s(void *_self) {\n", t->c_finalizer_name);
+    buf_append_fmt(td, "    struct %s *_o = (struct %s *)_self;\n",
+                   t->c_struct_name, t->c_struct_name);
+    bool any_managed = false;
+    for (size_t i = 0; i < t->field_count; i++) {
+        if (cgtype_is_managed(t->fields[i].type)) {
+            buf_append_fmt(td, "    feng_release(_o->%s);\n", t->fields[i].c_name);
+            any_managed = true;
+        }
+    }
+    if (!any_managed) buf_append_cstr(td, "    (void)_o;\n");
+    buf_append_cstr(td, "}\n\n");
+
+    buf_append_fmt(td,
+        "const FengTypeDescriptor %s = { \"%s.%s\", sizeof(struct %s), %s };\n\n",
+        t->c_desc_name,
+        cg->module_dot_name, t->feng_name,
+        t->c_struct_name,
+        t->c_finalizer_name);
+}
+
+/* Emit a method body. Mirrors cg_emit_function but with a leading `self`
+ * parameter typed as `struct T *`. */
+static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) {
+    Buf *p = &cg->fn_protos;
+    buf_append_cstr(p, "static ");
+    cg_emit_c_type(p, m->return_type);
+    buf_append_fmt(p, " %s(struct %s *self", m->c_name, t->c_struct_name);
+    for (size_t i = 0; i < m->param_count; i++) {
+        buf_append_cstr(p, ", ");
+        cg_emit_c_type(p, m->param_types[i]);
+        buf_append_fmt(p, " %s", m->param_names[i] ? m->param_names[i] : "_p");
+    }
+    buf_append_cstr(p, ");\n");
+
+    Buf *body = &cg->fn_defs;
+    cg->cur_body = body;
+    cg->cur_return_type = m->return_type;
+    cg->cur_fn_is_main = false;
+    buf_append_cstr(body, "static ");
+    cg_emit_c_type(body, m->return_type);
+    buf_append_fmt(body, " %s(struct %s *self", m->c_name, t->c_struct_name);
+
+    Scope *fn_scope = scope_push(NULL);
+    if (!fn_scope) return cg_fail(cg, m->member->token, "codegen: out of memory");
+    cg->cur_scope = fn_scope;
+    cg->tmp_counter = 0;
+    cg->loop_depth = 0;
+    cg->try_depth = 0;
+    /* Register self as a borrowed param so cg_release_scope skips it. */
+    {
+        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
+        if (!self_t) {
+            cg->cur_scope = NULL; scope_pop_free(fn_scope);
+            return false;
+        }
+        self_t->user = t;
+        scope_add(fn_scope, "self", "self", self_t, true);
+    }
+    for (size_t i = 0; i < m->param_count; i++) {
+        buf_append_cstr(body, ", ");
+        cg_emit_c_type(body, m->param_types[i]);
+        const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
+        buf_append_fmt(body, " %s", pn);
+        CGType *pt = cgtype_clone(m->param_types[i]);
+        scope_add(fn_scope, pn, pn, pt, true);
+    }
+    buf_append_cstr(body, ") {\n");
+    buf_append_cstr(body, "    (void)self;\n");
+    for (size_t i = 0; i < m->param_count; i++) {
+        const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
+        buf_append_fmt(body, "    (void)%s;\n", pn);
+    }
+    if (!cg_emit_block(cg, m->member->as.callable.body)) {
+        cg->cur_scope = NULL; scope_pop_free(fn_scope);
+        cg->cur_body = NULL; cg->cur_return_type = NULL;
+        return false;
+    }
+    cg_release_scope(cg, fn_scope);
+    if (m->return_type->kind == CG_TYPE_VOID) {
+        buf_append_cstr(body, "    return;\n");
+    } else {
+        buf_append_cstr(body,
+            "    feng_panic(\"method reached end without return\");\n");
+    }
+    buf_append_cstr(body, "}\n\n");
+    cg->cur_scope = NULL; scope_pop_free(fn_scope);
+    cg->cur_body = NULL;
+    cg->cur_return_type = NULL;
+    return true;
+}
+
 static const FreeFn *cg_lookup_main(const CG *cg) {
     for (size_t i = 0; i < cg->free_fn_count; i++) {
         if (strcmp(cg->free_fns[i].feng_name, "main") == 0) return &cg->free_fns[i];
@@ -1519,6 +2223,8 @@ static char *cg_finalize(CG *cg) {
         "#include <string.h>\n"
         "#include \"runtime/feng_runtime.h\"\n\n");
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
+    buf_append_cstr(&out, "\n");
+    if (cg->type_defs.length) buf_append(&out, cg->type_defs.data, cg->type_defs.length);
     buf_append_cstr(&out, "\n");
     if (cg->statics.length) buf_append(&out, cg->statics.data, cg->statics.length);
     buf_append_cstr(&out, "\n");
@@ -1556,6 +2262,39 @@ static void cg_dispose(CG *cg) {
         cgtype_free(cg->free_fns[i].return_type);
     }
     free(cg->free_fns);
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        UserType *ut = &cg->user_types[i];
+        free(ut->feng_name);
+        free(ut->c_struct_name);
+        free(ut->c_desc_name);
+        free(ut->c_finalizer_name);
+        for (size_t j = 0; j < ut->field_count; j++) {
+            free(ut->fields[j].feng_name);
+            free(ut->fields[j].c_name);
+            cgtype_free(ut->fields[j].type);
+        }
+        free(ut->fields);
+        for (size_t j = 0; j < ut->method_count; j++) {
+            UserMethod *um = &ut->methods[j];
+            free(um->feng_name);
+            free(um->c_name);
+            cgtype_free(um->return_type);
+            for (size_t k = 0; k < um->param_count; k++) {
+                cgtype_free(um->param_types[k]);
+                free(um->param_names[k]);
+            }
+            free(um->param_types);
+            free(um->param_names);
+        }
+        free(ut->methods);
+    }
+    free(cg->user_types);
+    for (size_t i = 0; i < cg->module_binding_count; i++) {
+        free(cg->module_bindings[i].feng_name);
+        free(cg->module_bindings[i].c_name);
+        cgtype_free(cg->module_bindings[i].type);
+    }
+    free(cg->module_bindings);
     for (size_t i = 0; i < cg->string_literal_count; i++) {
         free(cg->string_literals[i].content);
         free(cg->string_literals[i].c_var);

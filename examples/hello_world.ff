@@ -1,21 +1,16 @@
 mod feng.examples;
 
-spec X {
-  let a: int;
-  let b: string;
-  fn foo(): void;
-}
+@cdecl("libc")
+extern fn puts(msg: string): int;
 
 type User {
   let name: string;
-  let age: int;
+  let age: i32;
+
   fn say(msg: string): void {
-    print(msg);
+    puts(msg);
   }
 }
-
-@cdecl("libc")
-extern fn print(msg: string): int;
 
 /* main function */
 fn main(args: string[]): void {
@@ -23,5 +18,5 @@ fn main(args: string[]): void {
     name: "Houfeng",
     age: 18
   };
-  print("Hello World: " + user.name);
+  user.say("Hello World: " + user.name);
 }

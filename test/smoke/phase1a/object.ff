@@ -1,0 +1,20 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type User {
+    let name: string;
+    let age: i32;
+
+    fn greet(prefix: string): string {
+        return prefix + self.name;
+    }
+}
+
+fn main(args: string[]) {
+    let u = User { name: "feng", age: 18 };
+    let m = u.greet("hello, ");
+    puts(m);
+    puts(u.name);
+}
