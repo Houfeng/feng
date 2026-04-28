@@ -1833,11 +1833,18 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "feng_string_default()"); break;
         case CG_TYPE_ARRAY: {
             char *desc = cg_array_element_descriptor(type->element);
-            const char *cty = cgtype_to_c(type->element ? type->element->kind : CG_TYPE_VOID);
+            /* Use full C type (including pointer star for managed elements)
+             * so sizeof matches the per-slot storage actually allocated by
+             * feng_array_new — see cg_emit_array_literal_typed for the
+             * canonical pattern. */
+            char *elem_cty = cg_ctype_dup(type->element);
             bool em = type->element ? cgtype_is_managed(type->element) : false;
             buf_append_fmt(&b, "feng_array_new(%s, sizeof(%s), %s, (size_t)0)",
-                           desc ? desc : "NULL", cty, em ? "true" : "false");
+                           desc ? desc : "NULL",
+                           elem_cty ? elem_cty : "void *",
+                           em ? "true" : "false");
             free(desc);
+            free(elem_cty);
             break;
         }
         case CG_TYPE_OBJECT: {
@@ -3047,14 +3054,14 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     break;
                 case CG_TYPE_ARRAY: {
                     char *desc = cg_array_element_descriptor(ft->element);
-                    const char *cty = cgtype_to_c(ft->element ?
-                        ft->element->kind : CG_TYPE_VOID);
+                    char *elem_cty = cg_ctype_dup(ft->element);
                     bool em = ft->element ? cgtype_is_managed(ft->element) : false;
                     buf_append_fmt(td,
                         "    _o->%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
                         t->fields[i].c_name, desc ? desc : "NULL",
-                        cty, em ? "true" : "false");
+                        elem_cty ? elem_cty : "void *", em ? "true" : "false");
                     free(desc);
+                    free(elem_cty);
                     break;
                 }
                 case CG_TYPE_OBJECT:
