@@ -215,6 +215,12 @@ typedef struct UserType {
      * generated method body; it owns the malloc'd string. */
     const FengTypeMember *finalizer;
     char   *c_finalizer_name;
+    /* Symbol name of the codegen-emitted "default zero" factory. This
+     * function is only emitted when the type is eligible for default-zero
+     * initialisation (no participation in an object-reference cycle). For
+     * cyclic types the slot stays NULL and any binding/field that would need
+     * a default zero of this type is rejected at semantic time. */
+    char   *c_default_zero_name;
     UserField  *fields;
     size_t      field_count;
     UserMethod *methods;
@@ -408,6 +414,9 @@ typedef struct CG {
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type);
 static bool cg_emit_block(CG *cg, const FengBlock *block);
+static bool cg_default_value_expr(CG *cg, const CGType *type,
+                                  const FengToken *blame,
+                                  char **out_expr);
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
@@ -726,6 +735,16 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
      * cg_emit_user_type_definition: types without managed fields don't get a
      * function emitted and leave the descriptor slot NULL. */
     t->c_release_children_name = NULL;
+    /* default_zero symbol is computed eagerly here so cross-type recursive
+     * default-zero calls can use it before the per-type body is emitted.
+     * Whether it is actually emitted (and whether it is legal to reference)
+     * is decided in cg_emit_user_type_definition / cg_emit_default_value. */
+    {
+        Buf z; buf_init(&z);
+        buf_append_fmt(&z, "%s__default_zero", t->c_struct_name);
+        t->c_default_zero_name = z.data;
+        if (!t->c_default_zero_name) { free(san); return false; }
+    }
     free(san);
     return t->feng_name && t->c_struct_name && t->c_desc_name;
 }
@@ -1424,16 +1443,28 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         er_free(&v);
     }
-    /* Require all fields assigned (no defaults in 1A). */
+    /* Fill any field the user omitted with that field's default zero value
+     * (Feng has no `null`; see docs/feng-builtin-type.md and
+     * docs/feng-type.md §5/§7). For managed fields the default expression
+     * yields a +1 owned reference assigned directly into the slot. */
     for (size_t k = 0; k < ut->field_count; k++) {
-        if (!assigned[k]) {
-            free(assigned);
-            char *errtmp = strdup(tmp);
-            free(tmp);
-            return cg_fail(cg, e->token,
-                "codegen: missing initialiser for field '%s' (was building %s)",
-                ut->fields[k].feng_name, errtmp ? errtmp : "");
+        if (assigned[k]) continue;
+        const UserField *uf = &ut->fields[k];
+        char *def_expr = NULL;
+        if (!cg_default_value_expr(cg, uf->type, &e->token, &def_expr)) {
+            free(assigned); free(tmp);
+            return false;
         }
+        if (cgtype_is_managed(uf->type)) {
+            buf_append_fmt(cg->cur_body, "    %s->%s = %s;\n",
+                           tmp, uf->c_name, def_expr);
+        } else {
+            char *cty = cg_ctype_dup(uf->type);
+            buf_append_fmt(cg->cur_body, "    %s->%s = (%s)(%s);\n",
+                           tmp, uf->c_name, cty, def_expr);
+            free(cty);
+        }
+        free(def_expr);
     }
     free(assigned);
 
@@ -1730,6 +1761,109 @@ static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
                    cname, cname, cname);
 }
 
+/* ---------- default-zero emission ----------
+ *
+ * Feng has no `null`. Every binding without an explicit initializer (and
+ * every object-literal field omitted by the user) takes the type's default
+ * zero value, see docs/feng-builtin-type.md and docs/feng-type.md §5/§7.
+ *
+ * The string default is the process-wide IMMORTAL singleton produced by
+ * feng_string_default(); the array default is a freshly allocated empty
+ * FengArray with the right element descriptor; the object default is a
+ * recursive zero instance produced by the per-type Feng__M__T__default_zero()
+ * factory emitted alongside the type. Cyclic object types (self- or
+ * mutually-referential) cannot have a finite default zero and must be
+ * rejected at compile time. */
+
+/* Recursive predicate: T is default-zero-safe iff T itself is acyclic AND
+ * every managed object field of T is itself default-zero-safe. The recursion
+ * terminates on the acyclic-types DAG. `visited` tracks the current DFS path
+ * to keep the algorithm robust even if the cyclicity marker is somehow
+ * inconsistent (defensive — feng_semantic_type_is_potentially_cyclic should
+ * already catch true cycles). */
+static bool cg_user_type_dz_safe_dfs(CG *cg, const UserType *t,
+                                     const UserType **stack, size_t depth,
+                                     size_t cap) {
+    if (feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl)) return false;
+    for (size_t i = 0; i < depth; i++) if (stack[i] == t) return false;
+    if (depth + 1 > cap) return false;  /* defensive */
+    stack[depth] = t;
+    for (size_t i = 0; i < t->field_count; i++) {
+        const CGType *ft = t->fields[i].type;
+        if (ft->kind != CG_TYPE_OBJECT || !ft->user) continue;
+        if (!cg_user_type_dz_safe_dfs(cg, ft->user, stack, depth + 1, cap)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_user_type_is_default_zero_safe(CG *cg, const UserType *t) {
+    /* Cap at user_type_count: any deeper path must contain a repeat, which
+     * the cycle marker would already have flagged. */
+    size_t cap = cg->user_type_count + 1;
+    const UserType **stack = calloc(cap, sizeof *stack);
+    if (!stack) return false;
+    bool ok = cg_user_type_dz_safe_dfs(cg, t, stack, 0, cap);
+    free(stack);
+    return ok;
+}
+
+/* Emit a C expression that produces the default-zero value of `type` and
+ * write it to *out_expr (caller-frees). For managed types the expression
+ * always carries a freshly-owned reference (+1 owns_ref semantics), with the
+ * exception of the IMMORTAL string singleton — it is also safe to treat as
+ * "owns_ref" because feng_release/feng_retain are no-ops on IMMORTAL refs.
+ *
+ * Returns false (and reports through cg_fail) when `type` is not eligible
+ * for default-zero (cyclic object type, or a type containing one). */
+static bool cg_default_value_expr(CG *cg, const CGType *type,
+                                  const FengToken *blame,
+                                  char **out_expr) {
+    Buf b; buf_init(&b);
+    switch (type->kind) {
+        case CG_TYPE_BOOL:
+            buf_append_cstr(&b, "false"); break;
+        case CG_TYPE_I8: case CG_TYPE_I16: case CG_TYPE_I32: case CG_TYPE_I64:
+        case CG_TYPE_U8: case CG_TYPE_U16: case CG_TYPE_U32: case CG_TYPE_U64:
+            buf_append_cstr(&b, "0"); break;
+        case CG_TYPE_F32: case CG_TYPE_F64:
+            buf_append_cstr(&b, "0.0"); break;
+        case CG_TYPE_STRING:
+            buf_append_cstr(&b, "feng_string_default()"); break;
+        case CG_TYPE_ARRAY: {
+            char *desc = cg_array_element_descriptor(type->element);
+            const char *cty = cgtype_to_c(type->element ? type->element->kind : CG_TYPE_VOID);
+            bool em = type->element ? cgtype_is_managed(type->element) : false;
+            buf_append_fmt(&b, "feng_array_new(%s, sizeof(%s), %s, (size_t)0)",
+                           desc ? desc : "NULL", cty, em ? "true" : "false");
+            free(desc);
+            break;
+        }
+        case CG_TYPE_OBJECT: {
+            if (!type->user) {
+                buf_free(&b);
+                return cg_fail(cg, blame ? *blame : (FengToken){0},
+                    "codegen: cannot default-zero an unresolved object type");
+            }
+            if (!cg_user_type_is_default_zero_safe(cg, type->user)) {
+                buf_free(&b);
+                return cg_fail(cg, blame ? *blame : (FengToken){0},
+                    "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
+                    type->user->feng_name);
+            }
+            buf_append_fmt(&b, "%s()", type->user->c_default_zero_name);
+            break;
+        }
+        default:
+            buf_free(&b);
+            return cg_fail(cg, blame ? *blame : (FengToken){0},
+                "codegen: cannot produce default value for this type");
+    }
+    *out_expr = b.data ? b.data : strdup("0");
+    return *out_expr != NULL;
+}
+
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     const FengBinding *b = &stmt->as.binding;
     /* Determine type: explicit annotation else inferred from initializer. */
@@ -1784,11 +1918,17 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         }
         er_free(&init);
     } else {
-        if (cgtype_is_managed(decl_type)) {
-            buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, cname);
-        } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = 0;\n", cty, cname);
+        /* No initializer: emit the type's default zero value. Per
+         * docs/feng-builtin-type.md & docs/feng-type.md §5/§7 every Feng
+         * type has a finite default zero (Feng has no `null`). For managed
+         * types the resulting reference is owned by this slot and joins the
+         * cleanup chain just like an explicit initializer. */
+        char *def_expr = NULL;
+        if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
+            free(cname); free(cty); cgtype_free(decl_type); return false;
         }
+        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, def_expr);
+        free(def_expr);
     }
     free(cty);
 
@@ -2598,7 +2738,25 @@ static void cg_emit_string_literal_init(CG *cg, Buf *body) {
 
 static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
     const FengExpr *init = mb->binding->initializer;
-    if (!init) return true;  /* zero/NULL static init suffices */
+    if (!init) {
+        /* No initializer: assign the type's default zero. For managed
+         * types the slot now owns a +1 reference (the static was zero-initialised
+         * to NULL/0 in pass 2b). */
+        char *def_expr = NULL;
+        if (!cg_default_value_expr(cg, mb->type, &mb->binding->token, &def_expr)) {
+            return false;
+        }
+        if (cgtype_is_managed(mb->type)) {
+            buf_append_fmt(cg->cur_body, "    %s = %s;\n", mb->c_name, def_expr);
+        } else {
+            char *cty = cg_ctype_dup(mb->type);
+            buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                           mb->c_name, cty, def_expr);
+            free(cty);
+        }
+        free(def_expr);
+        return true;
+    }
 
     /* Use a transient scope so any temporaries from the expression get
      * released after the assignment. */
@@ -2856,6 +3014,67 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "    .managed_fields = NULL,\n");
     }
     buf_append_cstr(td, "};\n\n");
+
+    /* Default-zero factory: per docs/feng-type.md §5/§7 every non-cyclic
+     * user object type has a recursive default zero instance. The factory
+     * allocates a fresh object via feng_object_new (which zeroes the struct
+     * memory and runs no constructor) and then materialises non-zero
+     * defaults for each managed field (string/array/object). Numeric/bool
+     * fields stay 0 from the calloc inside feng_object_new. The returned
+     * reference is owned by the caller (+1).
+     *
+     * Cyclic types intentionally have no factory; cg_default_value_expr
+     * rejects them and the c_default_zero_name slot is freed below. */
+    if (cg_user_type_is_default_zero_safe(cg, t)) {
+        /* Forward declare into headers so default_zero callers in any pass
+         * (including this same type's own field defaults) can reference it
+         * regardless of source order. */
+        buf_append_fmt(&cg->headers,
+            "struct %s *%s(void);\n",
+            t->c_struct_name, t->c_default_zero_name);
+        buf_append_fmt(td,
+            "struct %s *%s(void) {\n"
+            "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n",
+            t->c_struct_name, t->c_default_zero_name,
+            t->c_struct_name, t->c_struct_name, t->c_desc_name);
+        for (size_t i = 0; i < t->field_count; i++) {
+            const CGType *ft = t->fields[i].type;
+            switch (ft->kind) {
+                case CG_TYPE_STRING:
+                    buf_append_fmt(td,
+                        "    _o->%s = feng_string_default();\n",
+                        t->fields[i].c_name);
+                    break;
+                case CG_TYPE_ARRAY: {
+                    char *desc = cg_array_element_descriptor(ft->element);
+                    const char *cty = cgtype_to_c(ft->element ?
+                        ft->element->kind : CG_TYPE_VOID);
+                    bool em = ft->element ? cgtype_is_managed(ft->element) : false;
+                    buf_append_fmt(td,
+                        "    _o->%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                        t->fields[i].c_name, desc ? desc : "NULL",
+                        cty, em ? "true" : "false");
+                    free(desc);
+                    break;
+                }
+                case CG_TYPE_OBJECT:
+                    if (ft->user) {
+                        buf_append_fmt(td,
+                            "    _o->%s = %s();\n",
+                            t->fields[i].c_name,
+                            ft->user->c_default_zero_name);
+                    }
+                    break;
+                default:
+                    /* Numeric/bool: feng_object_new already zeroed. */
+                    break;
+            }
+        }
+        buf_append_cstr(td, "    return _o;\n}\n\n");
+    } else {
+        free(t->c_default_zero_name);
+        t->c_default_zero_name = NULL;
+    }
 }
 
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
@@ -3050,6 +3269,7 @@ static void cg_dispose(CG *cg) {
         free(ut->c_desc_name);
         free(ut->c_release_children_name);
         free(ut->c_finalizer_name);
+        free(ut->c_default_zero_name);
         for (size_t j = 0; j < ut->field_count; j++) {
             free(ut->fields[j].feng_name);
             free(ut->fields[j].c_name);

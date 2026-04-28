@@ -146,6 +146,12 @@ typedef struct FengString FengString;
  * exactly once at first use. The buffer is null-terminated. */
 FengString *feng_string_literal(const char *utf8, size_t length);
 
+/* Process-wide singleton empty string used as the `string` default zero value.
+ * Stamped IMMORTAL so retain/release are no-ops; safe to share across threads.
+ * Generated code uses this at every binding/field site that has no explicit
+ * initialiser so `string` defaults to a real empty string rather than NULL. */
+FengString *feng_string_default(void);
+
 /* Concatenation always returns a fresh +1 string; either operand may be NULL,
  * which is treated as the empty string. */
 FengString *feng_string_concat(const FengString *left, const FengString *right);

@@ -1,0 +1,62 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type Point {
+    let x: i32;
+    let y: i32;
+}
+
+type Box {
+    let label: string;
+    let nums: i32[];
+    let inner: Point;
+}
+
+let g_i: i32;
+let g_s: string;
+let g_a: i32[];
+let g_box: Box;
+
+fn main(args: string[]) {
+    /* Local scalar defaults are zero. */
+    let i: i32;
+    let f: f64;
+    let b: bool;
+    if i == 0 { puts("i-ok"); } else { puts("i-bad"); }
+    if f == 0.0 { puts("f-ok"); } else { puts("f-bad"); }
+    if b { puts("b-bad"); } else { puts("b-ok"); }
+
+    /* Local string default is the empty (non-null) string. */
+    let s: string;
+    puts(s);
+    puts("after-empty-string");
+
+    /* Local array default is an empty (non-null) array; no panic on access. */
+    let arr: i32[];
+    puts("arr-ok");
+
+    /* Object default: recursive zero, no constructor. */
+    let p: Point;
+    if p.x == 0 { puts("p-x-ok"); } else { puts("p-x-bad"); }
+    if p.y == 0 { puts("p-y-ok"); } else { puts("p-y-bad"); }
+
+    /* Object default with managed members: string defaults to "", array to [], nested object recurses. */
+    let bx: Box;
+    puts(bx.label);
+    puts("after-box-label");
+    if bx.inner.x == 0 { puts("box-inner-ok"); } else { puts("box-inner-bad"); }
+
+    /* Object literal with omitted fields fills defaults. */
+    let bx2 = Box { label: "named" };
+    puts(bx2.label);
+    if bx2.inner.y == 0 { puts("bx2-inner-ok"); } else { puts("bx2-inner-bad"); }
+
+    /* Module-level defaults work too. */
+    if g_i == 0 { puts("g-i-ok"); } else { puts("g-i-bad"); }
+    puts(g_s);
+    puts("after-g-s");
+    puts(g_box.label);
+    puts("after-g-box");
+}

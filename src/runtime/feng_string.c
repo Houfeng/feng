@@ -4,6 +4,7 @@
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +52,22 @@ FengString *feng_string_literal(const char *utf8, size_t length) {
         memcpy(((struct FengString *)s)->data, utf8, length);
     }
     return s;
+}
+
+/* Process-wide singleton empty string used for the `string` default zero
+ * value. Allocated lazily on first use under pthread_once so concurrent
+ * first-use callers observe the same pointer. The singleton is stamped with
+ * FENG_REFCOUNT_IMMORTAL so retain/release on the default value are no-ops. */
+static FengString    *feng_string_default_singleton = NULL;
+static pthread_once_t feng_string_default_once      = PTHREAD_ONCE_INIT;
+
+static void feng_string_default_init(void) {
+    feng_string_default_singleton = feng_string_literal("", 0U);
+}
+
+FengString *feng_string_default(void) {
+    pthread_once(&feng_string_default_once, feng_string_default_init);
+    return feng_string_default_singleton;
 }
 
 FengString *feng_string_concat(const FengString *left, const FengString *right) {
