@@ -672,6 +672,86 @@ static char *cg_fn_mangle(const char *module_mangle, const FengSlice *name) {
     return b.data;
 }
 
+/* Encode one CGType into a compact suffix fragment used for overload-aware
+ * symbol mangling. The encoding is reversible-by-collision-class only — its
+ * single requirement is that two CGTypes that differ in any way produce
+ * different fragments. We re-use the runtime-stable c_struct_name /
+ * c_value_struct_name for user-defined types so a future ABI rename of those
+ * symbols also updates every overload signature consistently. */
+static bool cg_encode_type_short(const CGType *t, Buf *out) {
+    if (!t) { buf_append_cstr(out, "void"); return true; }
+    switch (t->kind) {
+        case CG_TYPE_VOID:   buf_append_cstr(out, "void");   return true;
+        case CG_TYPE_BOOL:   buf_append_cstr(out, "b");      return true;
+        case CG_TYPE_I8:     buf_append_cstr(out, "i8");     return true;
+        case CG_TYPE_I16:    buf_append_cstr(out, "i16");    return true;
+        case CG_TYPE_I32:    buf_append_cstr(out, "i32");    return true;
+        case CG_TYPE_I64:    buf_append_cstr(out, "i64");    return true;
+        case CG_TYPE_U8:     buf_append_cstr(out, "u8");     return true;
+        case CG_TYPE_U16:    buf_append_cstr(out, "u16");    return true;
+        case CG_TYPE_U32:    buf_append_cstr(out, "u32");    return true;
+        case CG_TYPE_U64:    buf_append_cstr(out, "u64");    return true;
+        case CG_TYPE_F32:    buf_append_cstr(out, "f32");    return true;
+        case CG_TYPE_F64:    buf_append_cstr(out, "f64");    return true;
+        case CG_TYPE_STRING: buf_append_cstr(out, "s");      return true;
+        case CG_TYPE_OBJECT:
+            if (!t->user) { buf_append_cstr(out, "O_unknown"); return true; }
+            buf_append_cstr(out, "O_");
+            buf_append_cstr(out, t->user->c_struct_name);
+            return true;
+        case CG_TYPE_SPEC:
+            if (!t->user_spec) { buf_append_cstr(out, "S_unknown"); return true; }
+            buf_append_cstr(out, "S_");
+            buf_append_cstr(out, t->user_spec->c_value_struct_name);
+            return true;
+        case CG_TYPE_ARRAY:
+            buf_append_cstr(out, "A_");
+            return cg_encode_type_short(t->element, out);
+        default:
+            buf_append_cstr(out, "X");
+            return true;
+    }
+}
+
+/* Build the "__from__<param-types>" suffix that disambiguates overloads.
+ * docs/feng-function.md §5 / docs/feng-type.md §5 require that overloads
+ * differ by parameter signature, so encoding only the parameter types is
+ * sufficient (return type is not part of the overload key). The suffix is
+ * applied unconditionally — even single, unambiguous declarations gain it —
+ * so symbol shape stays predictable and deterministic for every callable.
+ * No-arg functions encode as `__from__void`. Returns a malloc'd string;
+ * caller frees. */
+static char *cg_build_param_suffix(CGType *const *param_types, size_t count) {
+    Buf b; buf_init(&b);
+    buf_append_cstr(&b, "__from__");
+    if (count == 0) {
+        buf_append_cstr(&b, "void");
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            if (i) buf_append_cstr(&b, "__");
+            if (!cg_encode_type_short(param_types[i], &b)) {
+                buf_free(&b);
+                return NULL;
+            }
+        }
+    }
+    return b.data ? b.data : strdup("__from__void");
+}
+
+/* Append the param-type suffix to an existing c_name buffer. Frees the old
+ * c_name and returns the new heap-owned string. */
+static char *cg_append_param_suffix(char *c_name, CGType *const *param_types,
+                                    size_t count) {
+    char *suffix = cg_build_param_suffix(param_types, count);
+    if (!suffix) { free(c_name); return NULL; }
+    Buf b; buf_init(&b);
+    buf_append_cstr(&b, c_name);
+    buf_append_cstr(&b, suffix);
+    free(c_name);
+    free(suffix);
+    return b.data;
+}
+
 static char *cg_local_cname(CG *cg, const char *feng_name, size_t len) {
     char *base = cg_sanitize(feng_name, len);
     if (!base) return NULL;
@@ -899,6 +979,11 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     if (!cg_resolve_type(cg, sig->return_type, &sig->token, &f->return_type)) {
         return false;
     }
+    /* Append param-type suffix for overload-aware mangling. Applied
+     * unconditionally so the symbol shape is the same regardless of whether
+     * the function is part of an overload set today. */
+    f->c_name = cg_append_param_suffix(f->c_name, f->param_types, f->param_count);
+    if (!f->c_name) return false;
     f->decl = decl;
     return true;
 }
@@ -909,6 +994,18 @@ static const FreeFn *cg_find_free_fn(const CG *cg, const char *name, size_t len)
             memcmp(cg->free_fns[i].feng_name, name, len) == 0) {
             return &cg->free_fns[i];
         }
+    }
+    return NULL;
+}
+
+/* Overload-aware lookup. Semantic analysis attaches the resolved FengDecl to
+ * every call site (FengResolvedCallable.function_decl); when present, codegen
+ * uses it to select the exact registered FreeFn rather than relying on
+ * by-name lookup which would silently pick the first overload. */
+static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl) {
+    if (!decl) return NULL;
+    for (size_t i = 0; i < cg->free_fn_count; i++) {
+        if (cg->free_fns[i].decl == decl) return &cg->free_fns[i];
     }
     return NULL;
 }
@@ -1025,6 +1122,9 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
             if (!cg_resolve_type(cg, sig->return_type, &sig->token, &um->return_type)) {
                 return false;
             }
+            um->c_name = cg_append_param_suffix(um->c_name,
+                                                um->param_types, um->param_count);
+            if (!um->c_name) return false;
         }
     }
     t->field_count = fi;
@@ -1048,6 +1148,18 @@ static const UserMethod *cg_user_type_method(const UserType *t, const char *name
             memcmp(t->methods[i].feng_name, name, len) == 0) {
             return &t->methods[i];
         }
+    }
+    return NULL;
+}
+
+/* Overload-aware method lookup: matches by the FengTypeMember pointer that
+ * semantic analysis stored on the call site. By-name lookup would silently
+ * pick the first overload of `name`. */
+static const UserMethod *cg_user_type_method_by_member(const UserType *t,
+                                                       const FengTypeMember *m) {
+    if (!m) return NULL;
+    for (size_t i = 0; i < t->method_count; i++) {
+        if (t->methods[i].member == m) return &t->methods[i];
     }
     return NULL;
 }
@@ -1290,6 +1402,9 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         }
         if (!cg_resolve_type(cg, sig->return_type, &sig->token,
                              &um->return_type)) return false;
+        um->c_name = cg_append_param_suffix(um->c_name,
+                                            um->param_types, um->param_count);
+        if (!um->c_name) return false;
     }
     uf->method_count = mi;
     return true;
@@ -2070,8 +2185,15 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 "codegen: method call on non-object value");
         }
         const UserType *ut = recv.type->user;
-        const UserMethod *um = cg_user_type_method(ut,
-            ma->as.member.member.data, ma->as.member.member.length);
+        const FengResolvedCallable *rc = &e->as.call.resolved_callable;
+        const UserMethod *um = NULL;
+        if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD && rc->member) {
+            um = cg_user_type_method_by_member(ut, rc->member);
+        }
+        if (!um) {
+            um = cg_user_type_method(ut,
+                ma->as.member.member.data, ma->as.member.member.length);
+        }
         if (!um) {
             er_free(&recv);
             return cg_fail(cg, e->token,
@@ -2142,7 +2264,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     }
 
     const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
-    const FreeFn *fn = cg_find_free_fn(cg, name.data, name.length);
+    const FengResolvedCallable *rc = &e->as.call.resolved_callable;
+    const FreeFn *fn = NULL;
+    if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
+        fn = cg_find_free_fn_by_decl(cg, rc->function_decl);
+    }
+    if (!fn && !ext) {
+        fn = cg_find_free_fn(cg, name.data, name.length);
+    }
     if (!ext && !fn) {
         return cg_fail(cg, e->token,
             "codegen: undefined function '%.*s'", (int)name.length, name.data);
@@ -2605,6 +2734,398 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr && out->type;
 }
 
+/* ===================== if / match expression emission =====================
+ *
+ * Per docs/feng-flow.md §4 the `if` expression form requires every branch
+ * (then, every `else if`, and a mandatory `else`) to be a block whose final
+ * statement is an expression statement. The block's value is that
+ * expression's value; semantic analysis has already verified all branch
+ * yield types unify, so codegen is purely a lowering exercise:
+ *
+ *   1. Discover the result type by emitting the then-branch yield expression
+ *      into a throwaway buffer/scope (probe). This is safe because the only
+ *      side-effects cg_emit_expr mutates outside the buffer (string-literal
+ *      cache, witness-instance table, tmp_counter) are either idempotent or
+ *      monotonic.
+ *   2. Allocate a slot `_ifv_N` of the result type in the OUTER scope and
+ *      register it on the Feng cleanup chain (managed kinds only). Any
+ *      `return`/`throw` raised inside a branch body therefore traverses
+ *      `_ifv_N` exactly once via cg_release_through, keeping the runtime
+ *      cleanup chain consistent.
+ *   3. For each branch: push a Feng scope, emit all leading statements via
+ *      cg_emit_stmt, then evaluate the yield expression and assign into
+ *      `_ifv_N` with the standard +1 transfer (steal on owns_ref, retain on
+ *      borrow); release the branch scope before joining.
+ *
+ * Aggregate (fat-spec) results require the move-by-take machinery used in
+ * cg_emit_return; that path is intentionally rejected with an explicit error
+ * until a smoke exercises it.
+ */
+
+static const FengExpr *cg_branch_yield_expr(const FengBlock *block) {
+    if (!block || block->statement_count == 0) return NULL;
+    const FengStmt *last = block->statements[block->statement_count - 1];
+    if (last->kind != FENG_STMT_EXPR) return NULL;
+    return last->as.expr;
+}
+
+static bool cg_emit_branch_into_slot(CG *cg,
+                                     const FengBlock *block,
+                                     const char *ifv_name,
+                                     const CGType *result_type,
+                                     bool managed,
+                                     FengToken err_token) {
+    Scope *bsc = scope_push(cg->cur_scope);
+    if (!bsc) return cg_fail(cg, err_token, "codegen: out of memory");
+    cg->cur_scope = bsc;
+
+    bool ok = true;
+    /* Leading statements (everything except the trailing yield expression). */
+    for (size_t i = 0; i + 1 < block->statement_count; i++) {
+        if (!cg_emit_stmt(cg, block->statements[i])) { ok = false; break; }
+    }
+
+    if (ok) {
+        const FengExpr *yield =
+            block->statements[block->statement_count - 1]->as.expr;
+        ExprResult r;
+        if (!cg_emit_expr(cg, yield, &r)) {
+            ok = false;
+        } else if (!cg_types_equal(result_type, r.type)) {
+            cg_fail(cg, err_token,
+                "codegen: if-expression branches yield mismatched types");
+            er_free(&r);
+            ok = false;
+        } else {
+            if (managed) {
+                if (r.owns_ref) {
+                    buf_append_fmt(cg->cur_body,
+                        "        %s = %s;\n", ifv_name, r.c_expr);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "        %s = %s; if (%s) feng_retain(%s);\n",
+                        ifv_name, r.c_expr, ifv_name, ifv_name);
+                }
+            } else {
+                char *cty = cg_ctype_dup(result_type);
+                if (!cty) {
+                    er_free(&r);
+                    cg->cur_scope = bsc->parent;
+                    scope_pop_free(bsc);
+                    return cg_fail(cg, err_token, "codegen: out of memory");
+                }
+                buf_append_fmt(cg->cur_body,
+                    "        %s = (%s)(%s);\n", ifv_name, cty, r.c_expr);
+                free(cty);
+            }
+            er_free(&r);
+        }
+    }
+
+    if (ok) {
+        cg_release_scope(cg, bsc);
+    }
+    cg->cur_scope = bsc->parent;
+    scope_pop_free(bsc);
+    return ok;
+}
+
+/* Probe the type of a branch's yield expression by emitting it into a
+ * throwaway buffer and scope. Returns a heap-owned CGType clone on success
+ * or NULL on failure. Caller owns the returned CGType. */
+static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
+    Buf throwaway; buf_init(&throwaway);
+    Buf *saved_body = cg->cur_body;
+    cg->cur_body = &throwaway;
+    Scope *probe = scope_push(cg->cur_scope);
+    if (!probe) {
+        cg->cur_body = saved_body;
+        buf_free(&throwaway);
+        return NULL;
+    }
+    cg->cur_scope = probe;
+    ExprResult r;
+    bool ok = cg_emit_expr(cg, yield, &r);
+    CGType *result = ok ? cgtype_clone(r.type) : NULL;
+    er_free(&r);
+    cg->cur_scope = probe->parent;
+    scope_pop_free(probe);
+    cg->cur_body = saved_body;
+    buf_free(&throwaway);
+    return result;
+}
+
+static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+
+    const FengBlock *then_b = e->as.if_expr.then_block;
+    const FengBlock *else_b = e->as.if_expr.else_block;
+    const FengExpr *then_yield = cg_branch_yield_expr(then_b);
+    const FengExpr *else_yield = cg_branch_yield_expr(else_b);
+    if (!then_yield || !else_yield) {
+        return cg_fail(cg, e->token,
+            "codegen: if-expression branches must end with an expression statement");
+    }
+
+    CGType *result_type = cg_probe_branch_yield_type(cg, then_yield);
+    if (!result_type) return false;
+
+    if (cgtype_is_aggregate(result_type)) {
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+            "codegen: if-expression of spec (aggregate) type not yet supported");
+    }
+    bool managed = cgtype_is_managed(result_type);
+
+    char *cond_tmp = cg_fresh_temp(cg, "_cond");
+    char *ifv = cg_fresh_temp(cg, "_ifv");
+    if (!cond_tmp || !ifv) {
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+
+    /* Emit the condition first; the slot decl follows so a panic raised by
+     * the condition expression itself never observes a dangling cleanup
+     * node for `_ifv` on the runtime chain. */
+    ExprResult cond;
+    if (!cg_emit_expr(cg, e->as.if_expr.condition, &cond)) {
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return false;
+    }
+    if (cond.type->kind != CG_TYPE_BOOL) {
+        er_free(&cond);
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+            "codegen: if-expression condition must be bool");
+    }
+    buf_append_fmt(cg->cur_body, "    bool %s = %s;\n", cond_tmp, cond.c_expr);
+    er_free(&cond);
+
+    char *cty = cg_ctype_dup(result_type);
+    if (!cty) {
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    if (managed) {
+        buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, ifv);
+        cg_emit_cleanup_push_for_managed_local(cg, ifv);
+        if (!scope_add(cg->cur_scope, ifv, ifv,
+                       cgtype_clone(result_type), false)) {
+            free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
+    }
+    free(cty);
+
+    buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
+    if (!cg_emit_branch_into_slot(cg, then_b, ifv, result_type, managed, e->token)) {
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return false;
+    }
+    buf_append_cstr(cg->cur_body, "    } else {\n");
+    if (!cg_emit_branch_into_slot(cg, else_b, ifv, result_type, managed, e->token)) {
+        free(cond_tmp); free(ifv); cgtype_free(result_type);
+        return false;
+    }
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    out->c_expr = strdup(ifv);
+    out->type = result_type;
+    /* For managed values the OUTER Feng scope owns the +1 (the slot was
+     * registered above). For non-managed values it's a plain rvalue copy.
+     * In both cases the surface contract is "borrowed-from-slot": owns_ref
+     * is false, callers that need to retain do so themselves. */
+    out->owns_ref = false;
+
+    free(cond_tmp);
+    free(ifv);
+    return out->c_expr != NULL;
+}
+
+/* Build a C boolean expression matching `target_tmp` against a single match
+ * label. Label literal expressions are emitted via cg_emit_expr; per
+ * docs/feng-flow.md §3 they must be compile-time constants/let-literal
+ * bindings, so the emitted C is a pure value with no scope side-effects.
+ * String comparison uses inline length+memcmp lowering against the runtime's
+ * FengString accessors so the runtime surface stays the value-model API set.
+ */
+static bool cg_emit_match_label_cond(CG *cg, const char *target_tmp,
+                                     CGTypeKind target_kind,
+                                     const FengMatchLabel *lab, Buf *out) {
+    if (lab->kind == FENG_MATCH_LABEL_VALUE) {
+        ExprResult lv;
+        if (!cg_emit_expr(cg, lab->value, &lv)) return false;
+        if (target_kind == CG_TYPE_STRING) {
+            buf_append_fmt(out,
+                "(bool)(feng_string_length(%s) == feng_string_length(%s) && "
+                "memcmp(feng_string_data(%s), feng_string_data(%s), "
+                "feng_string_length(%s)) == 0)",
+                target_tmp, lv.c_expr,
+                target_tmp, lv.c_expr,
+                lv.c_expr);
+        } else {
+            buf_append_fmt(out, "(bool)(%s == %s)", target_tmp, lv.c_expr);
+        }
+        er_free(&lv);
+        return true;
+    }
+    if (lab->kind == FENG_MATCH_LABEL_RANGE) {
+        if (target_kind == CG_TYPE_STRING || target_kind == CG_TYPE_BOOL) {
+            return cg_fail(cg, lab->token,
+                "codegen: range labels apply to integer match targets only");
+        }
+        ExprResult lo, hi;
+        if (!cg_emit_expr(cg, lab->range_low, &lo)) return false;
+        if (!cg_emit_expr(cg, lab->range_high, &hi)) {
+            er_free(&lo);
+            return false;
+        }
+        buf_append_fmt(out, "(%s >= %s && %s <= %s)",
+                       target_tmp, lo.c_expr, target_tmp, hi.c_expr);
+        er_free(&lo);
+        er_free(&hi);
+        return true;
+    }
+    return cg_fail(cg, lab->token, "codegen: unknown match label kind");
+}
+
+static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+
+    if (!e->as.match_expr.else_block) {
+        return cg_fail(cg, e->token,
+            "codegen: match expression requires an else branch");
+    }
+    const FengExpr *else_yield =
+        cg_branch_yield_expr(e->as.match_expr.else_block);
+    if (!else_yield) {
+        return cg_fail(cg, e->token,
+            "codegen: match expression else branch must end with an expression statement");
+    }
+    for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
+        if (!cg_branch_yield_expr(e->as.match_expr.branches[i].body)) {
+            return cg_fail(cg, e->token,
+                "codegen: match branch must end with an expression statement");
+        }
+    }
+
+    CGType *result_type = cg_probe_branch_yield_type(cg, else_yield);
+    if (!result_type) return false;
+    if (cgtype_is_aggregate(result_type)) {
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+            "codegen: match expression of spec (aggregate) type not yet supported");
+    }
+    bool managed = cgtype_is_managed(result_type);
+
+    /* Materialise the target so it is evaluated exactly once and (for managed
+     * targets like `string`) stays alive across every label comparison. */
+    ExprResult tgt;
+    if (!cg_emit_expr(cg, e->as.match_expr.target, &tgt)) {
+        cgtype_free(result_type);
+        return false;
+    }
+    CGTypeKind tk = tgt.type->kind;
+    if (tk != CG_TYPE_BOOL && tk != CG_TYPE_STRING && !cgtype_is_integer(tk)) {
+        er_free(&tgt);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+            "codegen: match target must be integer, bool, or string");
+    }
+    /* materialize_to_local registers managed +1 results into the current
+     * scope and emits the cleanup_push, so the target survives every
+     * comparison and is released at scope exit alongside other locals. */
+    char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
+    if (!tgt_tmp) {
+        er_free(&tgt);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    er_free(&tgt);
+
+    char *ifv = cg_fresh_temp(cg, "_ifv");
+    if (!ifv) {
+        free(tgt_tmp); cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    char *cty = cg_ctype_dup(result_type);
+    if (!cty) {
+        free(ifv); free(tgt_tmp); cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    if (managed) {
+        buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, ifv);
+        cg_emit_cleanup_push_for_managed_local(cg, ifv);
+        if (!scope_add(cg->cur_scope, ifv, ifv,
+                       cgtype_clone(result_type), false)) {
+            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
+    }
+    free(cty);
+
+    bool first_branch = true;
+    for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
+        const FengMatchBranch *br = &e->as.match_expr.branches[i];
+        if (br->label_count == 0) {
+            free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return cg_fail(cg, br->token,
+                "codegen: match branch has no labels");
+        }
+        Buf cond; buf_init(&cond);
+        bool cond_ok = true;
+        for (size_t li = 0; li < br->label_count; li++) {
+            if (li) buf_append_cstr(&cond, " || ");
+            if (!cg_emit_match_label_cond(cg, tgt_tmp, tk, &br->labels[li], &cond)) {
+                cond_ok = false;
+                break;
+            }
+        }
+        if (!cond_ok) {
+            buf_free(&cond);
+            free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return false;
+        }
+        if (first_branch) {
+            buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.data);
+            first_branch = false;
+        } else {
+            buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
+        }
+        buf_free(&cond);
+        if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed,
+                                      e->token)) {
+            free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return false;
+        }
+    }
+    if (first_branch) {
+        /* No value branches — degenerate to a plain block running else only.
+         * Wrap in a C block so the assignment-driven slot setup is consistent. */
+        buf_append_cstr(cg->cur_body, "    {\n");
+    } else {
+        buf_append_cstr(cg->cur_body, "    } else {\n");
+    }
+    if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
+                                  result_type, managed, e->token)) {
+        free(ifv); free(tgt_tmp); cgtype_free(result_type);
+        return false;
+    }
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    out->c_expr = strdup(ifv);
+    out->type = result_type;
+    out->owns_ref = false;
+
+    free(tgt_tmp);
+    free(ifv);
+    return out->c_expr != NULL;
+}
+
 static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cg->failed) return false;
     bool ok;
@@ -2637,6 +3158,8 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
         case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
+        case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
+        case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
         default:
             return cg_fail(cg, e->token,
                 "codegen: expression kind not yet supported in this iteration");

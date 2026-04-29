@@ -1,0 +1,22 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn label(n: i32): string {
+    return "int";
+}
+
+fn label(s: string): string {
+    return "string";
+}
+
+fn label(): string {
+    return "none";
+}
+
+fn main(args: string[]) {
+    puts(label(42));
+    puts(label("hi"));
+    puts(label());
+}

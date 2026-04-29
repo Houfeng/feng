@@ -1,0 +1,27 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type User {
+    let name: string;
+
+    fn label(n: i32): string {
+        return "int";
+    }
+
+    fn label(s: string): string {
+        return s;
+    }
+
+    fn label(): string {
+        return self.name;
+    }
+}
+
+fn main(args: string[]) {
+    let u = User { name: "feng" };
+    puts(u.label(7));
+    puts(u.label("hello"));
+    puts(u.label());
+}

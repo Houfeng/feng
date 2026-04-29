@@ -1,0 +1,21 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn translate(word: string): string {
+    let r = if word {
+        "hi", "hello" { "greeting"; }
+        "bye", "goodbye" { "farewell"; }
+        else { "unknown"; }
+    };
+    return r;
+}
+
+fn main(args: string[]) {
+    puts(translate("hi"));
+    puts(translate("hello"));
+    puts(translate("bye"));
+    puts(translate("goodbye"));
+    puts(translate("foo"));
+}

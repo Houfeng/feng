@@ -1,0 +1,27 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn pick(flag: bool): i32 {
+    return if flag {
+        100;
+    } else {
+        200;
+    };
+}
+
+fn main(args: string[]) {
+    let a = pick(true);
+    let b = pick(false);
+    if a == 100 {
+        puts("a-ok");
+    } else {
+        puts("a-fail");
+    }
+    if b == 200 {
+        puts("b-ok");
+    } else {
+        puts("b-fail");
+    }
+}

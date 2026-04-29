@@ -1,0 +1,21 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn classify(age: i32): string {
+    let label = if age {
+        0 { "infant"; }
+        1...17 { "minor"; }
+        18...59 { "adult"; }
+        else { "senior"; }
+    };
+    return label;
+}
+
+fn main(args: string[]) {
+    puts(classify(0));
+    puts(classify(10));
+    puts(classify(30));
+    puts(classify(80));
+}

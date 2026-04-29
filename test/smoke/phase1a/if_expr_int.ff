@@ -1,0 +1,18 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn classify(n: i32): string {
+    let label = if n >= 0 {
+        "non-negative";
+    } else {
+        "negative";
+    };
+    return label;
+}
+
+fn main(args: string[]) {
+    puts(classify(7));
+    puts(classify(-3));
+}

@@ -1,0 +1,18 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn label_for(score: i32): string {
+    let s = if score >= 60 {
+        "pass";
+    } else {
+        "fail";
+    };
+    return s;
+}
+
+fn main(args: string[]) {
+    puts(label_for(80));
+    puts(label_for(40));
+}
