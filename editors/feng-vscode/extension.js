@@ -10,7 +10,7 @@ function getExecutablePath() {
 function runCheck(filePath) {
     return new Promise((resolve) => {
         const execPath = getExecutablePath();
-        const proc = cp.spawn(execPath, ['check', filePath], {
+        const proc = cp.spawn(execPath, ['tool', 'check', filePath], {
             stdio: ['ignore', 'pipe', 'pipe']
         });
 

@@ -4587,11 +4587,17 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
     return true;
 }
 
-static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
-                                  FengCompileTarget target) {
-    if (!cg_emit_module_header(cg, prog)) return false;
+/* --- Multi-program emission helpers (P3) ---------------------------------
+ *
+ * The pipeline below is structured so that every name minted by Pass 1/1.5/
+ * 2.7/2b/4 uses the OWNING program's module mangle (set via
+ * `cg_emit_module_header`), while passes that operate on already-registered
+ * shells (member registration and emission) are program-agnostic and run
+ * once across the global cg arrays.
+ */
 
-    /* Pass 1: register every user type SHELL so cross-references resolve. */
+static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
+    if (!cg_emit_module_header(cg, prog)) return false;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_TYPE) {
@@ -4607,31 +4613,22 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
             if (!cg_register_user_spec_shell(cg, d)) return false;
         }
     }
-    /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
-     * every shell). */
-    for (size_t i = 0; i < cg->user_type_count; i++) {
-        if (!cg_register_user_type_members(cg, &cg->user_types[i])) return false;
-    }
-    /* Pass 2.5: register spec members (Step 4b). */
-    for (size_t i = 0; i < cg->user_spec_count; i++) {
-        if (!cg_register_user_spec_members(cg, &cg->user_specs[i])) return false;
-    }
-    /* Pass 2.7: register fit shells + members (Step 4b-γ). Specs and types
-     * must be fully populated first because fit member type resolution may
-     * reference any of them. */
+    return true;
+}
+
+static bool cg_pass_register_fit_shells(CG *cg, const FengProgram *prog) {
+    if (!cg_emit_module_header(cg, prog)) return false;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_FIT) {
             if (!cg_register_user_fit_shell(cg, d)) return false;
         }
     }
-    for (size_t i = 0; i < cg->user_fit_count; i++) {
-        if (!cg_register_user_fit_members(cg, &cg->user_fits[i])) return false;
-    }
-    /* Pass 2b: register every module-level let/var so identifiers can resolve
-     * across function bodies regardless of source order, and emit their
-     * static storage. Initialisation runs from the main wrapper in source
-     * order. */
+    return true;
+}
+
+static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
+    if (!cg_emit_module_header(cg, prog)) return false;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind != FENG_DECL_GLOBAL_BINDING) continue;
@@ -4650,24 +4647,12 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
         }
         free(cty);
     }
-    /* Pass 3: emit forward decls + struct/finalizer/descriptor for every type. */
-    for (size_t i = 0; i < cg->user_type_count; i++) {
-        cg_emit_user_type_forward(cg, &cg->user_types[i]);
-    }
-    /* Pass 3.5a: emit spec forward decls + value-struct definitions (depend on
-     * witness-struct names but not their bodies). */
-    for (size_t i = 0; i < cg->user_spec_count; i++) {
-        cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
-    }
-    for (size_t i = 0; i < cg->user_type_count; i++) {
-        cg_emit_user_type_definition(cg, &cg->user_types[i]);
-    }
-    /* Pass 3.5b: emit spec witness-struct bodies (after every type body so
-     * method return / param types are fully resolved as C). */
-    for (size_t i = 0; i < cg->user_spec_count; i++) {
-        cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
-    }
+    return true;
+}
 
+static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
+                               FengCompileTarget target) {
+    if (!cg_emit_module_header(cg, prog)) return false;
     /* Pass 4: walk top-level decls in source order for externs / functions /
      * methods. Type decls themselves emit only their methods here. */
     for (size_t i = 0; i < prog->declaration_count; i++) {
@@ -4720,6 +4705,64 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
     }
     return true;
 }
+
+/* Drive every pass across the full program set in deterministic
+ * (module, program) order. Passes that mint cross-module-mangled symbols
+ * (shells, fits, module bindings, decl emission) re-anchor `cg->module_mangle`
+ * via cg_emit_module_header before processing each program; passes that walk
+ * already-registered shells (member registration, type/spec body emission)
+ * are program-agnostic and run once over the global cg arrays. */
+static bool cg_emit_all_programs(CG *cg,
+                                 const FengProgram *const *programs,
+                                 size_t program_count,
+                                 FengCompileTarget target) {
+    /* Pass 1 + 1.5: register type and spec shells per program. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_register_type_shells(cg, programs[p])) return false;
+    }
+    /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
+     * every shell, regardless of owning program). */
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        if (!cg_register_user_type_members(cg, &cg->user_types[i])) return false;
+    }
+    /* Pass 2.5: register spec members. */
+    for (size_t i = 0; i < cg->user_spec_count; i++) {
+        if (!cg_register_user_spec_members(cg, &cg->user_specs[i])) return false;
+    }
+    /* Pass 2.7: register fit shells (mangled per owning program), then
+     * fit members (program-agnostic). */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_register_fit_shells(cg, programs[p])) return false;
+    }
+    for (size_t i = 0; i < cg->user_fit_count; i++) {
+        if (!cg_register_user_fit_members(cg, &cg->user_fits[i])) return false;
+    }
+    /* Pass 2b: register module-level let/var bindings + emit static storage. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_register_module_bindings(cg, programs[p])) return false;
+    }
+    /* Pass 3 + 3.5a/3.5b: emit type forwards/defs and spec forwards/defs.
+     * These walk the global cg shell arrays, so a single global pass suffices. */
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        cg_emit_user_type_forward(cg, &cg->user_types[i]);
+    }
+    for (size_t i = 0; i < cg->user_spec_count; i++) {
+        cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
+    }
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        cg_emit_user_type_definition(cg, &cg->user_types[i]);
+    }
+    for (size_t i = 0; i < cg->user_spec_count; i++) {
+        cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
+    }
+    /* Pass 4: per-program decl emission (externs / functions / methods /
+     * finalizers / fit method bodies). */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_emit_decls(cg, programs[p], target)) return false;
+    }
+    return true;
+}
+
 
 static void cg_emit_string_literal_table(CG *cg) {
     Buf *s = &cg->statics;
@@ -5546,14 +5589,10 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         out_error->path = NULL;
         memset(&out_error->token, 0, sizeof out_error->token);
     }
-    /* Phase 1A iter 1 supports a single program (single .ff file). */
+    /* Collect every program in deterministic (module, program) order. */
     size_t program_total = 0;
-    const FengProgram *single = NULL;
     for (size_t i = 0; i < analysis->module_count; i++) {
-        for (size_t j = 0; j < analysis->modules[i].program_count; j++) {
-            program_total++;
-            single = analysis->modules[i].programs[j];
-        }
+        program_total += analysis->modules[i].program_count;
     }
     CG cg = {0};
     cg.error = out_error;
@@ -5563,14 +5602,22 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         cg_dispose(&cg);
         return false;
     }
-    if (program_total > 1) {
-        cg_fail(&cg, (FengToken){0},
-            "codegen: multi-file compilation not yet supported in this iteration");
+
+    const FengProgram **programs = calloc(program_total, sizeof(*programs));
+    if (!programs) {
+        cg_fail(&cg, (FengToken){0}, "codegen: out of memory collecting programs");
         cg_dispose(&cg);
         return false;
     }
+    size_t cursor = 0;
+    for (size_t i = 0; i < analysis->module_count; i++) {
+        for (size_t j = 0; j < analysis->modules[i].program_count; j++) {
+            programs[cursor++] = analysis->modules[i].programs[j];
+        }
+    }
 
-    if (!cg_emit_program_decls(&cg, single, target)) {
+    if (!cg_emit_all_programs(&cg, programs, program_total, target)) {
+        free(programs);
         cg_dispose(&cg);
         return false;
     }
@@ -5578,15 +5625,20 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     if (target == FENG_COMPILE_TARGET_BIN) {
         const FreeFn *main_fn = cg_lookup_main(&cg);
         if (!main_fn) {
-            cg_fail(&cg, single->module_token, "codegen: bin target requires `main` function");
+            cg_fail(&cg, programs[0]->module_token,
+                    "codegen: bin target requires `main` function");
+            free(programs);
             cg_dispose(&cg);
             return false;
         }
         if (!cg_emit_main_wrapper(&cg, main_fn)) {
+            free(programs);
             cg_dispose(&cg);
             return false;
         }
     }
+
+    free(programs);
 
     /* Emit the string literal storage table after all bodies are generated
      * so that strings interned during module-binding initialisers are
