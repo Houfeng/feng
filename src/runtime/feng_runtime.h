@@ -182,6 +182,126 @@ void   feng_array_check_index(const FengArray *array, size_t index);
  * desc->size MUST cover the full struct including the header. */
 void *feng_object_new(const FengTypeDescriptor *desc);
 
+/* --- Value model: by-value aggregates with managed slots --------------- */
+/*
+ * The runtime classifies every Feng value into one of three categories
+ * (see dev/feng-value-model-pending.md §2):
+ *
+ *   FENG_VALUE_TRIVIAL          — bytes only, no retain/release; codegen
+ *                                 emits direct C assignment / memcpy.
+ *   FENG_VALUE_MANAGED_POINTER  — single managed pointer, handled by the
+ *                                 existing single-pointer primitives.
+ *   FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS — by-value composite holding
+ *                                 at least one managed slot; lifecycle is
+ *                                 driven by FengAggregateValueDescriptor
+ *                                 below.
+ *
+ * `FengValueKind` is consumed by codegen for site dispatch only; the runtime
+ * does not branch on it (the dispatch happens at the call-site through the
+ * five aggregate APIs further down). */
+typedef enum FengValueKind {
+    FENG_VALUE_TRIVIAL = 1,
+    FENG_VALUE_MANAGED_POINTER = 2,
+    FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS = 3
+} FengValueKind;
+
+/* Single managed slot inside a by-value aggregate. `offset` is measured from
+ * the aggregate value's base address (NOT from a FengManagedHeader). */
+typedef enum FengManagedSlotKind {
+    /* Slot itself is one managed pointer. The aggregate APIs use
+     * feng_retain/feng_release/feng_assign on `*(void**)(value + offset)`. */
+    FENG_SLOT_POINTER = 1,
+    /* Slot embeds another by-value aggregate; walker recurses through
+     * `nested`. */
+    FENG_SLOT_NESTED_AGGREGATE = 2
+} FengManagedSlotKind;
+
+typedef struct FengManagedSlotDescriptor {
+    size_t offset;
+    FengManagedSlotKind kind;
+    /* Required iff kind == FENG_SLOT_NESTED_AGGREGATE; otherwise must be
+     * NULL. */
+    const struct FengAggregateValueDescriptor *nested;
+} FengManagedSlotDescriptor;
+
+/* Default-initialisation strategy for an aggregate value. Some aggregates
+ * (e.g. fat object-form spec) cannot tolerate all-zero bytes as their
+ * default state because their managed slots must point at retained, valid
+ * objects from the very first observation. */
+typedef enum FengAggregateDefaultKind {
+    /* All-zero bytes (NULL pointers in every managed slot) is a legal
+     * default. feng_aggregate_default_init resolves to memset(0). */
+    FENG_DEFAULT_ZERO_BYTES = 1,
+    /* Type provides a custom initialiser that produces a fully-constructed
+     * value with all managed slots properly retained. */
+    FENG_DEFAULT_INIT_FN = 2
+} FengAggregateDefaultKind;
+
+/* Init function contract: on entry `value_out` points to `desc->size` bytes
+ * of indeterminate content; on return, every managed slot must hold either
+ * NULL or a +1 retained reference, and any non-managed bytes must hold a
+ * legal value. The function MUST NOT throw a Feng exception. */
+typedef void (*FengAggregateDefaultInitFn)(void *value_out);
+
+typedef struct FengAggregateDefaultInitDescriptor {
+    FengAggregateDefaultKind kind;
+    /* Only consulted when kind == FENG_DEFAULT_INIT_FN. */
+    FengAggregateDefaultInitFn init_fn;
+} FengAggregateDefaultInitDescriptor;
+
+typedef struct FengAggregateValueDescriptor {
+    /* Fully-qualified, debug-only. May be NULL. */
+    const char *name;
+    /* Total bytes the aggregate occupies. */
+    size_t size;
+    /* Default-initialisation policy. MUST be non-NULL; the runtime panics
+     * on default-init of a NULL policy. */
+    const FengAggregateDefaultInitDescriptor *default_init;
+    /* Managed slot table in declaration order. Slots that are non-managed
+     * (trivial bytes) are NOT enumerated. */
+    size_t managed_slot_count;
+    const FengManagedSlotDescriptor *managed_slots;
+} FengAggregateValueDescriptor;
+
+/* Five canonical operations over by-value aggregates. All are NULL-safe
+ * with respect to managed slot pointers (NULL pointers are skipped); they
+ * panic on a NULL `desc` or NULL `value`/`dst`/`src` (programmer error). */
+
+/* Retain every managed pointer reachable from `value` according to `desc`. */
+void feng_aggregate_retain(void *value,
+                           const FengAggregateValueDescriptor *desc);
+
+/* Release every managed pointer reachable from `value` according to `desc`.
+ * After return, the managed slot bytes are unchanged but the references
+ * they once held have been dropped; the caller MUST NOT observe those
+ * pointers again (typically the value's storage is about to be overwritten
+ * or its stack frame popped). */
+void feng_aggregate_release(void *value,
+                            const FengAggregateValueDescriptor *desc);
+
+/* Assignment: semantically equivalent to `*dst = *src` while keeping the
+ * refcount invariants of every managed slot.
+ *
+ * Self-assignment (`dst == src`) is a no-op. The implementation retains
+ * every source slot first, releases every destination slot next, then
+ * memcpys the whole aggregate; this gives correct results when source and
+ * destination share managed children. */
+void feng_aggregate_assign(void *dst, const void *src,
+                           const FengAggregateValueDescriptor *desc);
+
+/* Move: transfers ownership of every managed slot from `src` to `dst`.
+ * After return, every managed slot in `src` is set to NULL; non-managed
+ * bytes in `src` are left as-is. The destination's previous managed slots
+ * are released as in feng_aggregate_release.
+ *
+ * Self-move (`dst == src`) is a no-op. */
+void feng_aggregate_take(void *dst, void *src,
+                         const FengAggregateValueDescriptor *desc);
+
+/* Initialise `value_out` to the descriptor's default value. */
+void feng_aggregate_default_init(void *value_out,
+                                 const FengAggregateValueDescriptor *desc);
+
 /* --- Exceptions -------------------------------------------------------- */
 
 /* Linked-list node living on the C stack. Generated code pushes one of these

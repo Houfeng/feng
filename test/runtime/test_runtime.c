@@ -900,6 +900,308 @@ static void test_cycle_collector_multithreaded_stress(void) {
     feng_cycle_runtime_shutdown();
 }
 
+/* --- By-value aggregate (FengAggregateValueDescriptor) ----------------
+ *
+ * These tests exercise the five public APIs declared in feng_runtime.h
+ * (retain / release / assign / take / default_init) against the existing
+ * single-pointer primitives. The fixtures below model two shapes:
+ *
+ *   FatPair  — one managed pointer + one trivial int. Models a fat
+ *              object-form spec (subject + witness footprint).
+ *   Outer    — two pointer slots + one nested FatPair, used to verify
+ *              that the walker recurses through FENG_SLOT_NESTED_AGGREGATE
+ *              without exposing nesting to any caller-visible API.
+ */
+
+typedef struct FatPair {
+    void *subject;       /* managed pointer slot */
+    int   tag;           /* trivial */
+} FatPair;
+
+static void fat_pair_default_init(void *out) {
+    FatPair *p = (FatPair *)out;
+    /* Default subject is a fresh +1 object so callers observe a
+     * fully-constructed value (mirrors fat spec witness/subject contract).
+     * The init contract requires every managed slot to hold either NULL
+     * or a +1 retained reference — we use the latter. */
+    p->subject = feng_object_new(&test_object_descriptor);
+    p->tag = -1;
+}
+
+static const FengAggregateDefaultInitDescriptor fat_pair_default = {
+    .kind = FENG_DEFAULT_INIT_FN,
+    .init_fn = fat_pair_default_init,
+};
+
+static const FengManagedSlotDescriptor fat_pair_slots[] = {
+    { offsetof(FatPair, subject), FENG_SLOT_POINTER, NULL },
+};
+
+static const FengAggregateValueDescriptor fat_pair_desc = {
+    .name = "test.FatPair",
+    .size = sizeof(FatPair),
+    .default_init = &fat_pair_default,
+    .managed_slot_count = sizeof(fat_pair_slots) / sizeof(fat_pair_slots[0]),
+    .managed_slots = fat_pair_slots,
+};
+
+typedef struct OuterAgg {
+    void   *head;            /* managed pointer */
+    FatPair inner;           /* nested aggregate */
+    void   *tail;            /* managed pointer */
+} OuterAgg;
+
+static const FengManagedSlotDescriptor outer_slots[] = {
+    { offsetof(OuterAgg, head),  FENG_SLOT_POINTER,         NULL },
+    { offsetof(OuterAgg, inner), FENG_SLOT_NESTED_AGGREGATE, &fat_pair_desc },
+    { offsetof(OuterAgg, tail),  FENG_SLOT_POINTER,         NULL },
+};
+
+static const FengAggregateDefaultInitDescriptor outer_default_zero = {
+    .kind = FENG_DEFAULT_ZERO_BYTES,
+    .init_fn = NULL,
+};
+
+static const FengAggregateValueDescriptor outer_desc = {
+    .name = "test.OuterAgg",
+    .size = sizeof(OuterAgg),
+    .default_init = &outer_default_zero,
+    .managed_slot_count = sizeof(outer_slots) / sizeof(outer_slots[0]),
+    .managed_slots = outer_slots,
+};
+
+static void test_aggregate_retain_release_paired(void) {
+    g_finalize_count = 0;
+    TestObject *o = (TestObject *)feng_object_new(&test_object_descriptor);
+    /* p takes ownership of the +1 from object_new. */
+    FatPair p;
+    p.subject = o;
+    p.tag = 7;
+
+    feng_aggregate_retain(&p, &fat_pair_desc);
+    ASSERT(o->header.refcount == 2U);
+
+    feng_aggregate_release(&p, &fat_pair_desc);
+    ASSERT(o->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+
+    /* Drop p's ownership. */
+    feng_aggregate_release(&p, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_retain_release_null_slot(void) {
+    /* NULL pointer slots must be skipped silently. */
+    FatPair p = { .subject = NULL, .tag = 0 };
+    feng_aggregate_retain(&p, &fat_pair_desc);   /* no-op on NULL */
+    feng_aggregate_release(&p, &fat_pair_desc);  /* no-op on NULL */
+    ASSERT(p.subject == NULL);
+    ASSERT(p.tag == 0);
+}
+
+static void test_aggregate_assign_disjoint(void) {
+    g_finalize_count = 0;
+    TestObject *a = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *b = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    /* Each FatPair takes ownership of one fresh +1 reference. */
+    FatPair dst = { .subject = a, .tag = 1 };
+    FatPair src = { .subject = b, .tag = 2 };
+
+    feng_aggregate_assign(&dst, &src, &fat_pair_desc);
+    /* dst now holds b (+1 freshly retained); the previous slot's +1 on a
+     * was released, so a finalized. */
+    ASSERT(dst.subject == b);
+    ASSERT(dst.tag == 2);
+    ASSERT(g_finalize_count == 1);
+    ASSERT(b->header.refcount == 2U); /* src's +1 + dst's +1 */
+
+    feng_aggregate_release(&dst, &fat_pair_desc);
+    ASSERT(b->header.refcount == 1U);
+    feng_aggregate_release(&src, &fat_pair_desc);
+    ASSERT(g_finalize_count == 2);
+}
+
+static void test_aggregate_assign_shared_subobject(void) {
+    /* Both dst and src reference the same managed object — retain-before-
+     * release ordering must keep the refcount > 0 throughout. */
+    g_finalize_count = 0;
+    TestObject *o = (TestObject *)feng_object_new(&test_object_descriptor);
+    /* Each owner needs its own +1; the original retain is dst's. */
+    feng_retain(o);
+    FatPair dst = { .subject = o, .tag = 11 };
+    FatPair src = { .subject = o, .tag = 22 };
+    ASSERT(o->header.refcount == 2U);
+
+    feng_aggregate_assign(&dst, &src, &fat_pair_desc);
+    ASSERT(dst.subject == o);
+    ASSERT(dst.tag == 22);
+    /* dst released its old +1 and acquired a new +1 — net change zero. */
+    ASSERT(o->header.refcount == 2U);
+    ASSERT(g_finalize_count == 0);
+
+    feng_aggregate_release(&dst, &fat_pair_desc);
+    feng_aggregate_release(&src, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_assign_self(void) {
+    /* Pointer-identity self-assign must be a no-op. */
+    g_finalize_count = 0;
+    TestObject *o = (TestObject *)feng_object_new(&test_object_descriptor);
+    FatPair p = { .subject = o, .tag = 99 };
+
+    feng_aggregate_assign(&p, &p, &fat_pair_desc);
+    ASSERT(p.subject == o);
+    ASSERT(p.tag == 99);
+    ASSERT(o->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+
+    feng_aggregate_release(&p, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_take_transfers_ownership(void) {
+    g_finalize_count = 0;
+    TestObject *a = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *b = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    FatPair dst = { .subject = a, .tag = 1 };
+    FatPair src = { .subject = b, .tag = 2 };
+
+    feng_aggregate_take(&dst, &src, &fat_pair_desc);
+    /* a was released (and finalized: it had only dst's +1); b moved into
+     * dst with no refcount change; src's managed slot was nulled so a
+     * subsequent release on it is a no-op. */
+    ASSERT(dst.subject == b);
+    ASSERT(dst.tag == 2);
+    ASSERT(src.subject == NULL);
+    /* take preserves non-managed bytes in src (per dev/feng-value-model
+     * §5.2). */
+    ASSERT(src.tag == 2);
+    ASSERT(b->header.refcount == 1U);
+    ASSERT(g_finalize_count == 1); /* a finalized */
+
+    /* Releasing src now must not double-free. */
+    feng_aggregate_release(&src, &fat_pair_desc);
+    ASSERT(b->header.refcount == 1U);
+
+    feng_aggregate_release(&dst, &fat_pair_desc);
+    ASSERT(g_finalize_count == 2);
+}
+
+static void test_aggregate_take_self(void) {
+    g_finalize_count = 0;
+    TestObject *o = (TestObject *)feng_object_new(&test_object_descriptor);
+    FatPair p = { .subject = o, .tag = 5 };
+    feng_aggregate_take(&p, &p, &fat_pair_desc);
+    ASSERT(p.subject == o);
+    ASSERT(o->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+    feng_aggregate_release(&p, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_default_init_zero_bytes(void) {
+    OuterAgg v;
+    /* Stuff the struct so we can confirm memset clears it. */
+    memset(&v, 0xA5, sizeof(v));
+    feng_aggregate_default_init(&v, &outer_desc);
+    ASSERT(v.head == NULL);
+    ASSERT(v.tail == NULL);
+    ASSERT(v.inner.subject == NULL);
+    ASSERT(v.inner.tag == 0);
+    /* All-NULL slots: release must remain a clean no-op. */
+    feng_aggregate_release(&v, &outer_desc);
+}
+
+static void test_aggregate_default_init_fn(void) {
+    g_finalize_count = 0;
+    FatPair v;
+    memset(&v, 0xCC, sizeof(v));
+    feng_aggregate_default_init(&v, &fat_pair_desc);
+    ASSERT(v.subject != NULL);
+    ASSERT(v.tag == -1);
+    ASSERT(((FengManagedHeader *)v.subject)->refcount == 1U);
+
+    feng_aggregate_release(&v, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_nested_walker(void) {
+    /* Verify the walker recurses through FENG_SLOT_NESTED_AGGREGATE: the
+     * inner FatPair's managed pointer must be retained/released alongside
+     * the outer struct's own pointer slots. */
+    g_finalize_count = 0;
+    TestObject *h = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *m = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *t = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    OuterAgg v;
+    feng_aggregate_default_init(&v, &outer_desc);
+    /* Manually populate as if codegen had moved each owning +1 into the
+     * slots. */
+    v.head = h;
+    v.inner.subject = m;
+    v.inner.tag = 1;
+    v.tail = t;
+
+    feng_aggregate_retain(&v, &outer_desc);
+    ASSERT(h->header.refcount == 2U);
+    ASSERT(m->header.refcount == 2U);
+    ASSERT(t->header.refcount == 2U);
+
+    feng_aggregate_release(&v, &outer_desc);
+    ASSERT(h->header.refcount == 1U);
+    ASSERT(m->header.refcount == 1U);
+    ASSERT(t->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+
+    /* Final release drops v's ownership and frees all three. */
+    feng_aggregate_release(&v, &outer_desc);
+    ASSERT(g_finalize_count == 3);
+}
+
+static void test_aggregate_nested_assign(void) {
+    /* assign must copy nested aggregates correctly: both inner pointer
+     * and outer pointers participate. */
+    g_finalize_count = 0;
+    TestObject *src_head  = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *src_inner = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *src_tail  = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *dst_head  = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *dst_inner = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *dst_tail  = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    OuterAgg src = {
+        .head = src_head,
+        .inner = { .subject = src_inner, .tag = 11 },
+        .tail = src_tail,
+    };
+    OuterAgg dst = {
+        .head = dst_head,
+        .inner = { .subject = dst_inner, .tag = 22 },
+        .tail = dst_tail,
+    };
+
+    feng_aggregate_assign(&dst, &src, &outer_desc);
+    ASSERT(dst.head == src_head);
+    ASSERT(dst.inner.subject == src_inner);
+    ASSERT(dst.inner.tag == 11);
+    ASSERT(dst.tail == src_tail);
+    /* The three dst originals each lost dst's +1 (their only +1 in this
+     * test) and finalized; the three src originals gained dst's +1, so
+     * each now sits at refcount 2. */
+    ASSERT(g_finalize_count == 3);
+    ASSERT(src_head->header.refcount == 2U);
+    ASSERT(src_inner->header.refcount == 2U);
+    ASSERT(src_tail->header.refcount == 2U);
+
+    feng_aggregate_release(&dst, &outer_desc);
+    feng_aggregate_release(&src, &outer_desc);
+    ASSERT(g_finalize_count == 6);
+}
+
 int main(void) {
     test_object_retain_release();
     test_retain_release_nullsafe();
@@ -926,6 +1228,18 @@ int main(void) {
     test_finalizer_throw_on_cycle_path_aborts();
     test_cycle_collector_threshold_triggers_collection();
     test_cycle_collector_multithreaded_stress();
+
+    test_aggregate_retain_release_paired();
+    test_aggregate_retain_release_null_slot();
+    test_aggregate_assign_disjoint();
+    test_aggregate_assign_shared_subobject();
+    test_aggregate_assign_self();
+    test_aggregate_take_transfers_ownership();
+    test_aggregate_take_self();
+    test_aggregate_default_init_zero_bytes();
+    test_aggregate_default_init_fn();
+    test_aggregate_nested_walker();
+    test_aggregate_nested_assign();
 
     fputs("test_runtime: ok\n", stdout);
     return 0;
