@@ -1,0 +1,13 @@
+mod test;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn main(args: string[]) {
+  puts("start..");
+  var sum = 0;
+  for var i = 0; i < 10000; i = i + 1 {
+    sum = sum + i;
+  }
+  puts("end..");
+}
