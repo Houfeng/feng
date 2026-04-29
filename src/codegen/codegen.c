@@ -2963,7 +2963,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     }
     if (managed_count > 0U) {
         buf_append_fmt(td,
-            "static const FengManagedFieldEntry %s__managed_fields[] = {\n",
+            "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
             t->c_desc_name);
         for (size_t i = 0; i < t->field_count; i++) {
             const CGType *ft = t->fields[i].type;

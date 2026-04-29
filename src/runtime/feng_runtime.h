@@ -59,10 +59,10 @@ typedef void (*FengReleaseChildrenFn)(void *self);
  * (Phase 1B). The deterministic ARC release path does not consult it; the
  * codegen-emitted user finalizer remains the sole owner of the per-field
  * release sequence so the ARC fast path stays Phase 1A compatible. */
-typedef struct FengManagedFieldEntry {
+typedef struct FengManagedFieldDescriptor {
     size_t offset;
     const struct FengTypeDescriptor *static_desc;
-} FengManagedFieldEntry;
+} FengManagedFieldDescriptor;
 
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
@@ -86,7 +86,7 @@ typedef struct FengTypeDescriptor {
      * layout built-ins (string/array) leave it empty and expose their
      * managed children through a tag-specific runtime hook instead. */
     size_t managed_field_count;
-    const FengManagedFieldEntry *managed_fields;
+    const FengManagedFieldDescriptor *managed_fields;
 } FengTypeDescriptor;
 
 /* Built-in descriptors used by string/array helpers. Generated code may also
