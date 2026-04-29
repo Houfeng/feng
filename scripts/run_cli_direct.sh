@@ -85,6 +85,10 @@ if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
         echo "FAIL[full_pipeline] IR file should be cleaned without --keep-ir"
         failures=$((failures + 1))
     fi
+    if [[ -d "$out1/ir" ]]; then
+        echo "FAIL[full_pipeline] empty IR directory should be cleaned without --keep-ir"
+        failures=$((failures + 1))
+    fi
 fi
 
 # 2. --keep-ir preserves the intermediate C file

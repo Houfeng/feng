@@ -65,6 +65,30 @@ static char *path_dirname_dup(const char *path) {
     return str_dup_n(path, len);
 }
 
+static void cleanup_empty_ir_dirs(const char *c_path) {
+    char *ir_c_dir = path_dirname_dup(c_path);
+    if (ir_c_dir == NULL) return;
+    char *ir_dir = path_dirname_dup(ir_c_dir);
+    if (ir_dir == NULL) {
+        free(ir_c_dir);
+        return;
+    }
+
+    if (rmdir(ir_c_dir) != 0 && errno != ENOENT && errno != ENOTEMPTY) {
+        fprintf(stderr,
+                "warning: could not remove empty IR directory %s: %s\n",
+                ir_c_dir, strerror(errno));
+    }
+    if (rmdir(ir_dir) != 0 && errno != ENOENT && errno != ENOTEMPTY) {
+        fprintf(stderr,
+                "warning: could not remove empty IR directory %s: %s\n",
+                ir_dir, strerror(errno));
+    }
+
+    free(ir_dir);
+    free(ir_c_dir);
+}
+
 /* --- runtime artefact discovery ----------------------------------------- */
 
 /* Resolve the running executable's absolute path. Returns a malloc'd
@@ -441,14 +465,19 @@ build_done:
         return rc;
     }
 
-    /* Success: optionally clean the IR file. The IR root directory is
-     * intentionally left in place since other tooling may rely on it
-     * existing (e.g. parallel callers writing to the same --out tree). */
+    /* Success: optionally clean the IR file and collapse the now-empty
+     * <out>/ir/c and <out>/ir directories. Non-empty directories are left
+     * alone, which keeps future multi-artefact layouts safe. */
     if (!opts->keep_intermediate) {
+        bool can_cleanup_dirs = true;
         if (unlink(opts->c_path) != 0 && errno != ENOENT) {
             fprintf(stderr,
                     "warning: could not remove intermediate %s: %s\n",
                     opts->c_path, strerror(errno));
+            can_cleanup_dirs = false;
+        }
+        if (can_cleanup_dirs) {
+            cleanup_empty_ir_dirs(opts->c_path);
         }
     }
     return 0;
