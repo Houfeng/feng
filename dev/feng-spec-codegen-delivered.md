@@ -1,9 +1,10 @@
-# spec 运行时与 codegen 可执行方案草案（fat 值方向，不含 @fixed / C ABI）
+# spec 运行时与 codegen 可执行方案（fat 值方向，不含 @fixed / C ABI）
 
-> 本文档是实现草案，不是语言权威规范。
+> **状态：已交付**（4b-α + 4b-β + 4b-γ 全部落地，18/18 smoke + 全套单测零回归）。
+> 本文档原为实现草案；当 4b 三个子步骤全部完成后由 `feng-spec-codegen-pending.md` 改名收口，作为 4b 阶段的设计与实施记录。
 > 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
 > 值模型基座见 [feng-value-model-delivered.md](./feng-value-model-delivered.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
-> 本草案只讨论非 `@fixed` 场景，不涉及 C ABI 与函数指针桥接。
+> 本文档只讨论非 `@fixed` 场景，不涉及 C ABI 与函数指针桥接（Phase 2 范畴）。
 
 ## 1 目标与范围
 
@@ -36,7 +37,7 @@
 | --- | --- | --- |
 | 4b-α | object-form spec 最小垂直切片：spec 形参 + 对象→spec 强制转换 + spec 方法调用 + spec 局部 + 1 个 smoke | **已交付**（commit `f69dfe0`） |
 | 4b-β | spec 字段（对象成员为 spec）+ spec 默认零值 + spec `==` / `!=` + 3 个 smoke | 待实施 |
-| 4b-γ | fit-method 来源 witness、spec 数组元素、spec 作为返回值的完整移动 + 对应 smoke | 待实施 |
+| 4b-γ | fit-method 来源 witness、spec 数组元素、spec 作为返回值的完整移动 + 对应 smoke | **已交付** |
 | Phase 2 | callable-form spec | 不在 4b 范围 |
 
 > 各章节内行文将以 **\[已交付 4b-α]** / **\[4b-β]** / **\[4b-γ]** 标注，第 13 节再给出完整清单。
@@ -475,9 +476,9 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 1. ~~value-model §7.3 数组元素三分类落地~~。**已交付**（`feng_array_new_kinded` + cycle collector 三分支 + 6 项单测）。
 2. ~~spec 数组发码（§9.6）~~：**已交付** — array literal / 默认零值 / index 写入三处分支到 `feng_array_new_kinded(..., FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &FengSpecAgg__M__S, sizeof(struct FengSpecValue__M__S), n)` + `feng_aggregate_assign`；语义层支持 array-literal 元素的 `User → Named` 自动 coercion（`expr_matches_expected_type_ref` / `record_object_spec_coercion_site_if_applicable` 数组递归）。
 3. ~~spec 返回值移动路径完整化，走 `feng_aggregate_take`~~：**已交付** — `cg_emit_call` 将 aggregate 返回值标记为 `owns_ref=true`（与 managed pointer 一致的"+1 移交"语义）；`cg_emit_return` aggregate 分支双路径：borrowed 源走 `feng_aggregate_retain`，owns_ref 源先 `cg_materialize_to_local` 锚定到作用域清理链再 `feng_aggregate_take` 移动并清空源管理槽，cleanup 时的 `feng_aggregate_release` 在零槽上是文档化的 no-op。
-4. fit-method 来源 witness（§5.2 第三行）。
-5. smoke：~~`spec_array.ff`~~ ✅ / ~~`spec_return.ff`~~ ✅ / `spec_fit_witness.ff`。
-6. 全量回归。
+4. ~~fit-method 来源 witness（§5.2 第三行）~~：**已交付** — codegen 引入 `UserFit` 注册表（`fit_decl` → 目标 `UserType` + per-fit 索引前缀 `FengFit_<idx>__<modT>__<T>`）；Pass 2.7 注册 fit shell + members（fit-body 方法 c_name 形如 `<fit_prefix>__<member>`，与 T 自有方法及兄弟 fit 完全不冲突）；Pass 4 `FENG_DECL_FIT` 复用 `cg_emit_user_method(uf->target, &uf->methods[i])` 发射方法体（self 类型即目标 T，与自有方法发码完全对称）；`cg_ensure_witness_instance` `FIT_METHOD` 分支按 `via_fit_decl` 定位 `UserFit`、按 `impl_member` 定位 `UserMethod`，emit 与 `TYPE_OWN_METHOD` 同形态的 thunk（仅替换被调 c_name）；CG destructor 释放 `user_fits` / `c_prefix`。
+5. smoke：~~`spec_array.ff`~~ ✅ / ~~`spec_return.ff`~~ ✅ / ~~`spec_fit_witness.ff`~~ ✅ — 覆盖：spec 形参经 fit 满足 + 直接 `let n: Named = User{..};` 经 fit 满足 + 字符串拼接 `"fit:" + self.name` 验证 self 字段访问与 fit 方法体执行。
+6. ~~全量回归~~：18/18 smokes + lexer/parser/semantic/runtime 单测全绿。
 
 ### 13.4 Phase 2
 

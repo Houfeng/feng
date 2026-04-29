@@ -334,6 +334,22 @@ typedef struct UserSpec {
     const FengDecl *decl;
 } UserSpec;
 
+/* `fit T :: S { ... }` registry (Step 4b-γ). One entry per fit declaration.
+ * Codegen treats fit-body methods as if they were ordinary methods on T,
+ * but mangles their C symbols with the fit's per-module index so two fits
+ * for the same target T cannot collide. The witness emitter (FIT_METHOD
+ * source kind) looks up the matching UserMethod by its source `member`
+ * pointer to recover the symbol to call. */
+typedef struct UserFit {
+    const FengDecl *decl;
+    const UserType *target;       /* resolved target T (named single-segment) */
+    UserMethod     *methods;      /* fit-body methods, c_name mangled with index */
+    size_t          method_count;
+    size_t          index;        /* per-program 0-based declaration order */
+    char           *c_prefix;     /* "FengFit_<idx>__<modT>__<T>" */
+} UserFit;
+
+
 static char *cg_user_type_c_name(const CGType *t) __attribute__((unused));
 static char *cg_user_type_c_name(const CGType *t) {
     /* Caller owns the returned malloc'd string. */
@@ -509,6 +525,12 @@ typedef struct CG {
     struct UserSpec *user_specs;
     size_t           user_spec_count;
     size_t           user_spec_capacity;
+    /* Fit registry (Step 4b-γ). Sibling of user_specs. Each entry models
+     * one `fit T :: S { ... }` so witness emission for FIT_METHOD source
+     * can look up the C symbol of the fit-body method to call. */
+    struct UserFit  *user_fits;
+    size_t           user_fit_count;
+    size_t           user_fit_capacity;
     /* Witness-table emission cache (Step 4b): one entry per (type, spec) pair
      * for which a witness instance has been emitted into fn_protos/fn_defs.
      * Avoids duplicate emission across multiple coercion sites. */
@@ -715,6 +737,13 @@ static const UserType *cg_find_user_type_by_decl(const CG *cg, const FengDecl *d
 static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *decl) {
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         if (cg->user_specs[i].decl == decl) return &cg->user_specs[i];
+    }
+    return NULL;
+}
+
+static const UserFit *cg_find_user_fit_by_decl(const CG *cg, const FengDecl *decl) {
+    for (size_t i = 0; i < cg->user_fit_count; i++) {
+        if (cg->user_fits[i].decl == decl) return &cg->user_fits[i];
     }
     return NULL;
 }
@@ -1171,6 +1200,99 @@ static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
         }
     }
     return NULL;
+}
+
+/* ------------- Fit registration (Step 4b-γ) ------------- */
+
+/* Register a `fit T :: S { ... }` shell: resolve the target T to a UserType
+ * and assign a per-program index for symbol mangling. Member resolution is
+ * deferred to cg_register_user_fit_members so target T's methods (used by
+ * cg_resolve_type for parameter / return types) are already populated. */
+static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
+    if (!decl->as.fit_decl.has_body) {
+        /* `fit T :: S, U;` (head-only) carries no methods to emit; semantic
+         * still consumes it for satisfaction relations. Codegen registers
+         * an empty entry so witness lookup by decl returns a stable handle. */
+    }
+    const FengTypeRef *target_ref = decl->as.fit_decl.target;
+    if (!target_ref || target_ref->kind != FENG_TYPE_REF_NAMED ||
+        target_ref->as.named.segment_count != 1) {
+        return cg_fail(cg, decl->token,
+            "codegen: only single-segment named fit targets are supported");
+    }
+    const FengSlice *seg = &target_ref->as.named.segments[0];
+    const UserType *target = cg_find_user_type(cg, seg->data, seg->length);
+    if (!target) {
+        return cg_fail(cg, decl->token,
+            "codegen: fit target type '%.*s' is not a known user type",
+            (int)seg->length, seg->data);
+    }
+    if (cg->user_fit_count + 1 > cg->user_fit_capacity) {
+        size_t cap = cg->user_fit_capacity ? cg->user_fit_capacity * 2 : 4;
+        void *p = realloc(cg->user_fits, cap * sizeof *cg->user_fits);
+        if (!p) return false;
+        cg->user_fits = p;
+        cg->user_fit_capacity = cap;
+    }
+    UserFit *uf = &cg->user_fits[cg->user_fit_count];
+    memset(uf, 0, sizeof *uf);
+    uf->decl = decl;
+    uf->target = target;
+    uf->index = cg->user_fit_count;
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "FengFit_%zu__%s", uf->index, target->c_struct_name);
+    if (!b.data) return false;
+    uf->c_prefix = b.data;
+    cg->user_fit_count++;
+    return true;
+}
+
+/* Populate the fit's UserMethod array. Field members are not legal in a fit
+ * body (semantic enforces this; we double-check). Each method's c_name
+ * is `<fit_prefix>__<member>` so two fits for the same T cannot collide,
+ * and so a fit method does not shadow a same-named method on T itself. */
+static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
+    const FengDecl *decl = uf->decl;
+    size_t mc = 0;
+    for (size_t i = 0; i < decl->as.fit_decl.member_count; i++) {
+        if (decl->as.fit_decl.members[i]->kind == FENG_TYPE_MEMBER_METHOD) mc++;
+    }
+    uf->methods = mc ? calloc(mc, sizeof *uf->methods) : NULL;
+    if (mc && !uf->methods) return false;
+    size_t mi = 0;
+    for (size_t i = 0; i < decl->as.fit_decl.member_count; i++) {
+        const FengTypeMember *m = decl->as.fit_decl.members[i];
+        if (m->kind != FENG_TYPE_MEMBER_METHOD) {
+            return cg_fail(cg, m->token,
+                "codegen: only methods are supported in fit bodies");
+        }
+        UserMethod *um = &uf->methods[mi++];
+        const FengCallableSignature *sig = &m->as.callable;
+        um->member = m;
+        um->feng_name = strndup(sig->name.data, sig->name.length);
+        char *msan = cg_sanitize(sig->name.data, sig->name.length);
+        if (!um->feng_name || !msan) { free(msan); return false; }
+        Buf cb; buf_init(&cb);
+        buf_append_fmt(&cb, "%s__%s", uf->c_prefix, msan);
+        um->c_name = cb.data;
+        free(msan);
+        um->param_count = sig->param_count;
+        um->param_types = sig->param_count
+            ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+        um->param_names = sig->param_count
+            ? calloc(sig->param_count, sizeof(char*)) : NULL;
+        for (size_t pi = 0; pi < sig->param_count; pi++) {
+            if (!cg_resolve_type(cg, sig->params[pi].type,
+                                 &sig->params[pi].token,
+                                 &um->param_types[pi])) return false;
+            um->param_names[pi] = strndup(sig->params[pi].name.data,
+                                          sig->params[pi].name.length);
+        }
+        if (!cg_resolve_type(cg, sig->return_type, &sig->token,
+                             &um->return_type)) return false;
+    }
+    uf->method_count = mi;
+    return true;
 }
 
 /* Forward declarations for spec value-struct + witness-struct, plus the
@@ -3721,9 +3843,67 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                 t->feng_name, s->feng_name, sm->feng_name);
         }
         if (wm->source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
-            buf_free(&prefix); free(t_san); free(s_san);
-            return cg_fail(cg, blame,
-                "codegen: fit-provided spec witnesses not yet supported (Step 4b-γ)");
+            /* Step 4b-γ — fit-provided method. The fit body emits the
+             * implementation as `<fit_prefix>__<member>(struct T *self, ...)`
+             * (see cg_register_user_fit_members / cg_emit_user_fit_methods);
+             * the witness thunk just adapts the void* subject and forwards. */
+            if (sm->kind != USM_KIND_METHOD) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: spec field '%s' cannot be satisfied by a fit method",
+                    sm->feng_name);
+            }
+            const UserFit *uf = cg_find_user_fit_by_decl(cg, wm->via_fit_decl);
+            if (!uf || uf->target != t) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s'",
+                    s->feng_name, sm->feng_name, t->feng_name);
+            }
+            const UserMethod *fm = NULL;
+            for (size_t k = 0; k < uf->method_count; k++) {
+                if (uf->methods[k].member == wm->impl_member) {
+                    fm = &uf->methods[k]; break;
+                }
+            }
+            if (!fm) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: fit method '%s' not found in fit body for type '%s'",
+                    sm->feng_name, t->feng_name);
+            }
+            Buf *fp = &cg->fn_protos;
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(fp, ", ");
+                cg_emit_c_type(fp, sm->param_types[pi]);
+                buf_append_fmt(fp, " p%zu", pi);
+            }
+            buf_append_cstr(fp, ");\n");
+
+            Buf *fd = &cg->witness_defs;
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(fd, ", ");
+                cg_emit_c_type(fd, sm->param_types[pi]);
+                buf_append_fmt(fd, " p%zu", pi);
+            }
+            buf_append_cstr(fd, ") {\n");
+            if (sm->type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(fd, "    %s((struct %s *)_subject", fm->c_name, t->c_struct_name);
+            } else {
+                buf_append_fmt(fd, "    return %s((struct %s *)_subject",
+                               fm->c_name, t->c_struct_name);
+            }
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_fmt(fd, ", p%zu", pi);
+            }
+            buf_append_cstr(fd, ");\n}\n\n");
+            continue;
         }
         if (sm->kind == USM_KIND_METHOD) {
             if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
@@ -3913,6 +4093,18 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         if (!cg_register_user_spec_members(cg, &cg->user_specs[i])) return false;
     }
+    /* Pass 2.7: register fit shells + members (Step 4b-γ). Specs and types
+     * must be fully populated first because fit member type resolution may
+     * reference any of them. */
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        if (d->kind == FENG_DECL_FIT) {
+            if (!cg_register_user_fit_shell(cg, d)) return false;
+        }
+    }
+    for (size_t i = 0; i < cg->user_fit_count; i++) {
+        if (!cg_register_user_fit_members(cg, &cg->user_fits[i])) return false;
+    }
     /* Pass 2b: register every module-level let/var so identifiers can resolve
      * across function bodies regardless of source order, and emit their
      * static storage. Initialisation runs from the main wrapper in source
@@ -3977,9 +4169,21 @@ static bool cg_emit_program_decls(CG *cg, const FengProgram *prog,
             }
             case FENG_DECL_SPEC:
                 continue;
-            case FENG_DECL_FIT:
-                return cg_fail(cg, d->token,
-                    "codegen: fit declarations not yet supported");
+            case FENG_DECL_FIT: {
+                /* Step 4b-γ — emit each fit-body method as if it were an
+                 * ordinary method on the target type. The fit-mangled
+                 * c_name (set in cg_register_user_fit_members) keeps the
+                 * symbol disjoint from T's own methods and from sibling
+                 * fits for the same T. Witness thunks generated by
+                 * cg_ensure_witness_instance call this c_name directly. */
+                const UserFit *uf = cg_find_user_fit_by_decl(cg, d);
+                if (!uf) return cg_fail(cg, d->token,
+                    "codegen: internal: fit not registered");
+                for (size_t mi = 0; mi < uf->method_count; mi++) {
+                    if (!cg_emit_user_method(cg, uf->target, &uf->methods[mi])) return false;
+                }
+                break;
+            }
             case FENG_DECL_FUNCTION:
                 if (d->is_extern) {
                     if (!cg_emit_extern_decl(cg, d)) return false;
@@ -4772,6 +4976,24 @@ static void cg_dispose(CG *cg) {
         free(us->members);
     }
     free(cg->user_specs);
+    for (size_t i = 0; i < cg->user_fit_count; i++) {
+        UserFit *uf = &cg->user_fits[i];
+        for (size_t j = 0; j < uf->method_count; j++) {
+            UserMethod *um = &uf->methods[j];
+            free(um->feng_name);
+            free(um->c_name);
+            cgtype_free(um->return_type);
+            for (size_t k = 0; k < um->param_count; k++) {
+                cgtype_free(um->param_types[k]);
+                free(um->param_names[k]);
+            }
+            free(um->param_types);
+            free(um->param_names);
+        }
+        free(uf->methods);
+        free(uf->c_prefix);
+    }
+    free(cg->user_fits);
     for (size_t i = 0; i < cg->witness_table_count; i++) {
         free(cg->witness_tables[i].c_var);
     }
