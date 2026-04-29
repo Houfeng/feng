@@ -7710,6 +7710,179 @@ static void test_spec_member_access_callable_form_rejected(void) {
     feng_program_free(program);
 }
 
+/* --- Phase S3: SpecWitness sidecar tests (§9.5) ---------------------- */
+
+static void test_spec_witness_via_declared_head(void) {
+    /* §9.5 (1): T satisfies S via its own declared head; each S member
+     * resolves to T's own implementation. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn make(): int {\n"
+        "    let s: Named = User{n: \"u\"};\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_head.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    ASSERT(w != NULL);
+    ASSERT(w->type_decl == user);
+    ASSERT(w->spec_decl == named);
+    ASSERT(w->member_count == 1U);
+    ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD);
+    ASSERT(w->members[0].impl_member != NULL);
+    ASSERT(w->members[0].impl_member->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(w->members[0].via_fit_decl == NULL);
+    ASSERT(w->members[0].provider_module == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_witness_via_fit(void) {
+    /* §9.5 (2): T satisfies S only through a fit; the witness member
+     * resolves to FIT_METHOD with the fit decl/module recorded. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User { var n: string; }\n"
+        "fit User: Named { fn name(): string { return self.n; } }\n"
+        "fn make(): int {\n"
+        "    let s: Named = User{n: \"u\"};\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_fit.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    ASSERT(w != NULL);
+    ASSERT(w->member_count == 1U);
+    ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD);
+    ASSERT(w->members[0].impl_member != NULL);
+    ASSERT(w->members[0].impl_member->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(w->members[0].via_fit_decl != NULL);
+    ASSERT(w->members[0].via_fit_decl->kind == FENG_DECL_FIT);
+    ASSERT(w->members[0].provider_module != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_witness_field_member(void) {
+    /* §9.5: a spec field maps to T's own field via TYPE_OWN_FIELD. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { var n: string; }\n"
+        "type User: Named { var n: string; }\n"
+        "fn make(): int {\n"
+        "    let s: Named = User{n: \"u\"};\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_field.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    ASSERT(w != NULL);
+    ASSERT(w->member_count == 1U);
+    ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD);
+    ASSERT(w->members[0].impl_member != NULL);
+    ASSERT(w->members[0].impl_member->kind == FENG_TYPE_MEMBER_FIELD);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_witness_on_demand_only(void) {
+    /* §8.2: with no coercion site, no witness is materialised — even
+     * though (User, Named) has a SpecRelation entry. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_lazy.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    /* Relation exists (declared head). */
+    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
+    /* Witness does not — no coercion site demanded it. */
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, user, named) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_witness_multi_fit_conflict(void) {
+    /* §8.1: two visible fits both provide the same (name, params, return)
+     * implementation of S's method on T → conflict at first coercion. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User { var n: string; }\n"
+        "fit User: Named { fn name(): string { return self.n; } }\n"
+        "fit User: Named { fn name(): string { return \"x\"; } }\n"
+        "fn make(): int {\n"
+        "    let s: Named = User{n: \"u\"};\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_conflict.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    ASSERT(!ok);
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -7739,6 +7912,11 @@ int main(void) {
     test_spec_member_access_field_write();
     test_spec_member_access_method_call();
     test_spec_member_access_callable_form_rejected();
+    test_spec_witness_via_declared_head();
+    test_spec_witness_via_fit();
+    test_spec_witness_field_member();
+    test_spec_witness_on_demand_only();
+    test_spec_witness_multi_fit_conflict();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();

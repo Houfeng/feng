@@ -4579,6 +4579,11 @@ static void record_spec_member_access(ResolveContext *context,
                                       const FengDecl *spec_decl,
                                       const FengTypeMember *member);
 
+static void compute_spec_witness_if_absent(ResolveContext *context,
+                                           const FengDecl *type_decl,
+                                           const FengDecl *spec_decl,
+                                           FengToken err_token);
+
 static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
@@ -7075,6 +7080,13 @@ static void record_object_spec_coercion_site_if_applicable(
                                                           src_type_decl,
                                                           target_decl,
                                                           relation);
+
+    /* Phase S3 — materialise the (T, S) witness on first demand (§8.2). The
+     * compute helper is idempotent: subsequent coercions for the same pair
+     * observe the cached entry and skip recomputation, so per-coercion-site
+     * conflict diagnostics fire exactly once at the first triggering site
+     * (per §8.1 / §8.2 — "复用同一份 SpecWitness 结果"). */
+    compute_spec_witness_if_absent(context, src_type_decl, target_decl, expr->token);
 }
 
 /* Records object-form coercion sites for each argument of a call against the
@@ -10105,6 +10117,232 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
     return true;
 }
 
+/* Phase S3 — SpecWitness compute (§6.5 / §8.1 / §8.2).
+ *
+ * Materialises one (T, S) witness on first demand. The walk follows S's
+ * member closure (deduplicated by name to mirror find_spec_object_member's
+ * "first occurrence wins" semantics) and resolves each member against T's
+ * visible face: T's own members + every fit visible from the resolve
+ * context's module (per fit_decl_is_visible_from). Method candidates are
+ * filtered by exact signature match per §6.5; ambiguity between distinct
+ * visible-face implementations of the same (name, params, return) raises
+ * §8.1 conflict at the triggering coercion site.
+ *
+ * Missing-implementation slots (no candidate at all) record a NULL
+ * impl_member without emitting an error: the missing-member diagnostic is
+ * already produced by verify_type_satisfies_spec / fit validation; the
+ * NULL slot exists only so codegen can detect the gap. */
+
+typedef struct WitnessFitCandidate {
+    const FengTypeMember *method;
+    const FengDecl *fit_decl;
+    const FengSemanticModule *fit_module;
+} WitnessFitCandidate;
+
+typedef struct WitnessFitCollectCtx {
+    const ResolveContext *ctx;
+    const FengCallableSignature *spec_sig;
+    WitnessFitCandidate *items;
+    size_t count;
+    size_t capacity;
+    bool oom;
+} WitnessFitCollectCtx;
+
+static bool witness_fit_collect_visitor(const FengTypeMember *member,
+                                        const FengSemanticModule *fit_module,
+                                        const FengDecl *fit_decl,
+                                        void *userdata) {
+    WitnessFitCollectCtx *st = (WitnessFitCollectCtx *)userdata;
+
+    if (!callable_signatures_match_for_satisfaction(st->ctx, st->spec_sig,
+                                                    &member->as.callable)) {
+        return true;
+    }
+    if (st->count == st->capacity) {
+        size_t new_cap = st->capacity == 0U ? 4U : st->capacity * 2U;
+        WitnessFitCandidate *grown = realloc(st->items, new_cap * sizeof(*grown));
+
+        if (grown == NULL) {
+            st->oom = true;
+            return false;
+        }
+        st->items = grown;
+        st->capacity = new_cap;
+    }
+    st->items[st->count].method = member;
+    st->items[st->count].fit_decl = fit_decl;
+    st->items[st->count].fit_module = fit_module;
+    ++st->count;
+    return true;
+}
+
+static void compute_spec_witness_if_absent(ResolveContext *context,
+                                           const FengDecl *type_decl,
+                                           const FengDecl *spec_decl,
+                                           FengToken err_token) {
+    const FengDecl **closure = NULL;
+    size_t closure_count = 0U;
+    size_t closure_capacity = 0U;
+    FengSlice *seen_names = NULL;
+    size_t seen_count = 0U;
+    size_t seen_capacity = 0U;
+    FengSpecWitness *witness;
+    size_t ci;
+
+    if (context == NULL || context->analysis == NULL ||
+        type_decl == NULL || spec_decl == NULL) {
+        return;
+    }
+    if (type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return;
+    }
+    if (feng_semantic_lookup_spec_witness(context->analysis,
+                                          type_decl, spec_decl) != NULL) {
+        return;
+    }
+
+    witness = feng_semantic_reserve_spec_witness(context->analysis,
+                                                 type_decl, spec_decl);
+    if (witness == NULL) {
+        return;
+    }
+    if (!spec_collect_closure(context, spec_decl, &closure,
+                              &closure_count, &closure_capacity)) {
+        free(closure);
+        return;
+    }
+
+    for (ci = 0U; ci < closure_count; ++ci) {
+        const FengDecl *cur = closure[ci];
+        size_t mi;
+
+        if (cur->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            continue;
+        }
+        for (mi = 0U; mi < cur->as.spec_decl.as.object.member_count; ++mi) {
+            const FengTypeMember *sm = cur->as.spec_decl.as.object.members[mi];
+            FengSlice name;
+            bool dup = false;
+            size_t k;
+
+            if (sm == NULL) {
+                continue;
+            }
+            if (sm->kind == FENG_TYPE_MEMBER_FIELD) {
+                name = sm->as.field.name;
+            } else if (sm->kind == FENG_TYPE_MEMBER_METHOD) {
+                name = sm->as.callable.name;
+            } else {
+                continue;
+            }
+            for (k = 0U; k < seen_count; ++k) {
+                if (slice_equals(seen_names[k], name)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                continue;
+            }
+            if (seen_count == seen_capacity) {
+                size_t new_cap = seen_capacity == 0U ? 8U : seen_capacity * 2U;
+                FengSlice *grown = realloc(seen_names, new_cap * sizeof(*grown));
+
+                if (grown == NULL) {
+                    free(seen_names);
+                    free(closure);
+                    return;
+                }
+                seen_names = grown;
+                seen_capacity = new_cap;
+            }
+            seen_names[seen_count++] = name;
+
+            if (sm->kind == FENG_TYPE_MEMBER_FIELD) {
+                const FengTypeMember *t_field = type_find_field(type_decl, name);
+
+                (void)feng_semantic_spec_witness_append_member(
+                    witness, sm, t_field,
+                    FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD,
+                    NULL, NULL);
+                continue;
+            }
+
+            /* Method member — collect signature-matching candidates from T
+             * and from every visible fit. */
+            {
+                const FengTypeMember *t_method = type_find_matching_method(
+                    context, type_decl, &sm->as.callable, NULL, 0U);
+                WitnessFitCollectCtx fit_st;
+                size_t total;
+
+                fit_st.ctx = context;
+                fit_st.spec_sig = &sm->as.callable;
+                fit_st.items = NULL;
+                fit_st.count = 0U;
+                fit_st.capacity = 0U;
+                fit_st.oom = false;
+                (void)visit_visible_fit_methods_for_type(
+                    context, type_decl, name, true,
+                    witness_fit_collect_visitor, &fit_st);
+                if (fit_st.oom) {
+                    free(fit_st.items);
+                    free(seen_names);
+                    free(closure);
+                    return;
+                }
+
+                total = (t_method != NULL ? 1U : 0U) + fit_st.count;
+                if (total == 0U) {
+                    /* Missing — diagnostic is the responsibility of the
+                     * type/fit validation passes. Record a NULL slot. */
+                    (void)feng_semantic_spec_witness_append_member(
+                        witness, sm, NULL,
+                        FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+                        NULL, NULL);
+                } else if (total == 1U) {
+                    if (t_method != NULL) {
+                        (void)feng_semantic_spec_witness_append_member(
+                            witness, sm, t_method,
+                            FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+                            NULL, NULL);
+                    } else {
+                        (void)feng_semantic_spec_witness_append_member(
+                            witness, sm, fit_st.items[0].method,
+                            FENG_SPEC_WITNESS_SOURCE_FIT_METHOD,
+                            fit_st.items[0].fit_decl,
+                            fit_st.items[0].fit_module);
+                    }
+                } else {
+                    /* §8.1 — multiple visible-face implementations of the
+                     * same (name, params, return). Report once, at the
+                     * triggering coercion site. */
+                    (void)resolver_append_error(
+                        context, err_token,
+                        format_message(
+                            "type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself)",
+                            (int)decl_typeish_name(type_decl).length,
+                            decl_typeish_name(type_decl).data,
+                            (int)name.length, name.data,
+                            (int)spec_decl->as.spec_decl.name.length,
+                            spec_decl->as.spec_decl.name.data));
+                    (void)feng_semantic_spec_witness_append_member(
+                        witness, sm, NULL,
+                        FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+                        NULL, NULL);
+                }
+                free(fit_st.items);
+            }
+        }
+    }
+
+    free(seen_names);
+    free(closure);
+}
+
 static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
                                               const FengDecl *type_decl,
                                               const FengDecl ***out_set,
@@ -11700,6 +11938,10 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     free(analysis->spec_coercion_sites);
     free(analysis->spec_default_bindings);
     free(analysis->spec_member_accesses);
+    for (index = 0U; index < analysis->spec_witness_count; ++index) {
+        free(analysis->spec_witnesses[index].members);
+    }
+    free(analysis->spec_witnesses);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

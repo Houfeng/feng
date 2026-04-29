@@ -164,6 +164,9 @@ typedef struct FengSemanticAnalysis {
     struct FengSpecMemberAccess *spec_member_accesses;
     size_t spec_member_access_count;
     size_t spec_member_access_capacity;
+    struct FengSpecWitness *spec_witnesses;
+    size_t spec_witness_count;
+    size_t spec_witness_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
@@ -368,6 +371,83 @@ void feng_semantic_upgrade_spec_member_access_to_write(
 const FengSpecMemberAccess *feng_semantic_lookup_spec_member_access(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
+
+/* --- SpecWitness (Phase S3, §6.5 / §8.1 / §8.2 / §9.5) --------------- */
+
+/* Per-member implementation source within a (T, S) witness. Each entry maps
+ * one member of S's closure to the T-side implementation that satisfies it.
+ *
+ *   TYPE_OWN_FIELD  — the field lives on `type_decl` itself.
+ *   TYPE_OWN_METHOD — the method lives on `type_decl` itself.
+ *   FIT_METHOD      — the method is provided by `via_fit_decl`, owned by
+ *                     `provider_module`.
+ *
+ * `spec_member` points into S's closure (returned by find_spec_object_member
+ * when looking up by name). `impl_member` points at the chosen T-side
+ * field/method (T's own member or the fit-body member). `via_fit_decl` and
+ * `provider_module` are non-NULL only for FIT_METHOD. */
+typedef enum FengSpecWitnessSourceKind {
+    FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD = 0,
+    FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+    FENG_SPEC_WITNESS_SOURCE_FIT_METHOD
+} FengSpecWitnessSourceKind;
+
+typedef struct FengSpecWitnessMember {
+    const FengTypeMember *spec_member;
+    const FengTypeMember *impl_member;
+    FengSpecWitnessSourceKind source_kind;
+    const FengDecl *via_fit_decl;
+    const FengSemanticModule *provider_module;
+} FengSpecWitnessMember;
+
+/* One witness entry per (type_decl, spec_decl) pair that has been demanded
+ * by at least one coercion site (per §8.2 — on-demand cache). The members
+ * array follows the iteration order of S's member closure. The entry
+ * pointer is stable until feng_semantic_analysis_free.
+ *
+ * If S's member closure contains a member that the (T, S) visible face
+ * could not unambiguously satisfy (missing implementation, or §8.1
+ * multi-source ambiguity), the corresponding `members[i].impl_member` is
+ * NULL. The conflict is reported as a semantic error at the coercion site
+ * that triggered the witness compute; subsequent lookups simply observe
+ * the NULL slot. */
+typedef struct FengSpecWitness {
+    const FengDecl *type_decl;
+    const FengDecl *spec_decl;
+    FengSpecWitnessMember *members;
+    size_t member_count;
+    size_t member_capacity;
+} FengSpecWitness;
+
+/* Look up the witness entry for (type_decl, spec_decl). Returns NULL when
+ * no coercion has yet demanded this (T, S) pair (per §8.2). */
+const FengSpecWitness *feng_semantic_lookup_spec_witness(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *type_decl,
+    const FengDecl *spec_decl);
+
+/* Reserve and return a fresh witness entry for (type_decl, spec_decl). The
+ * caller is expected to populate `members` via
+ * feng_semantic_spec_witness_append_member after reservation. Returns NULL
+ * on allocation failure or when an entry already exists (callers should
+ * check feng_semantic_lookup_spec_witness first). */
+FengSpecWitness *feng_semantic_reserve_spec_witness(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *type_decl,
+    const FengDecl *spec_decl);
+
+/* Append one member entry to a witness reserved by
+ * feng_semantic_reserve_spec_witness. Returns false on allocation failure.
+ * `impl_member` may be NULL to record an unresolved/conflicted slot.
+ * `via_fit_decl` and `provider_module` must be non-NULL iff
+ * `source_kind == FIT_METHOD`. */
+bool feng_semantic_spec_witness_append_member(
+    FengSpecWitness *witness,
+    const FengTypeMember *spec_member,
+    const FengTypeMember *impl_member,
+    FengSpecWitnessSourceKind source_kind,
+    const FengDecl *via_fit_decl,
+    const FengSemanticModule *provider_module);
 
 #ifdef __cplusplus
 }
