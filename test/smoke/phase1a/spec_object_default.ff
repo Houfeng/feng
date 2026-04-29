@@ -1,0 +1,17 @@
+mod feng.smoke;
+
+@cdecl("libc") extern fn puts(msg: string): int;
+
+spec Named {
+    var name: string;
+    fn greet(): string;
+}
+
+fn main(args: string[]) {
+    let s: Named;
+    puts(s.name);
+    puts(s.greet());
+    s.name = "hi";
+    puts(s.name);
+    puts(s.greet());
+}

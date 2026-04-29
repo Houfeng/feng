@@ -321,6 +321,14 @@ typedef struct UserSpec {
     char   *c_aggregate_default_name;  /* e.g., FengSpecAggDefault__M__S */
     char   *c_aggregate_init_fn_name;  /* e.g., FengSpecAggInit__M__S */
     char   *c_aggregate_desc_name;     /* e.g., FengSpecAgg__M__S */
+    /* Default-zero machinery (dev/feng-spec-codegen-pending.md §6). The
+     * hidden subject type is a real managed object emitted purely to
+     * back default spec values; the default witness reads / writes its
+     * fields and returns per-type defaults from method slots. */
+    char   *c_default_subject_struct_name; /* e.g., FengSpecDefault__M__S__Subject */
+    char   *c_default_subject_desc_name;   /* e.g., FengSpecDefault__M__S__Subject_desc */
+    char   *c_default_subject_new_name;    /* e.g., FengSpecDefault__M__S__new_subject */
+    char   *c_default_witness_name;        /* e.g., FengSpecDefaultWitness__M__S */
     UserSpecMember *members;
     size_t          member_count;
     const FengDecl *decl;
@@ -558,6 +566,15 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var);
+static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
+                                                FengToken blame);
+static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
+                                              const char *struct_name,
+                                              const char *field_name,
+                                              const CGType *t,
+                                              FengToken blame);
+static bool cg_emit_field_release(CG *cg, Buf *td, const char *field_name,
+                                  const CGType *t, FengToken blame);
 
 /* ===================== error helpers ===================== */
 
@@ -1059,10 +1076,32 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
     s->c_aggregate_init_fn_name = ib.data;
 
+    Buf dssb; buf_init(&dssb);
+    buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
+                   cg->module_mangle, san);
+    s->c_default_subject_struct_name = dssb.data;
+
+    Buf ddb; buf_init(&ddb);
+    buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
+                   cg->module_mangle, san);
+    s->c_default_subject_desc_name = ddb.data;
+
+    Buf dnb; buf_init(&dnb);
+    buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
+                   cg->module_mangle, san);
+    s->c_default_subject_new_name = dnb.data;
+
+    Buf dwb; buf_init(&dwb);
+    buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
+                   cg->module_mangle, san);
+    s->c_default_witness_name = dwb.data;
+
     free(san);
     return s->c_value_struct_name && s->c_witness_struct_name
         && s->c_aggregate_desc_name && s->c_aggregate_slots_name
-        && s->c_aggregate_default_name && s->c_aggregate_init_fn_name;
+        && s->c_aggregate_default_name && s->c_aggregate_init_fn_name
+        && s->c_default_subject_struct_name && s->c_default_subject_desc_name
+        && s->c_default_subject_new_name && s->c_default_witness_name;
 }
 
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
@@ -1194,17 +1233,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
      * §3, §7.2, §8.2). For object-form specs the value layout is
      * { void *subject; const Witness *witness; } — exactly one managed
      * pointer slot at offset 0 (subject). The witness pointer is a
-     * non-managed reference into rodata.
-     *
-     * The default-init function is emitted as a panicking stub: spec
-     * default-binding (which would supply a fitting subject) is part of
-     * the broader 4b-β spec-codegen scope. As long as no current Feng
-     * program triggers default-init on a spec value (no
-     * `feng_aggregate_default_init` call against this descriptor and no
-     * AGGREGATE-element array of spec type), the stub is unreachable; if
-     * a future emit path forgets to provide an explicit initializer, the
-     * panic surfaces the gap immediately rather than silently producing
-     * a NULL subject. */
+     * non-managed reference into rodata. */
     buf_append_fmt(td,
         "static const FengManagedSlotDescriptor %s[] = {\n"
         "    { offsetof(struct %s, subject), FENG_SLOT_POINTER, NULL },\n"
@@ -1212,13 +1241,227 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_aggregate_slots_name,
         s->c_value_struct_name);
 
+    /* ---- Hidden default-subject type (dev/feng-spec-codegen-pending.md §6).
+     * For each object-form spec we generate a real managed object that
+     * backs default-initialised spec values: the default witness reads /
+     * writes its fields, and method slots return per-type defaults. The
+     * struct is opaque to user code (its name carries `Default__`). */
+    buf_append_fmt(td, "struct %s {\n", s->c_default_subject_struct_name);
+    buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind != USM_KIND_FIELD) continue;
+        buf_append_cstr(td, "    ");
+        cg_emit_c_type(td, sm->type);
+        buf_append_fmt(td, " %s;\n", sm->c_field_name);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    /* Subject release_children — one drop per managed FIELD (aggregate spec
+     * fields are rejected at registration, so each managed field is exactly
+     * one pointer slot here). */
+    bool subject_any_managed = false;
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind == USM_KIND_FIELD &&
+            cgtype_value_kind(sm->type) != CG_VK_TRIVIAL) {
+            subject_any_managed = true;
+            break;
+        }
+    }
+    char *subject_release_name = NULL;
+    if (subject_any_managed) {
+        Buf rcn; buf_init(&rcn);
+        buf_append_fmt(&rcn, "%s__release_children",
+                       s->c_default_subject_struct_name);
+        subject_release_name = rcn.data;
+        buf_append_fmt(td, "static void %s(void *_self) {\n", subject_release_name);
+        buf_append_fmt(td, "    struct %s *_o = (struct %s *)_self;\n",
+                       s->c_default_subject_struct_name,
+                       s->c_default_subject_struct_name);
+        for (size_t i = 0; i < s->member_count; i++) {
+            const UserSpecMember *sm = &s->members[i];
+            if (sm->kind != USM_KIND_FIELD) continue;
+            if (!cg_emit_field_release(cg, td, sm->c_field_name, sm->type,
+                                       s->decl->token)) {
+                free(subject_release_name);
+                return;
+            }
+        }
+        buf_append_cstr(td, "}\n\n");
+    }
+
+    /* Subject managed_fields metadata for the cycle collector. */
+    size_t subject_managed_count = 0U;
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind != USM_KIND_FIELD) continue;
+        subject_managed_count += cg_field_managed_descriptor_count(
+            cg, sm->type, s->decl->token);
+    }
+    if (subject_managed_count > 0U) {
+        buf_append_fmt(td,
+            "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
+            s->c_default_subject_struct_name);
+        for (size_t i = 0; i < s->member_count; i++) {
+            const UserSpecMember *sm = &s->members[i];
+            if (sm->kind != USM_KIND_FIELD) continue;
+            if (!cg_emit_field_managed_descriptors(cg, td,
+                    s->c_default_subject_struct_name,
+                    sm->c_field_name, sm->type, s->decl->token)) {
+                free(subject_release_name);
+                return;
+            }
+        }
+        buf_append_cstr(td, "};\n\n");
+    }
+
+    /* Subject FengTypeDescriptor — hidden default subjects are never user
+     * finalisers and conservatively marked acyclic (default zero values
+     * cannot reference back into themselves: every initialiser is a fresh
+     * default of its own type). */
+    buf_append_fmt(td,
+        "static const FengTypeDescriptor %s = {\n"
+        "    .name = \"%s.%s.<spec_default>\",\n"
+        "    .size = sizeof(struct %s),\n"
+        "    .finalizer = NULL,\n"
+        "    .release_children = %s,\n"
+        "    .is_potentially_cyclic = false,\n"
+        "    .managed_field_count = %zu,\n",
+        s->c_default_subject_desc_name,
+        cg->module_dot_name, s->feng_name,
+        s->c_default_subject_struct_name,
+        subject_release_name ? subject_release_name : "NULL",
+        subject_managed_count);
+    if (subject_managed_count > 0U) {
+        buf_append_fmt(td, "    .managed_fields = %s__managed_fields,\n",
+                       s->c_default_subject_struct_name);
+    } else {
+        buf_append_cstr(td, "    .managed_fields = NULL,\n");
+    }
+    buf_append_cstr(td, "};\n\n");
+    free(subject_release_name);
+
+    /* Subject factory: feng_object_new + per-field default-zero materialise.
+     * Returns +1 owns_ref. */
+    buf_append_fmt(td,
+        "static struct %s *%s(void) {\n"
+        "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n",
+        s->c_default_subject_struct_name, s->c_default_subject_new_name,
+        s->c_default_subject_struct_name, s->c_default_subject_struct_name,
+        s->c_default_subject_desc_name);
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind != USM_KIND_FIELD) continue;
+        /* Trivial: feng_object_new already zeroed. */
+        if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL) continue;
+        char *expr = NULL;
+        if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
+            free(expr);
+            return;
+        }
+        buf_append_fmt(td, "    _o->%s = %s;\n", sm->c_field_name, expr);
+        free(expr);
+    }
+    buf_append_cstr(td, "    return _o;\n}\n\n");
+
+    /* Default witness thunks. Field getters / setters route through the
+     * subject's own field; methods return the default value of their
+     * return type. Method thunks ignore arguments (default semantics
+     * cannot inspect them). */
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind == USM_KIND_FIELD) {
+            buf_append_cstr(td, "static ");
+            cg_emit_c_type(td, sm->type);
+            buf_append_fmt(td, " %s__get_%s(void *_subject) {\n",
+                           s->c_default_witness_name, sm->c_field_name);
+            buf_append_fmt(td,
+                "    return ((struct %s *)_subject)->%s;\n",
+                s->c_default_subject_struct_name, sm->c_field_name);
+            buf_append_cstr(td, "}\n");
+            if (sm->is_var) {
+                buf_append_fmt(td,
+                    "static void %s__set_%s(void *_subject, ",
+                    s->c_default_witness_name, sm->c_field_name);
+                cg_emit_c_type(td, sm->type);
+                buf_append_cstr(td, " value) {\n");
+                if (cgtype_is_managed(sm->type)) {
+                    buf_append_fmt(td,
+                        "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
+                        s->c_default_subject_struct_name, sm->c_field_name);
+                } else {
+                    buf_append_fmt(td,
+                        "    ((struct %s *)_subject)->%s = value;\n",
+                        s->c_default_subject_struct_name, sm->c_field_name);
+                }
+                buf_append_cstr(td, "}\n");
+            }
+        } else if (sm->kind == USM_KIND_METHOD) {
+            buf_append_cstr(td, "static ");
+            cg_emit_c_type(td, sm->type);
+            buf_append_fmt(td, " %s__%s(void *_subject",
+                           s->c_default_witness_name, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(td, ", ");
+                cg_emit_c_type(td, sm->param_types[pi]);
+                buf_append_fmt(td, " _p%zu", pi);
+            }
+            buf_append_cstr(td, ") {\n    (void)_subject;\n");
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_fmt(td, "    (void)_p%zu;\n", pi);
+            }
+            if (sm->type->kind == CG_TYPE_VOID) {
+                buf_append_cstr(td, "}\n");
+            } else {
+                char *expr = NULL;
+                if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
+                    free(expr);
+                    return;
+                }
+                buf_append_fmt(td, "    return %s;\n}\n", expr);
+                free(expr);
+            }
+        }
+    }
+    buf_append_cstr(td, "\n");
+
+    /* Default witness instance — same struct layout as a (T,S) witness; only
+     * the function pointers differ. */
+    buf_append_fmt(td, "static const struct %s %s = {\n",
+                   s->c_witness_struct_name, s->c_default_witness_name);
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind == USM_KIND_FIELD) {
+            buf_append_fmt(td, "    .get_%s = &%s__get_%s,\n",
+                           sm->c_field_name, s->c_default_witness_name,
+                           sm->c_field_name);
+            if (sm->is_var) {
+                buf_append_fmt(td, "    .set_%s = &%s__set_%s,\n",
+                               sm->c_field_name, s->c_default_witness_name,
+                               sm->c_field_name);
+            }
+        } else if (sm->kind == USM_KIND_METHOD) {
+            buf_append_fmt(td, "    .%s = &%s__%s,\n",
+                           sm->c_field_name, s->c_default_witness_name,
+                           sm->c_field_name);
+        }
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    /* Real default-init function: allocate fresh subject (+1) and bind
+     * the default witness. Per dev/feng-spec-codegen-pending.md §6.4 the
+     * factory already returned an owning reference, so no extra retain. */
     buf_append_fmt(td,
         "static void %s(void *_value_out) {\n"
-        "    (void)_value_out;\n"
-        "    feng_panic(\"spec default-init not yet implemented for %s\");\n"
+        "    struct %s *_v = _value_out;\n"
+        "    _v->subject = (void *)%s();\n"
+        "    _v->witness = &%s;\n"
         "}\n",
         s->c_aggregate_init_fn_name,
-        s->feng_name);
+        s->c_value_struct_name,
+        s->c_default_subject_new_name,
+        s->c_default_witness_name);
 
     buf_append_fmt(td,
         "static const FengAggregateDefaultInitDescriptor %s = {\n"
@@ -2507,12 +2750,28 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
          * type has a finite default zero (Feng has no `null`). For managed
          * types the resulting reference is owned by this slot and joins the
          * cleanup chain just like an explicit initializer. */
-        char *def_expr = NULL;
-        if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
-            free(cname); free(cty); cgtype_free(decl_type); return false;
+        if (cgtype_is_aggregate(decl_type)) {
+            /* Step 4b-β — spec default zero. The aggregate descriptor's
+             * default_init function allocates a fresh subject and binds the
+             * default witness; the resulting struct already carries a +1
+             * reference on subject. */
+            const char *desc = cg_aggregate_field_desc_name(decl_type);
+            if (!desc) {
+                free(cname); free(cty); cgtype_free(decl_type);
+                return cg_fail(cg, b->token,
+                    "codegen: missing aggregate descriptor for spec default-init");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
+                cty, cname, cname, desc);
+        } else {
+            char *def_expr = NULL;
+            if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
+                free(cname); free(cty); cgtype_free(decl_type); return false;
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, def_expr);
+            free(def_expr);
         }
-        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, def_expr);
-        free(def_expr);
     }
     free(cty);
 
@@ -4351,6 +4610,10 @@ static void cg_dispose(CG *cg) {
         free(us->c_aggregate_slots_name);
         free(us->c_aggregate_default_name);
         free(us->c_aggregate_init_fn_name);
+        free(us->c_default_subject_struct_name);
+        free(us->c_default_subject_desc_name);
+        free(us->c_default_subject_new_name);
+        free(us->c_default_witness_name);
         for (size_t j = 0; j < us->member_count; j++) {
             UserSpecMember *sm = &us->members[j];
             free(sm->feng_name);
