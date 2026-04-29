@@ -296,6 +296,10 @@ typedef struct UserSpecMember {
     } kind;
     /* For FIELD: the field's declared type. For METHOD: the method return type. */
     CGType  *type;
+    /* FIELD only: true when the spec declared `var` (mutable). `let` and the
+     * default both record false; only `var` triggers a setter slot in the
+     * witness struct (see cg_emit_user_spec_definition). */
+    bool     is_var;
     /* METHOD only: declared parameter types (excluding the implicit subject). */
     CGType **param_types;
     char   **param_names;       /* informational, mirrors signature */
@@ -546,6 +550,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg, const char *cname);
+static const char *cg_aggregate_field_desc_name(const CGType *t);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
@@ -1078,12 +1083,18 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         sm->member = m;
         if (m->kind == FENG_TYPE_MEMBER_FIELD) {
             sm->kind = USM_KIND_FIELD;
+            sm->is_var = (m->as.field.mutability == FENG_MUTABILITY_VAR);
             sm->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
             sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
             if (!cg_resolve_type(cg, m->as.field.type, &m->token, &sm->type)) return false;
-            /* Spec field witness slots (getter/setter) are not consumed by 4b-α
-             * smoke; their emission lands in 4b-β. We still record the type so
-             * cg_resolve_type sees a fully populated UserSpec. */
+            /* Aggregate-typed spec fields (spec inside spec) are part of the
+             * 4b-γ fat-spec recursion and need recursive aggregate_assign;
+             * reject early so the gap surfaces at compile time rather than
+             * silently emitting a wrong thunk. */
+            if (cgtype_value_kind(sm->type) == CG_VK_AGGREGATE) {
+                return cg_fail(cg, m->token,
+                    "codegen: spec field of aggregate type not yet supported (Step 4b-γ)");
+            }
         } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
             sm->kind = USM_KIND_METHOD;
             const FengCallableSignature *sig = &m->as.callable;
@@ -1135,26 +1146,44 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         s->c_value_struct_name, s->c_witness_struct_name);
 }
 
-/* Emit the witness struct body (one function pointer per method member) into
- * the type_defs buffer. Field-witness slots are reserved for 4b-β; for 4b-α
- * we emit only method slots so the smoke compiles. If a spec has zero method
- * members, an empty struct would be invalid C — we add a `_padding` byte. */
+/* Emit the witness struct body. Method members get a single function-pointer
+ * slot; field members get a getter slot and (for `var`) a setter slot. The
+ * declaration order of slots matches the spec source so codegen iteration
+ * and debugger inspection stay aligned. If a spec has no slots at all an
+ * empty struct would be invalid C — emit a `_padding` byte. */
 static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     Buf *td = &cg->type_defs;
     buf_append_fmt(td, "struct %s {\n", s->c_witness_struct_name);
     size_t emitted = 0;
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_METHOD) continue;
-        buf_append_cstr(td, "    ");
-        cg_emit_c_type(td, sm->type);
-        buf_append_fmt(td, " (*%s)(void *_subject", sm->c_field_name);
-        for (size_t pi = 0; pi < sm->param_count; pi++) {
-            buf_append_cstr(td, ", ");
-            cg_emit_c_type(td, sm->param_types[pi]);
+        if (sm->kind == USM_KIND_METHOD) {
+            buf_append_cstr(td, "    ");
+            cg_emit_c_type(td, sm->type);
+            buf_append_fmt(td, " (*%s)(void *_subject", sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(td, ", ");
+                cg_emit_c_type(td, sm->param_types[pi]);
+            }
+            buf_append_cstr(td, ");\n");
+            emitted++;
+        } else if (sm->kind == USM_KIND_FIELD) {
+            /* Getter — borrowed return per dev/feng-spec-codegen-pending.md
+             * §5.3 (witness thunks pass values borrowed). */
+            buf_append_cstr(td, "    ");
+            cg_emit_c_type(td, sm->type);
+            buf_append_fmt(td, " (*get_%s)(void *_subject);\n", sm->c_field_name);
+            emitted++;
+            if (sm->is_var) {
+                /* Setter — owning store via feng_assign for managed slots. */
+                buf_append_cstr(td, "    void (*set_");
+                buf_append_cstr(td, sm->c_field_name);
+                buf_append_cstr(td, ")(void *_subject, ");
+                cg_emit_c_type(td, sm->type);
+                buf_append_cstr(td, " value);\n");
+                emitted++;
+            }
         }
-        buf_append_cstr(td, ");\n");
-        emitted++;
     }
     if (emitted == 0) {
         buf_append_cstr(td, "    char _padding;\n");
@@ -1777,6 +1806,29 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     ExprResult recv;
     if (!cg_emit_expr(cg, e->as.member.object, &recv)) return false;
+    if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
+        /* Step 4b-β — spec field access via witness getter. */
+        const UserSpec *us = recv.type->user_spec;
+        const UserSpecMember *sm = cg_user_spec_member(us,
+            e->as.member.member.data, e->as.member.member.length);
+        if (!sm || sm->kind != USM_KIND_FIELD) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: spec '%s' has no field '%.*s'",
+                us->feng_name,
+                (int)e->as.member.member.length, e->as.member.member.data);
+        }
+        /* Materialize the receiver so .subject / .witness load exactly once. */
+        cg_materialize_to_local(cg, &recv, "_t");
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "%s.witness->get_%s(%s.subject)",
+                       recv.c_expr, sm->c_field_name, recv.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_clone(sm->type);
+        out->owns_ref = false;   /* getter returns a borrow per §5.3 */
+        er_free(&recv);
+        return out->c_expr && out->type;
+    }
     if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
         er_free(&recv);
         return cg_fail(cg, e->token,
@@ -2214,11 +2266,25 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
                            l->c_name, l->c_name);
         } else if (cgtype_is_aggregate(l->type)) {
-            /* Step 4b — fat spec value: subject lives at offset 0, registered
-             * by &local.subject in cg_emit_cleanup_push_for_aggregate_local. */
+            /* Step 4b-β — drop the 4b-α subject-shortcut and route through
+             * the value-model aggregate API. The cleanup chain still holds
+             * `&local.subject` because the only managed slot of an
+             * object-form spec value is subject (single FENG_SLOT_POINTER).
+             * Pop first so a panic raised inside the release walk does not
+             * re-enter the same slot, then walk every managed slot via the
+             * descriptor, then zero `subject` to keep the post-release
+             * invariant aligned with the managed-local path. */
+            const char *desc = cg_aggregate_field_desc_name(l->type);
+            if (!desc) {
+                /* unreachable today: AGGREGATE means object-form spec. */
+                buf_append_fmt(cg->cur_body,
+                    "    feng_panic(\"codegen: missing aggregate descriptor for %s\");\n",
+                    l->c_name);
+                continue;
+            }
             buf_append_fmt(cg->cur_body,
-                "    feng_cleanup_pop(); feng_release(%s.subject); %s.subject = NULL;\n",
-                l->c_name, l->c_name);
+                "    feng_cleanup_pop(); feng_aggregate_release(&%s, &%s); %s.subject = NULL;\n",
+                l->c_name, desc, l->c_name);
         }
     }
 }
@@ -2410,15 +2476,25 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                cty, cname, init.c_expr, cname);
             }
         } else if (cgtype_is_aggregate(decl_type)) {
-            /* Step 4b — fat spec value: by-value struct copy carries the
+            /* Step 4b-β — fat spec value: by-value struct copy carries the
              * subject reference. If the producer was +1 (e.g., wrapped object
-             * literal), take it directly; otherwise retain `subject`. */
+             * literal), take it directly; otherwise route through the
+             * value-model aggregate retain so every managed slot of the
+             * descriptor gets bumped (today subject only, future descriptors
+             * may carry more). */
             if (init.owns_ref) {
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
             } else {
+                const char *desc = cg_aggregate_field_desc_name(decl_type);
+                if (!desc) {
+                    er_free(&init);
+                    free(cty); free(cname); cgtype_free(decl_type);
+                    return cg_fail(cg, b->token,
+                        "codegen: missing aggregate descriptor for spec local");
+                }
                 buf_append_fmt(cg->cur_body,
-                               "    %s %s = %s; feng_retain(%s.subject);\n",
-                               cty, cname, init.c_expr, cname);
+                               "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                               cty, cname, init.c_expr, cname, desc);
             }
         } else {
             buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
@@ -2517,6 +2593,52 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     if (target->kind == FENG_EXPR_MEMBER) {
         ExprResult recv;
         if (!cg_emit_expr(cg, target->as.member.object, &recv)) return false;
+        if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
+            /* Step 4b-β — spec field write via witness setter. */
+            const UserSpec *us = recv.type->user_spec;
+            const UserSpecMember *sm = cg_user_spec_member(us,
+                target->as.member.member.data,
+                target->as.member.member.length);
+            if (!sm || sm->kind != USM_KIND_FIELD) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: spec '%s' has no field '%.*s'",
+                    us->feng_name,
+                    (int)target->as.member.member.length,
+                    target->as.member.member.data);
+            }
+            if (!sm->is_var) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: spec field '%s' is not declared `var`",
+                    sm->feng_name);
+            }
+            cg_materialize_to_local(cg, &recv, "_t");
+            ExprResult v;
+            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                er_free(&recv); return false;
+            }
+            /* Setter takes ownership semantics inside the thunk (managed →
+             * feng_assign). For an owns_ref RHS we must pass it as +1 and
+             * the setter's feng_assign will retain+release; therefore we
+             * release the +1 ourselves after the call to balance to a net
+             * +0 store. For a borrow RHS we just pass through. */
+            if (cgtype_is_managed(sm->type) && v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { ");
+                cg_emit_c_type(cg->cur_body, sm->type);
+                buf_append_fmt(cg->cur_body,
+                    " _v = %s; %s.witness->set_%s(%s.subject, _v); feng_release(_v); }\n",
+                    v.c_expr, recv.c_expr, sm->c_field_name, recv.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    %s.witness->set_%s(%s.subject, %s);\n",
+                    recv.c_expr, sm->c_field_name, recv.c_expr, v.c_expr);
+            }
+            er_free(&v);
+            er_free(&recv);
+            return true;
+        }
         if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
             er_free(&recv);
             return cg_fail(cg, stmt->token,
@@ -2662,14 +2784,20 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r.type)) {
-        /* Step 4b — fat spec value: must transfer the +1 on `subject` out of
-         * the function. Mirror the managed-pointer path but bump
-         * `tmp.subject` when the producer was borrowed. */
+        /* Step 4b-β — fat spec value: must transfer +1 on every managed slot
+         * of the descriptor out of the function. Borrowed producer takes a
+         * descriptor-driven retain; owns_ref producer is moved as-is. */
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s.subject);\n",
-                           cty, tmp, r.c_expr, tmp);
+            const char *desc = cg_aggregate_field_desc_name(r.type);
+            if (!desc) {
+                free(cty); free(tmp); er_free(&r);
+                return cg_fail(cg, stmt->token,
+                    "codegen: missing aggregate descriptor for spec return");
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                           cty, tmp, r.c_expr, tmp, desc);
         } else {
             buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
         }
@@ -3190,10 +3318,10 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                    cg->module_mangle, t_san, cg->module_mangle, s_san);
 
     /* Iterate spec members in declared order — matches witness->members[] order
-     * from feng_semantic_spec_witness_append_member. */
+     * from feng_semantic_spec_witness_append_member. Methods get a single
+     * thunk; fields get a getter and (for `var`) a setter. */
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_METHOD) continue;
         if (i >= witness->member_count) {
             buf_free(&prefix); free(t_san); free(s_san);
             return cg_fail(cg, blame,
@@ -3212,54 +3340,116 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
             return cg_fail(cg, blame,
                 "codegen: fit-provided spec witnesses not yet supported (Step 4b-γ)");
         }
-        if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
-            buf_free(&prefix); free(t_san); free(s_san);
-            return cg_fail(cg, blame,
-                "codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α)",
-                sm->feng_name, t->feng_name);
-        }
-        const UserMethod *um = cg_user_type_method(t, sm->feng_name,
-                                                   strlen(sm->feng_name));
-        if (!um) {
-            buf_free(&prefix); free(t_san); free(s_san);
-            return cg_fail(cg, blame,
-                "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
-                t->feng_name, sm->feng_name, s->feng_name);
-        }
-        /* Forward declaration — body is emitted in cg_emit_user_method. */
-        Buf *fp = &cg->fn_protos;
-        buf_append_cstr(fp, "static ");
-        cg_emit_c_type(fp, sm->type);
-        buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
-        for (size_t pi = 0; pi < sm->param_count; pi++) {
-            buf_append_cstr(fp, ", ");
-            cg_emit_c_type(fp, sm->param_types[pi]);
-            buf_append_fmt(fp, " p%zu", pi);
-        }
-        buf_append_cstr(fp, ");\n");
+        if (sm->kind == USM_KIND_METHOD) {
+            if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α)",
+                    sm->feng_name, t->feng_name);
+            }
+            const UserMethod *um = cg_user_type_method(t, sm->feng_name,
+                                                       strlen(sm->feng_name));
+            if (!um) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
+                    t->feng_name, sm->feng_name, s->feng_name);
+            }
+            /* Forward declaration — body is emitted in cg_emit_user_method. */
+            Buf *fp = &cg->fn_protos;
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(fp, ", ");
+                cg_emit_c_type(fp, sm->param_types[pi]);
+                buf_append_fmt(fp, " p%zu", pi);
+            }
+            buf_append_cstr(fp, ");\n");
 
-        /* Body — emitted into witness_defs to avoid splicing into whatever
-         * function body cur_body currently points at. */
-        Buf *fd = &cg->witness_defs;
-        buf_append_cstr(fd, "static ");
-        cg_emit_c_type(fd, sm->type);
-        buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
-        for (size_t pi = 0; pi < sm->param_count; pi++) {
-            buf_append_cstr(fd, ", ");
-            cg_emit_c_type(fd, sm->param_types[pi]);
-            buf_append_fmt(fd, " p%zu", pi);
+            /* Body — emitted into witness_defs to avoid splicing into whatever
+             * function body cur_body currently points at. */
+            Buf *fd = &cg->witness_defs;
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(fd, ", ");
+                cg_emit_c_type(fd, sm->param_types[pi]);
+                buf_append_fmt(fd, " p%zu", pi);
+            }
+            buf_append_cstr(fd, ") {\n");
+            if (sm->type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(fd, "    %s((struct %s *)_subject", um->c_name, t->c_struct_name);
+            } else {
+                buf_append_fmt(fd, "    return %s((struct %s *)_subject",
+                               um->c_name, t->c_struct_name);
+            }
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_fmt(fd, ", p%zu", pi);
+            }
+            buf_append_cstr(fd, ");\n}\n\n");
+        } else if (sm->kind == USM_KIND_FIELD) {
+            /* Step 4b-β — TYPE_OWN_FIELD witness. The implementing field
+             * lives directly on T; locate it by Feng name to recover the
+             * sanitised C field identifier. */
+            if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: spec field '%s' must be satisfied by a field on '%s'",
+                    sm->feng_name, t->feng_name);
+            }
+            const UserField *uf = cg_user_type_field(t, sm->feng_name,
+                                                     strlen(sm->feng_name));
+            if (!uf) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
+                    t->feng_name, sm->feng_name, s->feng_name);
+            }
+
+            /* Getter: return ((struct T*)_subject)->c_field. The thunk
+             * emits a borrow — caller is responsible for any retain. */
+            Buf *fd = &cg->witness_defs;
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
+                           prefix.data, sm->c_field_name);
+            buf_append_fmt(fd, "    return ((struct %s *)_subject)->%s;\n",
+                           t->c_struct_name, uf->c_name);
+            buf_append_cstr(fd, "}\n\n");
+
+            Buf *fp = &cg->fn_protos;
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
+                           prefix.data, sm->c_field_name);
+
+            if (sm->is_var) {
+                /* Setter: managed slots route through feng_assign so the
+                 * old reference is released and the new one retained
+                 * atomically; trivial slots use a direct store. */
+                buf_append_fmt(fd, "static void %s__set_%s(void *_subject, ",
+                               prefix.data, sm->c_field_name);
+                cg_emit_c_type(fd, sm->type);
+                buf_append_cstr(fd, " value) {\n");
+                if (cgtype_is_managed(sm->type)) {
+                    buf_append_fmt(fd,
+                        "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
+                        t->c_struct_name, uf->c_name);
+                } else {
+                    buf_append_fmt(fd,
+                        "    ((struct %s *)_subject)->%s = value;\n",
+                        t->c_struct_name, uf->c_name);
+                }
+                buf_append_cstr(fd, "}\n\n");
+
+                buf_append_fmt(fp, "static void %s__set_%s(void *_subject, ",
+                               prefix.data, sm->c_field_name);
+                cg_emit_c_type(fp, sm->type);
+                buf_append_cstr(fp, " value);\n");
+            }
         }
-        buf_append_cstr(fd, ") {\n");
-        if (sm->type->kind == CG_TYPE_VOID) {
-            buf_append_fmt(fd, "    %s((struct %s *)_subject", um->c_name, t->c_struct_name);
-        } else {
-            buf_append_fmt(fd, "    return %s((struct %s *)_subject",
-                           um->c_name, t->c_struct_name);
-        }
-        for (size_t pi = 0; pi < sm->param_count; pi++) {
-            buf_append_fmt(fd, ", p%zu", pi);
-        }
-        buf_append_cstr(fd, ");\n}\n\n");
     }
 
     /* Witness table instance. */
@@ -3277,9 +3467,17 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                    s->c_witness_struct_name, var.data);
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_METHOD) continue;
-        buf_append_fmt(fd, "    .%s = &%s__%s,\n",
-                       sm->c_field_name, prefix.data, sm->c_field_name);
+        if (sm->kind == USM_KIND_METHOD) {
+            buf_append_fmt(fd, "    .%s = &%s__%s,\n",
+                           sm->c_field_name, prefix.data, sm->c_field_name);
+        } else if (sm->kind == USM_KIND_FIELD) {
+            buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
+                           sm->c_field_name, prefix.data, sm->c_field_name);
+            if (sm->is_var) {
+                buf_append_fmt(fd, "    .set_%s = &%s__set_%s,\n",
+                               sm->c_field_name, prefix.data, sm->c_field_name);
+            }
+        }
     }
     buf_append_cstr(fd, "};\n\n");
 
