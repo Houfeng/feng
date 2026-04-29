@@ -127,10 +127,42 @@ static CGType *cgtype_clone(const CGType *t) {
     return c;
 }
 
+/* Value-kind classifier for codegen-side dispatch on per-field lifetime
+ * emission. Mirrors the runtime three-way classification described in
+ * dev/feng-value-model-pending.md §3.3 / §7.2:
+ *
+ *   CG_VK_TRIVIAL          — bit-copyable, no participation in ARC.
+ *   CG_VK_MANAGED_POINTER  — single managed pointer (string / array / object).
+ *   CG_VK_AGGREGATE        — by-value compound carrying one or more
+ *                            FENG_SLOT_POINTER slots inside (e.g., the fat
+ *                            spec value layout). No type currently classifies
+ *                            here; the case is reserved for the value-model
+ *                            fat-spec implementation (Step 4b) and is the
+ *                            single dispatch point §7.2 mandates.
+ *
+ * `cgtype_is_managed` is preserved as a thin wrapper around this classifier
+ * so the many ARC-emit call sites continue to read naturally; new code that
+ * needs to branch by kind should call cgtype_value_kind directly. */
+typedef enum CGValueKind {
+    CG_VK_TRIVIAL = 0,
+    CG_VK_MANAGED_POINTER,
+    CG_VK_AGGREGATE
+} CGValueKind;
+
+static CGValueKind cgtype_value_kind(const CGType *t) {
+    if (!t) return CG_VK_TRIVIAL;
+    switch (t->kind) {
+        case CG_TYPE_STRING:
+        case CG_TYPE_ARRAY:
+        case CG_TYPE_OBJECT:
+            return CG_VK_MANAGED_POINTER;
+        default:
+            return CG_VK_TRIVIAL;
+    }
+}
+
 static bool cgtype_is_managed(const CGType *t) {
-    if (!t) return false;
-    return t->kind == CG_TYPE_STRING || t->kind == CG_TYPE_ARRAY ||
-           t->kind == CG_TYPE_OBJECT;
+    return cgtype_value_kind(t) == CG_VK_MANAGED_POINTER;
 }
 
 static bool cgtype_is_integer(CGTypeKind k) {
@@ -2886,6 +2918,92 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
 
 /* ===================== USER TYPE EMISSION (Phase 1A iter 2a) ===================== */
 
+/* --- per-field lifetime / metadata helpers --------------------------------
+ *
+ * The three helpers below centralise the "how does this field participate in
+ * ARC + cycle metadata" decision so cg_emit_user_type_definition can iterate
+ * fields without re-deriving the rule each time. Each helper dispatches on
+ * cgtype_value_kind(field_type):
+ *
+ *   TRIVIAL          — contributes nothing.
+ *   MANAGED_POINTER  — one managed_fields[] entry; one feng_release() call.
+ *   AGGREGATE        — flattened per dev/feng-value-model-pending.md §7.2
+ *                      (one descriptor per FENG_SLOT_POINTER slot inside the
+ *                      aggregate, plus a feng_aggregate_release() call). No
+ *                      type currently classifies here; until Step 4b lands a
+ *                      real aggregate type, hitting this branch is a codegen
+ *                      bug — the helpers fail loudly so the omission is not
+ *                      silently masked.
+ */
+
+static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
+                                                FengToken err_token) {
+    switch (cgtype_value_kind(t)) {
+        case CG_VK_TRIVIAL:         return 0U;
+        case CG_VK_MANAGED_POINTER: return 1U;
+        case CG_VK_AGGREGATE:
+            (void)cg_fail(cg, err_token,
+                "codegen: aggregate field descriptor flattening not yet implemented");
+            return 0U;
+    }
+    return 0U;
+}
+
+static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
+                                              const char *struct_name,
+                                              const char *field_c_name,
+                                              const CGType *ft,
+                                              FengToken err_token) {
+    switch (cgtype_value_kind(ft)) {
+        case CG_VK_TRIVIAL:
+            return true;
+        case CG_VK_MANAGED_POINTER:
+            buf_append_fmt(td, "    { offsetof(struct %s, %s), ",
+                           struct_name, field_c_name);
+            switch (ft->kind) {
+                case CG_TYPE_STRING:
+                    buf_append_cstr(td, "&feng_string_descriptor");
+                    break;
+                case CG_TYPE_ARRAY:
+                    buf_append_cstr(td, "&feng_array_descriptor");
+                    break;
+                case CG_TYPE_OBJECT:
+                    if (ft->user) {
+                        buf_append_fmt(td, "&%s", ft->user->c_desc_name);
+                    } else {
+                        buf_append_cstr(td, "NULL");
+                    }
+                    break;
+                default:
+                    buf_append_cstr(td, "NULL");
+                    break;
+            }
+            buf_append_cstr(td, " },\n");
+            return true;
+        case CG_VK_AGGREGATE:
+            return cg_fail(cg, err_token,
+                "codegen: aggregate field descriptor emission not yet implemented");
+    }
+    return true;
+}
+
+static bool cg_emit_field_release(CG *cg, Buf *td,
+                                  const char *field_c_name,
+                                  const CGType *ft,
+                                  FengToken err_token) {
+    switch (cgtype_value_kind(ft)) {
+        case CG_VK_TRIVIAL:
+            return true;
+        case CG_VK_MANAGED_POINTER:
+            buf_append_fmt(td, "    feng_release(_o->%s);\n", field_c_name);
+            return true;
+        case CG_VK_AGGREGATE:
+            return cg_fail(cg, err_token,
+                "codegen: aggregate field release emission not yet implemented");
+    }
+    return true;
+}
+
 /* Emit `struct Feng__mod__T;` and the descriptor extern into `headers` so
  * cross references compile in any order. */
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
@@ -2912,10 +3030,16 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * .release_children slot is left NULL so the runtime can skip the call.
      * This is a separate concept from the user finalizer (which lives in
      * descriptor.finalizer); see docs/feng-lifetime.md §11/§13.2 and the
-     * FengReleaseChildrenFn typedef in feng_runtime.h. */
+     * FengReleaseChildrenFn typedef in feng_runtime.h.
+     *
+     * Per-field dispatch goes through cg_emit_field_release so the AGGREGATE
+     * branch (Step 4b) can hook in without touching this driver. */
     bool any_managed = false;
     for (size_t i = 0; i < t->field_count; i++) {
-        if (cgtype_is_managed(t->fields[i].type)) { any_managed = true; break; }
+        if (cgtype_value_kind(t->fields[i].type) != CG_VK_TRIVIAL) {
+            any_managed = true;
+            break;
+        }
     }
     /* UserType is allocated via calloc by the type registry; the cast is safe
      * because we own the only writer of this field. */
@@ -2929,8 +3053,9 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         buf_append_fmt(td, "    struct %s *_o = (struct %s *)_self;\n",
                        t->c_struct_name, t->c_struct_name);
         for (size_t i = 0; i < t->field_count; i++) {
-            if (cgtype_is_managed(t->fields[i].type)) {
-                buf_append_fmt(td, "    feng_release(_o->%s);\n", t->fields[i].c_name);
+            if (!cg_emit_field_release(cg, td, t->fields[i].c_name,
+                                       t->fields[i].type, t->decl->token)) {
+                return;
             }
         }
         buf_append_cstr(td, "}\n\n");
@@ -2954,41 +3079,27 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * holds a managed reference. The cycle collector reads this table to do
      * non-mutating object traversal during trial deletion. The deterministic
      * ARC release path does NOT consult it; the user finalizer above remains
-     * the sole owner of per-field release ordering. */
+     * the sole owner of per-field release ordering.
+     *
+     * Per-field dispatch goes through cg_field_managed_descriptor_count and
+     * cg_emit_field_managed_descriptors so AGGREGATE field flattening (Step
+     * 4b) can be added in one place without re-walking this driver. */
     size_t managed_count = 0U;
     for (size_t i = 0; i < t->field_count; i++) {
-        if (cgtype_is_managed(t->fields[i].type)) {
-            managed_count++;
-        }
+        managed_count += cg_field_managed_descriptor_count(cg, t->fields[i].type,
+                                                           t->decl->token);
     }
     if (managed_count > 0U) {
         buf_append_fmt(td,
             "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
             t->c_desc_name);
         for (size_t i = 0; i < t->field_count; i++) {
-            const CGType *ft = t->fields[i].type;
-            if (!cgtype_is_managed(ft)) continue;
-            buf_append_fmt(td, "    { offsetof(struct %s, %s), ",
-                           t->c_struct_name, t->fields[i].c_name);
-            switch (ft->kind) {
-                case CG_TYPE_STRING:
-                    buf_append_cstr(td, "&feng_string_descriptor");
-                    break;
-                case CG_TYPE_ARRAY:
-                    buf_append_cstr(td, "&feng_array_descriptor");
-                    break;
-                case CG_TYPE_OBJECT:
-                    if (ft->user) {
-                        buf_append_fmt(td, "&%s", ft->user->c_desc_name);
-                    } else {
-                        buf_append_cstr(td, "NULL");
-                    }
-                    break;
-                default:
-                    buf_append_cstr(td, "NULL");
-                    break;
+            if (!cg_emit_field_managed_descriptors(cg, td, t->c_struct_name,
+                                                   t->fields[i].c_name,
+                                                   t->fields[i].type,
+                                                   t->decl->token)) {
+                return;
             }
-            buf_append_cstr(td, " },\n");
         }
         buf_append_cstr(td, "};\n\n");
     }
