@@ -54,10 +54,10 @@ test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BI
 	$(BIN_DIR)/test_codegen
 
 smoke: cli runtime
-	./scritps/run_smoke.sh
+	./scripts/run_smoke.sh
 
 cli-tests: cli runtime
-	./scritps/run_cli_direct.sh
+	./scripts/run_cli_direct.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)

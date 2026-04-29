@@ -29,7 +29,7 @@
 
 - 新增 `src/cli/compile/direct.{c}`：解析 `feng <files...> --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]`，串联前端 → codegen，落地 `<out>/ir/c/feng.c`。
 - `--target=lib` 暂保留解析但报错，`--release` 解析后给警告，`--out` 强制要求非空。
-- 新增 `scritps/run_cli_direct.sh`，覆盖完整管线、IR 保留、各类负例。
+- 新增 `scripts/run_cli_direct.sh`，覆盖完整管线、IR 保留、各类负例。
 
 ## P5 宿主 C 编译器驱动（已交付）
 
@@ -42,12 +42,12 @@
 
 ## P6 构建脚本与 smoke 回归（已交付）
 
-- `scritps/run_smoke.sh` 完全切到直编模式：
+- `scripts/run_smoke.sh` 完全切到直编模式：
   - 单文件用例：`<name>.ff` + `<name>.expected`，按字母序遍历。
   - 多文件用例：`<name>/`（目录里多个 `*.ff`） + `<name>.expected`，目录内 `.ff` 排序后整体喂给 feng，并通过 `--name=<name>` 固定产物名。
   - 不再有"手工 cc"环节。每个用例独立的 `build/gen/smoke/<name>/` 目录承载 IR 与 bin。
 - 新增首个多文件 smoke 用例 `test/smoke/phase1a/multi_hello/`（同模块两文件，main 调用另一文件中的 helper）。
-- `scritps/run_cli_direct.sh` 增补：
+- `scripts/run_cli_direct.sh` 增补：
   - `multi_file`：复用 `multi_hello` 走完整链路，断言 stdout 与 expected 一致；
   - `name_empty`：`--name=` 必须报错。
 - `make test` 入口持续作为仓库主回归（5 单测套件 + 26 smoke + 10 cli-direct），全部通过。

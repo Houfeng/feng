@@ -240,7 +240,7 @@ src/cli/
 
 1. 调整 `Makefile`，使 CLI 源文件拆分后仍能正确收集。
 2. 保持 runtime 静态库仍由 Makefile 构建。
-3. 修改 `scritps/run_smoke.sh`，从“手工 cc”迁移为“直接调用顶层编译模式”。
+3. 修改 `scripts/run_smoke.sh`，从“手工 cc”迁移为“直接调用顶层编译模式”。
 4. 补充多文件相关 smoke 与负例。
 
 验收：
