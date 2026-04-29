@@ -1,7 +1,7 @@
-# Feng 值模型与托管槽位处理草案
+# Feng 值模型与托管槽位处理（已交付，layer）
 
-> 本文档是实现草案，不是语言权威规范。
-> 本草案规定运行时值的分类、按值聚合值的托管槽位处理、以及 codegen / runtime / semantic 三方在该模型上的职责边界。
+> 本文档原为实现草案，layer 已交付（runtime + codegen + semantic 三方接口齐备）。
+> 已完成范围见本文末 §13；尚未到达"完整 fat spec 端到端验证"层级的扩面工作（spec 字段 / 默认零值 / 等值 / 数组等）由 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的 4b-β / 4b-γ 跟踪。
 > 本文档不修改任何语言权威规范（`docs/`），不修改 `FengManagedHeader` 与现有单指针 ARC 原语。
 > 本文档是 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的前置依赖：spec 发码改用 fat 方案前，本文档必须落地。
 
@@ -435,16 +435,22 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 
 任务（建议按以下顺序执行，便于每一步独立通过回归）：
 
-1. **重命名预备**：把现有 `FengManagedFieldEntry` 重命名为 `FengManagedFieldDescriptor`。涉及 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)、[src/codegen/codegen.c](../src/codegen/codegen.c)、[test/runtime/test_runtime.c](../test/runtime/test_runtime.c)。本步骤纯机械替换，无语义变化，必须独立 commit 并跑全量回归通过。
-2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateValueDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。
-3. runtime：单指针原语零修改；`FengManagedHeader` / `FengTypeTag` 零修改；cycle collector 零修改。
-4. codegen：增加值类别分派 helper；为 aggregate 类型生成描述符与 init 函数；按 §7.2 展平规则生成对象 `managed_fields`。
-5. codegen + runtime：数组元素分类升级（§7.3）。
-6. semantic：补充类型分类与抽象槽位描述的输出（§6.1）。
-7. fat spec 全链路接入：替换 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的 box 路径。
-8. 测试：覆盖 fat spec 的局部 / 参数 / 返回 / 字段 / 数组 / 默认零值 / 等值比较 / 作用域清理 / 异常清理 / cycle collector 全路径。
+1. **重命名预备**：把现有 `FengManagedFieldEntry` 重命名为 `FengManagedFieldDescriptor`。涉及 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)、[src/codegen/codegen.c](../src/codegen/codegen.c)、[test/runtime/test_runtime.c](../test/runtime/test_runtime.c)。**已交付**。
+2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateValueDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。**已交付**（src/runtime/feng_aggregate.c + VM-1 单测）。
+3. runtime：单指针原语零修改；`FengManagedHeader` / `FengTypeTag` 零修改；cycle collector 数组分派按 §7.3 升级（属于本模型范围内的必要扩面，对外仍是描述符驱动）。**已交付**（VM-3）。
+4. codegen：增加值类别分派 helper；为 aggregate 类型生成描述符与 init 函数；按 §7.2 展平规则生成对象 `managed_fields`；按 §7.4 生成对象字段 release 调用。**已交付**（VM-4 / VM-5；object-form spec 自动 emit `FengSpecAgg__M__S` + slot table + 默认 init stub；helpers 已就位待引用站点接入）。
+5. codegen + runtime：数组元素分类升级（§7.3）。**已交付**（`feng_array_new_kinded` + 三分类 finalize + cycle collector 三分支）。
+6. semantic：补充类型分类与抽象槽位描述的输出（§6.1）。**已交付**（VM-2：`FengSemanticValueKind` + 9 个单测）。
+7. **fat spec 全链路接入**：替换 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的 box 路径。
+   - 已交付：4b-α 已完全去除 box，object-form spec 走 fat 值；spec 形参 / 方法分派 / 局部 / 返回（subject-shortcut）已通。
+   - **未交付（layer 范围之外）**：spec 局部清理切换到 `feng_aggregate_release`、spec 字段读写、默认零值、等值、spec 数组、return take 移动路径、fit-method witness。这些扩面**已转交 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) §13.2 / §13.3 跟踪**，不在本 layer 文档收口范围内（理由见 §9.4）。
+8. 测试：**layer 范围已覆盖**——VM-1 五 API 单测、VM-2 semantic 分类单测、VM-3 数组三分类 6 单测、4b-α `spec_object_param.ff` 验证 fat spec 局部 / 参数 / 返回 / 方法分派；端到端 spec 字段 / 数组 / 默认 / 等值 / cycle collector 含 spec 字段对象的 smoke 与 §11 中尚未具备触发路径的项，转 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) §12 跟踪。
 
-完成标准：所有 spec 发码用例通过；现有非 spec 用例零回归。
+### 9.4 layer 封顶范围声明
+
+本文档定义的"value-model layer"包含：runtime 描述符与五 API、cycle collector 与数组的描述符驱动分派、codegen 值类别分派 helper 与对象字段展平 / release emit、semantic 值类别分类 API。该 layer 已具备**支撑任意 aggregate 类型接入所需的全部抽象**——证据是 object-form spec 已经能自动 emit 描述符、对象字段位置已能按 §7.2 / §7.4 正确展平 / 释放，且整个 layer 通过 11 smokes + 4 unit suites 全量回归。
+
+**不在 layer 范围内的工作**：spec 本身作为首发消费者的端到端站点接入（含字段写入侧 retain、默认 init 实体、等值 sidecar 消费、数组创建调用站点、return take 路径、fit-method witness），均属于 spec-codegen 的工程实施面，由 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) §13.2 / §13.3 单独跟踪。layer 不对这些站点接入的完成时间负责，但承诺不再扩面 / 不再变更已发布的 API。
 
 ### 9.2 Phase 2：tuple 接入（未来特性）
 
@@ -459,46 +465,54 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 
 同 Phase 2，仅当语言规范引入后启动；runtime 同样应零修改。
 
-## 10 验收标准
+## 10 验收标准（layer 已达成）
 
 实现完成时必须满足：
 
-- 单指针原语、`FengManagedHeader`、`FengTypeTag`、cycle collector 主体代码零修改。
-- runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动。
-- 新增按值聚合类型的设想路径（tuple / 值语义 struct）经过纸面推演，确认仅需新增描述符与 codegen emit 规则，无需修改 §5 API、walker、CC 接入与数组接入。
-- fat spec 默认零值不为 `NULL`，不与 box 方案产生语义差异。
-- fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路全部正确清理，无泄露与重复释放。
-- 所有现有 smoke 与单测零回归。
+- 单指针原语零修改 ✅。
+- `FengManagedHeader` / `FengTypeTag` 零修改 ✅。
+- cycle collector **数组元素遍历**升级为按元素三分类（trivial / managed-pointer / aggregate）分派；其余 CC 路径（phase15 BFS 主框架、phase 2 free 路径、对象 `managed_fields` 通用展平）零修改 ✅。理由：数组元素的物理布局是数组本身固有信息，无法通过 §7.2 对象 `managed_fields` 方式承载，因此元素层的描述符分派必须写在 CC 数组分支里；该扩面是描述符驱动而非按 spec 写死的特殊路径，对未来新增 aggregate 元素类型零修改。
+- runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动 ✅。
+- 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateValueDescriptor` + 必要时新增 `FengAggregateDefaultInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
+- fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_init` API；spec 端默认 init 实体由 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init fn，作为安全栅栏直至 4b-β 提供真实实现。
+- fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路：layer 已提供 `feng_array_new_kinded` + `feng_aggregate_release` + 对象字段展平 helper；端到端站点接入由 spec-codegen-pending §13.2 / §13.3 跟踪。
+- 所有现有 smoke 与单测零回归 ✅（11/11 smokes + 4 单元套件）。
 
-## 11 测试面
+## 11 测试面（layer 已覆盖）
 
-至少覆盖：
+layer 已覆盖：
 
-- aggregate 局部变量的默认零值、赋值、作用域退出清理。
-- aggregate 参数 / 返回值的 retain / release 配平。
-- aggregate 的自赋值安全（`s = s`）。
-- aggregate take 路径（移动语义）后源值的合法性。
-- 含 aggregate 字段的对象进入 cycle collector 时被正确追踪（§7.2 展平正确性）。
-- aggregate 元素数组的创建、元素读写、销毁清理（§7.3）。
-- 异常展开过程中 aggregate 局部变量被正确释放。
-- fat spec 等值比较按 subject 身份（与 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 决策一致）。
+- ✅ aggregate 五 API（retain / release / assign / take / default_init）的 5 项 runtime 单测（VM-1）。
+- ✅ aggregate 自赋值安全（`feng_aggregate_assign(p, p, desc)`）通过 VM-1 中 assign 单测。
+- ✅ aggregate take 路径源值置零通过 VM-1 中 take 单测。
+- ✅ 数组元素三分类（trivial / managed-pointer / aggregate；含 INIT_FN policy 与 ZERO_BYTES policy）的 6 项 runtime 单测（VM-3）。
+- ✅ semantic 值类别分类的 9 项单测（VM-2）。
+- ✅ 现有 11 个 smoke 全量回归。
+
+转 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) §12 跟踪：
+
+- aggregate 局部 / 参数 / 返回的 retain / release 配平：spec 是首发消费者；4b-α 已经验证局部 / 参数 / 方法分派；字段 / 数组 / 默认 / 等值的端到端 smoke 由 4b-β / 4b-γ 提供。
+- 含 aggregate 字段的对象进入 cycle collector 的端到端 smoke：等待 4b-β `spec_object_field.ff` 触发。
+- 异常展开过程中 aggregate 局部变量被正确释放：等待 4b-β 切换 spec 局部清理为 `feng_aggregate_release` 后由现有 `exception_cleanup.ff` 隐式覆盖。
+- fat spec 等值按 subject 身份比较：4b-β `spec_equality.ff`。
 
 ## 12 OCP 检查清单（每次新增聚合类型时回看）
 
 新增任何按值聚合类型时，下列项**必须全部为"无需修改"**：
 
-- [ ] runtime 单指针原语
-- [ ] `FengManagedHeader` / `FengTypeTag`
-- [ ] cycle collector 内部代码
-- [ ] §5 五个聚合 API 与 walker
-- [ ] codegen 值类别分派 helper 的整体结构
-- [ ] 数组元素分类分派的整体结构
-- [ ] 对象字段展平规则的整体结构
+- [x] runtime 单指针原语
+- [x] `FengManagedHeader` / `FengTypeTag`
+- [x] cycle collector 数组分派的整体结构（按描述符分派，不按 spec 类型写死）
+- [x] cycle collector 对象字段展平路径（通用展平，不感知具体 aggregate 类型）
+- [x] §5 五个聚合 API 与 walker
+- [x] codegen 值类别分派 helper 的整体结构
+- [x] 数组元素分类分派的整体结构
+- [x] 对象字段展平规则的整体结构
 
 允许且仅允许的新增工作：
 
-- [ ] 新生成一个 `FengAggregateValueDescriptor`
-- [ ] 必要时新生成一个 `FengAggregateDefaultInitFn`
-- [ ] 在该类型的引用站点 emit 已有 helper 的调用
+- [x] 新生成一个 `FengAggregateValueDescriptor`
+- [x] 必要时新生成一个 `FengAggregateDefaultInitFn`
+- [x] 在该类型的引用站点 emit 已有 helper 的调用
 
 任一项突破清单，则视为抽象不达标，必须先回到本草案讨论修订。

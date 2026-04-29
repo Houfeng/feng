@@ -1,4 +1,4 @@
-/* Value-kind classification (dev/feng-value-model-pending.md §6.1).
+/* Value-kind classification (dev/feng-value-model-delivered.md §6.1).
  *
  * Single source of truth for "given a Feng type, which of the three
  * runtime value categories does it belong to". The classification rule is

@@ -140,7 +140,7 @@ void *feng_take(void **slot);
 /* --- Value model: by-value aggregates with managed slots --------------- */
 /*
  * The runtime classifies every Feng value into one of three categories
- * (see dev/feng-value-model-pending.md §2):
+ * (see dev/feng-value-model-delivered.md §2):
  *
  *   FENG_VALUE_TRIVIAL          — bytes only, no retain/release; codegen
  *                                 emits direct C assignment / memcpy.
@@ -284,7 +284,7 @@ const char *feng_string_data(const FengString *s);
 typedef struct FengArray FengArray;
 
 /* Creates a fresh +1 array. Element classification follows
- * dev/feng-value-model-pending.md §7.3:
+ * dev/feng-value-model-delivered.md §7.3:
  *
  *   FENG_VALUE_TRIVIAL          — `element_aggregate` MUST be NULL; slots
  *                                 hold raw bytes and finalize merely frees

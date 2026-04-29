@@ -1,4 +1,4 @@
-/* By-value aggregate value lifecycle (dev/feng-value-model-pending.md §5).
+/* By-value aggregate value lifecycle (dev/feng-value-model-delivered.md §5).
  *
  * The five public APIs (retain / release / assign / take / default_init) are
  * all implemented on top of a single internal walker that recursively

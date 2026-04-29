@@ -136,7 +136,7 @@ static CGType *cgtype_clone(const CGType *t) {
 
 /* Value-kind classifier for codegen-side dispatch on per-field lifetime
  * emission. Mirrors the runtime three-way classification described in
- * dev/feng-value-model-pending.md §3.3 / §7.2:
+ * dev/feng-value-model-delivered.md §3.3 / §7.2:
  *
  *   CG_VK_TRIVIAL          — bit-copyable, no participation in ARC.
  *   CG_VK_MANAGED_POINTER  — single managed pointer (string / array / object).
@@ -276,7 +276,7 @@ typedef struct UserType {
 /* Object-form spec registry (Step 4b — value model fat spec). One entry per
  * `spec` declaration. The runtime layout for a value of spec S is the
  * by-value `struct FengSpecValue__M__S { void *subject; const FengSpecWitness__M__S *witness; }`
- * (no header — see dev/feng-value-model-pending.md §3.3 / §7.2). subject sits
+ * (no header — see dev/feng-value-model-delivered.md §3.3 / §7.2). subject sits
  * at offset 0 so the existing pointer-cleanup chain reuses on `&value.subject`.
  *
  * Phase 4b-α covers object-form, single-program, in-module spec usage:
@@ -307,7 +307,7 @@ typedef struct UserSpec {
     char   *feng_name;                /* e.g., "Named" */
     char   *c_value_struct_name;      /* e.g., FengSpecValue__feng__sample__Named */
     char   *c_witness_struct_name;    /* e.g., FengSpecWitness__feng__sample__Named */
-    /* Value-model descriptor symbols (see dev/feng-value-model-pending.md
+    /* Value-model descriptor symbols (see dev/feng-value-model-delivered.md
      * §3, §7.2). For object-form specs the aggregate has exactly one
      * managed slot — the `subject` pointer at offset 0 of the value
      * struct. The descriptor is emitted unconditionally so per-field
@@ -1063,7 +1063,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
     const FengDecl *decl = s->decl;
     /* Phase 4b-α rejects parent_specs to keep witness composition out of
-     * scope; per dev/feng-value-model-pending.md the closure is intended
+     * scope; per dev/feng-value-model-delivered.md the closure is intended
      * for 4b-β/γ. */
     if (decl->as.spec_decl.parent_spec_count > 0) {
         return cg_fail(cg, decl->token,
@@ -1161,7 +1161,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     }
     buf_append_cstr(td, "};\n\n");
 
-    /* ---- Value-model aggregate descriptor (dev/feng-value-model-pending.md
+    /* ---- Value-model aggregate descriptor (dev/feng-value-model-delivered.md
      * §3, §7.2, §8.2). For object-form specs the value layout is
      * { void *subject; const Witness *witness; } — exactly one managed
      * pointer slot at offset 0 (subject). The witness pointer is a
@@ -3594,7 +3594,7 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
  *
  *   TRIVIAL          — contributes nothing.
  *   MANAGED_POINTER  — one managed_fields[] entry; one feng_release() call.
- *   AGGREGATE        — flattened per dev/feng-value-model-pending.md §7.2:
+ *   AGGREGATE        — flattened per dev/feng-value-model-delivered.md §7.2:
  *                      one descriptor per FENG_SLOT_POINTER slot inside the
  *                      aggregate (with offset = field_offset + slot_offset),
  *                      plus a feng_aggregate_release() call on the field

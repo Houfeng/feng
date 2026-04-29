@@ -492,11 +492,11 @@ const FengSpecEquality *feng_semantic_lookup_spec_equality(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
 
-/* --- Value-kind classification (dev/feng-value-model-pending.md §6.1) - */
+/* --- Value-kind classification (dev/feng-value-model-delivered.md §6.1) - */
 
 /* Runtime classification of a Feng value, mirroring runtime
  * FengValueKind in src/runtime/feng_runtime.h. Per
- * dev/feng-value-model-pending.md §2 / §6.1 every Feng type belongs to
+ * dev/feng-value-model-delivered.md §2 / §6.1 every Feng type belongs to
  * exactly one of these three categories; codegen uses the classification
  * to pick an emit path (direct C copy / single-pointer ARC primitives /
  * the five aggregate APIs). The semantic layer is the single source of

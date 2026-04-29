@@ -2,7 +2,7 @@
 
 > 本文档是实现草案，不是语言权威规范。
 > 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
-> 值模型基座见 [feng-value-model-pending.md](./feng-value-model-pending.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
+> 值模型基座见 [feng-value-model-delivered.md](./feng-value-model-delivered.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
 > 本草案只讨论非 `@fixed` 场景，不涉及 C ABI 与函数指针桥接。
 
 ## 1 目标与范围
@@ -15,7 +15,7 @@
 - object-form `spec` 的强制转换、成员访问、参数传递、返回值、字段、数组元素的 emit 路径；
 - object-form `spec` 默认零值的生成规则；
 - object-form `spec` `==` / `!=` 的比较语义；
-- object-form `spec` 与 [feng-value-model-pending.md](./feng-value-model-pending.md) 的对接点；
+- object-form `spec` 与 [feng-value-model-delivered.md](./feng-value-model-delivered.md) 的对接点；
 - semantic 必须为 codegen 提供的 sidecar；
 - 4b-α / 4b-β / 4b-γ 三个子步骤的范围与交付物。
 
@@ -28,7 +28,7 @@
 
 ### 1.3 与 value-model 的关系
 
-本文档 **不** 引入新的 runtime ABI；spec 值的生命周期一律走 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的五个聚合 API。本文档对 value-model 的依赖项见 §11，必须在 spec 发码扩面前完成。
+本文档 **不** 引入新的 runtime ABI；spec 值的生命周期一律走 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §5 的五个聚合 API。本文档对 value-model 的依赖项见 §11，必须在 spec 发码扩面前完成。
 
 ### 1.4 子步骤划分
 
@@ -62,7 +62,7 @@
 
 ### 2.3 必须与 value-model 对齐的硬约束
 
-- spec 值是 [feng-value-model-pending.md](./feng-value-model-pending.md) §2.1 中的 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`。
+- spec 值是 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §2.1 中的 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`。
 - spec 值的描述符是该文档 §3.1 的 `FengAggregateValueDescriptor`。
 - spec 值的默认初始化使用该文档 §4.2 的 `FENG_DEFAULT_INIT_FN`。
 - spec 字段对对象 `managed_fields` 的接入走该文档 §7.2 的展平规则。
@@ -204,7 +204,7 @@ static const struct FengSpecWitness__demo__Named FengWitness__demo__User__as__de
 
 ### 6.1 选用规则 \[4b-β]
 
-按 [feng-value-model-pending.md](./feng-value-model-pending.md) §4.3：
+按 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §4.3：
 
 - spec 默认零值一律选用 `FENG_DEFAULT_INIT_FN`。
 - codegen 为每个 object-form `spec S` 生成 init 函数 `FengSpecDefaultInit__<modS>__<S>`，并挂到该 spec 的 `FengAggregateValueDescriptor.default_init` 上。
@@ -250,7 +250,7 @@ static void FengSpecDefaultInit__demo__Named(void *out) {
 
 - `new_subject` 内部使用 `feng_object_new`，返回值已是 +1 状态。
 - init 函数不调 `feng_retain`，因为 `new_subject` 已经返回 owning。
-- 由 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的 `feng_aggregate_default_init` 调用。
+- 由 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §5 的 `feng_aggregate_default_init` 调用。
 
 ### 6.5 调用站点 \[4b-β]
 
@@ -343,11 +343,11 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 - 字段读取：`obj->field` 是 lvalue，可直接传给 spec 形参（借用）。
 - 字段写入：`feng_aggregate_assign(&obj->field, &src, &FengSpecAgg__M__S);`。
 - 对象释放：`release_children` 中对 spec 字段调用 `feng_aggregate_release(&obj->field, &desc);`。
-- 对象 `managed_fields` 按 [feng-value-model-pending.md](./feng-value-model-pending.md) §7.2 展平：spec 字段的 subject 槽位以 `字段偏移 + 0` 作为一条 `FengManagedFieldDescriptor`（`static_desc = NULL`，多态）。
+- 对象 `managed_fields` 按 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §7.2 展平：spec 字段的 subject 槽位以 `字段偏移 + 0` 作为一条 `FengManagedFieldDescriptor`（`static_desc = NULL`，多态）。
 
 ### 9.6 spec 数组 \[4b-γ]
 
-- 数组创建按 [feng-value-model-pending.md](./feng-value-model-pending.md) §7.3 传入元素分类 `aggregate` 与 `&FengSpecAgg__M__S`。
+- 数组创建按 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §7.3 传入元素分类 `aggregate` 与 `&FengSpecAgg__M__S`。
 - 元素读：返回 `struct FengSpecValue__M__S` 按值（借用），或在需要拥有时由调用方 retain。
 - 元素写：`feng_aggregate_assign(&arr->elements[i], &src, &desc);`
 - 数组销毁：逐元素 `feng_aggregate_release`。
@@ -380,16 +380,16 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 ### 11.1 直接依赖
 
-本文档需要 [feng-value-model-pending.md](./feng-value-model-pending.md) 完成以下章节：
+[feng-value-model-delivered.md](./feng-value-model-delivered.md) **layer 已交付**（§9.4 封顶声明）；本文档对其依赖项全部就绪：
 
-| value-model 章节 | spec codegen 依赖项 | 4b 阶段 |
-| --- | --- | --- |
-| §3 描述符 | `FengAggregateValueDescriptor` / `FengManagedSlotDescriptor` | β（spec 字段、默认零值） |
-| §4 默认初始化 | `FENG_DEFAULT_INIT_FN` 路径 | β |
-| §5 五个聚合 API | retain / release / assign / take / default_init | β / γ |
-| §7.2 cycle collector 展平 | 含 spec 字段的对象 `managed_fields` 自动展平 | β |
-| §7.3 数组元素三分类 | spec 数组 | γ |
-| §7.4 对象字段为 aggregate | spec 字段读写 / `release_children` | β |
+| value-model 章节 | spec codegen 依赖项 | 4b 阶段 | layer 状态 |
+| --- | --- | --- | --- |
+| §3 描述符 | `FengAggregateValueDescriptor` / `FengManagedSlotDescriptor` | β（spec 字段、默认零值） | ✅ 已交付（含 codegen 自动 emit `FengSpecAgg__M__S`） |
+| §4 默认初始化 | `FENG_DEFAULT_INIT_FN` 路径 | β | ✅ 已交付（init 实体由 4b-β 替换 panic stub） |
+| §5 五个聚合 API | retain / release / assign / take / default_init | β / γ | ✅ 已交付（含 5 项 runtime 单测） |
+| §7.2 cycle collector 展平 | 含 spec 字段的对象 `managed_fields` 自动展平 | β | ✅ 已交付（codegen helper 已就位待引用站点接入） |
+| §7.3 数组元素三分类 | spec 数组 | γ | ✅ 已交付（`feng_array_new_kinded` + 6 项单测） |
+| §7.4 对象字段为 aggregate | spec 字段读写 / `release_children` | β | ✅ 已交付（codegen helper 已就位） |
 
 ### 11.2 本文档不新增 runtime ABI
 
@@ -431,7 +431,7 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 ### 12.4 单测
 
-- 不强制新增 runtime 单测：spec 走 value-model 的聚合 API，runtime 单测应在 value-model 范围内补齐（见 [feng-value-model-pending.md](./feng-value-model-pending.md) §11）。
+- 不强制新增 runtime 单测：spec 走 value-model 的聚合 API，runtime 单测应在 value-model 范围内补齐（见 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §11）。
 - semantic 单测由各 sidecar 提交时已覆盖；本阶段不再新增。
 
 ### 12.5 全量回归
@@ -462,18 +462,18 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 按以下顺序执行，便于每步独立通过回归：
 
-1. value-model §3 / §4 / §5 落地（与 4b-β 强相关章节）。
+1. ~~value-model §3 / §4 / §5 落地（与 4b-β 强相关章节）~~。**已交付**（[feng-value-model-delivered.md](./feng-value-model-delivered.md) layer 封顶；codegen 已为每个 object-form spec 自动 emit `FengSpecAgg__M__S` + slot table + panic stub init fn；§7.2 / §7.4 helpers 就位）。
 2. 把 4b-α 的 subject-shortcut 清理切换到 `feng_aggregate_release` + `FengSpecAgg__M__S` 描述符。
 3. spec 字段（§4.3 thunk + §9.5 lvalue / 写 / `release_children`），含 value-model §7.2 / §7.4。
-4. spec 默认零值（§6 全套：隐藏 subject 类型、默认 witness、init 函数、`FengAggregateDefaultInitDescriptor`）。
+4. spec 默认零值（§6 全套：隐藏 subject 类型、默认 witness、init 函数实体替换 panic stub、绑定到 `FengSpecAgg__M__S.default_init`）。
 5. spec 等值（§7 + 消费 `SpecEquality` sidecar）。
 6. smoke：`spec_object_field.ff` / `spec_object_default.ff` / `spec_equality.ff`。
 7. 全量回归。
 
 ### 13.3 4b-γ \[随后]
 
-1. value-model §7.3 数组元素三分类落地。
-2. spec 数组发码（§9.6）。
+1. ~~value-model §7.3 数组元素三分类落地~~。**已交付**（`feng_array_new_kinded` + cycle collector 三分支 + 6 项单测）。
+2. spec 数组发码（§9.6）：调用站点改用 `feng_array_new_kinded(..., FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &FengSpecAgg__M__S, sizeof(struct FengSpecValue__M__S), n)`。
 3. spec 返回值移动路径完整化，走 `feng_aggregate_take`。
 4. fit-method 来源 witness（§5.2 第三行）。
 5. smoke：`spec_array.ff` / `spec_return.ff` / `spec_fit_witness.ff`。
@@ -493,7 +493,7 @@ callable-form spec、`@fixed` spec、跨 TU 符号导出、devirtualization。
 - `spec` 值比较不因 coercion 次数改变语义。
 - `FengManagedHeader` / cycle collector 主体代码 / 单指针原语 **零修改**。
 - 无任何 `feng_spec_*` runtime helper，无 spec 专用 type tag，无 spec 专用 cleanup chain。
-- 所有 spec 值生命周期路径走 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的五个聚合 API；不存在对 spec 值手写 `feng_release(.subject)` 的残留。
+- 所有 spec 值生命周期路径走 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §5 的五个聚合 API；不存在对 spec 值手写 `feng_release(.subject)` 的残留。
 - 所有现有 smoke 与单测零回归。
 
 ## 15 非目标与禁止项

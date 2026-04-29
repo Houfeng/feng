@@ -18,7 +18,7 @@ struct FengArray {
     size_t length;
     size_t element_size;
     const FengTypeDescriptor *element_desc;
-    /* Three-way classification per dev/feng-value-model-pending.md §7.3.
+    /* Three-way classification per dev/feng-value-model-delivered.md §7.3.
      * TRIVIAL    — bytes only; finalize merely frees `items`.
      * MANAGED_POINTER — `items` is an array of `void *` slots; each non-NULL
      *                   slot is feng_release'd on finalize.

@@ -16,7 +16,7 @@
 
 本草案明确不处理：
 
-- `spec` 的运行时值表示（独立草案：[feng-spec-codegen-draft.md](./feng-spec-codegen-draft.md) 与 [feng-value-model-draft.md](./feng-value-model-draft.md)）。
+- `spec` 的运行时值表示（独立草案：[feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 与 [feng-value-model-delivered.md](./feng-value-model-delivered.md)）。
 - codegen 如何发码（witness thunk、coercion helper、closure env 布局等）。
 - 运行时 ARC / cycle collector / 默认零值的具体实现路径。
 - 未来去虚化 / 内联缓存 / 单态化等优化。
@@ -27,8 +27,8 @@
 | 草案 | 关心的问题 |
 | --- | --- |
 | 本草案 | semantic 层应稳定产出哪些 `spec` 相关结论 |
-| [feng-spec-codegen-draft.md](./feng-spec-codegen-draft.md) | `spec` 值如何在 box 模型下落地（含 codegen / runtime） |
-| [feng-value-model-draft.md](./feng-value-model-draft.md) | 三类值模型与"按值聚合 + 托管槽位"未来抽象 |
+| [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) | `spec` 值如何在 box 模型下落地（含 codegen / runtime） |
+| [feng-value-model-delivered.md](./feng-value-model-delivered.md) | 三类值模型与"按值聚合 + 托管槽位"未来抽象 |
 
 本草案与后两者解耦：本草案产出的结论是后两者的输入，但本草案不依赖后两者的任何选型。
 

@@ -8090,7 +8090,7 @@ static void test_spec_equality_int_not_recorded(void) {
     feng_program_free(program);
 }
 
-/* --- Value-kind classification tests (dev/feng-value-model-pending.md §6.1) --- */
+/* --- Value-kind classification tests (dev/feng-value-model-delivered.md §6.1) --- */
 
 static FengSlice slice_from_cstr(const char *literal) {
     FengSlice s = { literal, strlen(literal) };
