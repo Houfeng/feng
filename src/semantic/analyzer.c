@@ -4568,6 +4568,12 @@ static InferredExprType resolve_expr_owner_type(ResolveContext *context,
     return owner_type;
 }
 
+static void record_object_arg_coercion_sites(ResolveContext *context,
+                                             FengExpr *const *args,
+                                             size_t arg_count,
+                                             const FengParameter *params,
+                                             size_t param_count);
+
 static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
@@ -4579,6 +4585,9 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     if (callee_type_decl != NULL && decl_is_function_type(callee_type_decl)) {
         if (function_type_parameters_match_args(context, callee_type_decl, args, arg_count)) {
             note_callable_value_expr_exception_escape(context, callee);
+            record_object_arg_coercion_sites(context, args, arg_count,
+                                             callee_type_decl->as.spec_decl.as.callable.params,
+                                             callee_type_decl->as.spec_decl.as.callable.param_count);
             return true;
         }
 
@@ -6992,6 +7001,155 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
     }
 }
 
+/* Phase S1b — SpecCoercionSite recording helpers (§6.2). */
+
+static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *context,
+                                                      InferredExprType expr_type) {
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (expr_type.type_decl != NULL &&
+                expr_type.type_decl->kind == FENG_DECL_TYPE) {
+                return expr_type.type_decl;
+            }
+            return NULL;
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF: {
+            const FengDecl *d = resolve_type_ref_decl(context, expr_type.type_ref);
+            return (d != NULL && d->kind == FENG_DECL_TYPE) ? d : NULL;
+        }
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+        default:
+            return NULL;
+    }
+}
+
+/* Records an object-form coercion site when expected_type_ref names an
+ * object-form spec and expr's static type is a concrete `type` decl that
+ * satisfies it. Silent no-op for any other shape (numeric coercion, builtin
+ * match, lambda body inference re-entries, etc.). */
+static void record_object_spec_coercion_site_if_applicable(
+        ResolveContext *context,
+        const FengExpr *expr,
+        const FengTypeRef *expected_type_ref) {
+    const FengDecl *target_decl;
+    const FengDecl *src_type_decl;
+    InferredExprType expr_type;
+    const FengSpecRelation *relation;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL ||
+        expected_type_ref == NULL) {
+        return;
+    }
+    target_decl = resolve_type_ref_decl(context, expected_type_ref);
+    if (target_decl == NULL || target_decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+    /* Callable-form specs have their own callable hook (§8.4). */
+    if (decl_is_function_type(target_decl)) {
+        return;
+    }
+    expr_type = infer_expr_type(context, expr);
+    src_type_decl = concrete_type_decl_of_inferred(context, expr_type);
+    if (src_type_decl == NULL) {
+        return;
+    }
+    relation = feng_semantic_lookup_spec_relation(context->analysis,
+                                                  src_type_decl,
+                                                  target_decl);
+    if (relation == NULL) {
+        /* Match must have been by exact type identity (src == target spec is
+         * impossible since target is SPEC and src is TYPE), so absence here
+         * means the match was a non-spec path (should not happen given the
+         * SPEC target check above). Defensive no-op. */
+        return;
+    }
+    (void)feng_semantic_record_object_spec_coercion_site(context->analysis,
+                                                          expr,
+                                                          src_type_decl,
+                                                          target_decl,
+                                                          relation);
+}
+
+/* Records object-form coercion sites for each argument of a call against the
+ * resolved callee parameter list. Per-argument application of
+ * record_object_spec_coercion_site_if_applicable handles the predicate
+ * (target is object-form spec, src is concrete type, satisfaction relation
+ * exists); arguments that don't match the predicate are silently skipped. */
+static void record_object_arg_coercion_sites(ResolveContext *context,
+                                             FengExpr *const *args,
+                                             size_t arg_count,
+                                             const FengParameter *params,
+                                             size_t param_count) {
+    size_t i;
+
+    if (params == NULL || args == NULL || param_count != arg_count) {
+        return;
+    }
+    for (i = 0U; i < arg_count; ++i) {
+        record_object_spec_coercion_site_if_applicable(context,
+                                                        args[i],
+                                                        params[i].type);
+    }
+}
+
+static FengSpecCoercionCallableSource classify_callable_source(
+        const ResolveContext *context, const FengExpr *expr) {
+    if (expr == NULL) {
+        return FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_LAMBDA:
+            return FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA;
+        case FENG_EXPR_IDENTIFIER: {
+            /* If the identifier resolves to a local binding/parameter, treat
+             * as a generic callable value. Otherwise, if it names a top-level
+             * function (overload set), classify as TOP_LEVEL_FN. */
+            if (resolver_find_local_name_entry(context, expr->as.identifier) != NULL) {
+                return FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+            }
+            if (find_function_overload_set(context->function_sets,
+                                           context->function_set_count,
+                                           expr->as.identifier) != NULL) {
+                return FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN;
+            }
+            return FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+        }
+        case FENG_EXPR_MEMBER: {
+            /* `mod.fn` (alias-qualified top-level function) reports as
+             * TOP_LEVEL_FN; `obj.method` reports as METHOD_VALUE. */
+            const FengExpr *object = expr->as.member.object;
+            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER &&
+                find_unshadowed_alias(context, object->as.identifier) != NULL) {
+                return FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN;
+            }
+            return FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE;
+        }
+        default:
+            return FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+    }
+}
+
+static void record_callable_spec_coercion_site(ResolveContext *context,
+                                               const FengExpr *expr,
+                                               const FengTypeRef *expected_type_ref) {
+    const FengDecl *target_decl;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL ||
+        expected_type_ref == NULL) {
+        return;
+    }
+    target_decl = resolve_function_type_decl(context, expected_type_ref);
+    if (target_decl == NULL) {
+        return;
+    }
+    (void)feng_semantic_record_callable_spec_coercion_site(
+        context->analysis,
+        expr,
+        target_decl,
+        classify_callable_source(context, expr));
+}
+
 static bool validate_function_typed_expr(ResolveContext *context,
                                          const FengExpr *expr,
                                          const FengTypeRef *expected_type_ref) {
@@ -7005,6 +7163,7 @@ static bool validate_function_typed_expr(ResolveContext *context,
 
     resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
     if (resolution.kind == FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+        record_callable_spec_coercion_site(context, expr, expected_type_ref);
         return true;
     }
 
@@ -7052,6 +7211,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
         return validate_function_typed_expr(context, expr, expected_type_ref);
     }
     if (expr_matches_expected_type_ref(context, expr, expected_type_ref)) {
+        record_object_spec_coercion_site_if_applicable(context, expr, expected_type_ref);
         return true;
     }
 
@@ -7938,6 +8098,14 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
         mutable_expr->as.call.resolved_callable.kind = FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR;
         mutable_expr->as.call.resolved_callable.owner_type_decl = target.type_decl;
         mutable_expr->as.call.resolved_callable.member = constructor_member;
+        if (constructor_member != NULL &&
+            constructor_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            record_object_arg_coercion_sites(context,
+                                             expr->as.call.args,
+                                             expr->as.call.arg_count,
+                                             constructor_member->as.callable.params,
+                                             constructor_member->as.callable.param_count);
+        }
     }
     return true;
 }
@@ -8000,6 +8168,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
                     record_resolved_callable_from_resolution(expr, &resolution);
+                    record_object_arg_coercion_sites(context,
+                                                     expr->as.call.args,
+                                                     expr->as.call.arg_count,
+                                                     resolution.callable->params,
+                                                     resolution.callable->param_count);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -8057,6 +8230,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 note_callable_exception_escape(context, resolution.callable);
                 record_resolved_callable_from_resolution(expr, &resolution);
+                record_object_arg_coercion_sites(context,
+                                                 expr->as.call.args,
+                                                 expr->as.call.arg_count,
+                                                 resolution.callable->params,
+                                                 resolution.callable->param_count);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -8125,6 +8303,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
                     record_resolved_callable_from_resolution(expr, &resolution);
+                    record_object_arg_coercion_sites(context,
+                                                     expr->as.call.args,
+                                                     expr->as.call.arg_count,
+                                                     resolution.callable->params,
+                                                     resolution.callable->param_count);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -11305,6 +11488,19 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
         ok = append_module_program(&analysis->modules[module_index], program);
     }
 
+    /* Phase S1a: spec satisfaction relation sidecar must be available
+     * during the resolve pass so coercion-site recording (Phase S1b) can
+     * link each site back to its justifying relation. The pass walks
+     * declared `satisfies` clauses and `fit` decls — pure AST data that
+     * does not depend on resolved types — so it is safe to run early.
+     * See dev/feng-spec-semantic-draft.md §10. */
+    if (ok && error_count == 0U) {
+        if (!feng_semantic_compute_spec_relations(analysis)) {
+            ok = false;
+            goto finish;
+        }
+    }
+
     max_iterations = count_all_callables(analysis) + 1U;
     if (max_iterations == 0U) {
         max_iterations = 1U;
@@ -11387,17 +11583,6 @@ finish:
             return false;
         }
     }
-    /* Phase S1a: spec satisfaction relation sidecar — see
-     * dev/feng-spec-semantic-draft.md §10. Same fatal-on-failure policy as
-     * the cyclicity pass: downstream stages assume the table is either
-     * fully populated or absent. */
-    if (out_analysis != NULL && *out_analysis != NULL) {
-        if (!feng_semantic_compute_spec_relations(*out_analysis)) {
-            feng_semantic_analysis_free(*out_analysis);
-            *out_analysis = NULL;
-            return false;
-        }
-    }
     return true;
 }
 
@@ -11417,6 +11602,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->spec_relations[index].sources);
     }
     free(analysis->spec_relations);
+    free(analysis->spec_coercion_sites);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

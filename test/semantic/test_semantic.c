@@ -7203,6 +7203,238 @@ static void test_spec_relation_visibility_filter(void) {
     feng_program_free(pc);
 }
 
+/* --- Phase S1b: SpecCoercionSite sidecar tests ----------------------- */
+
+static const FengDecl *find_function_decl_in_program(const FengProgram *prog,
+                                                     const char *name) {
+    size_t name_len = strlen(name);
+    for (size_t i = 0U; i < prog->declaration_count; ++i) {
+        const FengDecl *d = prog->declarations[i];
+        if (d->kind != FENG_DECL_FUNCTION) continue;
+        if (d->as.function_decl.name.length == name_len &&
+            memcmp(d->as.function_decl.name.data, name, name_len) == 0) {
+            return d;
+        }
+    }
+    return NULL;
+}
+
+static const FengExpr *first_let_initializer(const FengCallableSignature *fn) {
+    for (size_t i = 0U; i < fn->body->statement_count; ++i) {
+        const FengStmt *s = fn->body->statements[i];
+        if (s->kind == FENG_STMT_BINDING) {
+            return s->as.binding.initializer;
+        }
+    }
+    return NULL;
+}
+
+static void test_spec_coercion_object_let_binding(void) {
+    /* `let x: Named = User{...};` records an OBJECT-form coercion site on
+     * the initializer expression, with the SpecRelation entry that
+     * justifies the satisfaction. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn make(): int {\n"
+        "    let x: Named = User{n: \"u\"};\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_let.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengExpr *init = first_let_initializer(&make->as.function_decl);
+    ASSERT(init != NULL);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(site->src_type_decl == user);
+    ASSERT(site->target_spec_decl == named);
+    ASSERT(site->relation != NULL);
+    ASSERT(site->relation->type_decl == user);
+    ASSERT(site->relation->spec_decl == named);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_object_argument(void) {
+    /* Argument-passing coercion: `accept(User{...})` against parameter
+     * `s: Named` records an OBJECT site on the argument expression. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn accept(s: Named) {}\n"
+        "fn caller(): int {\n"
+        "    accept(User{n: \"u\"});\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_arg.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *caller = find_function_decl_in_program(program, "caller");
+    ASSERT(caller != NULL);
+    const FengStmt *call_stmt = caller->as.function_decl.body->statements[0];
+    /* expression statement: `accept(User{...});` */
+    ASSERT(call_stmt->kind == FENG_STMT_EXPR);
+    const FengExpr *call = call_stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.arg_count == 1U);
+    const FengExpr *arg = call->as.call.args[0];
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, arg);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(site->src_type_decl == user);
+    ASSERT(site->target_spec_decl == named);
+    ASSERT(site->relation != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_object_return(void) {
+    /* Return coercion: `return User{...};` from a function returning Named
+     * records an OBJECT site on the returned expression. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn make(): Named {\n"
+        "    return User{n: \"u\"};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_ret.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengStmt *ret_stmt = make->as.function_decl.body->statements[0];
+    ASSERT(ret_stmt->kind == FENG_STMT_RETURN);
+    const FengExpr *ret_expr = ret_stmt->as.return_value;
+    ASSERT(ret_expr != NULL);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, ret_expr);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->src_type_decl == find_type_decl_by_name(analysis, "User"));
+    ASSERT(site->relation != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_callable_top_level_fn(void) {
+    /* `let f: Cb = my_fn;` — top-level function bound to a callable-form
+     * spec slot records a CALLABLE site classified as TOP_LEVEL_FN. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Cb(x: int): int;\n"
+        "fn double(x: int): int { return x + x; }\n"
+        "fn caller(): int {\n"
+        "    let f: Cb = double;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_callable_fn.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *caller = find_function_decl_in_program(program, "caller");
+    const FengExpr *init = first_let_initializer(&caller->as.function_decl);
+    ASSERT(init != NULL && init->kind == FENG_EXPR_IDENTIFIER);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+    ASSERT(site->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN);
+    ASSERT(site->relation == NULL);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Cb"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_callable_lambda(void) {
+    /* Lambda literal coerced to a callable-form spec slot records a
+     * CALLABLE site classified as LAMBDA. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Cb(x: int): int;\n"
+        "fn caller(): int {\n"
+        "    let f: Cb = (x: int) -> x + 1;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_callable_lambda.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *caller = find_function_decl_in_program(program, "caller");
+    const FengExpr *init = first_let_initializer(&caller->as.function_decl);
+    ASSERT(init != NULL && init->kind == FENG_EXPR_LAMBDA);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+    ASSERT(site->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Cb"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -7220,6 +7452,11 @@ int main(void) {
     test_spec_relation_declared_parent_transitive();
     test_spec_relation_fit_head_and_parent();
     test_spec_relation_visibility_filter();
+    test_spec_coercion_object_let_binding();
+    test_spec_coercion_object_argument();
+    test_spec_coercion_object_return();
+    test_spec_coercion_callable_top_level_fn();
+    test_spec_coercion_callable_lambda();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();

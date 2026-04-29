@@ -91,6 +91,57 @@ typedef struct FengSpecRelation {
     size_t source_capacity;
 } FengSpecRelation;
 
+/* Form of a spec coercion site — see dev/feng-spec-semantic-draft.md §6.2. */
+typedef enum FengSpecCoercionForm {
+    /* Concrete type → object-form spec. The site references the SpecRelation
+     * picked by the resolver for this (T, S) coercion. */
+    FENG_SPEC_COERCION_FORM_OBJECT = 0,
+    /* Callable value → callable-form spec / function type. Carries the
+     * value-source classification per §6.2; signature is read from the
+     * target callable decl. */
+    FENG_SPEC_COERCION_FORM_CALLABLE
+} FengSpecCoercionForm;
+
+/* Origin of the callable value being coerced to a callable-form spec. The
+ * classification mirrors the dispatch in resolve_expr_callable_value and is
+ * stable across multiple coercion points referring to the same value. */
+typedef enum FengSpecCoercionCallableSource {
+    /* A top-level (module-scope) function value, possibly overload-resolved. */
+    FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN = 0,
+    /* A bound method value `obj.method` taken as a callable. */
+    FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE,
+    /* A lambda literal at the coercion site. */
+    FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA,
+    /* Any other callable-typed value (local binding, parameter, field,
+     * member access whose static type is callable, etc.). */
+    FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER
+} FengSpecCoercionCallableSource;
+
+/* Per-site decision for a single coercion point. Stored in a sidecar table
+ * keyed by AST FengExpr pointer to keep parser/AST free of semantic
+ * back-references. Populated incrementally during resolution by the analyzer
+ * each time validate_expr_against_expected_type confirms a match into a
+ * spec-typed slot.
+ *
+ * Per §8.4 callable-form specs do not enter SpecRelation; relation is NULL
+ * for FORM_CALLABLE. For FORM_OBJECT the relation pointer is stable until
+ * feng_semantic_analysis_free. */
+typedef struct FengSpecCoercionSite {
+    const FengExpr *expr;
+    FengSpecCoercionForm form;
+    /* OBJECT form: the concrete source `type` decl. Always non-NULL. */
+    const FengDecl *src_type_decl;
+    /* The target spec / function-type decl. Always non-NULL. */
+    const FengDecl *target_spec_decl;
+    /* OBJECT form only: the SpecRelation entry that justifies this coercion.
+     * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
+     * before recording). NULL for FORM_CALLABLE per §8.4. */
+    const FengSpecRelation *relation;
+    /* CALLABLE form only: classification of the value source. Unspecified
+     * for FORM_OBJECT. */
+    FengSpecCoercionCallableSource callable_source;
+} FengSpecCoercionSite;
+
 typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
     size_t module_count;
@@ -104,6 +155,9 @@ typedef struct FengSemanticAnalysis {
     FengSpecRelation *spec_relations;
     size_t spec_relation_count;
     size_t spec_relation_capacity;
+    FengSpecCoercionSite *spec_coercion_sites;
+    size_t spec_coercion_site_count;
+    size_t spec_coercion_site_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
@@ -158,6 +212,46 @@ bool feng_semantic_spec_relation_source_visible_from(
     const FengSemanticModule *consumer_module,
     const FengSemanticModule *const *consumer_imports,
     size_t consumer_import_count);
+
+/* --- SpecCoercionSite (Phase S1b, §6.2) ------------------------------ */
+
+/* Record an object-form coercion site (`expr` of concrete type
+ * `src_type_decl` flowing into a slot typed as object-form spec
+ * `target_spec_decl`). `relation` MUST be the SpecRelation entry that
+ * justifies this coercion (caller is responsible for looking it up via
+ * feng_semantic_lookup_spec_relation and confirming non-NULL). All four
+ * pointers must be non-NULL. Recording the same `expr` twice replaces the
+ * earlier entry — the analyzer is expected to call this exactly once per
+ * coercion site, but the replace-on-conflict policy keeps the table
+ * consistent if a re-resolution path runs.
+ *
+ * Implemented in spec_coercion_sites.c. */
+bool feng_semantic_record_object_spec_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *src_type_decl,
+    const FengDecl *target_spec_decl,
+    const FengSpecRelation *relation);
+
+/* Record a callable-form coercion site. `target_spec_decl` is the
+ * callable-form spec decl (or function-type decl). `callable_source`
+ * classifies the value origin per §6.2. Per §8.4 callable-form specs do
+ * not enter SpecRelation, so no relation is associated.
+ *
+ * Implemented in spec_coercion_sites.c. */
+bool feng_semantic_record_callable_spec_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *target_spec_decl,
+    FengSpecCoercionCallableSource callable_source);
+
+/* Look up the recorded coercion site for `expr`. Returns NULL when no site
+ * was recorded (either the expression is not a coercion site, or the
+ * resolver did not visit it as one). The returned pointer is stable until
+ * feng_semantic_analysis_free. */
+const FengSpecCoercionSite *feng_semantic_lookup_spec_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr);
 
 #ifdef __cplusplus
 }
