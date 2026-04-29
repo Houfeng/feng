@@ -1,656 +1,518 @@
-# spec 运行时与 codegen 可执行方案草案（不含 @fixed / C ABI）
+# spec 运行时与 codegen 可执行方案草案（fat 值方向，不含 @fixed / C ABI）
 
 > 本文档是实现草案，不是语言权威规范。
 > 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
+> 值模型基座见 [feng-value-model-pending.md](./feng-value-model-pending.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
 > 本草案只讨论非 `@fixed` 场景，不涉及 C ABI 与函数指针桥接。
 
 ## 1 目标与范围
 
-本草案把当前 `spec` 语义承诺收敛成一版可以直接拆任务实施的方案，覆盖以下能力：
+### 1.1 直接目标
 
-- object-form `spec` 的运行时值表示
-- callable-form `spec`（非 `@fixed`）的运行时值表示
-- `spec` 默认零值 / 默认 witness 的生成规则
-- 具体 `type` 进入 `spec` 位置时的 codegen 降级规则
-- `spec` 成员访问、方法调用、字段赋值、参数传递、返回值的发码路径
-- 对现有 ARC / finalizer / cycle collector 元数据的接入方式
-- 最小测试面与分阶段落地顺序
+把 `spec` 的发码方案收敛为**胖值（fat value）方向**，并规定：
 
-本草案明确不处理：
+- object-form `spec` 的运行时值表示与 ABI；
+- object-form `spec` 的强制转换、成员访问、参数传递、返回值、字段、数组元素的 emit 路径；
+- object-form `spec` 默认零值的生成规则；
+- object-form `spec` `==` / `!=` 的比较语义；
+- object-form `spec` 与 [feng-value-model-pending.md](./feng-value-model-pending.md) 的对接点；
+- semantic 必须为 codegen 提供的 sidecar；
+- 4b-α / 4b-β / 4b-γ 三个子步骤的范围与交付物。
 
-- `@fixed spec` 与 C ABI
-- object-form `spec` 的去虚化、内联缓存、JIT 风格优化
-- 多编译单元链接层面的符号导出稳定化
-- 运行时自动发现“谁满足谁”的全局 registry
+### 1.2 非目标（明确禁止）
+
+- **双托管 box 方案**：先前草案使用 `FengSpecRef__S { FengManagedHeader; subject; witness; }` 作为独立托管对象，已被废弃；本草案禁止再以 box 方式承载 object-form `spec`。
+- callable-form `spec`（含函数值 / 方法值 / lambda 适配 / 默认 stub）：留待 [feng-plan.md](./feng-plan.md) Phase 2，本文档只声明其值模型预期与现有结构的接入方式，不展开发码细节。
+- `@fixed spec` 与 C ABI、跨 TU 符号导出。
+- 运行时反射、全局 registry、自动鸭子类型适配、object-form spec 的去虚化与内联缓存。
+
+### 1.3 与 value-model 的关系
+
+本文档 **不** 引入新的 runtime ABI；spec 值的生命周期一律走 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的五个聚合 API。本文档对 value-model 的依赖项见 §11，必须在 spec 发码扩面前完成。
+
+### 1.4 子步骤划分
+
+| 步骤 | 范围 | 状态 |
+| --- | --- | --- |
+| 4b-α | object-form spec 最小垂直切片：spec 形参 + 对象→spec 强制转换 + spec 方法调用 + spec 局部 + 1 个 smoke | **已交付**（commit `f69dfe0`） |
+| 4b-β | spec 字段（对象成员为 spec）+ spec 默认零值 + spec `==` / `!=` + 3 个 smoke | 待实施 |
+| 4b-γ | fit-method 来源 witness、spec 数组元素、spec 作为返回值的完整移动 + 对应 smoke | 待实施 |
+| Phase 2 | callable-form spec | 不在 4b 范围 |
+
+> 各章节内行文将以 **\[已交付 4b-α]** / **\[4b-β]** / **\[4b-γ]** 标注，第 13 节再给出完整清单。
 
 ## 2 设计约束
 
 ### 2.1 必须保持的语言语义
 
-以下语义来自权威规范，方案必须满足：
-
-- `spec` 可作为参数类型、返回类型、成员类型和其他类型位置中的引用目标
-- object-form `spec` 不约束物理布局，只约束可见形状
-- object-form `spec` 的满足关系必须来自声明头或可见 `fit`，禁止鸭子类型
-- 无初始值的 `spec` 绑定必须得到默认 witness
-- 默认 witness 对开发者不可见，不可显式引用
-- 每次 `spec` 默认初始化都创建新实例，不复用共享单例
-- `spec` 值的 `==` / `!=` 默认比较引用身份
-- callable-form `spec` 是可调用形状，不是对象布局契约
+- `spec` 可作为参数类型、返回类型、成员类型与其他类型位置中的引用目标。
+- object-form `spec` 不约束物理布局，只约束可见形状。
+- object-form `spec` 的满足关系必须来自声明头或可见 `fit`，禁止鸭子类型。
+- 无初始值的 `spec` 绑定必须得到默认 witness。
+- 默认 witness 对开发者不可见，不可显式引用。
+- 每次 `spec` 默认初始化都创建新实例，不复用共享单例。
+- `spec` 值的 `==` / `!=` 默认比较 **subject 引用身份**，不受中间 coercion 次数影响。
+- callable-form `spec` 是可调用形状，不是对象布局契约（Phase 2 处理）。
 
 ### 2.2 必须贴合的现有运行时基座
 
-当前运行时已经稳定存在以下基础设施：
+- 单指针原语 `feng_retain` / `feng_release` / `feng_assign` 与作用域 / 异常清理表。
+- `FengManagedHeader` 与 cycle collector：**不修改**。
+- value-model §5 的五个聚合 API 与 walker：**不在本文档新增**，仅消费。
 
-- 统一托管头 `FengManagedHeader`
-- 统一描述符 `FengTypeDescriptor`
-- ARC retain/release 与 `release_children`
-- cycle collector 对 `managed_fields` 的静态追踪
-- `FENG_TYPE_TAG_OBJECT` / `FENG_TYPE_TAG_CLOSURE`
+### 2.3 必须与 value-model 对齐的硬约束
 
-见 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)。
-
-因此，`spec` 的运行时方案必须优先复用现有托管模型，而不是引入独立 GC 体系或与现有头布局冲突的新对象模型。
+- spec 值是 [feng-value-model-pending.md](./feng-value-model-pending.md) §2.1 中的 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`。
+- spec 值的描述符是该文档 §3.1 的 `FengAggregateValueDescriptor`。
+- spec 值的默认初始化使用该文档 §4.2 的 `FENG_DEFAULT_INIT_FN`。
+- spec 字段对对象 `managed_fields` 的接入走该文档 §7.2 的展平规则。
+- spec 数组元素走该文档 §7.3 的元素三分类。
 
 ## 3 总体模型
 
-`spec` 分两类分别落地：
+### 3.1 object-form spec 是胖值
 
-- object-form `spec`
-  运行时值表示为“spec box”，内部持有一个具体对象 `subject` 与一张 witness 表 `witness`
-- callable-form `spec`
-  运行时值直接复用闭包 / 函数值 / 方法值基座，不再额外包一层 object witness box
+object-form `spec` 在运行时的值表示为：
 
-编译期与运行时职责边界如下：
+```c
+struct FengSpecValue__<mod>__<S> {
+    void *subject;                                       /* 托管指针，参与 ARC */
+    const struct FengSpecWitness__<mod>__<S> *witness;   /* 静态只读表，不参与 ARC */
+};
+```
 
-- 编译期负责决定：
-  - 某个 `type` 是否满足某个 `spec`
-  - 当前作用域哪些 `fit` 可见
-  - 某个赋值 / 传参 / 返回 / 字段初始化应选择哪张 witness 表
-- 运行时只负责执行已经选定的 witness thunk 或 callable thunk
+要点：
 
-运行时不得做以下工作：
+- **按值聚合，无 header**，本身不是托管对象，不进入 ARC 自身的对象计数。
+- **subject 在偏移 0**，与 value-model §3 的 `FENG_SLOT_POINTER` 槽位对齐；现有"单指针 cleanup chain"通过 `(void **)&local.subject` 直接复用，无需新清理原语。
+- **witness 是静态全局表**，在程序生命周期内有效，绝不参与 retain / release。
+- 大小固定 16 字节（64-bit 平台），按值传参时多数 ABI 走寄存器。
 
-- 动态搜索“哪些类型满足某个 `spec`”
-- 在运行期重新解释 `fit` 可见性
-- 基于对象形状做结构化自动适配
+### 3.2 为什么不用 box
+
+- **额外分配**：box 方案对每次 coercion 都要分配一个堆托管对象，再装一根指针；fat 方案只是在栈/寄存器里组合 16 字节。
+- **生命周期复杂**：box 与 subject 形成两层托管引用，cycle collector 必须把 box 也纳入扫描，spec 之间互引用极易触发误判与额外开销。
+- **相等性失真**：每次 coercion 新建 box，比较 box 地址会被中间 coercion 次数污染；fat 方案直接比 `subject`，语义清洁。
+- **C ABI 易控**：fat 方案是普通 C struct，调用方 / 被调方使用同一 typedef，编译器自然处理寄存器/栈传递。
+
+### 3.3 编译期 / 运行时职责边界
+
+- 编译期决定：某个 `type` 是否满足某个 `spec`、当前作用域哪些 `fit` 可见、spec coercion 站点应使用哪条满足关系与哪张 witness。
+- 运行时只负责：执行已选定的 witness thunk、按 value-model §5 处理 spec 值生命周期。
+
+运行时**不得**：
+
+- 动态搜索"哪些类型满足某个 spec"。
+- 在运行期重新解释 fit 可见性。
+- 基于对象形状做结构化自动适配。
 
 ## 4 object-form spec 的运行时结构
 
-### 4.1 结构选择
+### 4.1 值结构 \[已交付 4b-α]
 
-object-form `spec` 不直接等于具体对象指针，而是一个托管 box：
-
-```c
-typedef struct FengSpecRef__Named {
-    FengManagedHeader header;
-    void *subject;
-    const struct FengSpecWitness__Named *witness;
-} FengSpecRef__Named;
-
-typedef struct FengSpecWitness__Named {
-    const char *debug_name;
-
-    FengString *(*get_name)(void *subject);
-    void (*set_name)(void *subject, FengString *value);   /* let 字段时为 NULL */
-
-    FengString *(*display)(void *subject);
-} FengSpecWitness__Named;
-```
-
-其中：
-
-- `subject` 指向真实的具体对象实例
-- `witness` 描述“这个具体对象如何以 `Named` 视角暴露字段与方法”
-- `witness` 是静态只读表，不参与 retain/release
-- `FengSpecRef__Named` 本身是普通托管对象，参与 ARC 与 cycle collector
-
-### 4.2 为什么用 box，而不是直接用具体对象指针
-
-不建议直接把 object-form `spec` 运行时值表示成具体对象指针，原因有三点：
-
-- 同一个 `spec` 位置上可能接收多个不同具体 `type`，而成员访问不能直接静态绑定到某个对象布局
-- `fit` 允许同一对象通过不同路径满足同一个 `spec`；运行时需要一个显式 witness 载体来固定“当前这次转换使用哪张表”
-- 现有 ARC / cleanup / array 元素 / 绑定槽位都围绕“一根 managed pointer”工作；box 最贴合现有基座，改动面最小
-
-### 4.3 为什么字段访问用 witness thunk，不用 offset 直读
-
-object-form `spec` 的权威语义是不约束具体物理布局，因此 v1 必须把字段访问与方法调用都建模成 thunk：
-
-- `n.name` 发码为 `n->witness->get_name(n->subject)`
-- `n.name = value` 发码为 `n->witness->set_name(n->subject, value)`
-- `n.display()` 发码为 `n->witness->display(n->subject)`
-
-不采用 offset 直读的原因：
-
-- 规范已经声明 object-form `spec` 不承诺布局
-- `fit` 块未来可能给 `spec` 行为补 thunk，而不是与类型方法一一同名同位
-- thunk 是稳定契约；offset 只适合作为后续优化信息，不应成为第一版语义主轴
-
-### 4.4 与现有 `FengManagedHeader` 的关系
-
-本方案不修改 `FengManagedHeader`，也不新增新的 header 形状。
-
-`FengSpecRef__Named` 直接复用当前头：
+每个 object-form `spec S`（在模块 `mod` 内）生成独立的具名 typedef：
 
 ```c
-typedef struct FengSpecRef__Named {
-    FengManagedHeader header;
+struct FengSpecValue__demo__Named {
     void *subject;
-    const struct FengSpecWitness__Named *witness;
-} FengSpecRef__Named;
+    const struct FengSpecWitness__demo__Named *witness;
+};
 ```
 
-也不要求新增新的 `FengTypeTag`。v1 里 spec box 继续使用：
+不使用统一 `void* + void*` 的两字段无名结构：会丢失 witness 静态类型，迫使每个 callsite 强转，易错。
 
-- `FENG_TYPE_TAG_OBJECT` 作为 object-form spec box 的 tag
+### 4.2 witness 表结构 \[已交付 4b-α]
+
+每个 object-form `spec S` 生成独立 witness 表 typedef：
+
+```c
+struct FengSpecWitness__demo__Named {
+    /* 按 spec 成员声明顺序排列；目前仅方法。 */
+    FengString *(*greet)(void *subject);
+    /* 字段访问槽位见 §4.3，4b-β 引入。 */
+
+    /* 若无任何成员，发射一个 char _padding 占位，避免空 struct。 */
+};
+```
+
+要点：
+
+- witness 表的成员顺序与 `spec` 源码声明顺序严格一致，便于 codegen / 调试器交叉对照。
+- 表本身是 `static const`，单 TU 内通过 (T,S) 缓存唯一化。
+- 跨 TU 共享留待 Phase 2 一并解决（`@fixed` 章节会决定符号导出策略）。
+
+### 4.3 字段访问槽位 \[4b-β]
+
+object-form `spec` 字段必须经 thunk 访问，不允许 offset 直读：
+
+- spec 不约束布局，offset 直读会被 fit 与多类型适配场景立即破坏。
+- 字段读 thunk：`FengString *(*get_name)(void *subject)`；写 thunk（`var` 字段）：`void (*set_name)(void *subject, FengString *value)`。
+- `let` 字段不发 set thunk，witness 表中不留该位。
+- thunk 命名：`FengSpecThunk__<modT>__<T>__as__<modS>__<S>__<member>`（4b-α 已用此命名，4b-β 复用）。
+
+### 4.4 调用约定 \[已交付 4b-α]
+
+- **形参**：spec 值按 C struct 按值传递；callee **借用**，调用方负责保持源活到调用结束（与现有 managed-pointer 形参约定一致，`Local.is_param: caller owns`）。
+- **方法分派**：`recv.witness->slot(recv.subject, args...)`。
+- **绑定**：`let n: Named = u;` — 当源是 owns_ref 临时值，直接搬移；当源是借用，发 `feng_retain(&n_local.subject)`（subject 在 0 偏移，等价 `feng_retain(n_local.subject)` 但通过 value-model API 表达）。
+- **作用域退出**：`feng_cleanup_pop(); feng_release(local.subject); local.subject = NULL;`（4b-α 直写，4b-β 起改用 §5 中将归并的 helper）。
+- **返回**：与 managed return 对称——若值是借用，先 retain subject 再 transfer；若是 owns_ref，直接搬移。
+
+> **\[4b-β 任务]** 把 4b-α 的"直写 `feng_release(local.subject)`"统一替换为 `feng_aggregate_release(&local, &FengSpecAgg__M__S)`，避免 spec 值生命周期路径长期与 value-model API 不一致。完成后所有 spec 局部的清理都通过描述符驱动。
+
+## 5 witness 生成规则
+
+### 5.1 (T, S) 唯一化与缓冲位置 \[已交付 4b-α]
+
+- 每个具体 `(type T, spec S)` 组合生成一张 witness 表与一组 thunk；按 (T, S) 缓存，重复 coercion 不重复生成。
+- thunk **forward decl** 写入 codegen 的 `cg->fn_protos`；thunk **body** 与 witness 表实例写入新增的 `cg->witness_defs` 缓冲，最后由 `cg_finalize` 拼接到 `fn_defs` 之后。
+- 分桶原因：4b-α 早期曾误把 witness 实体写入 `cg->fn_defs`，导致它被插入"正在发射的函数体"内部，编译失败。`witness_defs` 是该问题的结构性修复，禁止退化。
+
+### 5.2 witness 来源类型 \[4b-α / β / γ]
+
+| 来源 | 4b-α | 4b-β | 4b-γ |
+| --- | --- | --- | --- |
+| `TYPE_OWN_METHOD` | ✅ 支持 | ✅ | ✅ |
+| `TYPE_OWN_FIELD`（spec 含字段时） | 拒绝（明确报错） | ✅ 支持 | ✅ |
+| `FIT_METHOD`（来自可见 fit） | 拒绝（明确报错） | 拒绝 | ✅ 支持 |
+
+semantic 已经通过 `FengSpecWitness.source_kind` 给出来源；codegen 只按上表分派。任何在当前阶段未支持的来源都必须发出明确的"deferred to 4b-β/γ"错误，禁止静默回退。
+
+### 5.3 witness thunk 责任 \[4b-α / β / γ]
+
+thunk 是编译器生成的静态适配层，按成员形态分别承担：
+
+- 方法 thunk：把 `void *subject` 强转回具体对象指针，调用 `T` 的方法或 fit 实现，转发返回值；返回值若是 spec / closure 由调用方 emit 二次包装，本 thunk 不感知。
+- 字段读 thunk：返回 `_self->field`（非 owning）；调用方负责 retain / 包装。
+- 字段写 thunk：`feng_assign((void **)&_self->field, value);`（owning 写入）。
+
+thunk 的所有权语义统一为"借用进，借用出"——所有权调整在调用方完成，与现有 method emit 保持一致。
+
+### 5.4 witness 表初始化 \[已交付 4b-α]
+
+```c
+static const struct FengSpecWitness__demo__Named FengWitness__demo__User__as__demo__Named = {
+    .greet = FengSpecThunk__demo__User__as__demo__Named__greet,
+};
+```
+
+为了让任何在 `cg->fn_defs` 中的函数体能够引用 witness 实例，codegen 在 `cg->fn_protos` 同时发射其前向声明。
+
+## 6 默认零值
+
+> object-form `spec` 默认零值不能为 `NULL`：fat 值的 `subject` 必须是真实托管对象，`witness` 必须是有效静态表。`memset(0)` 得到非法值。
+
+### 6.1 选用规则 \[4b-β]
+
+按 [feng-value-model-pending.md](./feng-value-model-pending.md) §4.3：
+
+- spec 默认零值一律选用 `FENG_DEFAULT_INIT_FN`。
+- codegen 为每个 object-form `spec S` 生成 init 函数 `FengSpecDefaultInit__<modS>__<S>`，并挂到该 spec 的 `FengAggregateValueDescriptor.default_init` 上。
+
+### 6.2 隐藏 subject 类型 \[4b-β]
+
+为每个 object-form `spec S` 生成一个隐藏具体类型 `FengSpecDefault__<modS>__<S>__Subject`：
+
+```c
+struct FengSpecDefault__demo__Named__Subject {
+    FengManagedHeader header;
+    /* 每个 spec 字段对应一个槽位，按字段类型默认零值初始化。 */
+};
+```
+
+要点：
+
+- 该类型对开发者不可见，名字以 `Default__` 前缀；不允许出现在源码可见命名表里。
+- 是普通托管对象，走现有 `feng_object_new` 分配，参与 ARC 与 cycle collector。
+- spec 字段在该隐藏类型上以"自有字段"形式存在，由 codegen 填充默认零值（按 [feng-builtin-type.md](../docs/feng-builtin-type.md) 默认零值规范）。
+
+### 6.3 默认 witness \[4b-β]
+
+为每个 object-form `spec S` 生成一张默认 witness 表 `FengSpecDefaultWitness__<modS>__<S>`：
+
+- 字段读 thunk：返回该字段类型的默认零值（基础类型走 `0` / `0.0` / `false`；string / array / object / spec 走对应默认零值路径）。
+- 字段写 thunk（仅 `var`）：写入隐藏 subject 对应槽位，正常 `feng_assign`。
+- 方法 thunk：按返回类型生成默认零值返回；`void` 方法生成空实现。
+
+> 默认 witness 与具体 (T, S) witness 在结构上**完全一致**（同一 `FengSpecWitness__M__S` typedef），仅 thunk 实现不同。
+
+### 6.4 init 函数 \[4b-β]
+
+```c
+static void FengSpecDefaultInit__demo__Named(void *out) {
+    struct FengSpecValue__demo__Named *v = out;
+    v->subject = (void *)FengSpecDefault__demo__Named__new_subject();  /* +1 已 retain */
+    v->witness = &FengSpecDefaultWitness__demo__Named;
+}
+```
+
+要点：
+
+- `new_subject` 内部使用 `feng_object_new`，返回值已是 +1 状态。
+- init 函数不调 `feng_retain`，因为 `new_subject` 已经返回 owning。
+- 由 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的 `feng_aggregate_default_init` 调用。
+
+### 6.5 调用站点 \[4b-β]
+
+凡是 spec 局部 / 字段 / 数组元素无显式初始化时，codegen emit：
+
+```c
+struct FengSpecValue__demo__Named s;
+feng_aggregate_default_init(&s, &FengSpecAgg__demo__Named);
+/* 按聚合作用域规则注册 cleanup */
+```
+
+## 7 相等性 \[4b-β]
+
+object-form `spec` 的 `==` / `!=` **比较 subject 引用身份**：
+
+```c
+/* a, b 是 struct FengSpecValue__M__S */
+bool eq = (a.subject == b.subject);
+```
 
 理由：
 
-- 当前 tag 只区分是否需要 tag-specific 清理路径
-- spec box 没有自己的 tag-specific 清理逻辑，`release_children` 足够表达其托管子引用
-- 避免把 tag 变成语义类别枚举；真正的语义差异应由 `FengTypeDescriptor` 驱动
+- fat 值无 box，比较结构体本身字段不能区分"两次不同 coercion 得到的同一 subject"——witness 是只读静态表指针，跨 (T, S) 必然不等。
+- 仅比较 subject 与"身份比较 = 判断是否同一被引用对象"语义吻合。
 
-### 4.5 描述符与追踪元数据
+semantic 已通过 `FengSpecEquality` sidecar 把"两侧表达式应按 spec 身份比较"的结论给到 codegen；codegen 不再二次推导。该规则只对 object-form `spec` 生效；非 spec 值仍走原有路径。
 
-每个 object-form `spec` box 有一份独立 descriptor：
+## 8 callable-form spec（不在 4b 范围）
 
-```c
-const FengTypeDescriptor FengSpecDesc__demo__Named = {
-    .name = "demo.Named",
-    .size = sizeof(FengSpecRef__Named),
-    .finalizer = NULL,
-    .release_children = FengSpecRef__Named__release_children,
-    .is_potentially_cyclic = true,
-    .managed_field_count = 1,
-    .managed_fields = FengSpecRef__Named__managed_fields,
-};
-```
+callable-form `spec` 不是对象布局契约，而是函数形状。Phase 2 起才正式处理。本文档对其值表示的预期方向是：
 
-注意点：
+- 值表示为按值聚合 `{ void *env; const FengCallableInvoke *invoke; }` 的 fat 形态，与 object-form spec 在 ABI 形态上同构；
+- env 走 closure 基座，invoke 是按签名生成的静态调用适配器；
+- 默认零值生成方式与 object-form 类似，但 subject 类型替换为零捕获 closure。
 
-- `subject` 是唯一托管槽位，`witness` 不是托管值
-- `managed_fields[0].static_desc = NULL`
-  原因是 `subject` 是多态的，静态上不固定为某一个具体对象 descriptor
-- `is_potentially_cyclic = true`
-  原因是 spec box 很容易参与“对象 -> spec box -> 对象”型环路，保守纳入 cycle collector 最稳妥
-
-## 5 object-form spec 的 witness 生成规则
-
-### 5.1 每个 `(具体 type, spec)` 组合生成一张 witness 表
-
-例如：
-
-```feng
-spec Named {
-    let name: string;
-    fn display(): string;
-}
-
-type User: Named {
-    let name: string;
-    fn display(): string { ... }
-}
-```
-
-生成：
-
-```c
-static const FengSpecWitness__Named FengWitness__demo__User__as__Named = {
-    .debug_name = "demo.User as demo.Named",
-    .get_name = FengWitnessThunk__demo__User__as__Named__get_name,
-    .set_name = NULL,
-    .display = FengWitnessThunk__demo__User__as__Named__display,
-};
-```
-
-如果满足关系来自 `fit`，则 witness thunk 指向 fit 提供的实现；如果来自声明头，则指向 type 自身的方法 / 字段访问 thunk。
-
-### 5.2 witness thunk 的责任
-
-witness thunk 是编译器生成的静态适配层，负责：
-
-- 把 `void *subject` 转回具体对象类型指针
-- 完成字段读 / 写
-- 调用 type 方法或 fit 方法
-- 在返回值是 object-form `spec` 时继续做装箱
-- 在返回值是 callable-form `spec` 时继续走 callable 形状转换
-
-字段读 thunk 例子：
-
-```c
-static FengString *FengWitnessThunk__demo__User__as__Named__get_name(void *subject) {
-    struct Feng__demo__User *_self = (struct Feng__demo__User *)subject;
-    return _self->name;
-}
-```
-
-字段写 thunk 例子：
-
-```c
-static void FengWitnessThunk__demo__User__as__Editable__set_name(void *subject, FengString *value) {
-    struct Feng__demo__User *_self = (struct Feng__demo__User *)subject;
-    feng_assign((void **)&_self->name, value);
-}
-```
-
-## 6 object-form spec 的默认 zero / 默认 witness
-
-### 6.1 语义目标
-
-object-form `spec` 的默认零值必须满足：
-
-- 对开发者不可见
-- 每次默认初始化都产生新实例
-- 字段按字段类型默认零值初始化
-- 方法调用按规范返回默认零值或空实现
-
-### 6.2 生成物
-
-对每个 object-form `spec S`，编译器生成以下隐藏工件：
-
-- 一个隐藏 subject type：`FengSpecDefault__S__Subject`
-- 一张默认 witness：`FengSpecDefault__S__Witness`
-- 一个默认工厂：`FengSpecDefault__S__new_subject()`
-- 一个默认 box 工厂：`FengSpec__S__default_zero()`
-
-结构示意：
-
-```c
-typedef struct FengSpecDefault__Named__Subject {
-    FengManagedHeader header;
-    FengString *name;
-} FengSpecDefault__Named__Subject;
-```
-
-默认 zero 工厂示意：
-
-```c
-static FengSpecRef__Named *FengSpec__demo__Named__default_zero(void) {
-    FengSpecDefault__Named__Subject *subject = FengSpecDefault__Named__new_subject();
-    FengSpecRef__Named *box = (FengSpecRef__Named *)feng_object_new(&FengSpecDesc__demo__Named);
-    box->subject = subject;
-    box->witness = &FengSpecDefault__Named__Witness;
-    return box;
-}
-```
-
-### 6.3 默认方法实现
-
-默认 witness 的方法实现按以下规则生成：
-
-- 返回 `void`
-  生成空实现
-- 返回普通 built-in / string / array / object type
-  调用现有默认零值路径
-- 返回 object-form `spec`
-  继续调用对应 `spec` 的 `default_zero`
-- 返回 callable-form `spec`
-  生成该 callable-form `spec` 的默认 callable 值
-
-## 7 object-form spec 的相等性规则
-
-这是必须显式定下来的规则。
-
-如果 object-form `spec` 值每次 coercion 都新建 box，那么直接比较 box 地址会导致：
-
-- 同一个底层对象
-- 两次转换到同一个 `spec`
-- 得到两个不相等的 spec 值
-
-这会让“是否相等”被中间 coercion 次数污染。
-
-因此 v1 规定：
-
-- object-form `spec` 的 `==` / `!=` 比较 `subject` 身份，不比较 box 地址
-
-也就是：
-
-```c
-left->subject == right->subject
-```
-
-该规则只对 object-form `spec` 生效；普通对象仍按对象身份比较。
-
-## 8 callable-form spec（非 @fixed）
-
-### 8.1 总原则
-
-callable-form `spec` 不是对象布局契约，而是函数形状。
-
-因此它不应再走 object-form `spec` 的“subject + witness box”模型，而应直接复用闭包 / 函数值 / 方法值基座。
-
-### 8.2 运行时承载
-
-本草案假设 callable 值统一落到 closure 基座：
-
-- 顶层函数值：零捕获 closure
-- lambda：捕获环境 closure
-- 方法值：绑定 `self` 的 closure
-
-每个 closure 的第一成员仍然是 `FengManagedHeader`，tag 为：
-
-- `FENG_TYPE_TAG_CLOSURE`
-
-具体 closure struct 由 codegen 按捕获布局逐个生成，而不是由 runtime 提供一个统一胖结构。
-
-示意：
-
-```c
-typedef struct FengClosure__demo__User__say__bound {
-    FengManagedHeader header;
-    struct Feng__demo__User *self;
-} FengClosure__demo__User__say__bound;
-```
-
-其对应 invoke thunk 由 codegen 静态生成：
-
-```c
-static void FengInvoke__demo__M0__User__say(void *env) {
-    FengClosure__demo__User__say__bound *_env = (FengClosure__demo__User__say__bound *)env;
-    Feng__demo__User__say(_env->self);
-}
-```
-
-### 8.3 callable-form spec 与 closure 的衔接方式
-
-对每个 callable-form `spec`，编译器生成一套“期望调用签名”的 thunk typedef / invoke 适配层。
-
-例如：
-
-```feng
-spec M0(): void;
-```
-
-生成概念上等价于：
-
-```c
-typedef void (*FengCallableSig__demo__M0)(void *env);
-```
-
-所有能放进 `M0` 位置的值，都必须被 codegen 降成：
-
-- 一块 closure env 对象
-- 一个符合 `M0` 调用签名的 invoke thunk
-
-### 8.4 默认 zero / 默认 witness
-
-callable-form `spec` 也必须满足“每次默认初始化创建新实例”。
-
-因此不使用共享单例函数值，而是：
-
-- 每次生成一个零捕获 closure 对象
-- 其 invoke thunk 指向编译器生成的默认 stub
-
-例如：
-
-```c
-static int FengDefaultStub__demo__Mapper(void *env, int x) {
-    (void)env;
-    (void)x;
-    return 0;
-}
-```
-
-default zero 工厂则分配一个零捕获 closure，把 invoke 指针绑定到上面的 stub。
+具体细节、closure 与函数值 / 方法值 / lambda 的接入路径、默认 stub 生成规则，留待 Phase 2 单独定稿，本文档不展开。
 
 ## 9 codegen 降级规则
 
-### 9.1 从具体对象到 object-form spec
+### 9.1 对象 → object-form spec 强制转换 \[已交付 4b-α / 扩展 4b-γ]
 
-以下场景都走同一条 coercion 路径：
+凡是以下场景：
 
 - `let x: Named = user;`
-- `use_named(user);`
-- `return user;`，当返回类型是 `Named`
-- `obj.field = user;`，当 `field` 的类型是 `Named`
+- `use_named(user);` 当形参 `Named`
+- `return user;` 当返回类型 `Named`
+- `obj.field = user;` 当字段类型 `Named`
+- 数组元素位置 / spec 字段位置写入
 
 统一发码为：
-
-1. 分配 spec box
-2. `box->subject = retain(user)`
-3. `box->witness = &<T as S witness>`
-4. 返回 box
-
-建议抽一个 codegen helper：
 
 ```c
-static bool cg_emit_spec_coercion(CG *cg,
-                                  ExprResult subject,
-                                  const FengDecl *spec_decl,
-                                  const VisibleSpecRelation *relation,
-                                  ExprResult *out);
+((struct FengSpecValue__M__S){ .subject = (void *)<src_expr>, .witness = &FengWitness__T__as__S })
 ```
 
-### 9.2 object-form spec 成员访问
+调用方决定 retain：
 
-统一改写为 witness thunk 调用：
+- 源是 owns_ref 临时：搬移，不额外 retain（由后续聚合操作的 owns_ref 语义承担生命周期）。
+- 源是借用：写入持久槽位（绑定 / 字段 / 数组元素 / 返回）时，按 value-model §5 走 `feng_aggregate_retain` 或与之等价的逐槽 retain；纯参数借用不额外 retain。
 
-- 读字段：`spec->witness->get_x(spec->subject)`
-- 写字段：`spec->witness->set_x(spec->subject, value)`
-- 方法调用：`spec->witness->method(spec->subject, ...)`
+> **\[4b-γ 任务]** 4b-α 在传参路径上是"源借用 → 形参借用 → 不 retain"；当 spec 出现在数组元素 / 对象字段 / 返回值的持久位置时，必须改走 `feng_aggregate_retain` 而不是 hand-rolled `feng_retain(.subject)`，与 value-model API 对齐。
 
-### 9.3 从函数值 / 方法值 / lambda 到 callable-form spec
+### 9.2 object-form spec 成员访问 \[已交付 4b-α 方法 / 4b-β 字段]
 
-以下场景统一生成 closure：
+- 方法调用：`recv.witness->method(recv.subject, args...)`。
+- 字段读：`recv.witness->get_field(recv.subject)`。
+- 字段写：`recv.witness->set_field(recv.subject, value)`。
 
-- `let cb: Mapper = pick;`
-- `let cb: Mapper = user.pick;`
-- `let cb: Mapper = (x: int) -> x + 1;`
-- 参数 / 返回 / 字段初始化中的相同场景
+接收方在调用前必须先 materialize 到一个借用本地（避免对临时值多次取址），与 4b-α 已落地的 `cg_materialize_to_local` 路径一致。
 
-统一发码为：
+### 9.3 spec 默认零值 \[4b-β]
 
-1. 为当前可调用值选择 invoke thunk
-2. 分配对应 closure env 对象
-3. 复制并 retain 所有托管捕获
-4. 返回 closure 指针
+参见 §6.5：
 
-### 9.4 spec 默认零值
+```c
+feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
+```
 
-当绑定 / 字段 / 返回路径需要 `spec` 默认零值时：
+不允许走 `memset(&s, 0, sizeof s)` 或 `s = (struct ... ){0}`。
 
-- object-form `spec`
-  调用 `FengSpec__S__default_zero()`
-- callable-form `spec`
-  调用 `FengCallable__S__default_zero()`
+### 9.4 spec 等值 \[4b-β]
 
-### 9.5 数组与嵌套成员
+参见 §7。codegen 直接发 `(a.subject == b.subject)` / `(a.subject != b.subject)`，无需调用 helper。
 
-数组元素如果是 `spec`：
+### 9.5 spec 字段在对象上 \[4b-β]
 
-- object-form `spec[]` 的元素就是 spec box 指针
-- callable-form `spec[]` 的元素就是 closure 指针
+对象拥有 spec 字段时：
 
-对现有 `feng_array_new` 没有 ABI 级改动要求；只需要 element size 和 managed flag 正确即可。
+- 字段在对象内按 fat 值大小占位（`sizeof(struct FengSpecValue__M__S)`）。
+- 字段读取：`obj->field` 是 lvalue，可直接传给 spec 形参（借用）。
+- 字段写入：`feng_aggregate_assign(&obj->field, &src, &FengSpecAgg__M__S);`。
+- 对象释放：`release_children` 中对 spec 字段调用 `feng_aggregate_release(&obj->field, &desc);`。
+- 对象 `managed_fields` 按 [feng-value-model-pending.md](./feng-value-model-pending.md) §7.2 展平：spec 字段的 subject 槽位以 `字段偏移 + 0` 作为一条 `FengManagedFieldDescriptor`（`static_desc = NULL`，多态）。
 
-## 10 semantic 需要提供给 codegen 的数据
+### 9.6 spec 数组 \[4b-γ]
 
-### 10.1 为什么要优化 semantic
+- 数组创建按 [feng-value-model-pending.md](./feng-value-model-pending.md) §7.3 传入元素分类 `aggregate` 与 `&FengSpecAgg__M__S`。
+- 元素读：返回 `struct FengSpecValue__M__S` 按值（借用），或在需要拥有时由调用方 retain。
+- 元素写：`feng_aggregate_assign(&arr->elements[i], &src, &desc);`
+- 数组销毁：逐元素 `feng_aggregate_release`。
 
-这里的 semantic 优化，核心目的不是为 object-form `spec` 选择 box 还是未来可能的 fat value 布局服务；核心目的是把“具体 `type` 如何进入 `spec` 位置”这件事在语义阶段定型，避免 codegen 承担规则判断。
+## 10 semantic → codegen 数据契约
 
-原因如下：
+### 10.1 已交付 sidecar
 
-- `spec` 发码真正缺的，不是单纯的运行时布局信息，而是稳定的“适配结论”
-- object-form `spec` 与 callable-form `spec` 都存在“一个具体值进入某个 `spec` 位置时，到底采用哪条满足关系、哪张 witness、哪种 coercion”的问题
-- 这些判断依赖声明头、可见 `fit`、当前作用域可见性与成员形状，属于语义规则，不属于 codegen/runtime 的职责
-- box、single-managed-first-fat、closure 这些只是值表示选择；无论选哪一种表示，`type -> spec` 的关系选择都仍然必须先被确定
+| sidecar | 路径 | spec codegen 用途 |
+| --- | --- | --- |
+| `SpecRelation` | [src/semantic/spec_relations.c](../src/semantic/spec_relations.c) | 哪条 (T, S) 满足关系生效 |
+| `SpecCoercionSite` | [src/semantic/spec_coercion_sites.c](../src/semantic/spec_coercion_sites.c) | 站点 form (OBJECT / CALLABLE) 与 src/target |
+| `SpecMemberAccess` | [src/semantic/spec_member_accesses.c](../src/semantic/spec_member_accesses.c) | 表达式访问哪个 spec 成员（field / method） |
+| `SpecDefaultBinding` | [src/semantic/spec_default_bindings.c](../src/semantic/spec_default_bindings.c) | 绑定需要默认 witness |
+| `SpecWitness` | [src/semantic/spec_witnesses.c](../src/semantic/spec_witnesses.c) | (T, S) witness 的成员来源 (TYPE_OWN_FIELD / TYPE_OWN_METHOD / FIT_METHOD) |
+| `SpecEquality` | [src/semantic/spec_equalities.c](../src/semantic/spec_equalities.c) | `==` / `!=` 是否按 spec 身份比较 |
 
-如果不在 semantic 侧补这层结果，而让 codegen 自行重复推导，会出现以下问题：
+### 10.2 codegen 消费规则
 
-- 同一套满足关系规则在 semantic 与 codegen 各实现一遍，后续容易漂移
-- `fit` 可见性、歧义与报错时机不稳定，可能出现 semantic 放行、codegen 才失败的分层错位
-- codegen 需要知道过多语言规则细节，导致 object-form `spec`、callable-form `spec`、默认 witness、返回值/参数 coercion 各自重复判断
-- 后续即使把 object-form `spec` 从 box 改成其他布局，semantic 与 codegen 的职责边界仍然不清晰
+- 不在 codegen 中重新做 fit 可见性判断。
+- 不在 codegen 中重新做 (T, S) 满足关系搜索。
+- 不在 codegen 中再次区分 object-form / callable-form：以 `SpecCoercionSite.form` 为准。
+- witness 来源未支持时（见 §5.2 表），按"明确报错 + 标注 deferred"处理，禁止静默回退。
 
-因此，本草案要求把 semantic 的优化目标表述为：
+### 10.3 4b-β 起对 semantic 无新增需求
 
-- semantic 负责产出“这个值如何适配成某个 `spec`”的结论
-- codegen 负责按该结论选择具体 lowering
-- runtime 只承接 lowering 后的布局与生命周期，不再参与契约规则判断
+4b-β、4b-γ 全部在 codegen 与 runtime 之间完成，semantic 不再扩面。如果发现某条 spec emit 路径需要新事实，必须先评审 sidecar 设计，禁止 codegen 现场推导。
 
-### 10.2 semantic 需要稳定产出的事实
+## 11 对 value-model 的依赖与本文档不新增 runtime API
 
-为避免 codegen 重新做契约推导，semantic 应提供下列可消费事实：
+### 11.1 直接依赖
 
-- 某个命名类型引用是否为 object-form `spec` / callable-form `spec`
-- 某个表达式从具体 `type` 进入 `spec` 位置时，应使用哪条可见满足关系
-- 该次适配是对象契约适配还是可调用形状适配
-- 该次适配需要落到哪张 witness 表或哪组 callable invoke 适配信息
-- 某个 `fit` 是否在当前模块 / 文件作用域内可见
-- 对于 object-form `spec` 的每个成员：
-  - 是字段还是方法
-  - 字段是 `let` 还是 `var`
-  - 成员类型 / 参数类型 / 返回类型
+本文档需要 [feng-value-model-pending.md](./feng-value-model-pending.md) 完成以下章节：
 
-语义阶段最终最好显式产出一个“spec coercion / witness resolution”结果。是否做成独立 AST 节点、绑定注记或 codegen 可直接消费的分析表，可以后定；但最终必须满足以下边界：
+| value-model 章节 | spec codegen 依赖项 | 4b 阶段 |
+| --- | --- | --- |
+| §3 描述符 | `FengAggregateValueDescriptor` / `FengManagedSlotDescriptor` | β（spec 字段、默认零值） |
+| §4 默认初始化 | `FENG_DEFAULT_INIT_FN` 路径 | β |
+| §5 五个聚合 API | retain / release / assign / take / default_init | β / γ |
+| §7.2 cycle collector 展平 | 含 spec 字段的对象 `managed_fields` 自动展平 | β |
+| §7.3 数组元素三分类 | spec 数组 | γ |
+| §7.4 对象字段为 aggregate | spec 字段读写 / `release_children` | β |
 
-- “可见关系选择”只在 semantic 做一次
-- codegen 不自行推断 fit 可见性
-- codegen 不自行重新决定 object-form / callable-form 的适配路径
-- codegen 不负责把“是否可适配”升级成“如何适配”的规则推导
+### 11.2 本文档不新增 runtime ABI
 
-### 10.3 与值表示选择的关系
+- spec 值的 retain / release / assign / take / default_init 全部走 §5 的五个聚合 API。
+- 不新增 `feng_spec_*` runtime helper。
+- 不新增 spec 专用 type tag / cleanup chain。
+- 不修改 `FengManagedHeader`。
 
-需要明确：这里的 semantic 优化，与 object-form `spec` 最终选择 box 还是 fat value 没有直接绑定关系。
+### 11.3 4b-α 中尚未对齐 value-model 的临时路径
 
-- 如果继续使用 box，semantic 仍然要告诉 codegen：当前 coercion 采用哪条关系、绑定哪张 witness、默认 witness 走哪条链路
-- 如果未来改为 single-managed-first-fat，semantic 侧要提供的仍然是同一类结论；变化主要发生在 codegen/runtime 的值布局、cleanup、数组与 retain/release 路径
+4b-α 因 value-model §7.2/§7.4 未完成，使用了"subject 在偏移 0 → 直接复用单指针 cleanup chain"的快捷路径：
 
-也就是说：
+- `cg_emit_cleanup_push_for_aggregate_local` 直接以 `(void **)&local.subject` 入清理栈。
+- spec 局部作用域退出直接调 `feng_release(local.subject)`。
 
-- semantic 优化解决的是“规则归谁决定”
-- box / fat 选择解决的是“值在内存里怎么表示”
+这一路径**仅在 spec 值仅含一个托管槽位 subject** 时与 `feng_aggregate_release` 等价。本文档明确将其登记为**临时 shortcut**，并要求：
 
-两者相关，但不是同一个层面的决策。
-
-第一阶段可以不强制把这些做成新的公共 semantic API；允许 codegen 暂时沿用现有分析结果做受控二次查询，但该做法只能作为过渡，不应成为长期边界。
-
-## 11 runtime 层建议变更
-
-### 11.1 `feng_runtime.h`
-
-v1 不要求修改 `FengManagedHeader`。
-
-也不强制新增公用 `feng_spec_*` helper。理由：
-
-- 现有 `feng_object_new` + `feng_assign` 足以支撑 spec box 与 closure env 的分配
-- 过早把 `spec` 细节暴露到公共 runtime ABI，会把仍在演进的设计冻结得太早
-
-建议仅在需要时新增少量注释，说明：
-
-- codegen 生成的 spec box / closure env 也是普通 managed object
-- polymorphic managed slot 的 `static_desc` 可以为 `NULL`
-
-### 11.2 runtime 源文件
-
-第一阶段 runtime 不需要新增专门的 `feng_spec.c`。
-
-原因：
-
-- object-form `spec` box 的分配可直接走 `feng_object_new`
-- object-form `spec` 的释放可直接由 codegen 生成 `release_children`
-- callable-form `spec` 复用 closure 基座
-
-如果后续需要：
-
-- 统一的 spec equality helper
-- 统一的 debug 打印
-- 通用 witness 调用 trampoline
-
-再单独评审是否引入 `feng_spec.c`。
+- 4b-β 完成 value-model §3-§5 描述符与 API 后，立即将 spec 局部清理切换到 `feng_aggregate_release(&local, &FengSpecAgg__M__S)`；
+- 4b-γ 完成 value-model §7.2/§7.3/§7.4 后，spec 字段 / 数组元素 / 返回路径直接走聚合 API，不再扩展 shortcut；
+- 完成 β、γ 后，整源码路径中不应再有"对 spec 值手写 `feng_release(.subject)`"的代码。
 
 ## 12 测试面
 
-### 12.1 semantic
+### 12.1 4b-α 已交付
 
-新增 / 扩充以下语义用例：
+- `test/smoke/phase1a/spec_object_param.ff`：对象 → spec 形参 + spec 方法调用。
 
-- object-form `spec` 参数接受声明头满足的 `type`
-- object-form `spec` 参数接受可见 `fit` 满足的 `type`
-- object-form `spec` 参数拒绝仅形状相同但未显式满足的 `type`
-- object-form `spec` 字段初始化接受满足关系
-- object-form `spec` 字段初始化拒绝未满足关系
-- callable-form `spec` 绑定接受函数值 / 方法值 / lambda
-- callable-form `spec` 默认 witness 的返回类型链路通过
+### 12.2 4b-β 必须新增
 
-### 12.2 codegen / smoke
+- `spec_object_field.ff`：对象字段类型为 spec，赋值后通过字段访问其成员；验证 §9.5 与 value-model §7.2 / §7.4。
+- `spec_object_default.ff`：`let s: Named;` 走默认 witness，字段读返回默认零值，方法返回默认零值；验证 §6 与 value-model §4。
+- `spec_equality.ff`：同一 subject 经两次 coercion 到同一 object-form spec 后仍相等；不同 subject 经相同 coercion 不相等；验证 §7。
 
-至少新增以下 smoke：
+### 12.3 4b-γ 必须新增
 
-- `spec_object_param.ff`
-  具体对象传入 `spec` 参数并通过 spec 视角访问字段 / 方法
-- `spec_object_field.ff`
-  对象字段类型为 `spec`，赋值后通过字段访问其成员
-- `spec_object_default.ff`
-  `let s: Named;` 使用默认 witness，字段为默认零值，方法返回默认零值
-- `spec_callable_bind.ff`
-  顶层函数 / lambda / 方法值绑定到 callable-form `spec`
-- `spec_callable_default.ff`
-  `let f: Mapper;` 调用返回默认零值
-- `spec_equality.ff`
-  同一 subject 经两次 coercion 到同一 object-form `spec` 后仍相等
+- `spec_array.ff`：spec 元素数组的创建、元素读写、销毁清理；验证 §9.6 与 value-model §7.3。
+- `spec_return.ff`：函数返回 spec 值，调用方接收并使用；验证 §9.1 + value-model §5 take 路径。
+- `spec_fit_witness.ff`：通过可见 fit 满足 spec，方法分派经 fit 路径；验证 §5.2 `FIT_METHOD` 来源。
 
-### 12.3 runtime
+### 12.4 单测
 
-如果新增运行时 helper，再补 `test/runtime/test_runtime.c`；否则第一阶段无需 runtime 单测新增文件。
+- 不强制新增 runtime 单测：spec 走 value-model 的聚合 API，runtime 单测应在 value-model 范围内补齐（见 [feng-value-model-pending.md](./feng-value-model-pending.md) §11）。
+- semantic 单测由各 sidecar 提交时已覆盖；本阶段不再新增。
 
-## 13 分阶段实施顺序
+### 12.5 全量回归
 
-### Phase A
+每个子步骤完成时执行：
 
-- 不改公共 runtime ABI
-- 补齐最小可消费的 spec coercion / witness resolution 语义结果，避免 codegen 自行重复推导可见关系
-- 只实现 object-form `spec` box + witness table
-- 只支持“具体对象 -> object-form spec” coercion
-- 支持字段访问 / 方法调用 / 参数传递 / 返回值 / 默认 witness
+- `make clean && make -j8 all && make test`：所有单元套件 + 全部 smoke 通过。
+- 旧 smoke 零回归。
 
-### Phase B
+## 13 实施阶段（4b 完整清单）
 
-- 实现 callable-form `spec` 的 closure 基座接入
-- 打通函数值 / 方法值 / lambda 到 callable-form `spec`
-- 实现 callable-form `spec` 默认 zero
+### 13.1 4b-α \[已交付 commit `f69dfe0`]
 
-### Phase C
+实现项：
 
-- 处理 object-form `spec` 与 callable-form `spec` 互相嵌套的完整路径
-- 增加 debug / equality / devirtualization 的可选优化点
+- [x] 引入 `CG_TYPE_SPEC`、`UserSpec` / `UserSpecMember` 注册表
+- [x] fat 值 typedef + witness typedef 发射（`cg->headers` / `cg->type_defs`）
+- [x] (T, S) witness 缓存 + thunk + 表 → `cg->witness_defs`，前向声明 → `cg->fn_protos`
+- [x] 对象 → spec 强制转换（compound literal 包装）
+- [x] spec 方法分派
+- [x] spec 形参（按值借用）
+- [x] spec 局部声明 + 作用域退出（subject-shortcut 清理）
+- [x] spec 返回值（subject-shortcut transfer）
+- [x] 仅支持单模块、`TYPE_OWN_METHOD` witness 来源；其他来源明确报错延后
+- [x] smoke：`spec_object_param.ff`
 
-## 14 非目标与禁止项
+### 13.2 4b-β \[本步要做]
 
-以下做法在本方案中明确禁止：
+按以下顺序执行，便于每步独立通过回归：
 
-- 运行时通过全局 registry 动态判断“某对象是否满足某个 spec”
-- object-form `spec` 直接复用具体对象指针而完全不携带 witness
-- object-form `spec` 通过字段 offset 直读作为唯一契约实现
-- 以共享单例实现 `spec` 默认 witness
-- 因 `fit` 可见性复杂而把契约选择推迟到运行时
+1. value-model §3 / §4 / §5 落地（与 4b-β 强相关章节）。
+2. 把 4b-α 的 subject-shortcut 清理切换到 `feng_aggregate_release` + `FengSpecAgg__M__S` 描述符。
+3. spec 字段（§4.3 thunk + §9.5 lvalue / 写 / `release_children`），含 value-model §7.2 / §7.4。
+4. spec 默认零值（§6 全套：隐藏 subject 类型、默认 witness、init 函数、`FengAggregateDefaultInitDescriptor`）。
+5. spec 等值（§7 + 消费 `SpecEquality` sidecar）。
+6. smoke：`spec_object_field.ff` / `spec_object_default.ff` / `spec_equality.ff`。
+7. 全量回归。
 
-## 15 验收标准
+### 13.3 4b-γ \[随后]
 
-实现完成时，应满足以下验收标准：
+1. value-model §7.3 数组元素三分类落地。
+2. spec 数组发码（§9.6）。
+3. spec 返回值移动路径完整化，走 `feng_aggregate_take`。
+4. fit-method 来源 witness（§5.2 第三行）。
+5. smoke：`spec_array.ff` / `spec_return.ff` / `spec_fit_witness.ff`。
+6. 全量回归。
 
-- `spec` 类型可以出现在参数、返回值、成员字段、局部绑定中
-- object-form `spec` 的 coercion、字段访问、方法调用、默认 witness 均可正确发码
-- callable-form `spec` 的函数值 / 方法值 / lambda 绑定与调用可正确发码
-- `spec` 默认零值不使用 `NULL`
-- `spec` 值比较不因 coercion 次数改变语义
-- 不修改 `FengManagedHeader` 布局
-- 不引入与 `@fixed` / C ABI 绑定的额外前提
+### 13.4 Phase 2
 
-## 16 建议的首个实现切片
+callable-form spec、`@fixed` spec、跨 TU 符号导出、devirtualization。
 
-如果按“最小可落地”开始，建议第一刀只做以下子集：
+## 14 验收标准
 
-- object-form `spec` box + witness table
-- 具体对象传入 `spec` 参数
-- `spec` 视角字段读取 / 方法调用
-- object-form `spec` 默认 witness
-- 一组 smoke 覆盖 `Named` / `Displayable` 这类简单对象契约
+实现完成时（4b-α + β + γ 全部落地）必须满足：
 
-理由：
+- `spec` 类型可出现在参数、返回值、成员字段、局部绑定、数组元素中。
+- object-form `spec` 的 coercion、字段访问、方法调用、默认 witness、相等比较均正确发码。
+- object-form `spec` 默认零值不为 `NULL`，每次默认初始化都创建新实例。
+- `spec` 值比较不因 coercion 次数改变语义。
+- `FengManagedHeader` / cycle collector 主体代码 / 单指针原语 **零修改**。
+- 无任何 `feng_spec_*` runtime helper，无 spec 专用 type tag，无 spec 专用 cleanup chain。
+- 所有 spec 值生命周期路径走 [feng-value-model-pending.md](./feng-value-model-pending.md) §5 的五个聚合 API；不存在对 spec 值手写 `feng_release(.subject)` 的残留。
+- 所有现有 smoke 与单测零回归。
 
-- 这条路径只依赖现有 object runtime，不依赖 closure runtime
-- 可以最先验证“subject + witness + default box”是否正确
-- 一旦这条链路稳定，callable-form `spec` 的接入就只是把 callable 值并入同一套“默认 zero + 类型位置 coercion”框架
+## 15 非目标与禁止项
+
+明确禁止：
+
+- **再以 box 形态承载 object-form `spec`**（含 `FengManagedHeader`、`FengTypeTag`、独立托管对象等任何变体）。
+- 运行时通过全局 registry 动态判断"某对象是否满足某个 spec"。
+- 通过字段 offset 直读 spec 字段。
+- 以共享单例实现 `spec` 默认 witness。
+- 因 fit 可见性复杂而把契约选择推迟到运行时。
+- 在 spec emit 路径上引入"绕过 value-model API"的运行时 shortcut（4b-α 的 subject-shortcut 是过渡，必须按 §11.3 在 4b-β/γ 内退役）。
+
+## 16 4b-β 首切片建议
+
+为保证可独立通过回归，4b-β 第一刀建议只覆盖：
+
+1. value-model §3 描述符 + §5 五 API 的 codegen 接入（不含 §7.2 / §7.3 / §7.4）。
+2. spec 局部清理切换到 `feng_aggregate_release`。
+3. 一个 smoke：将 `spec_object_param.ff` 复制为 `spec_object_param_2.ff` 加一行 `let m: Named = u;` 验证赋值路径无回归。
+
+完成第一刀后再依次推 §6 默认零值、§7 等值、§9.5 字段。这样每一步都能独立 commit + 跑全量回归，避免一次性大改难定位回归源。
