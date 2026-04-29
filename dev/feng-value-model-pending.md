@@ -1,384 +1,504 @@
 # Feng 值模型与托管槽位处理草案
 
 > 本文档是实现草案，不是语言权威规范。
-> 本草案讨论的是运行时值分类、托管槽位处理与 codegen/runtime 的职责边界。
-> 本文档不直接修改现有 `spec` 语义，也不替代 [feng-spec-codegen-draft.md](./feng-spec-codegen-draft.md)。
+> 本草案规定运行时值的分类、按值聚合值的托管槽位处理、以及 codegen / runtime / semantic 三方在该模型上的职责边界。
+> 本文档不修改任何语言权威规范（`docs/`），不修改 `FengManagedHeader` 与现有单指针 ARC 原语。
+> 本文档是 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的前置依赖：spec 发码改用 fat 方案前，本文档必须落地。
 
-## 1 目标
+## 1 目标与范围
 
-本文档用于收敛一个更面向未来的值模型抽象，使后续能力可以落到同一套框架中，而不是围绕某一个特性单独做特判。
+### 1.1 直接目标
 
-当前明确会或可能受益的能力包括：
+- 收敛"按值聚合值（含托管槽位）"的统一模型，使其可作为 spec 发码的运行时基座。
+- 把模型设计成**对扩展开放、对修改封闭**：新增 tuple / 值语义 struct / 其他按值聚合类型时，仅需新增**类型级描述符**，不修改 runtime 与 codegen 的核心代码路径。
+- 完全保留并复用现有单托管指针基础设施（`feng_retain` / `feng_release` / `feng_assign` / 作用域清理 / 异常清理 / cycle collector），不修改其 ABI 与行为。
 
-- object-form `spec` 的未来 fat value 方案
-- callable 值与闭包环境
-- 未来的 tuple
-- 未来的普通值语义 struct
-- 数组元素为按值聚合类型的场景
-- 对象字段为按值聚合类型的场景
+### 1.2 首发消费者
 
-本文档的核心目标有两个：
+**fat object-form `spec`**。
 
-- 保持现有“单托管指针”基础设施尽量不动
-- 在其上增加一层可扩展的“按值聚合 + 托管槽位处理”抽象
+理由：
 
-## 2 设计结论
+- 现有 box 方案是双托管对象，运行时分配/回收开销过大。
+- 已决策 object-form `spec` 改为 fat 值（subject + witness 两字段按值聚合）。
+- spec 发码是 [feng-plan.md](./feng-plan.md) 第二阶段的前置依赖，必须在 Phase 2 启动前交付。
+- fat spec 的运行时形态恰好是"含一个托管槽位的按值聚合值"，是验证本模型最自然的最小切片。
 
-### 2.1 不再只用“指针 vs 非指针”二分
+### 1.3 设计原则（硬约束）
 
-如果值模型只有“指针 vs 非指针”两类，那么一旦引入 tuple 或普通值语义 struct，且这些聚合值内部允许引用 `string`、数组、对象、闭包或其他托管值，就会出现两难：
+1. **单指针基座不动。** 所有针对聚合值的操作必须通过**多次调用现有单指针原语**实现，而非新增"能直接处理任意复杂值"的底层原语。
+2. **开闭原则。** runtime 的聚合值处理代码路径必须是**类型无关**的通用 walker；新增按值聚合类型时只生成新描述符，不改 walker 与不改 codegen 公共 helper。
+3. **类型级描述，不污染实例。** 处理逻辑挂在类型描述符上，不挂在每个值实例上；trivial 值不承担任何额外空间与运行时成本。
+4. **静态描述优先于回调。** 第一阶段只允许"偏移表 + kind 枚举"的静态描述；不暴露任意函数指针回调。
+5. **零运行时反射。** runtime 不在运行期推断"某个值内部到底有哪些托管成员"。
 
-- 要么让所有“非指针”值都进入成员遍历路径，导致纯平凡值也被拖入额外处理流程
-- 要么让所有“非指针”值都不进入遍历路径，导致含托管引用的聚合值无法正确 retain/release
+### 1.4 非目标
 
-因此，值模型应至少区分以下三类：
+- 修改 `FengManagedHeader` 布局或新增 `FengTypeTag`。
+- 把所有值统一装箱。
+- 为每个值实例存储描述符指针。
+- 引入面向用户的自定义生命周期回调系统。
+- 为 `@fixed spec` / C ABI 兼容做特殊设计（独立草案处理）。
+- 修改 `docs/` 下任何语言权威规范。
 
-1. trivial value
-2. managed pointer value
-3. aggregate value with managed slots
+## 2 三类值分类
 
-### 2.2 三类值的定义
+### 2.1 分类
 
-#### trivial value
+值统一分为三类，**仅此三类**：
 
-满足以下条件的值属于 `trivial value`：
+| 分类 | 说明 |
+| --- | --- |
+| `FENG_VALUE_TRIVIAL` | 按值存储，复制不需要 retain，销毁不需要 release，无需扫描内部成员。 |
+| `FENG_VALUE_MANAGED_POINTER` | 值本身是一根托管指针；所有现有单指针原语直接作用其上。 |
+| `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | 值按值聚合存储，内部包含至少一个托管子槽位；生命周期通过逐槽调用单指针原语完成。 |
 
-- 按值存储
-- 按值传递
-- 复制不需要 retain
-- 销毁不需要 release
-- 不需要扫描内部成员
+下文统称 trivial / managed-pointer / aggregate。
 
-典型例子：
+### 2.2 各类的判定与示例
 
-- `bool`
-- 各类整数与浮点
-- 只由上述平凡值组成的 tuple / struct
+**trivial**：`bool`、整数、浮点、纯平凡字段组成的未来 tuple / 值语义 struct。
+**managed-pointer**：`string`、数组、普通对象引用、闭包对象引用。
+**aggregate**：fat object-form `spec`（首发消费者）；未来含托管字段的 tuple / 值语义 struct。
 
-#### managed pointer value
+判定职责见 §6。
 
-满足以下条件的值属于 `managed pointer value`：
+### 2.3 不再使用"指针 vs 非指针"二分
 
-- 值本身就是一根托管指针
-- retain/release/assign 可以直接对该值本身操作
-- 当前运行时的绝大多数基础设施已经围绕它建立
+仅二分会让"含托管子槽位的按值聚合值"无处安放：要么把所有非指针值都拖进遍历路径（trivial 受拖累），要么都不进（aggregate 漏处理）。三分类是基础前提，不可退化。
 
-典型例子：
+## 3 类型级描述符
 
-- `string`
-- 数组对象引用
-- 普通对象引用
-- 当前闭包对象引用
-- 现有 box 方案下的 object-form `spec`
-
-#### aggregate value with managed slots
-
-满足以下条件的值属于 `aggregate value with managed slots`：
-
-- 值本身按值存储，不是单一托管指针
-- 内部包含一个或多个托管子槽位
-- 复制、赋值、销毁时需要对子槽位做 retain/release
-- 只有托管子槽位需要参与处理，其他平凡字段不进入托管流程
-
-典型例子：
-
-- `(string, int)`
-- `(string, User, int[])`
-- 未来带托管字段的值语义 struct
-- 未来的 fat `spec` 值
-
-## 3 设计原则
-
-### 3.1 单指针原语尽量不动
-
-现有底层原语已经能稳定处理“一根托管指针”：
-
-- retain
-- release
-- assign
-- take
-- cleanup 链中的单槽位释放
-
-本草案不建议把这些原语升级成“直接处理任意复杂值”的大接口。
-
-更稳的路线是：
-
-- 底层原语继续只处理单个托管槽位
-- 上层如果遇到多个托管槽位，就逐个调用这些现有原语
-
-这样做有三个直接收益：
-
-- 保持现有运行时基座稳定
-- 降低新模型对现有代码路径的冲击
-- 让多槽位值的处理逻辑集中在一层较薄的抽象里
-
-### 3.2 不把处理器挂到值实例上
-
-未来 tuple 或值语义 struct 若需要托管槽位处理，不建议把“处理器指针”挂到每个值实例上。
-
-不建议的原因：
-
-- 每个实例都会额外增大
-- 平凡值也会被迫承担不必要的空间成本
-- 会污染按值布局、数组元素布局、返回值 ABI 与默认零值模型
-- 同一种类型的处理逻辑本质上是静态的，没有必要重复存在于每个实例中
-
-更合适的方式是：
-
-- 把处理逻辑挂在类型上，而不是值实例上
-- 用静态描述符或静态处理器描述“这个类型有哪些托管槽位、如何遍历它们”
-
-### 3.3 只处理托管槽位，不遍历所有成员
-
-好的实现目标不是“遍历聚合值的每个字段再判断是否托管”，而是：
-
-- 在编译期或类型描述中直接得到该类型的托管槽位列表
-- 运行时或 codegen 只处理这些托管槽位
-
-这样可以确保：
-
-- `trivial value` 根本不进入托管遍历流程
-- 只有 `aggregate value with managed slots` 才进入托管槽位 walk
-- 即使一个 tuple/struct 有很多字段，也只处理真正需要 retain/release 的那几个
-
-## 4 通用抽象
-
-### 4.1 面向上层的值分类
-
-面对 codegen、数组、cleanup、对象字段与返回值路径，建议统一暴露以下分类信息：
-
-```c
-typedef enum FengValueKind {
-    FENG_VALUE_TRIVIAL,
-    FENG_VALUE_MANAGED_POINTER,
-    FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
-} FengValueKind;
-```
-
-这个分类解决的是：
-
-- 当前值是否需要任何托管生命周期处理
-- 如果需要，是单指针快路径还是聚合槽位路径
-
-### 4.2 面向内部实现的进一步拆分
-
-如果后续需要更精细的优化，内部实现可以再拆成两个维度，而不改变上面的对外分类：
-
-- 表示形态：标量 / 指针 / 聚合
-- 生命周期类别：平凡 / 单托管槽位 / 多托管槽位
-
-这样做的目的是为将来的优化保留空间，但第一阶段不必把所有细分类都暴露成公共概念。
-
-## 5 类型级静态处理描述
-
-### 5.1 核心思想
-
-对 `aggregate value with managed slots`，类型应提供一份静态描述，告诉 codegen/runtime：
-
-- 这个值有几个托管槽位
-- 每个槽位在值内部的偏移是多少
-- 该槽位是否仅是单托管指针
-- 该槽位是否对应另一个按值聚合子值，需要继续递归处理
-
-这个描述应归属于“类型”，而不是某个具体实例。
-
-### 5.2 一个可执行的最小形状
-
-第一阶段可以把描述压到尽量简单，例如：
+### 3.1 描述符核心定义
 
 ```c
 typedef enum FengManagedSlotKind {
-    FENG_SLOT_POINTER,
-    FENG_SLOT_NESTED_AGGREGATE,
+    /* 槽位本身就是一根托管指针，使用现有单指针原语。 */
+    FENG_SLOT_POINTER = 1,
+    /* 槽位内嵌套另一个按值聚合值，需要递归走 walker。 */
+    FENG_SLOT_NESTED_AGGREGATE = 2,
 } FengManagedSlotKind;
 
-typedef struct FengManagedSlotDesc {
+typedef struct FengManagedSlotDescriptor {
+    /* 槽位相对于聚合值起始地址的字节偏移。 */
     size_t offset;
     FengManagedSlotKind kind;
-    const struct FengAggregateValueDesc *nested;
-} FengManagedSlotDesc;
+    /* 仅当 kind == FENG_SLOT_NESTED_AGGREGATE 时使用，指向嵌套聚合值的描述符。 */
+    const struct FengAggregateValueDescriptor *nested;
+} FengManagedSlotDescriptor;
 
-typedef struct FengAggregateValueDesc {
-    const char *debug_name;
+typedef struct FengAggregateValueDescriptor {
+    /* 调试用，全限定名。 */
+    const char *name;
+    /* 聚合值整体大小（字节）。 */
     size_t size;
+    /* 默认初始化策略，见 §4。 */
+    const struct FengAggregateDefaultInitDescriptor *default_init;
+    /* 按声明顺序排列的托管槽位表（仅托管槽位，不含平凡字段）。 */
     size_t managed_slot_count;
-    const FengManagedSlotDesc *managed_slots;
-} FengAggregateValueDesc;
+    const FengManagedSlotDescriptor *managed_slots;
+} FengAggregateValueDescriptor;
 ```
 
-这个最小形状先解决三件事：
+### 3.2 设计要点
 
-- 静态定位托管槽位
-- 支持嵌套聚合值递归进入
-- 不要求每个类型先写自定义函数
+- 描述符**只列托管槽位**，不枚举平凡字段。trivial 字段不进入任何 walker 路径。
+- `kind` 仅有两种取值；不引入回调指针。
+- `nested` 字段为递归留出空间，但第一阶段（fat spec）不会用到（fat spec 只有一个 `FENG_SLOT_POINTER` 槽位 = subject）。
+- `name` 仅用于调试与诊断，不参与任何决策。
+- 描述符是 `static const`，由 codegen 生成。
 
-### 5.3 为什么第一阶段优先描述符，而不是任意回调处理器
+### 3.3 trivial 值不生成任何描述符
 
-任意回调处理器的灵活性更高，但第一阶段不应直接上这条路。
+Trivial 值（`bool` / 整数 / 浮点 / 全部字段都是 trivial 的未来 tuple 与值语义 struct）**不生成本草案的任何描述符**：
 
-原因：
+- 没有托管槽位需要被 walker 访问。
+- 大小、对齐、复制语义由 C 编译器直接承担。
+- runtime 与 codegen 的所有按值聚合 helper（§5）不应在 trivial 值上调用；codegen 在站点分派时直接走 C 原生路径（赋值 / `memcpy`）。
 
-- tuple、普通规则布局 struct、fat `spec` 这类类型，大多数情况下都可以用“偏移表 + 通用 walker”表达
-- 先上回调会让 codegen/runtime 边界变松，过早把控制流复杂度引入底层
-- 纯静态描述更利于检查、优化和验证
+这条规则保证 §1.3 第 3 条原则成立：trivial 值不承担任何额外空间与运行时成本。
 
-因此第一阶段建议：
+### 3.4 与现有 `FengTypeDescriptor` 体系的关系
 
-- 默认使用静态描述符
-- 仅当未来出现规则布局无法表达的类型时，再讨论是否允许补充自定义回调
+runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（描述堆托管对象整体）与 `FengManagedFieldEntry`（描述堆托管对象内部的某一根托管指针字段，详见 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)）。
 
-## 6 通用 walker
+本草案新增的两个结构与之**职责相同、应用对象不同**。为避免命名漂移，做以下两件事：
 
-### 6.1 设计目标
+- 重命名旧类型 `FengManagedFieldEntry` → `FengManagedFieldDescriptor`，使后缀统一为 `Descriptor`（见 §9.1 任务）。
+- 不合并新旧两套描述符。
 
-既然底层原语继续只处理单个托管槽位，那么聚合值的处理层需要一个统一 walker，用于：
+#### 3.4.1 描述符总览
 
-- retain 聚合值内部的所有托管槽位
-- release 聚合值内部的所有托管槽位
-- assign 一个聚合值到另一个聚合槽位
-- cleanup 作用域退出时释放局部按值聚合变量中的托管槽位
+| 描述符 | 描述对象 | 整体 vs 单槽 | 主要消费者 |
+| --- | --- | --- | --- |
+| `FengTypeDescriptor` | 堆托管对象（含 header） | 整体 | ARC / cycle collector / 终结器 |
+| `FengManagedFieldDescriptor`（原 `FengManagedFieldEntry`） | 堆托管对象内部的一根托管指针字段 | 单槽 | cycle collector |
+| `FengAggregateValueDescriptor` | 按值聚合值（无 header） | 整体 | §5 五个聚合 API |
+| `FengManagedSlotDescriptor` | 按值聚合值内部的一个托管槽位 | 单槽 | §5 walker |
 
-### 6.2 建议接口
+#### 3.4.2 单槽描述符差异对比
 
-第一阶段可以采用 visitor 形状，而不是“返回托管指针数组”：
+`FengManagedFieldDescriptor` 与 `FengManagedSlotDescriptor` 都是"单槽描述符"，但服务于不同载体：
+
+| 维度 | `FengManagedFieldDescriptor` | `FengManagedSlotDescriptor` |
+| --- | --- | --- |
+| 描述谁内部 | 堆托管对象（含 header） | 按值聚合值（无 header） |
+| `offset` 起点 | 对象 base | 聚合值 base |
+| 是否带 `kind` | 不带（隐含 = 托管指针） | 带（指针 / 嵌套聚合） |
+| 是否支持嵌套 | 不需要（堆对象不嵌套堆对象） | 需要（聚合可嵌套聚合） |
+| 是否带目标类型字段 | 带 `static_desc`（CC 提示） | 不带 |
+| 主要消费者 | cycle collector | §5 walker |
+
+#### 3.4.3 不合并的理由
+
+上表三处差异（offset 起点、是否需要 kind、是否需要嵌套）都是本质差异。强行合并会让两边都背上自己用不到的字段；同时，堆对象描述符的多数字段（finalizer / refcount 语义 / tag）对按值聚合值无意义，强行复用 `FengTypeDescriptor` 也会让其字段语义跨语境，长期容易出错。
+
+二者唯一的桥接点见 §7.2。
+
+## 4 默认初始化
+
+### 4.1 必要性
+
+按值聚合值的默认零值**不一定是全 0 字节**。例如 fat spec 的默认值是 `{ subject = 默认子对象指针, witness = 默认 witness 表指针 }`，subject 必须是已 retain 的真实对象，witness 必须是有效的静态表。`memset(0)` 会得到非法值。
+
+### 4.2 描述
 
 ```c
-typedef void (*FengManagedSlotVisitor)(void *slot_base,
-                                       const FengManagedSlotDesc *slot,
-                                       void *ctx);
+typedef enum FengAggregateDefaultKind {
+    /* 全零字节就是合法默认值。codegen 直接 memset(0)。 */
+    FENG_DEFAULT_ZERO_BYTES = 1,
+    /* 需要调用类型自带的初始化函数。 */
+    FENG_DEFAULT_INIT_FN = 2,
+} FengAggregateDefaultKind;
 
-void feng_visit_aggregate_managed_slots(void *value,
-                                        const FengAggregateValueDesc *desc,
-                                        FengManagedSlotVisitor visitor,
-                                        void *ctx);
+typedef void (*FengAggregateDefaultInitFn)(void *value_out);
+
+typedef struct FengAggregateDefaultInitDescriptor {
+    FengAggregateDefaultKind kind;
+    /* 仅当 kind == FENG_DEFAULT_INIT_FN 时使用。函数应将 value_out 初始化为
+     * 一个完全合法的、所有托管槽位都已正确 retain 的实例。 */
+    FengAggregateDefaultInitFn init_fn;
+} FengAggregateDefaultInitDescriptor;
 ```
 
-选择 visitor 的原因：
+### 4.3 选用规则
 
-- 不需要临时分配“托管指针列表”
-- 可以直接处理槽位地址，而不是先构造中间结果
-- 更适合递归进入嵌套聚合值
+- 全部托管槽位的默认值都允许为 `NULL` 时（未来 tuple `(string?, int)` 这类），可使用 `FENG_DEFAULT_ZERO_BYTES`。
+- 任一托管槽位需要非空合法默认值时（fat spec），必须使用 `FENG_DEFAULT_INIT_FN`，由 codegen 为该类型生成 init 函数。
+- 第一阶段 fat spec 一律走 `FENG_DEFAULT_INIT_FN`。
 
-### 6.3 与现有单指针原语的协作
+## 5 五类聚合操作（runtime 公共 API）
 
-walker 本身不直接替代 retain/release/assign。
+### 5.1 API 列表
 
-它只负责：
+下列 API 是 runtime 公共 ABI，定义在 `feng_runtime.h` 的新章节中，由 codegen 直接 emit 调用。
 
-- 找到托管槽位
-- 逐个把槽位交给现有原语或上层操作
+```c
+/* 对聚合值的每个 FENG_SLOT_POINTER 槽位调用 feng_retain；对每个
+ * FENG_SLOT_NESTED_AGGREGATE 槽位递归调用 feng_aggregate_retain。
+ * 对 NULL 指针槽位是安全的。 */
+void feng_aggregate_retain(void *value, const FengAggregateValueDescriptor *desc);
 
-例如：
+/* 对称的 release。语义保证：调用后 value 中的托管槽位仍是当前字节，但
+ * 其托管引用已被释放，调用方负责确保此后不再读取这些槽位（通常紧接
+ * memcpy 覆盖或栈帧弹出）。 */
+void feng_aggregate_release(void *value, const FengAggregateValueDescriptor *desc);
 
-- retain 聚合值时，对每个 `FENG_SLOT_POINTER` 槽位调用 retain
-- release 聚合值时，对每个 `FENG_SLOT_POINTER` 槽位调用 release
-- 对 `FENG_SLOT_NESTED_AGGREGATE` 槽位，递归进入其 `nested` 描述
+/* 语义等价于 *dst = src，且对托管槽位执行正确的 retain/release。
+ * 实现保证：
+ *   - 自赋值（dst == src）安全且无副作用。
+ *   - 中途异常不会导致泄露或重复释放。
+ * 内部实现通过逐槽调用 feng_assign 完成；非托管字节通过 memcpy 复制。 */
+void feng_aggregate_assign(void *dst, const void *src,
+                           const FengAggregateValueDescriptor *desc);
 
-## 7 与现有能力的关系
+/* 移动语义：把 src 的所有权搬移到 dst，src 对应字节被覆盖为"已被搬走"
+ * 的合法状态（托管槽位置 NULL，平凡字段保持原值或清零，由 walker 行为
+ * 决定）。dst 原内容被释放（按 release 语义）。
+ * 用于返回值优化、临时值落入命名变量等场景。 */
+void feng_aggregate_take(void *dst, void *src,
+                         const FengAggregateValueDescriptor *desc);
 
-### 7.1 对当前单指针基础设施的影响
+/* 把 value_out 初始化为该类型的默认值。
+ * 内部根据 desc->default_init 选择 memset 或调用 init_fn。 */
+void feng_aggregate_default_init(void *value_out,
+                                 const FengAggregateValueDescriptor *desc);
+```
 
-本草案的目标是：
+### 5.2 实现策略：完全复用单指针原语
 
-- 不推翻现有单指针基础设施
-- 不要求 `feng_retain` / `feng_release` / `feng_assign` 直接理解复杂聚合值
-- 仅在上层新增一层“聚合值托管槽位处理”能力
+**这是本草案的核心实现约定。** 五个 API 的实现一律通过通用 walker 遍历描述符，对每个槽位调用现有单指针原语：
 
-换句话说，单指针路径仍然是快路径，不应被聚合值模型拖慢。
+- `retain`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_retain`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归。
+- `release`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_release`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归。
+- `assign`：先按声明顺序对每个 `FENG_SLOT_POINTER` 槽位 `feng_assign(dst_slot, src_slot)`（`feng_assign` 内部已做 retain-before-release，自赋值安全）；非托管字节由 `memcpy` 完成。
+- `take`：对每个 `FENG_SLOT_POINTER` 槽位 `feng_release(*dst_slot); *dst_slot = *src_slot; *src_slot = NULL;`；非托管字节同样 `memcpy`。
+- `default_init`：见 §4。
 
-### 7.2 对 tuple 的意义
+walker 函数本身是 runtime 内部实现，不暴露公共回调签名。
 
-如果未来支持 tuple：
+### 5.3 通用 walker（runtime 内部）
 
-- `(int, bool)` 应落为 `trivial value`
-- `(string, int)` 应落为 `aggregate value with managed slots`
-- `((string, int), bool)` 应通过嵌套描述递归处理
+```c
+/* runtime 内部使用，不进入公共头。 */
+typedef void (*FengManagedSlotVisitor)(void *slot_base,
+                                       const FengManagedSlotDescriptor *slot,
+                                       void *ctx);
 
-因此 tuple 是本草案成立的直接驱动之一。
+static void feng_visit_aggregate_managed_slots(
+    void *value,
+    const FengAggregateValueDescriptor *desc,
+    FengManagedSlotVisitor visitor,
+    void *ctx);
+```
 
-### 7.3 对值语义 struct 的意义
+五个公共 API 通过它实现；新增聚合类型不改它。
 
-如果未来支持值语义 struct：
+### 5.4 OCP 体现
 
-- 纯平凡字段 struct 仍可保持 `trivial value`
-- 含托管字段 struct 不必退化成托管对象指针
-- 可以继续是按值布局，只是在生命周期路径上走托管槽位处理
+- 新增按值聚合类型 → 仅生成新的 `FengAggregateValueDescriptor` 实例。
+- runtime 的五个 API、walker、单指针原语 → 全部不动。
+- codegen 公共 helper（"对一个 aggregate 槽位 emit retain/release/assign/take/default-init"）→ 全部不动。
 
-### 7.4 对 future fat spec 的意义
+## 6 三方职责边界
 
-如果 object-form `spec` 未来改为 fat value，本草案提供了一条更稳的落点：
+### 6.1 semantic
 
-- fat `spec` 不是新的特殊大类
-- 它只是一个 `aggregate value with managed slots`
-- 只要它的托管槽位可以静态描述，就能复用同一套 walker 和单指针原语
+semantic 必须为每个类型稳定产出：
 
-这意味着 `spec` 不再需要单独发明一套生命周期模型。
+1. 该类型的 `FengValueKind` 分类（trivial / managed-pointer / aggregate）。
+2. 若为 aggregate，该类型对应的**抽象**槽位描述（slot 列表、每个 slot 的 offset 与 kind、嵌套指向）。
 
-## 8 codegen / runtime / semantic 的职责边界
+semantic **不**直接生成 C 描述符字面量，仅产出抽象描述供 codegen 消费。
 
-### 8.1 semantic
+semantic **不**参与 retain/release 决策；仅做分类。
 
-semantic 不负责具体 retain/release 细节。
+semantic 对 `spec` 的契约规则推导继续按 [feng-spec-semantic-delivered.md](./feng-spec-semantic-delivered.md) 已决策的方式执行；本草案不重叠该职责。
 
-但 semantic 应能向 codegen 明确提供：
-
-- 某个类型是平凡值、托管指针值还是含托管槽位的聚合值
-- 对于 `spec` 这类带契约语义的类型，具体使用哪种适配关系
-
-### 8.2 codegen
+### 6.2 codegen
 
 codegen 负责：
 
-- 在本地变量、参数、返回值、字段赋值、数组元素等路径上选择正确的值处理路径
-- 为 tuple / 值语义 struct / fat `spec` 生成静态描述符
-- 在需要时调用聚合值 walker
-- 继续复用现有单指针原语处理实际托管槽位
+- 把 semantic 的抽象描述 emit 成 C `static const FengAggregateValueDescriptor`。
+- 在每个值处理站点（局部变量声明、参数传递、返回值、字段赋值、数组元素读写、作用域退出清理、异常清理路径）按值类别选择对应的 emit 路径：
+  - trivial → 直接 C 赋值 / `memcpy`。
+  - managed-pointer → 调用现有单指针原语（保持当前行为）。
+  - aggregate → 调用 §5 的五类聚合 API。
+- 为含 `FENG_DEFAULT_INIT_FN` 的类型生成对应的 init 函数。
 
-### 8.3 runtime
+codegen 公共 helper 必须按值类别**分派**，但**不**为每种 aggregate 类型生成专用代码。新增 aggregate 类型 → 仅新增描述符 + 必要时新增 init 函数；codegen helper 与 emit 路径不动。
+
+### 6.3 runtime
 
 runtime 负责：
 
-- 提供稳定的单指针原语
-- 提供尽量薄的聚合值 walker 支撑
-- 不在运行时动态推断语言层类型语义
+- 维持现有单指针原语稳定不变。
+- 提供 §5 列出的五个聚合 API 与内部 walker。
+- 不为任何具体 aggregate 类型写专用代码。
+- 不在运行期推断语言层类型语义。
 
-## 9 分阶段建议
+## 7 与现有运行时的接入点
 
-### Phase A
+### 7.1 单指针原语：零变更
 
-- 只在设计层引入三类值模型
-- 不修改现有单指针 runtime ABI
-- 为未来 tuple / 值语义 struct / fat `spec` 预留统一抽象
+`feng_retain` / `feng_release` / `feng_assign` / 作用域清理表 / 异常清理表 / `release_children` 调用约定 / `FengManagedHeader` 布局 / `FengTypeTag` 集合：**全部不变**。
 
-### Phase B
+### 7.2 Cycle collector：通过描述符展平接入
 
-- 先让一个受限场景接入该模型
-- 推荐优先顺序：fat `spec` 或 tuple 二选一
-- 第一刀可只支持“规则布局 + 静态托管槽位描述”
+**接入方式：在 codegen 生成 `FengTypeDescriptor.managed_fields` 时，将含 aggregate 字段的对象按 aggregate 描述符展平成多条原始 `FengManagedFieldDescriptor`。**
 
-### Phase C
+具体规则：
 
-- 扩展到嵌套聚合值
-- 接入数组元素与对象字段路径
-- 视需要再讨论是否引入自定义处理回调
+- 若对象字段是 managed-pointer：`managed_fields` 加一条，`offset = 字段偏移`，与现状一致。
+- 若对象字段是 aggregate：对该 aggregate 描述符的每个 `FENG_SLOT_POINTER` 槽位生成一条 `FengManagedFieldDescriptor`，`offset = 字段偏移 + 槽位偏移`。
+- 嵌套 aggregate 槽位递归展开（`offset = 字段偏移 + 外层槽位偏移 + ... + 最内层指针槽位偏移`）。
+- aggregate 中的非托管字节不进入 `managed_fields`。
 
-## 10 非目标
+#### 7.2.1 桥接示意
 
-本草案当前明确不处理：
+以一个含 fat spec 字段的对象为例：
 
-- 修改已有托管对象头布局
-- 把所有值统一装箱
-- 为每个值实例保存处理器指针
-- 一开始就引入完全通用的自定义回调系统
-- 在运行时动态反射“一个值内部到底有哪些托管成员”
+```c
+struct Feng__demo__Holder {
+    FengManagedHeader header;            /* 偏移 0 */
+    int32_t tag;                          /* 偏移 16，trivial */
+    FengSpecValue__demo__Named named;     /* 偏移 24（subject 在 +0，witness 在 +8） */
+    FengString *label;                    /* 偏移 40，普通托管指针 */
+};
 
-## 11 当前建议
+/* fat spec 内部槽位描述（来自 §3）： */
+static const FengManagedSlotDescriptor FengSpec__demo__Named__slots[] = {
+    { offsetof(FengSpecValue__demo__Named, subject), FENG_SLOT_POINTER, NULL },
+};
 
-当前建议可以压缩成以下几条：
+/* codegen 展平后生成的对象托管字段表： */
+static const FengManagedFieldDescriptor Feng__demo__Holder__managed_fields[] = {
+    /* 来自 named.subject：字段偏移 24 + 槽位偏移 0 = 24 */
+    { .offset = 24, .static_desc = NULL },
+    /* 来自 label：字段偏移 40 */
+    { .offset = 40, .static_desc = &feng_string_descriptor },
+};
+```
 
-- 值模型不再只用“指针 vs 非指针”二分
-- 保留现有单指针原语作为稳定基座
-- 新增 `aggregate value with managed slots` 作为第三类值
-- 聚合值的托管处理逻辑挂在类型上，不挂在值实例上
-- 第一阶段优先采用静态描述符 + 通用 walker
-- 未来 tuple、值语义 struct、fat `spec` 统一落到这套框架中
+这是新旧两套描述符之间**唯一的**桥接点：codegen 在生成对象 `FengTypeDescriptor` 时读取该对象每个字段的 `FengAggregateValueDescriptor`，把其中每个 `FENG_SLOT_POINTER` 槽位翻译成一条 `FengManagedFieldDescriptor`。CC 看到的仍是平铺的托管指针表，不感知"这条来自一个聚合字段"。
+
+#### 7.2.2 收益
+
+- cycle collector 代码完全不动。
+- `FengManagedFieldDescriptor` 结构不动（仅完成 §9.1 的命名重构，字段语义保持）。
+- 完全符合 OCP：新增 aggregate 类型 → codegen 在生成对象描述符时多调一次展平逻辑，CC 不感知。
+
+### 7.3 数组：元素分类升级
+
+数组元素需要升级为三分类。第一阶段把改动纳入本草案的实现范围（不延后），否则 spec 数组用例无法运行。
+
+具体规则：
+
+- 数组创建处需要传入元素分类信息（trivial / managed-pointer / aggregate）。
+- 对 aggregate 元素，数组内部存储其按值布局；元素 size 取自 `FengAggregateValueDescriptor.size`。
+- 数组元素的 retain / release / assign / 数组销毁逐元素清理 → 对 aggregate 元素调用 §5 API。
+- 数组的 `managed_fields` 等价物（运行时遍历入口）按元素分类做对应分派。
+
+数组接口的具体改动属于 runtime 实现细节，本草案规定语义边界，详细 API 在实现阶段与现有 `feng_array_*` 一并定型并写入实现交付文档。
+
+### 7.4 对象字段
+
+对象字段为 aggregate 时：
+
+- 字段在对象中按 aggregate 大小占位。
+- 字段读写的 retain/release 由 codegen emit 时使用 §5 API。
+- 对象的 `managed_fields` 按 §7.2 展平规则生成。
+- 对象的 `release_children` 按字段分类，对 aggregate 字段调用 `feng_aggregate_release`。
+
+## 8 fat object-form `spec` 在本模型下的映射
+
+> 本节给出首发消费者的具体落点示意。完整的 spec 发码方案以 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的更新版本为准；该文档将在本草案落地后同步更新。
+
+### 8.1 类型表示
+
+```c
+typedef struct FengSpecValue__demo__Named {
+    void *subject;                                   /* 托管指针 */
+    const struct FengSpecWitness__demo__Named *witness; /* 静态只读表，非托管 */
+} FengSpecValue__demo__Named;
+```
+
+按值聚合，无 header，不参与 ARC 自身。
+
+### 8.2 描述符
+
+```c
+static const FengManagedSlotDescriptor FengSpec__demo__Named__slots[] = {
+    { offsetof(FengSpecValue__demo__Named, subject),
+      FENG_SLOT_POINTER, NULL },
+};
+
+static void FengSpec__demo__Named__default_init(void *out);
+
+static const FengAggregateDefaultInitDescriptor FengSpec__demo__Named__default = {
+    .kind = FENG_DEFAULT_INIT_FN,
+    .init_fn = FengSpec__demo__Named__default_init,
+};
+
+static const FengAggregateValueDescriptor FengSpecAgg__demo__Named = {
+    .name = "demo.Named",
+    .size = sizeof(FengSpecValue__demo__Named),
+    .default_init = &FengSpec__demo__Named__default,
+    .managed_slot_count = 1,
+    .managed_slots = FengSpec__demo__Named__slots,
+};
+```
+
+### 8.3 C ABI
+
+fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。每个 object-form `spec` 生成独立 `FengSpecValue__<module>__<name>` 类型；调用方与被调方使用同一类型签名，C 编译器负责寄存器/栈分配（多数 64-bit 平台两指针 struct 走寄存器）。
+
+不采用统一二字段 `void* + void*` 的原因：会丢失 witness 静态类型，迫使 callsite 强转，易错。
+
+### 8.4 生命周期路径
+
+| 场景 | emit 调用 |
+| --- | --- |
+| 局部声明 `let s: Named` 无初值 | `feng_aggregate_default_init(&s, &FengSpecAgg__demo__Named)` |
+| 拷贝 `let t = s` | `memcpy(&t, &s, ...); feng_aggregate_retain(&t, &desc)` |
+| 赋值 `t = s` | `feng_aggregate_assign(&t, &s, &desc)` |
+| 作用域退出 | `feng_aggregate_release(&s, &desc)` |
+| 返回值 | 按 §7.3 take 路径或拷贝路径，由 codegen 根据移动分析决定 |
+| 对象字段为 spec | §7.4 展平进对象 `managed_fields` |
+| 数组元素为 spec | §7.3 元素分类为 aggregate |
+
+## 9 实施阶段
+
+### 9.1 Phase 1：模型落地 + fat spec 接入（spec 发码前置，必做）
+
+不再分 Phase A / Phase B，因为 fat spec 的工期不允许"先空跑骨架"。
+
+任务（建议按以下顺序执行，便于每一步独立通过回归）：
+
+1. **重命名预备**：把现有 `FengManagedFieldEntry` 重命名为 `FengManagedFieldDescriptor`。涉及 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)、[src/codegen/codegen.c](../src/codegen/codegen.c)、[test/runtime/test_runtime.c](../test/runtime/test_runtime.c)。本步骤纯机械替换，无语义变化，必须独立 commit 并跑全量回归通过。
+2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateValueDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。
+3. runtime：单指针原语零修改；`FengManagedHeader` / `FengTypeTag` 零修改；cycle collector 零修改。
+4. codegen：增加值类别分派 helper；为 aggregate 类型生成描述符与 init 函数；按 §7.2 展平规则生成对象 `managed_fields`。
+5. codegen + runtime：数组元素分类升级（§7.3）。
+6. semantic：补充类型分类与抽象槽位描述的输出（§6.1）。
+7. fat spec 全链路接入：替换 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 的 box 路径。
+8. 测试：覆盖 fat spec 的局部 / 参数 / 返回 / 字段 / 数组 / 默认零值 / 等值比较 / 作用域清理 / 异常清理 / cycle collector 全路径。
+
+完成标准：所有 spec 发码用例通过；现有非 spec 用例零回归。
+
+### 9.2 Phase 2：tuple 接入（未来特性）
+
+仅当 `docs/` 引入 tuple 规范后启动。预期工作量：
+
+- semantic：tuple 类型的 `FengValueKind` 与槽位描述生成。
+- codegen：tuple 字面量、解构、字段访问的 emit。
+- runtime：**零修改**。
+- 走 OCP 验证：本阶段若需要修改 §5 API、walker、CC 接入逻辑或数组接入逻辑，则证明 Phase 1 抽象不达标，必须返工。
+
+### 9.3 Phase 3：值语义 struct（未来特性）
+
+同 Phase 2，仅当语言规范引入后启动；runtime 同样应零修改。
+
+## 10 验收标准
+
+实现完成时必须满足：
+
+- 单指针原语、`FengManagedHeader`、`FengTypeTag`、cycle collector 主体代码零修改。
+- runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动。
+- 新增按值聚合类型的设想路径（tuple / 值语义 struct）经过纸面推演，确认仅需新增描述符与 codegen emit 规则，无需修改 §5 API、walker、CC 接入与数组接入。
+- fat spec 默认零值不为 `NULL`，不与 box 方案产生语义差异。
+- fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路全部正确清理，无泄露与重复释放。
+- 所有现有 smoke 与单测零回归。
+
+## 11 测试面
+
+至少覆盖：
+
+- aggregate 局部变量的默认零值、赋值、作用域退出清理。
+- aggregate 参数 / 返回值的 retain / release 配平。
+- aggregate 的自赋值安全（`s = s`）。
+- aggregate take 路径（移动语义）后源值的合法性。
+- 含 aggregate 字段的对象进入 cycle collector 时被正确追踪（§7.2 展平正确性）。
+- aggregate 元素数组的创建、元素读写、销毁清理（§7.3）。
+- 异常展开过程中 aggregate 局部变量被正确释放。
+- fat spec 等值比较按 subject 身份（与 [feng-spec-codegen-pending.md](./feng-spec-codegen-pending.md) 决策一致）。
+
+## 12 OCP 检查清单（每次新增聚合类型时回看）
+
+新增任何按值聚合类型时，下列项**必须全部为"无需修改"**：
+
+- [ ] runtime 单指针原语
+- [ ] `FengManagedHeader` / `FengTypeTag`
+- [ ] cycle collector 内部代码
+- [ ] §5 五个聚合 API 与 walker
+- [ ] codegen 值类别分派 helper 的整体结构
+- [ ] 数组元素分类分派的整体结构
+- [ ] 对象字段展平规则的整体结构
+
+允许且仅允许的新增工作：
+
+- [ ] 新生成一个 `FengAggregateValueDescriptor`
+- [ ] 必要时新生成一个 `FengAggregateDefaultInitFn`
+- [ ] 在该类型的引用站点 emit 已有 helper 的调用
+
+任一项突破清单，则视为抽象不达标，必须先回到本草案讨论修订。
