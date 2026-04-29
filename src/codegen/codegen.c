@@ -1727,6 +1727,37 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!cg_emit_expr(cg, e->as.binary.left, &lr)) return false;
     if (!cg_emit_expr(cg, e->as.binary.right, &rr)) { er_free(&lr); return false; }
 
+    /* Spec `==` / `!=` — reference-identity per dev/feng-spec-codegen-pending.md
+     * §7. Semantic registers a SpecEquality sidecar entry for every binary
+     * `==`/`!=` whose operands resolve to a spec; codegen consumes it and
+     * lowers to a direct subject pointer compare. Both operands are fat
+     * spec values (aggregates); when either side is an owns_ref temporary
+     * we materialise it to a local first so its `subject` survives the
+     * comparison and its scope cleanup runs the standard aggregate
+     * release. */
+    const FengSpecEquality *eq_site =
+        cg->analysis ? feng_semantic_lookup_spec_equality(cg->analysis, e) : NULL;
+    if (eq_site != NULL) {
+        if (!cgtype_is_aggregate(lr.type) || !cgtype_is_aggregate(rr.type)) {
+            er_free(&lr); er_free(&rr);
+            return cg_fail(cg, e->token,
+                "codegen: spec equality requires aggregate spec operands");
+        }
+        cg_materialize_to_local(cg, &lr, "_t");
+        cg_materialize_to_local(cg, &rr, "_t");
+        const char *cop = (eq_site->op == FENG_SPEC_EQUALITY_OP_EQ) ? "==" : "!=";
+        Buf b; buf_init(&b);
+        /* Cast guards against -Wparentheses-equality when the result lands
+         * directly inside `if (...)`: the explicit (bool) cast prevents
+         * clang from treating the `==` as a stray double-paren. */
+        buf_append_fmt(&b, "(bool)(%s.subject %s %s.subject)",
+                       lr.c_expr, cop, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
     /* String concatenation: '+' on two strings. */
     if (e->as.binary.op == FENG_TOKEN_PLUS &&
         lr.type->kind == CG_TYPE_STRING && rr.type->kind == CG_TYPE_STRING) {

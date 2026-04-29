@@ -466,8 +466,8 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 2. ~~把 4b-α 的 subject-shortcut 清理切换到 `feng_aggregate_release` + `FengSpecAgg__M__S` 描述符。~~ **已交付**（local cleanup / init borrowed retain / return borrowed retain 三处替换；smoke `spec_object_local.ff`）。
 3. ~~spec 字段（§4.3 thunk + §9.5 lvalue / 写 / `release_children`），含 value-model §7.2 / §7.4。~~ **已交付**（`UserSpecMember.is_var` + 字段 getter/setter slot；`cg_ensure_witness_instance` 发 `get_<f>` / `set_<f>` thunk；`cg_emit_member` 与 `cg_emit_assign` member 分支接入 spec 接收者 → `recv.witness->get_<f>(recv.subject)` / `set_<f>`；smoke `spec_object_field.ff`。aggregate-typed spec 字段在注册期显式拒绝并标注 4b-γ）。
 4. ~~spec 默认零值（§6 全套：隐藏 subject 类型、默认 witness、init 函数实体替换 panic stub、绑定到 `FengSpecAgg__M__S.default_init`）。~~ **已交付**（每个 object-form spec emit 隐藏 subject struct + `FengTypeDescriptor` + `release_children` + managed_fields 元数据 + factory `<spec>__new_subject()`；默认 witness thunk —— 字段 getter 直读 subject 字段、var 字段 setter 走 `feng_assign`、方法 thunk 忽略参数返回 `cg_default_value_expr` 的默认值；init fn 替换 panic stub 为真实分配并绑定默认 witness；`let s: Spec;` 路径切换到 `feng_aggregate_default_init(&s, &FengSpecAgg__M__S)`；smoke `spec_object_default.ff`）。
-5. spec 等值（§7 + 消费 `SpecEquality` sidecar）。
-6. smoke：~~`spec_object_field.ff`~~ **已交付** / ~~`spec_object_default.ff`~~ **已交付** / `spec_equality.ff`。
+5. ~~spec 等值（§7 + 消费 `SpecEquality` sidecar）。~~ **已交付**（`cg_emit_binary` 头部新增 `feng_semantic_lookup_spec_equality` 早出分支：先把两侧 owns_ref 临时 materialise 到本地以让 aggregate cleanup 正常退役，再 emit `(bool)(L.subject ==/!= R.subject)`；非 spec 比较走原有路径无回归；smoke `spec_equality.ff`）。
+6. smoke：~~`spec_object_field.ff`~~ **已交付** / ~~`spec_object_default.ff`~~ **已交付** / ~~`spec_equality.ff`~~ **已交付**。
 7. 全量回归。
 
 ### 13.3 4b-γ \[随后]

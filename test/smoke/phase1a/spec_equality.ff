@@ -1,0 +1,26 @@
+mod feng.smoke;
+
+@cdecl("libc") extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+type User: Named {
+    var name: string;
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+fn main(args: string[]) {
+    let a = User { name: "alice" };
+    let b = User { name: "bob" };
+    let na: Named = a;
+    let na2: Named = a;
+    let nb: Named = b;
+    if (na == na2) { puts("eq:same"); } else { puts("ne:same"); }
+    if (na == nb) { puts("eq:diff"); } else { puts("ne:diff"); }
+    if (na != nb) { puts("ne!:diff"); } else { puts("eq!:diff"); }
+    if (na != na2) { puts("ne!:same"); } else { puts("eq!:same"); }
+}

@@ -1,0 +1,4 @@
+eq:same
+ne:diff
+ne!:diff
+eq!:same
