@@ -4574,6 +4574,11 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                                              const FengParameter *params,
                                              size_t param_count);
 
+static void record_spec_member_access(ResolveContext *context,
+                                      const FengExpr *expr,
+                                      const FengDecl *spec_decl,
+                                      const FengTypeMember *member);
+
 static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
@@ -5215,6 +5220,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
         member = find_spec_object_member(context, owner_type_decl, expr->as.member.member);
         if (member != NULL) {
             /* Spec members are unconditionally public per spec rules. */
+            record_spec_member_access(context, expr, owner_type_decl, member);
             return true;
         }
         return resolver_append_error(
@@ -7148,6 +7154,63 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
         expr,
         target_decl,
         classify_callable_source(context, expr));
+}
+
+/* Phase S2-a — SpecDefaultBinding recording helper (§6.3). Records a
+ * default-witness site when `binding_type` resolves to a spec decl (object
+ * or callable form). Caller is responsible for ensuring this is invoked
+ * only when the slot has no initializer. Silent no-op when the type does
+ * not resolve to a spec. */
+static void record_spec_default_binding_if_applicable(
+        ResolveContext *context,
+        const void *site,
+        FengSpecDefaultBindingPosition position,
+        const FengTypeRef *binding_type) {
+    const FengDecl *decl;
+    FengSpecCoercionForm form;
+
+    if (context == NULL || context->analysis == NULL || site == NULL ||
+        binding_type == NULL) {
+        return;
+    }
+    decl = resolve_type_ref_decl(context, binding_type);
+    if (decl == NULL || decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+    form = decl_is_function_type(decl) ? FENG_SPEC_COERCION_FORM_CALLABLE
+                                       : FENG_SPEC_COERCION_FORM_OBJECT;
+    (void)feng_semantic_record_spec_default_binding(context->analysis,
+                                                    site,
+                                                    position,
+                                                    form,
+                                                    decl);
+}
+
+/* Phase S2-b — SpecMemberAccess recording helper (§6.4). Records a member
+ * access site for an `obj.member` expression whose owner static type is an
+ * object-form spec. Recorded kind is METHOD_CALL for method members and
+ * FIELD_READ for field members; the assignment statement resolver later
+ * upgrades FIELD_READ to FIELD_WRITE for assignment LHS positions. */
+static void record_spec_member_access(ResolveContext *context,
+                                      const FengExpr *expr,
+                                      const FengDecl *spec_decl,
+                                      const FengTypeMember *member) {
+    FengSpecMemberAccessKind kind;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL ||
+        spec_decl == NULL || member == NULL) {
+        return;
+    }
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        kind = FENG_SPEC_MEMBER_ACCESS_KIND_FIELD_READ;
+    } else {
+        kind = FENG_SPEC_MEMBER_ACCESS_KIND_METHOD_CALL;
+    }
+    (void)feng_semantic_record_spec_member_access(context->analysis,
+                                                  expr,
+                                                  spec_decl,
+                                                  member,
+                                                  kind);
 }
 
 static bool validate_function_typed_expr(ResolveContext *context,
@@ -9311,6 +9374,15 @@ static bool resolve_binding(ResolveContext *context,
         if (!validate_expr_against_expected_type(context, binding->initializer, binding->type)) {
             return false;
         }
+        if (binding->initializer == NULL) {
+            /* Phase S2-a: `let s: S;` (or `var s: S;`) without an initializer
+             * is a default-witness slot when the declared type is a spec. */
+            record_spec_default_binding_if_applicable(
+                context,
+                binding,
+                FENG_SPEC_DEFAULT_BINDING_POSITION_LOCAL_BINDING,
+                binding->type);
+        }
     } else {
         if (!validate_untyped_callable_value_expr(context, binding->initializer)) {
             return false;
@@ -9413,6 +9485,16 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
         case FENG_STMT_ASSIGN:
             if (!resolve_expr(context, stmt->as.assign.target, allow_self)) {
                 return false;
+            }
+            /* Phase S2-b: if the LHS is a member-expression against an
+             * object-form spec, the recorded site is FIELD_READ by default;
+             * upgrade it to FIELD_WRITE here. No-op when the target is not
+             * a recorded spec member access (e.g. plain identifier, index
+             * expression, or member of a non-spec owner). */
+            if (stmt->as.assign.target != NULL &&
+                stmt->as.assign.target->kind == FENG_EXPR_MEMBER) {
+                feng_semantic_upgrade_spec_member_access_to_write(
+                    context->analysis, stmt->as.assign.target);
             }
             if (!validate_self_let_assignment(context, stmt)) {
                 return false;
@@ -10608,6 +10690,19 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             return false;
                         }
                     }
+                    if (member->as.field.initializer == NULL) {
+                        /* Phase S2-a: a `let`/`var` field whose declared type
+                         * is a spec and whose initializer is omitted at the
+                         * member declaration site is a default-witness slot
+                         * (the field may still be assigned later in the
+                         * constructor; that does not change the syntactic
+                         * default-witness obligation here). */
+                        record_spec_default_binding_if_applicable(
+                            context,
+                            member,
+                            FENG_SPEC_DEFAULT_BINDING_POSITION_TYPE_FIELD,
+                            member->as.field.type);
+                    }
                     continue;
                 }
 
@@ -11603,6 +11698,8 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->spec_relations);
     free(analysis->spec_coercion_sites);
+    free(analysis->spec_default_bindings);
+    free(analysis->spec_member_accesses);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

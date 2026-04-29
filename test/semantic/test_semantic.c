@@ -7435,6 +7435,281 @@ static void test_spec_coercion_callable_lambda(void) {
     feng_program_free(program);
 }
 
+/* --- Phase S2-a: SpecDefaultBinding sidecar tests (§9.3) ------------- */
+
+/* Locate the FengBinding* of the first `let`/`var` statement in fn body. */
+static const FengBinding *first_binding_in(const FengCallableSignature *fn) {
+    for (size_t i = 0U; i < fn->body->statement_count; ++i) {
+        const FengStmt *s = fn->body->statements[i];
+        if (s->kind == FENG_STMT_BINDING) {
+            return &s->as.binding;
+        }
+    }
+    return NULL;
+}
+
+static void test_spec_default_local_binding_object_form(void) {
+    /* `let s: Named;` (no initializer) records a LOCAL_BINDING default-
+     * witness site against the object-form spec `Named`. */
+    const char *src =
+        "pu mod demo.defaults;\n"
+        "spec Named { fn name(): string; }\n"
+        "fn make(): int {\n"
+        "    let s: Named;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("default_local_object.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengBinding *binding = first_binding_in(&make->as.function_decl);
+    ASSERT(binding != NULL);
+    ASSERT(binding->initializer == NULL);
+
+    const FengSpecDefaultBinding *site =
+        feng_semantic_lookup_spec_default_binding(analysis, binding);
+    ASSERT(site != NULL);
+    ASSERT(site->position == FENG_SPEC_DEFAULT_BINDING_POSITION_LOCAL_BINDING);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_default_local_binding_callable_form(void) {
+    /* `let f: Cb;` (no initializer, Cb is callable-form spec) records a
+     * LOCAL_BINDING default-witness site with form CALLABLE. */
+    const char *src =
+        "pu mod demo.defaults;\n"
+        "spec Cb(x: int): int;\n"
+        "fn make(): int {\n"
+        "    let f: Cb;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("default_local_callable.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    const FengBinding *binding = first_binding_in(&make->as.function_decl);
+    ASSERT(binding != NULL && binding->initializer == NULL);
+
+    const FengSpecDefaultBinding *site =
+        feng_semantic_lookup_spec_default_binding(analysis, binding);
+    ASSERT(site != NULL);
+    ASSERT(site->position == FENG_SPEC_DEFAULT_BINDING_POSITION_LOCAL_BINDING);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Cb"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_default_type_field_no_initializer(void) {
+    /* A `var s: Named` field of `type Holder` declared without an
+     * initializer at the member declaration site records a TYPE_FIELD
+     * default-witness site keyed by the field's FengTypeMember*. A
+     * concrete type is also given so analysis succeeds. */
+    const char *src =
+        "pu mod demo.defaults;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "type Holder {\n"
+        "    var named: Named;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("default_field.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *holder = find_type_decl_by_name(analysis, "Holder");
+    ASSERT(holder != NULL);
+    ASSERT(holder->as.type_decl.member_count == 1U);
+    const FengTypeMember *named_field = holder->as.type_decl.members[0];
+    ASSERT(named_field->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(named_field->as.field.initializer == NULL);
+
+    const FengSpecDefaultBinding *site =
+        feng_semantic_lookup_spec_default_binding(analysis, named_field);
+    ASSERT(site != NULL);
+    ASSERT(site->position == FENG_SPEC_DEFAULT_BINDING_POSITION_TYPE_FIELD);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* --- Phase S2-b: SpecMemberAccess sidecar tests (§9.4) --------------- */
+
+static void test_spec_member_access_field_read(void) {
+    /* `s.n` where s has static type Named (object-form spec) records a
+     * FIELD_READ entry with mutability VAR (matching the spec field). */
+    const char *src =
+        "pu mod demo.access;\n"
+        "spec Named { var n: string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "}\n"
+        "fn read_it(s: Named): string {\n"
+        "    return s.n;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("access_read.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *fn = find_function_decl_in_program(program, "read_it");
+    const FengStmt *ret = fn->as.function_decl.body->statements[0];
+    ASSERT(ret->kind == FENG_STMT_RETURN);
+    const FengExpr *member_expr = ret->as.return_value;
+    ASSERT(member_expr != NULL && member_expr->kind == FENG_EXPR_MEMBER);
+
+    const FengSpecMemberAccess *site =
+        feng_semantic_lookup_spec_member_access(analysis, member_expr);
+    ASSERT(site != NULL);
+    ASSERT(site->kind == FENG_SPEC_MEMBER_ACCESS_KIND_FIELD_READ);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->member != NULL && site->member->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(site->field_mutability == FENG_MUTABILITY_VAR);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_member_access_field_write(void) {
+    /* `s.n = "x";` upgrades the FIELD_READ entry on the LHS member-expr
+     * to FIELD_WRITE. */
+    const char *src =
+        "pu mod demo.access;\n"
+        "spec Named { var n: string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "}\n"
+        "fn write_it(s: Named) {\n"
+        "    s.n = \"x\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("access_write.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *fn = find_function_decl_in_program(program, "write_it");
+    const FengStmt *assign = fn->as.function_decl.body->statements[0];
+    ASSERT(assign->kind == FENG_STMT_ASSIGN);
+    const FengExpr *target = assign->as.assign.target;
+    ASSERT(target != NULL && target->kind == FENG_EXPR_MEMBER);
+
+    const FengSpecMemberAccess *site =
+        feng_semantic_lookup_spec_member_access(analysis, target);
+    ASSERT(site != NULL);
+    ASSERT(site->kind == FENG_SPEC_MEMBER_ACCESS_KIND_FIELD_WRITE);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->field_mutability == FENG_MUTABILITY_VAR);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_member_access_method_call(void) {
+    /* `s.name()` records a METHOD_CALL entry on the member-expression
+     * (the callee of the call), pointing at the spec method. */
+    const char *src =
+        "pu mod demo.access;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn call_it(s: Named): string {\n"
+        "    return s.name();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("access_call.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *fn = find_function_decl_in_program(program, "call_it");
+    const FengStmt *ret = fn->as.function_decl.body->statements[0];
+    ASSERT(ret->kind == FENG_STMT_RETURN);
+    const FengExpr *call = ret->as.return_value;
+    ASSERT(call != NULL && call->kind == FENG_EXPR_CALL);
+    const FengExpr *callee = call->as.call.callee;
+    ASSERT(callee != NULL && callee->kind == FENG_EXPR_MEMBER);
+
+    const FengSpecMemberAccess *site =
+        feng_semantic_lookup_spec_member_access(analysis, callee);
+    ASSERT(site != NULL);
+    ASSERT(site->kind == FENG_SPEC_MEMBER_ACCESS_KIND_METHOD_CALL);
+    ASSERT(site->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->member != NULL && site->member->kind == FENG_TYPE_MEMBER_METHOD);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_member_access_callable_form_rejected(void) {
+    /* §9.4: accessing a member on a callable-form spec value is rejected
+     * by the resolver and no member-access sidecar entry is recorded. */
+    const char *src =
+        "pu mod demo.access;\n"
+        "spec Cb(x: int): int;\n"
+        "fn use_it(c: Cb): int {\n"
+        "    return c.bogus;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("access_callable.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    ASSERT(!ok);
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -7457,6 +7732,13 @@ int main(void) {
     test_spec_coercion_object_return();
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
+    test_spec_default_local_binding_object_form();
+    test_spec_default_local_binding_callable_form();
+    test_spec_default_type_field_no_initializer();
+    test_spec_member_access_field_read();
+    test_spec_member_access_field_write();
+    test_spec_member_access_method_call();
+    test_spec_member_access_callable_form_rejected();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();

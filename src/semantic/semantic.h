@@ -158,6 +158,12 @@ typedef struct FengSemanticAnalysis {
     FengSpecCoercionSite *spec_coercion_sites;
     size_t spec_coercion_site_count;
     size_t spec_coercion_site_capacity;
+    struct FengSpecDefaultBinding *spec_default_bindings;
+    size_t spec_default_binding_count;
+    size_t spec_default_binding_capacity;
+    struct FengSpecMemberAccess *spec_member_accesses;
+    size_t spec_member_access_count;
+    size_t spec_member_access_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
@@ -250,6 +256,116 @@ bool feng_semantic_record_callable_spec_coercion_site(
  * resolver did not visit it as one). The returned pointer is stable until
  * feng_semantic_analysis_free. */
 const FengSpecCoercionSite *feng_semantic_lookup_spec_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr);
+
+/* --- SpecDefaultBinding (Phase S2-a, §6.3 / §9.3) --------------------- */
+
+/* Syntactic position of a default-witness site. Each enumerator covers one
+ * production path where the language admits a spec-typed slot without an
+ * explicit initializer/value, requiring the spec's default witness instead.
+ *
+ *   LOCAL_BINDING — `let s: S;` / `var s: S;` at statement scope (and the
+ *                   equivalent global binding decl form).
+ *   TYPE_FIELD    — A `let`/`var` field of a `type` whose declared type is
+ *                   a spec and whose initializer is omitted at the member
+ *                   declaration site. */
+typedef enum FengSpecDefaultBindingPosition {
+    FENG_SPEC_DEFAULT_BINDING_POSITION_LOCAL_BINDING = 0,
+    FENG_SPEC_DEFAULT_BINDING_POSITION_TYPE_FIELD
+} FengSpecDefaultBindingPosition;
+
+/* One entry per default-witness site. Indexed by the AST node whose absent
+ * initializer triggered the site:
+ *
+ *   LOCAL_BINDING — key is the FengBinding* (which lives inside the parent
+ *                   FengStmt or FengDecl; the binding pointer is stable for
+ *                   the lifetime of the parser arena and uniquely
+ *                   identifies the site).
+ *   TYPE_FIELD    — key is the FengTypeMember* of the field.
+ *
+ * `form` mirrors SpecCoercionSite::form: object-form vs callable-form spec.
+ * The witness itself (which value to use) is computed in a later phase
+ * (§6.5) — this sidecar only marks the site so the witness pass can find
+ * it. */
+typedef struct FengSpecDefaultBinding {
+    const void *site;
+    FengSpecDefaultBindingPosition position;
+    FengSpecCoercionForm form;
+    const FengDecl *spec_decl;
+} FengSpecDefaultBinding;
+
+/* Record a default-witness site. `site` MUST be the AST node pointer
+ * matching `position` (FengBinding* for LOCAL_BINDING, FengTypeMember* for
+ * TYPE_FIELD). `spec_decl` MUST be a FENG_DECL_SPEC. Recording the same
+ * site twice replaces the earlier entry. Implemented in
+ * spec_default_bindings.c. */
+bool feng_semantic_record_spec_default_binding(
+    const FengSemanticAnalysis *analysis,
+    const void *site,
+    FengSpecDefaultBindingPosition position,
+    FengSpecCoercionForm form,
+    const FengDecl *spec_decl);
+
+/* Look up the default-binding entry for `site`. Returns NULL when the site
+ * was not recorded. The returned pointer is stable until
+ * feng_semantic_analysis_free. */
+const FengSpecDefaultBinding *feng_semantic_lookup_spec_default_binding(
+    const FengSemanticAnalysis *analysis,
+    const void *site);
+
+/* --- SpecMemberAccess (Phase S2-b, §6.4 / §9.4) ----------------------- */
+
+/* Kind of access performed at a `obj.member` site whose `obj` static type is
+ * an object-form spec. METHOD_CALL covers any access to a method member
+ * (whether the result is invoked immediately or used as a method value).
+ * FIELD_READ / FIELD_WRITE distinguish read vs assignment-target uses of a
+ * field member; the analyzer records FIELD_READ at member-expression
+ * resolution time and upgrades to FIELD_WRITE once the parent assignment
+ * statement is observed. */
+typedef enum FengSpecMemberAccessKind {
+    FENG_SPEC_MEMBER_ACCESS_KIND_FIELD_READ = 0,
+    FENG_SPEC_MEMBER_ACCESS_KIND_FIELD_WRITE,
+    FENG_SPEC_MEMBER_ACCESS_KIND_METHOD_CALL
+} FengSpecMemberAccessKind;
+
+/* One entry per `obj.member` member-expression whose owner static type is
+ * an object-form spec. Indexed by the FengExpr* of the member expression
+ * itself. `member` points into the spec's closure of declared members
+ * (returned by find_spec_object_member). `field_mutability` is meaningful
+ * only for FIELD_READ / FIELD_WRITE. */
+typedef struct FengSpecMemberAccess {
+    const FengExpr *expr;
+    const FengDecl *spec_decl;
+    const FengTypeMember *member;
+    FengSpecMemberAccessKind kind;
+    FengMutability field_mutability;
+} FengSpecMemberAccess;
+
+/* Record a member-access site. The recorder is invoked at member-expression
+ * resolution time with FIELD_READ / METHOD_CALL based on `member->kind`;
+ * `feng_semantic_upgrade_spec_member_access_to_write` upgrades a previously
+ * recorded FIELD_READ to FIELD_WRITE when the same expression is later
+ * observed as the LHS of an assignment. Implemented in
+ * spec_member_accesses.c. */
+bool feng_semantic_record_spec_member_access(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *spec_decl,
+    const FengTypeMember *member,
+    FengSpecMemberAccessKind kind);
+
+/* Upgrade an existing FIELD_READ entry for `expr` to FIELD_WRITE. No-op
+ * when the entry does not exist (the expression's owner type is not a spec)
+ * or the entry is already FIELD_WRITE / METHOD_CALL (latter is a programmer
+ * error and ignored — assigning to a method value is rejected elsewhere). */
+void feng_semantic_upgrade_spec_member_access_to_write(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr);
+
+/* Look up the member-access entry for `expr`. Returns NULL when no entry
+ * was recorded. */
+const FengSpecMemberAccess *feng_semantic_lookup_spec_member_access(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
 
