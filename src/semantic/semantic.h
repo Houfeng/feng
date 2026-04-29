@@ -167,6 +167,9 @@ typedef struct FengSemanticAnalysis {
     struct FengSpecWitness *spec_witnesses;
     size_t spec_witness_count;
     size_t spec_witness_capacity;
+    struct FengSpecEquality *spec_equalities;
+    size_t spec_equality_count;
+    size_t spec_equality_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
@@ -448,6 +451,46 @@ bool feng_semantic_spec_witness_append_member(
     FengSpecWitnessSourceKind source_kind,
     const FengDecl *via_fit_decl,
     const FengSemanticModule *provider_module);
+
+/* --- SpecEquality (Phase S4, §6.6 / §9.6) ---------------------------- */
+
+/* Operator kind for a recorded equality site. The semantic conclusion is
+ * identical for both — `==` / `!=` on a spec-typed operand are reference-
+ * identity comparisons (per §6.6) — so codegen reads `is_neq` only to emit
+ * the right boolean polarity, not to choose a different comparison path. */
+typedef enum FengSpecEqualityOp {
+    FENG_SPEC_EQUALITY_OP_EQ = 0,
+    FENG_SPEC_EQUALITY_OP_NE
+} FengSpecEqualityOp;
+
+/* One entry per binary `==` / `!=` expression where at least one operand's
+ * static type is a spec. Validation upstream
+ * (validate_binary_expr / binary_expr_types_are_valid) requires the two
+ * operands to have the same static type, so when `spec_decl` is recorded
+ * here both sides are guaranteed to be that same spec. The keying is the
+ * binary FengExpr* itself; lookup returns NULL for non-spec equality
+ * expressions. */
+typedef struct FengSpecEquality {
+    const FengExpr *expr;
+    const FengDecl *spec_decl;
+    FengSpecEqualityOp op;
+} FengSpecEquality;
+
+/* Record a SpecEquality site. `expr` must be a FENG_EXPR_BINARY whose op is
+ * `==` or `!=`; `spec_decl` must be a FENG_DECL_SPEC. Recording the same
+ * expression twice replaces the earlier entry. Implemented in
+ * spec_equalities.c. */
+bool feng_semantic_record_spec_equality(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *spec_decl,
+    FengSpecEqualityOp op);
+
+/* Look up the equality entry for `expr`. Returns NULL when no entry was
+ * recorded (e.g., the operands' static type is not a spec). */
+const FengSpecEquality *feng_semantic_lookup_spec_equality(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr);
 
 #ifdef __cplusplus
 }

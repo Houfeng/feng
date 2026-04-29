@@ -7225,6 +7225,47 @@ static void record_spec_member_access(ResolveContext *context,
                                                   kind);
 }
 
+/* Phase S4 — SpecEquality recording helper (§6.6). Records an equality
+ * site for a binary `==` / `!=` expression whose operands' static type is
+ * an object-form spec. The semantic conclusion is "reference-identity
+ * comparison"; codegen consults the sidecar to keep spec equality
+ * decoupled from the value-equality path used by string / array. */
+static void record_spec_equality_if_applicable(ResolveContext *context,
+                                               const FengExpr *expr) {
+    InferredExprType left_type;
+    const FengDecl *spec_decl;
+    FengSpecEqualityOp op;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL) {
+        return;
+    }
+    if (expr->kind != FENG_EXPR_BINARY) {
+        return;
+    }
+    if (expr->as.binary.op != FENG_TOKEN_EQ && expr->as.binary.op != FENG_TOKEN_NE) {
+        return;
+    }
+    /* validate_binary_expr has already asserted both operands have the
+     * same static type and that the type is "known"; checking only the
+     * left operand is sufficient. */
+    left_type = infer_expr_type(context, expr->as.binary.left);
+    spec_decl = resolve_inferred_expr_type_decl(context, left_type);
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+    /* Object-form specs only — callable-form specs cannot be operands of
+     * `==` / `!=` (binary_expr_types_are_valid would not have accepted a
+     * function-typed operand here). Defensive guard. */
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return;
+    }
+    op = expr->as.binary.op == FENG_TOKEN_EQ
+             ? FENG_SPEC_EQUALITY_OP_EQ
+             : FENG_SPEC_EQUALITY_OP_NE;
+    (void)feng_semantic_record_spec_equality(context->analysis, expr,
+                                             spec_decl, op);
+}
+
 static bool validate_function_typed_expr(ResolveContext *context,
                                          const FengExpr *expr,
                                          const FengTypeRef *expected_type_ref) {
@@ -9336,9 +9377,13 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    validate_unary_expr(context, expr);
 
         case FENG_EXPR_BINARY:
-            return resolve_expr(context, expr->as.binary.left, allow_self) &&
-                   resolve_expr(context, expr->as.binary.right, allow_self) &&
-                   validate_binary_expr(context, expr);
+            if (!resolve_expr(context, expr->as.binary.left, allow_self) ||
+                !resolve_expr(context, expr->as.binary.right, allow_self) ||
+                !validate_binary_expr(context, expr)) {
+                return false;
+            }
+            record_spec_equality_if_applicable(context, expr);
+            return true;
 
         case FENG_EXPR_LAMBDA:
             return resolve_lambda_expr(context, expr);
@@ -11942,6 +11987,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->spec_witnesses[index].members);
     }
     free(analysis->spec_witnesses);
+    free(analysis->spec_equalities);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

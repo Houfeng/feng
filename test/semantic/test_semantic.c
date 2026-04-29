@@ -7883,6 +7883,213 @@ static void test_spec_witness_multi_fit_conflict(void) {
     feng_program_free(program);
 }
 
+/* --- Phase S4 SpecEquality (§9.6) ----------------------------------- */
+
+/* Walk the program and return the first FENG_EXPR_BINARY whose op matches
+ * `op`. The §9.6 cases use a single binary expression in `make()`, so a
+ * linear scan over the function's block is sufficient. */
+static const FengExpr *find_binary_op_in_block(const FengBlock *block, FengTokenKind op);
+
+static const FengExpr *find_binary_op_in_expr(const FengExpr *expr, FengTokenKind op) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_BINARY && expr->as.binary.op == op) {
+        return expr;
+    }
+    if (expr->kind == FENG_EXPR_BINARY) {
+        const FengExpr *l = find_binary_op_in_expr(expr->as.binary.left, op);
+        if (l != NULL) return l;
+        return find_binary_op_in_expr(expr->as.binary.right, op);
+    }
+    if (expr->kind == FENG_EXPR_UNARY) {
+        return find_binary_op_in_expr(expr->as.unary.operand, op);
+    }
+    return NULL;
+}
+
+static const FengExpr *find_binary_op_in_block(const FengBlock *block, FengTokenKind op) {
+    if (block == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0U; i < block->statement_count; ++i) {
+        const FengStmt *stmt = block->statements[i];
+        if (stmt == NULL) continue;
+        const FengExpr *e = NULL;
+        switch (stmt->kind) {
+            case FENG_STMT_EXPR:
+                e = stmt->as.expr;
+                break;
+            case FENG_STMT_RETURN:
+                e = stmt->as.return_value;
+                break;
+            case FENG_STMT_BINDING:
+                e = stmt->as.binding.initializer;
+                break;
+            case FENG_STMT_ASSIGN: {
+                const FengExpr *t = find_binary_op_in_expr(stmt->as.assign.target, op);
+                if (t != NULL) return t;
+                e = stmt->as.assign.value;
+                break;
+            }
+            default:
+                break;
+        }
+        const FengExpr *found = find_binary_op_in_expr(e, op);
+        if (found != NULL) return found;
+    }
+    return NULL;
+}
+
+static const FengExpr *find_first_binary_op_in_decls(const FengProgram *program,
+                                                     FengTokenKind op) {
+    if (program == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0U; i < program->declaration_count; ++i) {
+        const FengDecl *d = program->declarations[i];
+        if (d == NULL || d->kind != FENG_DECL_FUNCTION) continue;
+        const FengExpr *found = find_binary_op_in_block(d->as.function_decl.body, op);
+        if (found != NULL) return found;
+    }
+    return NULL;
+}
+
+static void test_spec_equality_object_eq_recorded(void) {
+    /* §9.6: spec-typed operands on `==` are classified as reference
+     * identity comparison; the binary expr is recorded with op=EQ and
+     * spec_decl pointing at the spec. */
+    const char *src =
+        "pu mod demo.eq;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn make(): bool {\n"
+        "    let a: Named = User{n: \"u\"};\n"
+        "    let b: Named = User{n: \"u\"};\n"
+        "    return a == b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("eq_object.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengExpr *bin = find_first_binary_op_in_decls(program, FENG_TOKEN_EQ);
+    ASSERT(bin != NULL);
+    const FengSpecEquality *e = feng_semantic_lookup_spec_equality(analysis, bin);
+    ASSERT(e != NULL);
+    ASSERT(e->op == FENG_SPEC_EQUALITY_OP_EQ);
+    ASSERT(e->spec_decl != NULL);
+    ASSERT(e->spec_decl->kind == FENG_DECL_SPEC);
+    ASSERT(e->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_equality_object_neq_recorded(void) {
+    /* §9.6: `!=` on spec-typed operands is recorded with op=NE; the
+     * conclusion is still reference-identity comparison, only the boolean
+     * polarity differs. */
+    const char *src =
+        "pu mod demo.eq;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn make(): bool {\n"
+        "    let a: Named = User{n: \"u\"};\n"
+        "    let b: Named = User{n: \"u\"};\n"
+        "    return a != b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("neq_object.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengExpr *bin = find_first_binary_op_in_decls(program, FENG_TOKEN_NE);
+    ASSERT(bin != NULL);
+    const FengSpecEquality *e = feng_semantic_lookup_spec_equality(analysis, bin);
+    ASSERT(e != NULL);
+    ASSERT(e->op == FENG_SPEC_EQUALITY_OP_NE);
+    ASSERT(e->spec_decl == find_spec_decl_by_name(analysis, "Named"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_equality_string_not_recorded(void) {
+    /* §9.6 negative: `==` on `string` operands is the value-equality
+     * path; no SpecEquality entry is recorded. This protects the existing
+     * string equality semantics (regression guard for §9.7). */
+    const char *src =
+        "pu mod demo.eq;\n"
+        "fn make(): bool {\n"
+        "    let a: string = \"u\";\n"
+        "    let b: string = \"u\";\n"
+        "    return a == b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("eq_string.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengExpr *bin = find_first_binary_op_in_decls(program, FENG_TOKEN_EQ);
+    ASSERT(bin != NULL);
+    /* No spec equality recorded — string == string stays on its own
+     * value-equality path. */
+    ASSERT(feng_semantic_lookup_spec_equality(analysis, bin) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_equality_int_not_recorded(void) {
+    /* §9.6 negative: `==` on builtin numeric operands has no SpecEquality
+     * entry. Sanity check — only spec-typed operands trigger recording. */
+    const char *src =
+        "pu mod demo.eq;\n"
+        "fn make(): bool {\n"
+        "    let a: int = 1;\n"
+        "    let b: int = 1;\n"
+        "    return a == b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("eq_int.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengExpr *bin = find_first_binary_op_in_decls(program, FENG_TOKEN_EQ);
+    ASSERT(bin != NULL);
+    ASSERT(feng_semantic_lookup_spec_equality(analysis, bin) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -7917,6 +8124,10 @@ int main(void) {
     test_spec_witness_field_member();
     test_spec_witness_on_demand_only();
     test_spec_witness_multi_fit_conflict();
+    test_spec_equality_object_eq_recorded();
+    test_spec_equality_object_neq_recorded();
+    test_spec_equality_string_not_recorded();
+    test_spec_equality_int_not_recorded();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
