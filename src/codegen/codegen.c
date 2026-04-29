@@ -2309,6 +2309,11 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         }
         if (cgtype_is_managed(items[i].type) && items[i].owns_ref) {
             cg_materialize_to_local(cg, &items[i], "_t");
+        } else if (cgtype_is_aggregate(items[i].type) && items[i].owns_ref) {
+            /* Step 4b-γ — fat aggregate carries +1 on its managed slots; the
+             * scope's aggregate cleanup must drive the eventual release once
+             * we hand the value off to feng_aggregate_assign. */
+            cg_materialize_to_local(cg, &items[i], "_t");
         }
     }
     /* Choose the slot type. If a non-array narrowing target was supplied
@@ -2342,14 +2347,43 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
     bool elem_managed = cgtype_is_managed(elem);
-    buf_append_fmt(cg->cur_body,
-        "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
-        arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
+    bool elem_aggregate = cgtype_is_aggregate(elem);
+    const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+    if (elem_aggregate && agg_desc == NULL) {
+        free(arr_tmp); free(slots_tmp); free(elem_cty); free(desc_expr);
+        cgtype_free(elem);
+        for (size_t k = 0; k < n; k++) er_free(&items[k]);
+        free(items);
+        return cg_fail(cg, e->token,
+            "codegen: missing aggregate descriptor for spec array element");
+    }
+    if (elem_aggregate) {
+        /* Step 4b-γ §9.6 — aggregate-element arrays must use the kinded
+         * factory so the cycle collector walks each element's managed
+         * slots and so default_init seeds every slot before assignment. */
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new_kinded("
+            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+            arr_tmp, agg_desc, elem_cty, n);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
+    }
     buf_append_fmt(cg->cur_body,
         "    %s *%s = (%s *)feng_array_data(%s);\n",
         elem_cty, slots_tmp, elem_cty, arr_tmp);
     for (size_t i = 0; i < n; i++) {
-        if (elem_managed) {
+        if (elem_aggregate) {
+            /* feng_aggregate_assign releases the default-init'd slot (which
+             * carries +1 from feng_array_new_kinded) and retains the new
+             * value's managed slots — so both owns_ref temps and borrowed
+             * sources arrive in the slot with the correct refcount. The
+             * source temp's eventual cleanup balances the local +1. */
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
+                slots_tmp, i, items[i].c_expr, agg_desc);
+        } else if (elem_managed) {
             /* Slots own +1 each: retain (items already materialised). */
             buf_append_fmt(cg->cur_body,
                 "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
@@ -2669,10 +2703,27 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
              * canonical pattern. */
             char *elem_cty = cg_ctype_dup(type->element);
             bool em = type->element ? cgtype_is_managed(type->element) : false;
-            buf_append_fmt(&b, "feng_array_new(%s, sizeof(%s), %s, (size_t)0)",
-                           desc ? desc : "NULL",
-                           elem_cty ? elem_cty : "void *",
-                           em ? "true" : "false");
+            bool ea = type->element ? cgtype_is_aggregate(type->element) : false;
+            if (ea) {
+                /* Step 4b-γ §9.6 — aggregate-element arrays must encode the
+                 * AGGREGATE element kind even at length 0 so the cycle
+                 * collector tags the array correctly when later resized. */
+                const char *agg_desc = cg_aggregate_field_desc_name(type->element);
+                if (agg_desc == NULL) {
+                    free(desc); free(elem_cty); buf_free(&b);
+                    return cg_fail(cg, blame ? *blame : (FengToken){0},
+                        "codegen: missing aggregate descriptor for spec array default-zero");
+                }
+                buf_append_fmt(&b,
+                    "feng_array_new_kinded("
+                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0)",
+                    agg_desc, elem_cty ? elem_cty : "void *");
+            } else {
+                buf_append_fmt(&b, "feng_array_new(%s, sizeof(%s), %s, (size_t)0)",
+                               desc ? desc : "NULL",
+                               elem_cty ? elem_cty : "void *",
+                               em ? "true" : "false");
+            }
             free(desc);
             free(elem_cty);
             break;
@@ -2871,6 +2922,25 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "    feng_assign((void**)&((%s *)feng_array_data(%s))[%s], %s);\n",
                     elem_cty, recv.c_expr, idx_tmp, v.c_expr);
             }
+        } else if (cgtype_is_aggregate(recv.type->element)) {
+            /* Step 4b-γ §9.6 — aggregate slot write goes through
+             * feng_aggregate_assign so the slot's old subject is released
+             * and the new subject's managed slots get the right retain.
+             * For owns_ref temps we still let aggregate cleanup at scope
+             * exit drain the source's +1, mirroring local-binding semantics. */
+            const char *agg_desc = cg_aggregate_field_desc_name(recv.type->element);
+            if (agg_desc == NULL) {
+                free(elem_cty); free(idx_tmp);
+                er_free(&v); er_free(&ix); er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: missing aggregate descriptor for spec array element write");
+            }
+            if (v.owns_ref) {
+                cg_materialize_to_local(cg, &v, "_t");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&((%s *)feng_array_data(%s))[%s], &%s, &%s);\n",
+                elem_cty, recv.c_expr, idx_tmp, v.c_expr, agg_desc);
         } else {
             buf_append_fmt(cg->cur_body,
                 "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
@@ -4388,10 +4458,27 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     char *desc = cg_array_element_descriptor(ft->element);
                     char *elem_cty = cg_ctype_dup(ft->element);
                     bool em = ft->element ? cgtype_is_managed(ft->element) : false;
-                    buf_append_fmt(td,
-                        "    _o->%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
-                        t->fields[i].c_name, desc ? desc : "NULL",
-                        elem_cty ? elem_cty : "void *", em ? "true" : "false");
+                    bool ea = ft->element ? cgtype_is_aggregate(ft->element) : false;
+                    if (ea) {
+                        const char *agg_desc = cg_aggregate_field_desc_name(ft->element);
+                        if (agg_desc != NULL) {
+                            buf_append_fmt(td,
+                                "    _o->%s = feng_array_new_kinded("
+                                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                                t->fields[i].c_name, agg_desc,
+                                elem_cty ? elem_cty : "void *");
+                        } else {
+                            buf_append_fmt(td,
+                                "    _o->%s = feng_array_new(NULL, sizeof(%s), false, (size_t)0);\n",
+                                t->fields[i].c_name,
+                                elem_cty ? elem_cty : "void *");
+                        }
+                    } else {
+                        buf_append_fmt(td,
+                            "    _o->%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                            t->fields[i].c_name, desc ? desc : "NULL",
+                            elem_cty ? elem_cty : "void *", em ? "true" : "false");
+                    }
                     free(desc);
                     free(elem_cty);
                     break;

@@ -473,10 +473,10 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 ### 13.3 4b-γ \[随后]
 
 1. ~~value-model §7.3 数组元素三分类落地~~。**已交付**（`feng_array_new_kinded` + cycle collector 三分支 + 6 项单测）。
-2. spec 数组发码（§9.6）：调用站点改用 `feng_array_new_kinded(..., FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &FengSpecAgg__M__S, sizeof(struct FengSpecValue__M__S), n)`。
+2. ~~spec 数组发码（§9.6）~~：**已交付** — array literal / 默认零值 / index 写入三处分支到 `feng_array_new_kinded(..., FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &FengSpecAgg__M__S, sizeof(struct FengSpecValue__M__S), n)` + `feng_aggregate_assign`；语义层支持 array-literal 元素的 `User → Named` 自动 coercion（`expr_matches_expected_type_ref` / `record_object_spec_coercion_site_if_applicable` 数组递归）。
 3. spec 返回值移动路径完整化，走 `feng_aggregate_take`。
 4. fit-method 来源 witness（§5.2 第三行）。
-5. smoke：`spec_array.ff` / `spec_return.ff` / `spec_fit_witness.ff`。
+5. smoke：~~`spec_array.ff`~~ ✅ / `spec_return.ff` / `spec_fit_witness.ff`。
 6. 全量回归。
 
 ### 13.4 Phase 2

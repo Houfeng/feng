@@ -6881,6 +6881,18 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
                FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
     }
 
+    /* Step 4b-γ — array literals targeting an array type drive matching
+     * element-by-element so that per-element coercions (e.g. concrete object
+     * to spec) succeed even when the literal's inferred element type differs
+     * nominally from the expected element type. The recursion lives in
+     * expr_matches_expected_type_ref_when_inference_unknown. */
+    if (expr != NULL && expr->kind == FENG_EXPR_ARRAY_LITERAL &&
+        expected_type_ref != NULL && expected_type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return expr_matches_expected_type_ref_when_inference_unknown(context,
+                                                                     expr,
+                                                                     expected_type_ref);
+    }
+
     /* For numeric literal constants targeting a built-in numeric type, the literal-adaptation
      * path (with compile-time range checking per docs/feng-builtin-type.md §17) is the sole
      * authority — falling through to the default-inferred-type path would let oversized
@@ -7050,6 +7062,20 @@ static void record_object_spec_coercion_site_if_applicable(
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
+        return;
+    }
+    /* Step 4b-γ — array literals targeting an array type get per-element
+     * coercion sites recorded so codegen wraps each element into the spec
+     * fat value before the array storage is shaped. */
+    if (expr->kind == FENG_EXPR_ARRAY_LITERAL &&
+        expected_type_ref->kind == FENG_TYPE_REF_ARRAY &&
+        expected_type_ref->as.inner != NULL) {
+        size_t i;
+        for (i = 0U; i < expr->as.array_literal.count; ++i) {
+            record_object_spec_coercion_site_if_applicable(context,
+                                                            expr->as.array_literal.items[i],
+                                                            expected_type_ref->as.inner);
+        }
         return;
     }
     target_decl = resolve_type_ref_decl(context, expected_type_ref);
