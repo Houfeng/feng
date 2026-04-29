@@ -11387,6 +11387,17 @@ finish:
             return false;
         }
     }
+    /* Phase S1a: spec satisfaction relation sidecar — see
+     * dev/feng-spec-semantic-draft.md §10. Same fatal-on-failure policy as
+     * the cyclicity pass: downstream stages assume the table is either
+     * fully populated or absent. */
+    if (out_analysis != NULL && *out_analysis != NULL) {
+        if (!feng_semantic_compute_spec_relations(*out_analysis)) {
+            feng_semantic_analysis_free(*out_analysis);
+            *out_analysis = NULL;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -11402,6 +11413,10 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->modules);
     free(analysis->type_markers);
+    for (index = 0U; index < analysis->spec_relation_count; ++index) {
+        free(analysis->spec_relations[index].sources);
+    }
+    free(analysis->spec_relations);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

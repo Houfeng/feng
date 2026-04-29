@@ -6961,6 +6961,248 @@ static void test_cyclicity_array_mediated_cycle_marks_both(void) {
     feng_program_free(program);
 }
 
+/* --- Phase S1a: SpecRelation sidecar tests ---------------------------- */
+
+static const FengDecl *find_spec_decl_by_name(
+        const FengSemanticAnalysis *analysis, const char *name) {
+    size_t name_len = strlen(name);
+    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        for (size_t pi = 0U; pi < mod->program_count; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            for (size_t di = 0U; di < prog->declaration_count; ++di) {
+                const FengDecl *d = prog->declarations[di];
+                if (d->kind != FENG_DECL_SPEC) continue;
+                const FengSlice *n = &d->as.spec_decl.name;
+                if (n->length == name_len &&
+                    memcmp(n->data, name, name_len) == 0) {
+                    return d;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static const FengSemanticModule *find_module_by_path(
+        const FengSemanticAnalysis *analysis, const char *path) {
+    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        for (size_t pi = 0U; pi < mod->program_count; ++pi) {
+            if (strcmp(mod->programs[pi]->path, path) == 0) {
+                return mod;
+            }
+        }
+    }
+    return NULL;
+}
+
+static bool relation_has_source(const FengSpecRelation *rel,
+                                FengSpecRelationSourceKind kind,
+                                const FengDecl *via_spec_decl,
+                                const FengDecl *via_fit_decl) {
+    if (rel == NULL) return false;
+    for (size_t i = 0U; i < rel->source_count; ++i) {
+        const FengSpecRelationSource *s = &rel->sources[i];
+        if (s->kind == kind &&
+            s->via_spec_decl == via_spec_decl &&
+            s->via_fit_decl == via_fit_decl) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_spec_relation_declared_head_recorded(void) {
+    /* `type T : S` records a single DECLARED_HEAD source for (T, S) and
+     * does not invent any other relation. */
+    const char *src =
+        "pu mod demo.rel;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named { fn name(): string { return \"u\"; } }\n";
+    FengProgram *program = parse_program_or_die("rel_decl_head.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(user != NULL && named != NULL);
+
+    const FengSpecRelation *rel = feng_semantic_lookup_spec_relation(analysis, user, named);
+    ASSERT(rel != NULL);
+    ASSERT(rel->source_count == 1U);
+    ASSERT(relation_has_source(rel, FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD,
+                               named, NULL));
+
+    /* Reverse direction must not exist. */
+    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, user) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_relation_declared_parent_transitive(void) {
+    /* `type T : Child` where `spec Child : Parent` records DECLARED_HEAD for
+     * (T, Child) and DECLARED_PARENT for (T, Parent) via the head Child. */
+    const char *src =
+        "pu mod demo.rel;\n"
+        "spec Parent { fn p(): int; }\n"
+        "spec Child: Parent { fn c(): int; }\n"
+        "type Both: Child {\n"
+        "    fn p(): int { return 1; }\n"
+        "    fn c(): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("rel_decl_parent.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    const FengDecl *both = find_type_decl_by_name(analysis, "Both");
+    const FengDecl *parent = find_spec_decl_by_name(analysis, "Parent");
+    const FengDecl *child = find_spec_decl_by_name(analysis, "Child");
+    ASSERT(both && parent && child);
+
+    const FengSpecRelation *rel_child = feng_semantic_lookup_spec_relation(analysis, both, child);
+    ASSERT(rel_child != NULL);
+    ASSERT(relation_has_source(rel_child, FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD,
+                               child, NULL));
+
+    const FengSpecRelation *rel_parent = feng_semantic_lookup_spec_relation(analysis, both, parent);
+    ASSERT(rel_parent != NULL);
+    ASSERT(relation_has_source(rel_parent, FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT,
+                               child, NULL));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_relation_fit_head_and_parent(void) {
+    /* `fit T : Child` produces FIT_HEAD for (T, Child) and FIT_PARENT for
+     * (T, Parent), both pointing back at the same fit decl. */
+    const char *src =
+        "pu mod demo.rel;\n"
+        "spec Parent { fn p(): int; }\n"
+        "spec Child: Parent { fn c(): int; }\n"
+        "type Tag {}\n"
+        "fit Tag: Child {\n"
+        "    fn p(): int { return 1; }\n"
+        "    fn c(): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("rel_fit.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    const FengDecl *tag = find_type_decl_by_name(analysis, "Tag");
+    const FengDecl *parent = find_spec_decl_by_name(analysis, "Parent");
+    const FengDecl *child = find_spec_decl_by_name(analysis, "Child");
+    ASSERT(tag && parent && child);
+
+    /* Locate the fit decl. */
+    const FengDecl *fit = NULL;
+    const FengSemanticModule *mod = &analysis->modules[0];
+    const FengProgram *prog = mod->programs[0];
+    for (size_t di = 0U; di < prog->declaration_count; ++di) {
+        if (prog->declarations[di]->kind == FENG_DECL_FIT) {
+            fit = prog->declarations[di];
+            break;
+        }
+    }
+    ASSERT(fit != NULL);
+
+    const FengSpecRelation *rel_child = feng_semantic_lookup_spec_relation(analysis, tag, child);
+    ASSERT(rel_child != NULL);
+    ASSERT(relation_has_source(rel_child, FENG_SPEC_RELATION_SOURCE_FIT_HEAD,
+                               child, fit));
+
+    const FengSpecRelation *rel_parent = feng_semantic_lookup_spec_relation(analysis, tag, parent);
+    ASSERT(rel_parent != NULL);
+    ASSERT(relation_has_source(rel_parent, FENG_SPEC_RELATION_SOURCE_FIT_PARENT,
+                               child, fit));
+
+    /* provider_module on FIT_* sources points at the fit's owning module. */
+    for (size_t i = 0U; i < rel_child->source_count; ++i) {
+        if (rel_child->sources[i].kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD) {
+            ASSERT(rel_child->sources[i].provider_module == mod);
+        }
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_relation_visibility_filter(void) {
+    /* A `pu fit` lives in module A; module B does not `use` A; module C
+     * does. The relation table records the fit source unconditionally;
+     * the visibility helper rejects B and accepts C. */
+    const char *src_a =
+        "pu mod demo.a;\n"
+        "pu spec Named { fn name(): string; }\n"
+        "pu type Tag {}\n"
+        "pu fit Tag: Named { fn name(): string { return \"t\"; } }\n";
+    const char *src_b =
+        "mod demo.b;\n"
+        "fn unrelated() {}\n";
+    const char *src_c =
+        "mod demo.c;\n"
+        "use demo.a;\n"
+        "fn unrelated() {}\n";
+    FengProgram *pa = parse_program_or_die("vis_a.f", src_a);
+    FengProgram *pb = parse_program_or_die("vis_b.f", src_b);
+    FengProgram *pc = parse_program_or_die("vis_c.f", src_c);
+    const FengProgram *programs[] = {pa, pb, pc};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *tag = find_type_decl_by_name(analysis, "Tag");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(tag && named);
+
+    const FengSpecRelation *rel = feng_semantic_lookup_spec_relation(analysis, tag, named);
+    ASSERT(rel != NULL);
+    ASSERT(rel->source_count == 1U);
+
+    const FengSemanticModule *mod_a = find_module_by_path(analysis, "vis_a.f");
+    const FengSemanticModule *mod_b = find_module_by_path(analysis, "vis_b.f");
+    const FengSemanticModule *mod_c = find_module_by_path(analysis, "vis_c.f");
+    ASSERT(mod_a && mod_b && mod_c);
+
+    const FengSpecRelationSource *src = &rel->sources[0];
+    ASSERT(src->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD);
+    ASSERT(src->provider_module == mod_a);
+
+    /* From A itself: visible. */
+    ASSERT(feng_semantic_spec_relation_source_visible_from(src, mod_a, NULL, 0U));
+    /* From B (no `use`): not visible. */
+    ASSERT(!feng_semantic_spec_relation_source_visible_from(src, mod_b, NULL, 0U));
+    /* From C (with `use demo.a`): visible. */
+    const FengSemanticModule *c_imports[] = {mod_a};
+    ASSERT(feng_semantic_spec_relation_source_visible_from(src, mod_c, c_imports, 1U));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(pa);
+    feng_program_free(pb);
+    feng_program_free(pc);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -6974,6 +7216,10 @@ int main(void) {
     test_cyclicity_two_node_cycle_marks_both();
     test_cyclicity_three_node_cycle_marks_all();
     test_cyclicity_array_mediated_cycle_marks_both();
+    test_spec_relation_declared_head_recorded();
+    test_spec_relation_declared_parent_transitive();
+    test_spec_relation_fit_head_and_parent();
+    test_spec_relation_visibility_filter();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();
