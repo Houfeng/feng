@@ -7,9 +7,8 @@
 #include "semantic/semantic.h"
 
 /*
- * Phase 2 P4 will introduce a richer top-level direct compile mode.
- * For P0 we only carry forward the legacy `feng compile` debug subcommand
- * options so the split is structural-only.
+ * Phase 2 P4 introduces a richer top-level direct compile mode.
+ * The single-file debug compile path remains available via `feng tool compile`.
  */
 
 typedef struct FengCliLegacyCompileOptions {
@@ -34,7 +33,7 @@ typedef struct FengCliDirectOptions {
     const char *out_dir;          /* required: <out>/ir/c, <out>/bin */
     bool release;                 /* P4: parsed but reported as not-yet-implemented */
     bool keep_intermediate;       /* P5: keep <out>/ir/c artifacts on success */
-    const char *bin_name;         /* optional override for the produced bin file stem */
+    const char *artifact_name;    /* optional override for the produced artifact stem */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
 } FengCliDirectOptions;

@@ -47,7 +47,7 @@ bool feng_cli_legacy_compile_parse(const char *program,
 /* --- P4 direct mode option parser ----------------------------------------
  *
  * Accepted forms:
- *   feng <file> [<file>...] --target=bin --out=<dir> [--release] [--keep-ir]
+ *   feng <file> [<file>...] --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]
  *
  * Flags may appear before, between, or after file arguments. `--target`
  * defaults to bin; `--target=lib` is accepted at parse time so a richer
@@ -61,7 +61,7 @@ bool feng_cli_direct_options_parse(const char *program,
     out->out_dir = NULL;
     out->release = false;
     out->keep_intermediate = false;
-    out->bin_name = NULL;
+    out->artifact_name = NULL;
     out->input_count = 0;
     out->inputs = NULL;
 
@@ -113,10 +113,10 @@ bool feng_cli_direct_options_parse(const char *program,
             out->keep_intermediate = true;
             continue;
         }
-        if (strncmp(arg, "--bin-name=", 11) == 0) {
-            out->bin_name = arg + 11;
-            if (out->bin_name[0] == '\0') {
-                fprintf(stderr, "--bin-name requires a non-empty value\n");
+        if (strncmp(arg, "--name=", 7) == 0) {
+            out->artifact_name = arg + 7;
+            if (out->artifact_name[0] == '\0') {
+                fprintf(stderr, "--name requires a non-empty value\n");
                 free(inputs);
                 return false;
             }

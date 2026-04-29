@@ -16,6 +16,7 @@ int feng_cli_tool_lex_main(const char *program, int argc, char **argv);
 int feng_cli_tool_parse_main(const char *program, int argc, char **argv);
 int feng_cli_tool_semantic_main(const char *program, int argc, char **argv);
 int feng_cli_tool_check_main(const char *program, int argc, char **argv);
+int feng_cli_tool_compile_main(const char *program, int argc, char **argv);
 
 void feng_cli_tool_print_usage(const char *program, FILE *stream);
 

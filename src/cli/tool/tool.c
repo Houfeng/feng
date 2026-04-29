@@ -7,6 +7,7 @@
 
 void feng_cli_tool_print_usage(const char *program, FILE *stream) {
     fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stream, "  %s tool lex <file>\n", program);
     fprintf(stream, "  %s tool parse <file>\n", program);
     fprintf(stream, "  %s tool semantic [--target=bin|lib] <file> [more files...]\n", program);
@@ -25,6 +26,9 @@ int feng_cli_tool_main(const char *program, int argc, char **argv) {
 
     if (strcmp(sub, "lex") == 0) {
         return feng_cli_tool_lex_main(program, sub_argc, sub_argv);
+    }
+    if (strcmp(sub, "compile") == 0) {
+        return feng_cli_tool_compile_main(program, sub_argc, sub_argv);
     }
     if (strcmp(sub, "parse") == 0) {
         return feng_cli_tool_parse_main(program, sub_argc, sub_argv);

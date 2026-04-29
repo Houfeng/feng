@@ -14,12 +14,12 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
 feng <command> [options]
-feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg <.fb路径>]... [--lib <库路径>]...
 
 命令:
   init       在当前目录初始化 Feng 项目
@@ -49,6 +49,12 @@ feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg
 - `build/bin` 存放可执行文件
 - `build/lib` 存放库文件
 - `build/pkg` 存放包文件
+
+## 2.2 顶层直编补充选项
+
+- `--name=<产物名>`: 指定本次编译的产物基名。当前 `bin` 目标会落到 `<out>/bin/<name>`；未来 `lib`/`pkg` 目标也复用同一命名语义，而不是再引入只针对可执行文件的选项。
+- `--keep-ir`: 保留中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查。
+- `--release`: 作为统一顶层选项保留；是否真正生效由对应构建路径决定。
 
 ## 3 全局选项
 
@@ -249,18 +255,24 @@ feng deps install [<path>] [--force]
 命令结构:
 
 ```text
+feng tool compile [--target=<bin|lib>] [--emit-c=<path>] <file>
 feng tool lex <file>
 feng tool parse <file>
-feng tool semantic [--target <bin|lib>] <file> [more files...]
-feng tool check [--target <bin|lib>] <file> [more files...]
+feng tool semantic [--target=<bin|lib>] <file> [more files...]
+feng tool check [--target=<bin|lib>] <file> [more files...]
 ```
 
 各子命令职责:
 
+- `feng tool compile`: 面向编译器开发过程中的单文件 codegen 调试，可直接输出 C 源到 stdout 或 `--emit-c=<path>`。
 - `feng tool lex`: 输出词法 token 流。
 - `feng tool parse`: 输出 AST 或 parse 结果。
 - `feng tool semantic`: 输出人类可读的语义诊断。
 - `feng tool check`: 输出更适合编辑器或 CI 消费的结构化诊断。
+
+说明:
+
+- `compile` 归属于 `tool`，不作为长期保留的顶层主命令，避免把编译器调试入口暴露到普通项目工作流的主命名空间。
 
 ## 7 帮助输出示例
 
@@ -271,7 +283,7 @@ Feng CLI
 
 Usage:
   feng <command> [options]
-  feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+  feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg <.fb路径>]... [--lib <库路径>]...
 
 Project Commands:
   init      Initialize a project in the current directory

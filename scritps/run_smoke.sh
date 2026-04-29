@@ -10,7 +10,7 @@
 #                         (alphabetical) order.
 #
 # For each case we invoke `feng <files...> --target=bin --out=<gen-dir>
-# --bin-name=<name> --keep-ir`, which produces:
+# --name=<name> --keep-ir`, which produces:
 #
 #   <gen-dir>/ir/c/feng.c
 #   <gen-dir>/bin/<name>
@@ -49,7 +49,7 @@ run_case() {
 
     local log="$out_dir/compile.log"
     if ! "$FENG" "${inputs[@]}" --target=bin --out="$out_dir" \
-            --bin-name="$name" --keep-ir >"$log" 2>&1; then
+            --name="$name" --keep-ir >"$log" 2>&1; then
         echo "FAIL[$name] compile:"
         sed 's/^/  /' "$log"
         failures=$((failures + 1))

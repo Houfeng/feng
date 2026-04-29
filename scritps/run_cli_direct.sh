@@ -52,6 +52,18 @@ expect_fail() {
     return 0
 }
 
+# 0. help output should use the executable basename, not the invoked path
+if expect_ok "help" "$FENG" --help; then
+    if ! grep -q "^  feng " "$WORK/help.err"; then
+        echo "FAIL[help] usage should show executable name 'feng'"
+        failures=$((failures + 1))
+    fi
+    if grep -q "$FENG" "$WORK/help.err"; then
+        echo "FAIL[help] usage should not echo the invoked executable path"
+        failures=$((failures + 1))
+    fi
+fi
+
 # 1. happy path: full pipeline produces a runnable binary
 out1="$WORK/case_full"
 if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
@@ -146,7 +158,7 @@ elif [[ ! -f "$out8/ir/c/feng.c" ]]; then
 fi
 
 # 9. multi-file compile: two .ff files contributing to the same module,
-#    produced binary name controlled via --bin-name.
+#    produced artifact name controlled via --name.
 MULTI_DIR="$ROOT/test/smoke/phase1a/multi_hello"
 MULTI_EXPECTED="$ROOT/test/smoke/phase1a/multi_hello.expected"
 out9="$WORK/case_multi"
@@ -155,8 +167,8 @@ if [[ -d "$MULTI_DIR" ]]; then
     while IFS= read -r f; do
         multi_files+=("$f")
     done < <(find "$MULTI_DIR" -maxdepth 1 -name '*.ff' | sort)
-    if expect_ok "multi_file" "$FENG" "${multi_files[@]}" --target=bin \
-            --out="$out9" --bin-name=multi_hello; then
+        if expect_ok "multi_file" "$FENG" "${multi_files[@]}" --target=bin \
+            --out="$out9" --name=multi_hello; then
         bin="$out9/bin/multi_hello"
         if [[ ! -x "$bin" ]]; then
             echo "FAIL[multi_file] missing executable $bin"
@@ -177,12 +189,31 @@ else
     failures=$((failures + 1))
 fi
 
-# 10. --bin-name with an empty value is rejected
-expect_fail "bin_name_empty" "$FENG" "$FIXTURE" --out="$WORK/case_binname" \
-    --bin-name= || true
-if ! grep -q -- "--bin-name requires a non-empty value" "$WORK/bin_name_empty.err"; then
-    echo "FAIL[bin_name_empty] missing --bin-name diagnostic"
+# 10. --name with an empty value is rejected
+expect_fail "name_empty" "$FENG" "$FIXTURE" --out="$WORK/case_name" \
+    --name= || true
+if ! grep -q -- "--name requires a non-empty value" "$WORK/name_empty.err"; then
+    echo "FAIL[name_empty] missing --name diagnostic"
     failures=$((failures + 1))
+fi
+
+# 11. top-level compile should redirect users to tool compile
+expect_fail "legacy_compile_redirect" "$FENG" compile --emit-c="$WORK/legacy.c" "$FIXTURE" || true
+if ! grep -q "use .*tool compile" "$WORK/legacy_compile_redirect.err"; then
+    echo "FAIL[legacy_compile_redirect] missing migration hint"
+    failures=$((failures + 1))
+fi
+
+# 12. tool compile remains available for compiler-development debug flows
+tool_c="$WORK/tool_compile.c"
+if expect_ok "tool_compile" "$FENG" tool compile --emit-c="$tool_c" "$FIXTURE"; then
+    if [[ ! -s "$tool_c" ]]; then
+        echo "FAIL[tool_compile] missing generated C output"
+        failures=$((failures + 1))
+    elif ! grep -q "int main" "$tool_c"; then
+        echo "FAIL[tool_compile] generated C did not contain main wrapper"
+        failures=$((failures + 1))
+    fi
 fi
 
 if [[ $failures -gt 0 ]]; then

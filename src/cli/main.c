@@ -6,12 +6,12 @@
 
 void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s <files...> --target=bin --out=<dir> [--release] [--keep-ir]\n", program);
+    fprintf(stderr, "  %s <files...> --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]\n", program);
+    fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stderr, "  %s tool lex <file>\n", program);
     fprintf(stderr, "  %s tool parse <file>\n", program);
     fprintf(stderr, "  %s tool semantic [--target=bin|lib] <file> [more files...]\n", program);
     fprintf(stderr, "  %s tool check [--target=bin|lib] <file> [more files...]\n", program);
-    fprintf(stderr, "  %s compile [--target=bin|lib] [--emit-c=<path>] <file>   (legacy debug)\n", program);
     fprintf(stderr, "\n");
     fprintf(stderr, "  Direct mode: compile one or more .ff files into <out>/bin via <out>/ir/c.\n");
     fprintf(stderr, "  --target defaults to 'bin'; '--target=lib' is reserved for `tool` analysis.\n");
@@ -19,7 +19,11 @@ void feng_cli_print_usage(const char *program) {
 }
 
 int main(int argc, char **argv) {
-    const char *program = argc > 0 ? argv[0] : "feng";
+    const char *program = "feng";
+    if (argc > 0 && argv[0] != NULL && argv[0][0] != '\0') {
+        const char *slash = strrchr(argv[0], '/');
+        program = slash != NULL ? slash + 1 : argv[0];
+    }
 
     if (argc < 2) {
         feng_cli_print_usage(program);
@@ -34,11 +38,8 @@ int main(int argc, char **argv) {
         return feng_cli_tool_main(program, rest_argc, rest_argv);
     }
 
-    if (strcmp(cmd, "compile") == 0) {
-        return feng_cli_legacy_compile_main(program, rest_argc, rest_argv);
-    }
-
-    if (strcmp(cmd, "lex") == 0
+    if (strcmp(cmd, "compile") == 0
+        || strcmp(cmd, "lex") == 0
         || strcmp(cmd, "parse") == 0
         || strcmp(cmd, "semantic") == 0
         || strcmp(cmd, "check") == 0) {

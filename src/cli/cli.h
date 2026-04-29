@@ -7,9 +7,10 @@
  *
  * Phase 2 split (see dev/feng-phase2-pending.md):
  *   - main.c is reduced to a router.
- *   - tool/ owns `feng tool ...` subcommands.
- *   - compile/ owns the top-level direct compile mode (P4) and the
- *     legacy `feng compile` debug subcommand until P1 retires it.
+ *   - tool/ owns `feng tool ...` subcommands, including single-file debug
+ *     compile.
+ *   - compile/ owns the top-level direct compile mode (P4) plus the shared
+ *     implementation used by `feng tool compile`.
  */
 
 void feng_cli_print_usage(const char *program);

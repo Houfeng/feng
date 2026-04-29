@@ -248,12 +248,12 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    /* Compose the bin path. Prefer an explicit `--bin-name` override; otherwise
-     * derive the stem from the first input's basename. The multi-file naming
+    /* Compose the bin path. Prefer an explicit `--name` override; otherwise
+     * derive the stem from the first input's basename. The multi-target naming
      * convention may be revisited once the package model lands. */
     char *bin_path = NULL;
-    if (opts.bin_name != NULL) {
-        bin_path = path_join(bin_dir, opts.bin_name);
+    if (opts.artifact_name != NULL) {
+        bin_path = path_join(bin_dir, opts.artifact_name);
     } else {
         const char *first = opts.inputs[0];
         const char *slash = strrchr(first, '/');
