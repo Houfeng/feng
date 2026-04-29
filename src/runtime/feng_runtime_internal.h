@@ -18,7 +18,16 @@ struct FengArray {
     size_t length;
     size_t element_size;
     const FengTypeDescriptor *element_desc;
-    bool element_is_managed;
+    /* Three-way classification per dev/feng-value-model-pending.md §7.3.
+     * TRIVIAL    — bytes only; finalize merely frees `items`.
+     * MANAGED_POINTER — `items` is an array of `void *` slots; each non-NULL
+     *                   slot is feng_release'd on finalize.
+     * AGGREGATE  — `items` is an array of by-value aggregates of size
+     *              `element_aggregate->size`; each element is released via
+     *              feng_aggregate_release on finalize. `element_aggregate`
+     *              MUST be non-NULL when element_kind == AGGREGATE. */
+    FengValueKind element_kind;
+    const FengAggregateValueDescriptor *element_aggregate;
     /* Heap-allocated storage of length * element_size bytes. */
     void *items;
 };

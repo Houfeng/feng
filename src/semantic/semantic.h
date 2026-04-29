@@ -492,6 +492,57 @@ const FengSpecEquality *feng_semantic_lookup_spec_equality(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
 
+/* --- Value-kind classification (dev/feng-value-model-pending.md §6.1) - */
+
+/* Runtime classification of a Feng value, mirroring runtime
+ * FengValueKind in src/runtime/feng_runtime.h. Per
+ * dev/feng-value-model-pending.md §2 / §6.1 every Feng type belongs to
+ * exactly one of these three categories; codegen uses the classification
+ * to pick an emit path (direct C copy / single-pointer ARC primitives /
+ * the five aggregate APIs). The semantic layer is the single source of
+ * truth for the classification rule — codegen consumes the helpers
+ * declared below rather than re-deriving the rule.
+ *
+ * The enumerator values intentionally match
+ * runtime/FengValueKind so that callers may pass either enum across the
+ * boundary; the names are kept distinct because semantic operates on AST
+ * decls / type refs whereas the runtime enum tags runtime values. */
+typedef enum FengSemanticValueKind {
+    FENG_SEMANTIC_VALUE_TRIVIAL = 1,
+    FENG_SEMANTIC_VALUE_MANAGED_POINTER = 2,
+    FENG_SEMANTIC_VALUE_AGGREGATE = 3
+} FengSemanticValueKind;
+
+/* Classify the value kind of a built-in primitive named by `name` (any
+ * spelling accepted by the analyzer's built-in name table — both canonical
+ * and alias forms). Per §6.1:
+ *   - "string" → MANAGED_POINTER (FengString *).
+ *   - any numeric (i8…u64, f32, f64, and aliases int/long/byte/float/double)
+ *     and "bool" → TRIVIAL.
+ *   - "void" → TRIVIAL (used only for return slots; callers must not
+ *     materialize a runtime value of this kind).
+ *   - any other / unknown name → TRIVIAL (defensive default; the analyzer
+ *     itself rejects unknown built-in spellings before this point).
+ *
+ * Implemented in value_kind.c. The function is pure — it does not touch
+ * any FengSemanticAnalysis state. */
+FengSemanticValueKind feng_semantic_value_kind_of_builtin(FengSlice name);
+
+/* Classify the value kind of a user-declared `type` or `spec`. `decl` MUST
+ * be non-NULL and MUST be FENG_DECL_TYPE or FENG_DECL_SPEC; passing any
+ * other DeclKind is a programmer error and yields TRIVIAL (defensive).
+ * Per §6.1:
+ *   - FENG_DECL_TYPE → MANAGED_POINTER (heap object + FengManagedHeader).
+ *   - FENG_DECL_SPEC, object form → AGGREGATE (fat value: subject +
+ *     witness, see fat-value mapping in
+ *     dev/feng-spec-codegen-pending.md §4).
+ *   - FENG_DECL_SPEC, callable form → MANAGED_POINTER (closure pointer;
+ *     callable specs are not fat values, see §8.4).
+ *
+ * Implemented in value_kind.c. The function does not consult the
+ * analysis; the decl carries enough information on its own. */
+FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl);
+
 #ifdef __cplusplus
 }
 #endif

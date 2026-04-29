@@ -8090,6 +8090,164 @@ static void test_spec_equality_int_not_recorded(void) {
     feng_program_free(program);
 }
 
+/* --- Value-kind classification tests (dev/feng-value-model-pending.md §6.1) --- */
+
+static FengSlice slice_from_cstr(const char *literal) {
+    FengSlice s = { literal, strlen(literal) };
+    return s;
+}
+
+static void test_value_kind_builtin_classifies_string_as_managed_pointer(void) {
+    ASSERT(feng_semantic_value_kind_of_builtin(slice_from_cstr("string")) ==
+           FENG_SEMANTIC_VALUE_MANAGED_POINTER);
+}
+
+static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void) {
+    static const char *names[] = {
+        "i8",  "i16",  "i32",  "i64",
+        "u8",  "u16",  "u32",  "u64",
+        "f32", "f64",
+        "int", "long", "byte", "float", "double",
+        "bool"
+    };
+    for (size_t i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        ASSERT(feng_semantic_value_kind_of_builtin(slice_from_cstr(names[i])) ==
+               FENG_SEMANTIC_VALUE_TRIVIAL);
+    }
+}
+
+static void test_value_kind_builtin_classifies_void_as_trivial(void) {
+    ASSERT(feng_semantic_value_kind_of_builtin(slice_from_cstr("void")) ==
+           FENG_SEMANTIC_VALUE_TRIVIAL);
+}
+
+static void test_value_kind_builtin_unknown_name_defaults_to_trivial(void) {
+    /* The analyzer rejects unknown built-in spellings before this point;
+     * the helper itself must still degrade safely so that a programmer
+     * mistake never silently promotes an unknown name into the ARC path. */
+    ASSERT(feng_semantic_value_kind_of_builtin(slice_from_cstr("notatype")) ==
+           FENG_SEMANTIC_VALUE_TRIVIAL);
+    FengSlice empty = { NULL, 0U };
+    ASSERT(feng_semantic_value_kind_of_builtin(empty) ==
+           FENG_SEMANTIC_VALUE_TRIVIAL);
+}
+
+static void test_value_kind_user_type_is_managed_pointer(void) {
+    const char *src =
+        "pu mod demo.vk;\n"
+        "type Holder { let id: int; }\n";
+    FengProgram *program = parse_program_or_die("vk_type.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *holder = find_type_decl_by_name(analysis, "Holder");
+    ASSERT(holder != NULL);
+    ASSERT(feng_semantic_value_kind_of_decl(holder) ==
+           FENG_SEMANTIC_VALUE_MANAGED_POINTER);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_kind_object_form_spec_is_aggregate(void) {
+    const char *src =
+        "pu mod demo.vk;\n"
+        "spec Named { let name: string; }\n";
+    FengProgram *program = parse_program_or_die("vk_obj_spec.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(named != NULL);
+    ASSERT(named->as.spec_decl.form == FENG_SPEC_FORM_OBJECT);
+    ASSERT(feng_semantic_value_kind_of_decl(named) ==
+           FENG_SEMANTIC_VALUE_AGGREGATE);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_kind_callable_form_spec_is_managed_pointer(void) {
+    const char *src =
+        "pu mod demo.vk;\n"
+        "spec Greet(name: string): string;\n";
+    FengProgram *program = parse_program_or_die("vk_call_spec.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *greet = find_spec_decl_by_name(analysis, "Greet");
+    ASSERT(greet != NULL);
+    ASSERT(greet->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE);
+    ASSERT(feng_semantic_value_kind_of_decl(greet) ==
+           FENG_SEMANTIC_VALUE_MANAGED_POINTER);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_kind_null_decl_is_trivial(void) {
+    /* Defensive: passing NULL must not crash and must not promote into
+     * the managed/aggregate paths. */
+    ASSERT(feng_semantic_value_kind_of_decl(NULL) ==
+           FENG_SEMANTIC_VALUE_TRIVIAL);
+}
+
+static void test_value_kind_non_type_decl_is_trivial(void) {
+    /* A FENG_DECL_FUNCTION (or any non-type/non-spec decl) is not a type
+     * and has no value kind; the helper degrades to TRIVIAL rather than
+     * lying. */
+    const char *src =
+        "pu mod demo.vk;\n"
+        "fn helper() { }\n";
+    FengProgram *program = parse_program_or_die("vk_fn.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *fn_decl = NULL;
+    for (size_t mi = 0U; fn_decl == NULL && mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        for (size_t pi = 0U; fn_decl == NULL && pi < mod->program_count; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            for (size_t di = 0U; di < prog->declaration_count; ++di) {
+                if (prog->declarations[di]->kind == FENG_DECL_FUNCTION) {
+                    fn_decl = prog->declarations[di];
+                    break;
+                }
+            }
+        }
+    }
+    ASSERT(fn_decl != NULL);
+    ASSERT(feng_semantic_value_kind_of_decl(fn_decl) ==
+           FENG_SEMANTIC_VALUE_TRIVIAL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -8384,6 +8542,16 @@ int main(void) {
     test_main_entry_bad_signature_is_rejected_for_bin();
     test_multiple_main_entries_rejected_for_bin();
     test_lib_target_skips_main_check();
+
+    test_value_kind_builtin_classifies_string_as_managed_pointer();
+    test_value_kind_builtin_classifies_numerics_and_bool_as_trivial();
+    test_value_kind_builtin_classifies_void_as_trivial();
+    test_value_kind_builtin_unknown_name_defaults_to_trivial();
+    test_value_kind_user_type_is_managed_pointer();
+    test_value_kind_object_form_spec_is_aggregate();
+    test_value_kind_callable_form_spec_is_managed_pointer();
+    test_value_kind_null_decl_is_trivial();
+    test_value_kind_non_type_decl_is_trivial();
 
     puts("semantic tests passed");
     return 0;

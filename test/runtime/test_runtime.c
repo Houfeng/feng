@@ -1202,6 +1202,148 @@ static void test_aggregate_nested_assign(void) {
     ASSERT(g_finalize_count == 6);
 }
 
+/* ---- §7.3 Array element three-classification ----------------------- */
+
+static void test_array_kinded_trivial_matches_legacy(void) {
+    /* TRIVIAL kind via the kinded API must behave identically to the legacy
+     * (element_is_managed = false) constructor. */
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_TRIVIAL,
+                                         NULL,
+                                         &i32_element_descriptor,
+                                         sizeof(int32_t),
+                                         3U);
+    ASSERT(feng_array_length(a) == 3U);
+    ASSERT(feng_array_element_kind(a) == FENG_VALUE_TRIVIAL);
+    ASSERT(feng_array_element_aggregate(a) == NULL);
+    int32_t *items = (int32_t *)feng_array_data(a);
+    ASSERT(items != NULL);
+    /* calloc-zeroed. */
+    for (size_t i = 0U; i < 3U; ++i) {
+        ASSERT(items[i] == 0);
+    }
+    feng_release(a);
+}
+
+static void test_array_kinded_managed_pointer_matches_legacy(void) {
+    g_finalize_count = 0;
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_MANAGED_POINTER,
+                                         NULL,
+                                         &test_object_descriptor,
+                                         sizeof(void *),
+                                         2U);
+    ASSERT(feng_array_element_kind(a) == FENG_VALUE_MANAGED_POINTER);
+    ASSERT(feng_array_element_aggregate(a) == NULL);
+    void **slots = (void **)feng_array_data(a);
+    TestObject *o0 = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *o1 = (TestObject *)feng_object_new(&test_object_descriptor);
+    /* Move ownership in (legacy callers do `slots[i] = obj` directly). */
+    slots[0] = o0;
+    slots[1] = o1;
+    ASSERT(g_finalize_count == 0);
+    feng_release(a);
+    /* Array finalize releases both slots. */
+    ASSERT(g_finalize_count == 2);
+}
+
+static void test_array_aggregate_zero_bytes_default(void) {
+    /* OuterAgg uses FENG_DEFAULT_ZERO_BYTES — calloc alone suffices. */
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                                         &outer_desc,
+                                         NULL,
+                                         outer_desc.size,
+                                         3U);
+    ASSERT(feng_array_length(a) == 3U);
+    ASSERT(feng_array_element_kind(a) == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS);
+    ASSERT(feng_array_element_aggregate(a) == &outer_desc);
+
+    OuterAgg *items = (OuterAgg *)feng_array_data(a);
+    for (size_t i = 0U; i < 3U; ++i) {
+        ASSERT(items[i].head == NULL);
+        ASSERT(items[i].tail == NULL);
+        ASSERT(items[i].inner.subject == NULL);
+        ASSERT(items[i].inner.tag == 0);
+    }
+    /* Empty release path must be a clean no-op even with NULL slots. */
+    feng_release(a);
+}
+
+static void test_array_aggregate_init_fn_runs_per_element(void) {
+    /* FatPair uses FENG_DEFAULT_INIT_FN — every element must reach a
+     * properly-initialised state with subject != NULL and refcount 1. */
+    g_finalize_count = 0;
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                                         &fat_pair_desc,
+                                         NULL,
+                                         fat_pair_desc.size,
+                                         4U);
+    FatPair *items = (FatPair *)feng_array_data(a);
+    for (size_t i = 0U; i < 4U; ++i) {
+        ASSERT(items[i].subject != NULL);
+        ASSERT(items[i].tag == -1);
+        ASSERT(((FengManagedHeader *)items[i].subject)->refcount == 1U);
+    }
+    /* Releasing the array calls feng_aggregate_release on each element,
+     * which in turn finalizes each TestObject. */
+    feng_release(a);
+    ASSERT(g_finalize_count == 4);
+}
+
+static void test_array_aggregate_assign_per_element_tracks_refcount(void) {
+    /* User-driven: zero-initialise the array, then move owning references
+     * into each element via feng_aggregate_assign, and verify the array
+     * finalizer drops them when released. */
+    g_finalize_count = 0;
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                                         &outer_desc,
+                                         NULL,
+                                         outer_desc.size,
+                                         2U);
+    OuterAgg *items = (OuterAgg *)feng_array_data(a);
+
+    TestObject *h0 = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *t0 = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *h1 = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    OuterAgg src0 = { .head = h0,
+                      .inner = { .subject = NULL, .tag = 0 },
+                      .tail = t0 };
+    OuterAgg src1 = { .head = h1,
+                      .inner = { .subject = NULL, .tag = 0 },
+                      .tail = NULL };
+
+    feng_aggregate_assign(&items[0], &src0, &outer_desc);
+    feng_aggregate_assign(&items[1], &src1, &outer_desc);
+    /* Each holder now sits at rc=2 (src + array slot). */
+    ASSERT(h0->header.refcount == 2U);
+    ASSERT(t0->header.refcount == 2U);
+    ASSERT(h1->header.refcount == 2U);
+
+    /* Drop the source aggregates first. */
+    feng_aggregate_release(&src0, &outer_desc);
+    feng_aggregate_release(&src1, &outer_desc);
+    ASSERT(g_finalize_count == 0);
+    ASSERT(h0->header.refcount == 1U);
+    ASSERT(t0->header.refcount == 1U);
+    ASSERT(h1->header.refcount == 1U);
+
+    /* Releasing the array must release each element's slots. */
+    feng_release(a);
+    ASSERT(g_finalize_count == 3);
+}
+
+static void test_array_aggregate_zero_length(void) {
+    FengArray *a = feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                                         &fat_pair_desc,
+                                         NULL,
+                                         fat_pair_desc.size,
+                                         0U);
+    ASSERT(feng_array_length(a) == 0U);
+    ASSERT(feng_array_data(a) == NULL);
+    ASSERT(feng_array_element_kind(a) == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS);
+    ASSERT(feng_array_element_aggregate(a) == &fat_pair_desc);
+    feng_release(a);
+}
+
 int main(void) {
     test_object_retain_release();
     test_retain_release_nullsafe();
@@ -1240,6 +1382,13 @@ int main(void) {
     test_aggregate_default_init_fn();
     test_aggregate_nested_walker();
     test_aggregate_nested_assign();
+
+    test_array_kinded_trivial_matches_legacy();
+    test_array_kinded_managed_pointer_matches_legacy();
+    test_array_aggregate_zero_bytes_default();
+    test_array_aggregate_init_fn_runs_per_element();
+    test_array_aggregate_assign_per_element_tracks_refcount();
+    test_array_aggregate_zero_length();
 
     fputs("test_runtime: ok\n", stdout);
     return 0;

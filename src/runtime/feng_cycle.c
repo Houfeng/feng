@@ -203,18 +203,66 @@ void feng_cycle_remove_candidate(FengManagedHeader *header) {
 
 /* --- Child traversal --------------------------------------------------- */
 
+/* Walk every managed pointer slot reachable from a by-value aggregate
+ * occupying `value` and described by `desc`. Used by both the read-only
+ * and the slot-rewriting traversals below. Recurses through
+ * FENG_SLOT_NESTED_AGGREGATE entries so nested aggregates are flattened
+ * automatically. */
+static void cyc_aggregate_for_each_pointer_slot(
+        unsigned char *value,
+        const FengAggregateValueDescriptor *desc,
+        void (*visit)(FengManagedHeader **slot,
+                      FengManagedHeader *child,
+                      void *ctx),
+        void *ctx) {
+    if (value == NULL || desc == NULL) {
+        return;
+    }
+    for (size_t i = 0U; i < desc->managed_slot_count; ++i) {
+        const FengManagedSlotDescriptor *s = &desc->managed_slots[i];
+        unsigned char *p = value + s->offset;
+        switch (s->kind) {
+            case FENG_SLOT_POINTER: {
+                FengManagedHeader **slot = (FengManagedHeader **)p;
+                visit(slot, *slot, ctx);
+                break;
+            }
+            case FENG_SLOT_NESTED_AGGREGATE:
+                cyc_aggregate_for_each_pointer_slot(p, s->nested, visit, ctx);
+                break;
+        }
+    }
+}
+
 /* Visit every managed child slot of `header` and pass each non-NULL pointer
  * to `visit(child, ctx)`. The traversal handles all four built-in tags:
  *
  *   OBJECT/CLOSURE — uses descriptor->managed_fields (static trace table
- *                    emitted by codegen).
- *   ARRAY          — iterates items[0..length) when element_is_managed.
+ *                    emitted by codegen). After the §7.2 flatten step the
+ *                    table already enumerates aggregate-embedded slots, so
+ *                    no per-tag aggregate walk is required here.
+ *   ARRAY          — dispatches on element_kind: TRIVIAL skips, MANAGED_POINTER
+ *                    iterates items[0..length) as void*-sized slots, AGGREGATE
+ *                    walks each element via element_aggregate's slot table.
  *   STRING         — has no managed children.
  *
  * Note: array/string descriptors are themselves !is_potentially_cyclic, so
  * arrays/strings never enter the candidate buffer directly. They are only
  * encountered as transitively-reachable children of a user object whose
  * cyclic SCC includes them. */
+static void cyc_visit_pointer_only(FengManagedHeader **slot,
+                                    FengManagedHeader *child,
+                                    void *ctx) {
+    (void)slot;
+    if (child != NULL) {
+        struct {
+            void (*visit)(FengManagedHeader *child, void *ctx);
+            void *ctx;
+        } *bridge = ctx;
+        bridge->visit(child, bridge->ctx);
+    }
+}
+
 static void cyc_for_each_child(FengManagedHeader *header,
                                void (*visit)(FengManagedHeader *child, void *ctx),
                                void *ctx) {
@@ -239,14 +287,36 @@ static void cyc_for_each_child(FengManagedHeader *header,
         }
         case FENG_TYPE_TAG_ARRAY: {
             struct FengArray *arr = (struct FengArray *)header;
-            if (!arr->element_is_managed || arr->items == NULL) {
+            if (arr->items == NULL) {
                 break;
             }
-            FengManagedHeader **slots = (FengManagedHeader **)arr->items;
-            for (size_t i = 0U; i < arr->length; ++i) {
-                FengManagedHeader *child = slots[i];
-                if (child != NULL) {
-                    visit(child, ctx);
+            switch (arr->element_kind) {
+                case FENG_VALUE_TRIVIAL:
+                    break;
+                case FENG_VALUE_MANAGED_POINTER: {
+                    FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                    for (size_t i = 0U; i < arr->length; ++i) {
+                        FengManagedHeader *child = slots[i];
+                        if (child != NULL) {
+                            visit(child, ctx);
+                        }
+                    }
+                    break;
+                }
+                case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
+                    struct {
+                        void (*visit)(FengManagedHeader *child, void *ctx);
+                        void *ctx;
+                    } bridge = { visit, ctx };
+                    unsigned char *base = (unsigned char *)arr->items;
+                    for (size_t i = 0U; i < arr->length; ++i) {
+                        cyc_aggregate_for_each_pointer_slot(
+                            base + i * arr->element_size,
+                            arr->element_aggregate,
+                            cyc_visit_pointer_only,
+                            &bridge);
+                    }
+                    break;
                 }
             }
             break;
@@ -412,12 +482,30 @@ static void cyc_for_each_child_slot(FengManagedHeader *header,
         }
         case FENG_TYPE_TAG_ARRAY: {
             struct FengArray *arr = (struct FengArray *)header;
-            if (!arr->element_is_managed || arr->items == NULL) {
+            if (arr->items == NULL) {
                 break;
             }
-            FengManagedHeader **slots = (FengManagedHeader **)arr->items;
-            for (size_t i = 0U; i < arr->length; ++i) {
-                visit(&slots[i], slots[i], ctx);
+            switch (arr->element_kind) {
+                case FENG_VALUE_TRIVIAL:
+                    break;
+                case FENG_VALUE_MANAGED_POINTER: {
+                    FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                    for (size_t i = 0U; i < arr->length; ++i) {
+                        visit(&slots[i], slots[i], ctx);
+                    }
+                    break;
+                }
+                case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
+                    unsigned char *base = (unsigned char *)arr->items;
+                    for (size_t i = 0U; i < arr->length; ++i) {
+                        cyc_aggregate_for_each_pointer_slot(
+                            base + i * arr->element_size,
+                            arr->element_aggregate,
+                            visit,
+                            ctx);
+                    }
+                    break;
+                }
             }
             break;
         }
@@ -525,6 +613,23 @@ static void phase15_compute_intra_in(WhiteList *wl, WhiteAux *aux) {
 /* BFS along intra-white out-edges starting from each externally-resurrected
  * white. Survivors are tagged with CYC_FLAG_VISITED (which is otherwise
  * unused at this point — gather_white cleared it before we got here). */
+static void cyc_bfs_enqueue_white(FengManagedHeader **slot,
+                                  FengManagedHeader *child,
+                                  void *ctx) {
+    (void)slot;
+    struct {
+        FengManagedHeader **q;
+        size_t *tail_p;
+    } *bctx = ctx;
+    if (child != NULL
+        && child->refcount != FENG_REFCOUNT_IMMORTAL
+        && cyc_color(child) == CYC_COLOR_WHITE
+        && !(child->cycle_state & CYC_FLAG_VISITED)) {
+        child->cycle_state |= CYC_FLAG_VISITED;
+        bctx->q[(*bctx->tail_p)++] = child;
+    }
+}
+
 static void phase15_mark_survivors_bfs(WhiteList *wl, WhiteAux *aux,
                                        FengManagedHeader **queue,
                                        size_t *queue_size_out) {
@@ -557,13 +662,38 @@ static void phase15_mark_survivors_bfs(WhiteList *wl, WhiteAux *aux,
             }
         } else if (s->tag == FENG_TYPE_TAG_ARRAY) {
             struct FengArray *arr = (struct FengArray *)s;
-            if (arr->element_is_managed && arr->items != NULL) {
-                FengManagedHeader **slots = (FengManagedHeader **)arr->items;
-                for (size_t k = 0U; k < arr->length; ++k) {
-                    FengManagedHeader *c = slots[k];
-                    if (is_white(c) && !(c->cycle_state & CYC_FLAG_VISITED)) {
-                        c->cycle_state |= CYC_FLAG_VISITED;
-                        queue[qtail++] = c;
+            if (arr->items != NULL) {
+                switch (arr->element_kind) {
+                    case FENG_VALUE_TRIVIAL:
+                        break;
+                    case FENG_VALUE_MANAGED_POINTER: {
+                        FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                        for (size_t k = 0U; k < arr->length; ++k) {
+                            FengManagedHeader *c = slots[k];
+                            if (is_white(c) && !(c->cycle_state & CYC_FLAG_VISITED)) {
+                                c->cycle_state |= CYC_FLAG_VISITED;
+                                queue[qtail++] = c;
+                            }
+                        }
+                        break;
+                    }
+                    case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
+                        /* Bridge the slot-style walker into the BFS body so we
+                         * preserve the same visit/dedup logic regardless of
+                         * element layout. */
+                        struct {
+                            FengManagedHeader **q;
+                            size_t *tail_p;
+                        } bctx = { queue, &qtail };
+                        unsigned char *base = (unsigned char *)arr->items;
+                        for (size_t k = 0U; k < arr->length; ++k) {
+                            cyc_aggregate_for_each_pointer_slot(
+                                base + k * arr->element_size,
+                                arr->element_aggregate,
+                                cyc_bfs_enqueue_white,
+                                &bctx);
+                        }
+                        break;
                     }
                 }
             }

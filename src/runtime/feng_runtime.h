@@ -137,51 +137,6 @@ void  feng_assign(void **slot, void *new_value);
  * inherits the +1 reference. */
 void *feng_take(void **slot);
 
-/* --- String ------------------------------------------------------------ */
-
-typedef struct FengString FengString;
-
-/* Allocates a fresh immortal string holding a copy of the supplied UTF-8 bytes.
- * Codegen caches the returned pointer per literal site so each literal allocates
- * exactly once at first use. The buffer is null-terminated. */
-FengString *feng_string_literal(const char *utf8, size_t length);
-
-/* Process-wide singleton empty string used as the `string` default zero value.
- * Stamped IMMORTAL so retain/release are no-ops; safe to share across threads.
- * Generated code uses this at every binding/field site that has no explicit
- * initialiser so `string` defaults to a real empty string rather than NULL. */
-FengString *feng_string_default(void);
-
-/* Concatenation always returns a fresh +1 string; either operand may be NULL,
- * which is treated as the empty string. */
-FengString *feng_string_concat(const FengString *left, const FengString *right);
-
-size_t      feng_string_length(const FengString *s);
-const char *feng_string_data(const FengString *s);
-
-/* --- Array ------------------------------------------------------------- */
-
-typedef struct FengArray FengArray;
-
-/* Allocates a zero-initialised array of `length` elements. When
- * `element_is_managed` is true, slots are treated as pointers to managed
- * objects and released on array destruction. `element_desc` is currently used
- * only for diagnostics. */
-FengArray *feng_array_new(const FengTypeDescriptor *element_desc,
-                          size_t element_size,
-                          bool element_is_managed,
-                          size_t length);
-
-size_t feng_array_length(const FengArray *array);
-void  *feng_array_data(FengArray *array);
-void   feng_array_check_index(const FengArray *array, size_t index);
-
-/* --- Object ------------------------------------------------------------ */
-
-/* Allocates a zero-initialised instance whose first member is FengManagedHeader.
- * desc->size MUST cover the full struct including the header. */
-void *feng_object_new(const FengTypeDescriptor *desc);
-
 /* --- Value model: by-value aggregates with managed slots --------------- */
 /*
  * The runtime classifies every Feng value into one of three categories
@@ -196,9 +151,9 @@ void *feng_object_new(const FengTypeDescriptor *desc);
  *                                 driven by FengAggregateValueDescriptor
  *                                 below.
  *
- * `FengValueKind` is consumed by codegen for site dispatch only; the runtime
- * does not branch on it (the dispatch happens at the call-site through the
- * five aggregate APIs further down). */
+ * `FengValueKind` is consumed by codegen for site dispatch and by the
+ * runtime array layer for per-element dispatch (see feng_array_new_kinded);
+ * the single-pointer primitives themselves never branch on it. */
 typedef enum FengValueKind {
     FENG_VALUE_TRIVIAL = 1,
     FENG_VALUE_MANAGED_POINTER = 2,
@@ -301,6 +256,88 @@ void feng_aggregate_take(void *dst, void *src,
 /* Initialise `value_out` to the descriptor's default value. */
 void feng_aggregate_default_init(void *value_out,
                                  const FengAggregateValueDescriptor *desc);
+
+/* --- String ------------------------------------------------------------ */
+
+typedef struct FengString FengString;
+
+/* Allocates a fresh immortal string holding a copy of the supplied UTF-8 bytes.
+ * Codegen caches the returned pointer per literal site so each literal allocates
+ * exactly once at first use. The buffer is null-terminated. */
+FengString *feng_string_literal(const char *utf8, size_t length);
+
+/* Process-wide singleton empty string used as the `string` default zero value.
+ * Stamped IMMORTAL so retain/release are no-ops; safe to share across threads.
+ * Generated code uses this at every binding/field site that has no explicit
+ * initialiser so `string` defaults to a real empty string rather than NULL. */
+FengString *feng_string_default(void);
+
+/* Concatenation always returns a fresh +1 string; either operand may be NULL,
+ * which is treated as the empty string. */
+FengString *feng_string_concat(const FengString *left, const FengString *right);
+
+size_t      feng_string_length(const FengString *s);
+const char *feng_string_data(const FengString *s);
+
+/* --- Array ------------------------------------------------------------- */
+
+typedef struct FengArray FengArray;
+
+/* Creates a fresh +1 array. Element classification follows
+ * dev/feng-value-model-pending.md §7.3:
+ *
+ *   FENG_VALUE_TRIVIAL          — `element_aggregate` MUST be NULL; slots
+ *                                 hold raw bytes and finalize merely frees
+ *                                 the storage.
+ *   FENG_VALUE_MANAGED_POINTER  — `element_aggregate` MUST be NULL;
+ *                                 element_size MUST equal sizeof(void *);
+ *                                 each non-NULL slot is feng_release'd on
+ *                                 finalize.
+ *   FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS — `element_aggregate` MUST be
+ *                                 non-NULL and `element_size` MUST equal
+ *                                 `element_aggregate->size`; each element is
+ *                                 released via feng_aggregate_release on
+ *                                 finalize.
+ *
+ * `element_desc` is currently used only for diagnostics; pass NULL when the
+ * caller has nothing meaningful (e.g. aggregate elements). All
+ * preconditions are enforced with feng_panic to surface descriptor /
+ * codegen mistakes early. */
+FengArray *feng_array_new_kinded(FengValueKind element_kind,
+                                 const FengAggregateValueDescriptor *element_aggregate,
+                                 const FengTypeDescriptor *element_desc,
+                                 size_t element_size,
+                                 size_t length);
+
+/* Legacy two-way constructor preserved verbatim for callers that have not
+ * yet adopted the kinded API. Wraps feng_array_new_kinded with
+ * `element_aggregate = NULL` and dispatches `element_is_managed` to
+ * MANAGED_POINTER vs TRIVIAL. New code MUST use feng_array_new_kinded for
+ * aggregate-element arrays. */
+FengArray *feng_array_new(const FengTypeDescriptor *element_desc,
+                          size_t element_size,
+                          bool element_is_managed,
+                          size_t length);
+
+size_t feng_array_length(const FengArray *array);
+void  *feng_array_data(FengArray *array);
+void   feng_array_check_index(const FengArray *array, size_t index);
+
+/* Reports the per-element classification recorded at array creation. The
+ * runtime itself does not branch on this value (the finalize path uses
+ * the cached classification directly); callers that walk arrays from
+ * generated code may consult it to pick the correct copy/assign path. */
+FengValueKind feng_array_element_kind(const FengArray *array);
+
+/* Returns the per-element aggregate descriptor for AGGREGATE-kind arrays,
+ * or NULL otherwise. */
+const FengAggregateValueDescriptor *feng_array_element_aggregate(const FengArray *array);
+
+/* --- Object ------------------------------------------------------------ */
+
+/* Allocates a zero-initialised instance whose first member is FengManagedHeader.
+ * desc->size MUST cover the full struct including the header. */
+void *feng_object_new(const FengTypeDescriptor *desc);
 
 /* --- Exceptions -------------------------------------------------------- */
 

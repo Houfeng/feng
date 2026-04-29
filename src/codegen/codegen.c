@@ -307,6 +307,16 @@ typedef struct UserSpec {
     char   *feng_name;                /* e.g., "Named" */
     char   *c_value_struct_name;      /* e.g., FengSpecValue__feng__sample__Named */
     char   *c_witness_struct_name;    /* e.g., FengSpecWitness__feng__sample__Named */
+    /* Value-model descriptor symbols (see dev/feng-value-model-pending.md
+     * §3, §7.2). For object-form specs the aggregate has exactly one
+     * managed slot — the `subject` pointer at offset 0 of the value
+     * struct. The descriptor is emitted unconditionally so per-field
+     * flatten / release helpers (§7.2 / §7.4) can refer to it once a spec
+     * value appears as an object field or array element. */
+    char   *c_aggregate_slots_name;    /* e.g., FengSpecAggSlots__M__S */
+    char   *c_aggregate_default_name;  /* e.g., FengSpecAggDefault__M__S */
+    char   *c_aggregate_init_fn_name;  /* e.g., FengSpecAggInit__M__S */
+    char   *c_aggregate_desc_name;     /* e.g., FengSpecAgg__M__S */
     UserSpecMember *members;
     size_t          member_count;
     const FengDecl *decl;
@@ -1024,8 +1034,30 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     Buf wb; buf_init(&wb);
     buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
     s->c_witness_struct_name = wb.data;
+
+    /* Value-model descriptor names. Reuses the same module/sanitised name
+     * mangling as the value/witness structs to keep symbol triples easy to
+     * correlate when reading generated C. */
+    Buf db; buf_init(&db);
+    buf_append_fmt(&db, "FengSpecAgg__%s__%s", cg->module_mangle, san);
+    s->c_aggregate_desc_name = db.data;
+
+    Buf sb; buf_init(&sb);
+    buf_append_fmt(&sb, "FengSpecAggSlots__%s__%s", cg->module_mangle, san);
+    s->c_aggregate_slots_name = sb.data;
+
+    Buf db2; buf_init(&db2);
+    buf_append_fmt(&db2, "FengSpecAggDefault__%s__%s", cg->module_mangle, san);
+    s->c_aggregate_default_name = db2.data;
+
+    Buf ib; buf_init(&ib);
+    buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
+    s->c_aggregate_init_fn_name = ib.data;
+
     free(san);
-    return s->c_value_struct_name && s->c_witness_struct_name;
+    return s->c_value_struct_name && s->c_witness_struct_name
+        && s->c_aggregate_desc_name && s->c_aggregate_slots_name
+        && s->c_aggregate_default_name && s->c_aggregate_init_fn_name;
 }
 
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
@@ -1128,6 +1160,58 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_append_cstr(td, "    char _padding;\n");
     }
     buf_append_cstr(td, "};\n\n");
+
+    /* ---- Value-model aggregate descriptor (dev/feng-value-model-pending.md
+     * §3, §7.2, §8.2). For object-form specs the value layout is
+     * { void *subject; const Witness *witness; } — exactly one managed
+     * pointer slot at offset 0 (subject). The witness pointer is a
+     * non-managed reference into rodata.
+     *
+     * The default-init function is emitted as a panicking stub: spec
+     * default-binding (which would supply a fitting subject) is part of
+     * the broader 4b-β spec-codegen scope. As long as no current Feng
+     * program triggers default-init on a spec value (no
+     * `feng_aggregate_default_init` call against this descriptor and no
+     * AGGREGATE-element array of spec type), the stub is unreachable; if
+     * a future emit path forgets to provide an explicit initializer, the
+     * panic surfaces the gap immediately rather than silently producing
+     * a NULL subject. */
+    buf_append_fmt(td,
+        "static const FengManagedSlotDescriptor %s[] = {\n"
+        "    { offsetof(struct %s, subject), FENG_SLOT_POINTER, NULL },\n"
+        "};\n",
+        s->c_aggregate_slots_name,
+        s->c_value_struct_name);
+
+    buf_append_fmt(td,
+        "static void %s(void *_value_out) {\n"
+        "    (void)_value_out;\n"
+        "    feng_panic(\"spec default-init not yet implemented for %s\");\n"
+        "}\n",
+        s->c_aggregate_init_fn_name,
+        s->feng_name);
+
+    buf_append_fmt(td,
+        "static const FengAggregateDefaultInitDescriptor %s = {\n"
+        "    .kind = FENG_DEFAULT_INIT_FN,\n"
+        "    .init_fn = %s,\n"
+        "};\n",
+        s->c_aggregate_default_name,
+        s->c_aggregate_init_fn_name);
+
+    buf_append_fmt(td,
+        "static const FengAggregateValueDescriptor %s __attribute__((unused)) = {\n"
+        "    .name = \"%s\",\n"
+        "    .size = sizeof(struct %s),\n"
+        "    .default_init = &%s,\n"
+        "    .managed_slot_count = 1,\n"
+        "    .managed_slots = %s,\n"
+        "};\n\n",
+        s->c_aggregate_desc_name,
+        s->feng_name,
+        s->c_value_struct_name,
+        s->c_aggregate_default_name,
+        s->c_aggregate_slots_name);
 }
 
 /* ----- module bindings ----- */
@@ -3510,24 +3594,69 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
  *
  *   TRIVIAL          — contributes nothing.
  *   MANAGED_POINTER  — one managed_fields[] entry; one feng_release() call.
- *   AGGREGATE        — flattened per dev/feng-value-model-pending.md §7.2
- *                      (one descriptor per FENG_SLOT_POINTER slot inside the
- *                      aggregate, plus a feng_aggregate_release() call). No
- *                      type currently classifies here; until Step 4b lands a
- *                      real aggregate type, hitting this branch is a codegen
- *                      bug — the helpers fail loudly so the omission is not
- *                      silently masked.
+ *   AGGREGATE        — flattened per dev/feng-value-model-pending.md §7.2:
+ *                      one descriptor per FENG_SLOT_POINTER slot inside the
+ *                      aggregate (with offset = field_offset + slot_offset),
+ *                      plus a feng_aggregate_release() call on the field
+ *                      address. The currently-supported aggregate is the
+ *                      object-form fat spec, whose layout has a single
+ *                      managed `subject` pointer at slot offset 0.
  */
+
+/* For aggregate field types, returns the user-facing
+ * FengAggregateValueDescriptor symbol name. Today only object-form spec
+ * values are aggregate; new aggregate kinds (tuple, value-struct) must
+ * extend this dispatch. */
+static const char *cg_aggregate_field_desc_name(const CGType *t) {
+    if (!t || t->kind != CG_TYPE_SPEC || t->user_spec == NULL) {
+        return NULL;
+    }
+    return t->user_spec->c_aggregate_desc_name;
+}
+
+/* Returns the number of FENG_SLOT_POINTER slots produced by flattening the
+ * aggregate type. Mirrors aggregate_for_each_pointer_slot semantics; for
+ * spec values this is always 1 (the subject pointer). */
+static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
+    if (!t || t->kind != CG_TYPE_SPEC || t->user_spec == NULL) {
+        return 0U;
+    }
+    return 1U;
+}
+
+/* Walks the aggregate type's pointer slots and emits one
+ * FengManagedFieldDescriptor row per slot at offset
+ * `field_base_offsetof_expr + slot_offset_within_aggregate`. The
+ * `field_base_offsetof_expr` is a complete C expression yielding the
+ * field's offset in the enclosing struct (e.g.,
+ * `offsetof(struct Foo, bar)`). For spec values we reuse the value
+ * struct's own `offsetof(..., subject)` so the slot offset stays in sync
+ * with the layout the C compiler picked. */
+static void cg_emit_aggregate_pointer_slot_rows(Buf *td,
+                                                const char *field_base_offsetof_expr,
+                                                const CGType *t) {
+    /* Spec: single subject pointer at offset 0 of the value struct. */
+    if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
+        buf_append_fmt(td,
+            "    { %s + offsetof(struct %s, subject), NULL },\n",
+            field_base_offsetof_expr,
+            t->user_spec->c_value_struct_name);
+    }
+}
 
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
                                                 FengToken err_token) {
     switch (cgtype_value_kind(t)) {
         case CG_VK_TRIVIAL:         return 0U;
         case CG_VK_MANAGED_POINTER: return 1U;
-        case CG_VK_AGGREGATE:
-            (void)cg_fail(cg, err_token,
-                "codegen: aggregate field descriptor flattening not yet implemented");
-            return 0U;
+        case CG_VK_AGGREGATE: {
+            size_t n = cg_aggregate_pointer_slot_count(t);
+            if (n == 0U) {
+                (void)cg_fail(cg, err_token,
+                    "codegen: aggregate field has no flatten rule (unknown aggregate kind)");
+            }
+            return n;
+        }
     }
     return 0U;
 }
@@ -3563,9 +3692,22 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
             }
             buf_append_cstr(td, " },\n");
             return true;
-        case CG_VK_AGGREGATE:
-            return cg_fail(cg, err_token,
-                "codegen: aggregate field descriptor emission not yet implemented");
+        case CG_VK_AGGREGATE: {
+            if (cg_aggregate_pointer_slot_count(ft) == 0U) {
+                return cg_fail(cg, err_token,
+                    "codegen: aggregate field has no flatten rule (unknown aggregate kind)");
+            }
+            char field_base[256];
+            int n = snprintf(field_base, sizeof(field_base),
+                             "offsetof(struct %s, %s)",
+                             struct_name, field_c_name);
+            if (n < 0 || (size_t)n >= sizeof(field_base)) {
+                return cg_fail(cg, err_token,
+                    "codegen: aggregate field offset expression exceeds buffer");
+            }
+            cg_emit_aggregate_pointer_slot_rows(td, field_base, ft);
+            return true;
+        }
     }
     return true;
 }
@@ -3580,9 +3722,17 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
         case CG_VK_MANAGED_POINTER:
             buf_append_fmt(td, "    feng_release(_o->%s);\n", field_c_name);
             return true;
-        case CG_VK_AGGREGATE:
-            return cg_fail(cg, err_token,
-                "codegen: aggregate field release emission not yet implemented");
+        case CG_VK_AGGREGATE: {
+            const char *desc = cg_aggregate_field_desc_name(ft);
+            if (desc == NULL) {
+                return cg_fail(cg, err_token,
+                    "codegen: aggregate field has no descriptor symbol (unknown aggregate kind)");
+            }
+            buf_append_fmt(td,
+                "    feng_aggregate_release(&_o->%s, &%s);\n",
+                field_c_name, desc);
+            return true;
+        }
     }
     return true;
 }
@@ -3999,6 +4149,10 @@ static void cg_dispose(CG *cg) {
         free(us->feng_name);
         free(us->c_value_struct_name);
         free(us->c_witness_struct_name);
+        free(us->c_aggregate_desc_name);
+        free(us->c_aggregate_slots_name);
+        free(us->c_aggregate_default_name);
+        free(us->c_aggregate_init_fn_name);
         for (size_t j = 0; j < us->member_count; j++) {
             UserSpecMember *sm = &us->members[j];
             free(sm->feng_name);
