@@ -1,0 +1,59 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+// Returns a freshly built spec value (object→spec coercion at the return
+// site). The callee owns the +1 on subject; cg_emit_call must surface this
+// so the caller's binding consumes it without an extra retain.
+fn make_named(label: string): Named {
+    let u: User = User { name: label };
+    return u;
+}
+
+// Returns an existing spec local (borrow). Codegen must retain into the
+// return slot so the caller's bind/copy carries +1 independently of the
+// source local's lifetime.
+fn echo_named(n: Named): Named {
+    return n;
+}
+
+// Returns the result of another spec-returning call directly. With
+// owns_ref=true on the inner call, cg_emit_return takes the +1 via
+// feng_aggregate_take and zeroes the temp so cleanup is a no-op.
+fn forward(label: string): Named {
+    return make_named(label);
+}
+
+fn main(args: string[]) {
+    let n1: Named = make_named("alpha");
+    puts(n1.greet());
+
+    let n2: Named = echo_named(n1);
+    puts(n2.greet());
+
+    let n3: Named = forward("gamma");
+    puts(n3.greet());
+
+    // Spec call inside an array literal: each element is a +1 aggregate
+    // rvalue, materialised then assigned into the slot.
+    let arr: Named[]! = [make_named("delta"), make_named("epsilon")]!;
+    puts(arr[0].greet());
+    puts(arr[1].greet());
+
+    // Re-bind via call chain to exercise the take→retain crossover.
+    let n4: Named = echo_named(forward("zeta"));
+    puts(n4.greet());
+}

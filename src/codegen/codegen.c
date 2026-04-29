@@ -2072,7 +2072,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     buf_free(&args_buf);
     out->c_expr = b.data;
-    out->owns_ref = cgtype_is_managed(out->type);
+    /* Step 4b-γ-2 — function returns transfer +1 ownership for both managed
+     * pointers and aggregate (fat-spec) values. The callee return path
+     * (cg_emit_return) already retains/moves so every managed slot of the
+     * returned struct carries +1; mark the rvalue accordingly so the
+     * receiver (binding init / arg materialisation / further return)
+     * consumes that +1 instead of double-retaining it. */
+    out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
     return out->c_expr && out->type;
 }
 
@@ -3144,22 +3150,41 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r.type)) {
-        /* Step 4b-β — fat spec value: must transfer +1 on every managed slot
-         * of the descriptor out of the function. Borrowed producer takes a
-         * descriptor-driven retain; owns_ref producer is moved as-is. */
+        /* Step 4b-γ-2 — fat spec value: transfer +1 on every managed slot
+         * out of the function. Two source flavours:
+         *   • borrowed (owns_ref=false): bump every managed slot via
+         *     feng_aggregate_retain so the caller's _ret carries +1
+         *     independent of the source's lifetime.
+         *   • +1 rvalue (owns_ref=true, e.g. another spec-returning call,
+         *     a coerced object, a default-init binding): hoist into a
+         *     scope-tracked temp via cg_materialize_to_local (so its
+         *     subject lifetime is anchored, including across panics) and
+         *     then move the bytes through feng_aggregate_take. take()
+         *     nulls the source's managed slots so the cleanup-chain
+         *     release at scope exit is a well-defined no-op (per
+         *     feng_aggregate.c §take), which is exactly the documented
+         *     spec-return move semantics (dev/feng-spec-codegen-pending
+         *     §13.3.γ-2). _ret itself is null-initialised before take so
+         *     take's "release dst slots first" precondition holds.
+         */
+        const char *desc = cg_aggregate_field_desc_name(r.type);
+        if (!desc) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                "codegen: missing aggregate descriptor for spec return");
+        }
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
-            const char *desc = cg_aggregate_field_desc_name(r.type);
-            if (!desc) {
-                free(cty); free(tmp); er_free(&r);
-                return cg_fail(cg, stmt->token,
-                    "codegen: missing aggregate descriptor for spec return");
-            }
-            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
-                           cty, tmp, r.c_expr, tmp, desc);
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                cty, tmp, r.c_expr, tmp, desc);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+            cg_materialize_to_local(cg, &r, "_t");
+            buf_append_fmt(cg->cur_body,
+                "    %s %s; memset(&%s, 0, sizeof %s);"
+                " feng_aggregate_take(&%s, &%s, &%s);\n",
+                cty, tmp, tmp, tmp, tmp, r.c_expr, desc);
         }
         free(cty);
         cg_release_through(cg, NULL);
