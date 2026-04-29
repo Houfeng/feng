@@ -41,6 +41,15 @@ feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg
 - `init`、`build`、`run`、`check`、`clean`、`pack`、`deps` 面向普通项目开发。
 - `tool` 面向编译器开发过程中的调试,以及高级用户对编译细节的诊断。
 
+## 2.1 --out 说明
+
+- `--out` 指定输出路径，需要是一个目录，默认 `./build`
+- `build/ir` 中间产物（目前就编译后的 C 源文件），也可放入 `build/ir/c` 中。
+- `build/gen` 将来的自定义注解（编译期生成的文件目录）
+- `build/bin` 存放可执行文件
+- `build/lib` 存放库文件
+- `build/pkg` 存放包文件
+
 ## 3 全局选项
 
 所有顶层命令支持以下全局选项:
