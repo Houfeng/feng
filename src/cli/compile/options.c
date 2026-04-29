@@ -61,6 +61,7 @@ bool feng_cli_direct_options_parse(const char *program,
     out->out_dir = NULL;
     out->release = false;
     out->keep_intermediate = false;
+    out->bin_name = NULL;
     out->input_count = 0;
     out->inputs = NULL;
 
@@ -110,6 +111,15 @@ bool feng_cli_direct_options_parse(const char *program,
         }
         if (strcmp(arg, "--keep-ir") == 0) {
             out->keep_intermediate = true;
+            continue;
+        }
+        if (strncmp(arg, "--bin-name=", 11) == 0) {
+            out->bin_name = arg + 11;
+            if (out->bin_name[0] == '\0') {
+                fprintf(stderr, "--bin-name requires a non-empty value\n");
+                free(inputs);
+                return false;
+            }
             continue;
         }
         fprintf(stderr, "unknown option: %s\n", arg);

@@ -248,22 +248,26 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    /* Compose the bin path from the first input's basename (without
-     * extension) for now; the multi-file convention may be revisited as
-     * the package model lands. */
-    const char *first = opts.inputs[0];
-    const char *slash = strrchr(first, '/');
-    const char *base = slash != NULL ? slash + 1 : first;
-    const char *dot = strrchr(base, '.');
-    size_t stem_len = dot != NULL ? (size_t)(dot - base) : strlen(base);
-    if (stem_len == 0U) stem_len = strlen(base);
-    char *stem = malloc(stem_len + 1U);
+    /* Compose the bin path. Prefer an explicit `--bin-name` override; otherwise
+     * derive the stem from the first input's basename. The multi-file naming
+     * convention may be revisited once the package model lands. */
     char *bin_path = NULL;
-    if (stem != NULL) {
-        memcpy(stem, base, stem_len);
-        stem[stem_len] = '\0';
-        bin_path = path_join(bin_dir, stem);
-        free(stem);
+    if (opts.bin_name != NULL) {
+        bin_path = path_join(bin_dir, opts.bin_name);
+    } else {
+        const char *first = opts.inputs[0];
+        const char *slash = strrchr(first, '/');
+        const char *base = slash != NULL ? slash + 1 : first;
+        const char *dot = strrchr(base, '.');
+        size_t stem_len = dot != NULL ? (size_t)(dot - base) : strlen(base);
+        if (stem_len == 0U) stem_len = strlen(base);
+        char *stem = malloc(stem_len + 1U);
+        if (stem != NULL) {
+            memcpy(stem, base, stem_len);
+            stem[stem_len] = '\0';
+            bin_path = path_join(bin_dir, stem);
+            free(stem);
+        }
     }
     if (bin_path == NULL) {
         fprintf(stderr, "out of memory composing bin path\n");
@@ -307,10 +311,12 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     }
 
     FengCliDriverOptions drv = {
+        .program_path = program,
         .c_path = c_path,
         .out_bin_path = bin_path,
         .programs = prog_array,
         .program_count = prog_count,
+        .keep_intermediate = opts.keep_intermediate,
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);
 

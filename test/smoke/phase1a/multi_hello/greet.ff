@@ -1,0 +1,5 @@
+mod feng.smoke.multi_hello;
+
+fn helper(): string {
+    return "hello from helper";
+}

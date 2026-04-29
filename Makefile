@@ -56,8 +56,8 @@ test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BI
 smoke: cli runtime
 	./scritps/run_smoke.sh
 
-cli-tests: cli
-	./scritps/run_cli_p4.sh
+cli-tests: cli runtime
+	./scritps/run_cli_direct.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)

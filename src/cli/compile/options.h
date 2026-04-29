@@ -34,6 +34,7 @@ typedef struct FengCliDirectOptions {
     const char *out_dir;          /* required: <out>/ir/c, <out>/bin */
     bool release;                 /* P4: parsed but reported as not-yet-implemented */
     bool keep_intermediate;       /* P5: keep <out>/ir/c artifacts on success */
+    const char *bin_name;         /* optional override for the produced bin file stem */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
 } FengCliDirectOptions;
