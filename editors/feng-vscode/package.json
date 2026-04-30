@@ -41,7 +41,6 @@
         "extensions": [
           ".feng",
           ".ff",
-          ".fm",
           ".fi"
         ],
         "icon": {
@@ -49,6 +48,21 @@
           "dark": "./icons/feng-file.svg"
         },
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "feng-manifest",
+        "aliases": [
+          "Feng Manifest",
+          "feng-manifest"
+        ],
+        "extensions": [
+          ".fm"
+        ],
+        "icon": {
+          "light": "./icons/feng-file.svg",
+          "dark": "./icons/feng-file.svg"
+        },
+        "configuration": "./manifest-language-configuration.json"
       }
     ],
     "grammars": [
@@ -56,6 +70,11 @@
         "language": "feng",
         "scopeName": "source.feng",
         "path": "./syntaxes/feng.tmLanguage.json"
+      },
+      {
+        "language": "feng-manifest",
+        "scopeName": "source.fengmanifest",
+        "path": "./syntaxes/feng-manifest.tmLanguage.json"
       }
     ],
     "configuration": {

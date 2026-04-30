@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const cp = require('child_process');
 
-const { formatFengSource } = require('./formatter');
+const { formatFengSource, formatFengManifestSource } = require('./formatter');
 
 function getExecutablePath() {
     return vscode.workspace.getConfiguration('feng').get('executablePath', 'feng');
@@ -50,6 +50,16 @@ function entriesToDiagnostics(entries) {
 
 function isCheckableFengDocument(document) {
     return document.languageId === 'feng' && document.uri.scheme === 'file';
+}
+
+function formatDocumentSource(document, options) {
+    const source = document.getText();
+
+    if (document.languageId === 'feng-manifest') {
+        return formatFengManifestSource(source, options);
+    }
+
+    return formatFengSource(source, options);
 }
 
 function createDiagnosticController({ collection, runCheckEntries }) {
@@ -113,13 +123,15 @@ function activate(context) {
 
     const selector = [
         { language: 'feng', scheme: 'file' },
-        { language: 'feng', scheme: 'untitled' }
+        { language: 'feng', scheme: 'untitled' },
+        { language: 'feng-manifest', scheme: 'file' },
+        { language: 'feng-manifest', scheme: 'untitled' }
     ];
 
     const formatter = {
         provideDocumentFormattingEdits(document, options) {
             const source = document.getText();
-            const formatted = formatFengSource(source, options);
+            const formatted = formatDocumentSource(document, options);
 
             if (formatted === source) {
                 return [];
@@ -157,6 +169,7 @@ module.exports = {
     __test__: {
         createDiagnosticController,
         entriesToDiagnostics,
-        isCheckableFengDocument
+        isCheckableFengDocument,
+        formatDocumentSource
     }
 };

@@ -1,0 +1,76 @@
+{
+  "name": "Feng Manifest",
+  "scopeName": "source.fengmanifest",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#sections"
+    },
+    {
+      "include": "#entries"
+    },
+    {
+      "include": "#strings"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.fengmanifest",
+          "match": "^\\s*#.*$"
+        }
+      ]
+    },
+    "sections": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(\\[)([A-Za-z_][A-Za-z0-9_.-]*)(\\])\\s*$",
+          "captures": {
+            "2": {
+              "name": "punctuation.definition.section.begin.fengmanifest"
+            },
+            "3": {
+              "name": "keyword.control.section.fengmanifest"
+            },
+            "4": {
+              "name": "punctuation.definition.section.end.fengmanifest"
+            }
+          }
+        }
+      ]
+    },
+    "entries": {
+      "patterns": [
+        {
+          "match": "^(\\s*)([A-Za-z_][A-Za-z0-9_.-]*)(\\s*)(:)",
+          "captures": {
+            "2": {
+              "name": "variable.other.readwrite.fengmanifest"
+            },
+            "4": {
+              "name": "punctuation.separator.key-value.fengmanifest"
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.fengmanifest",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.fengmanifest",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

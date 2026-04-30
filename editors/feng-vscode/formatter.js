@@ -549,6 +549,130 @@ function formatFengSource(source, options = {}) {
     return formattedLines.join('\n');
 }
 
+function normalizeText(source) {
+    return source.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function isManifestIdentifier(value) {
+    return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(value);
+}
+
+function formatManifestComment(trimmedLine) {
+    const content = trimmedLine.slice(1).trim();
+
+    return content.length > 0 ? `# ${content}` : '#';
+}
+
+function parseManifestLine(line) {
+    const trimmed = line.trim();
+    const sectionMatch = trimmed.match(/^\[\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\]$/);
+    const entryMatch = trimmed.match(/^([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*("(?:[^"\\]|\\.)*")\s*$/);
+
+    if (trimmed.length === 0) {
+        return { type: 'blank' };
+    }
+
+    if (trimmed.startsWith('#')) {
+        return {
+            type: 'comment',
+            text: formatManifestComment(trimmed)
+        };
+    }
+
+    if (sectionMatch != null) {
+        return {
+            type: 'section',
+            name: sectionMatch[1]
+        };
+    }
+
+    if (entryMatch != null && isManifestIdentifier(entryMatch[1])) {
+        return {
+            type: 'entry',
+            key: entryMatch[1],
+            value: entryMatch[2]
+        };
+    }
+
+    return {
+        type: 'raw',
+        text: line.replace(/[\t ]+$/g, '')
+    };
+}
+
+function groupManifestBlocks(nodes) {
+    const blocks = [{ header: null, nodes: [] }];
+
+    for (const node of nodes) {
+        if (node.type === 'section') {
+            blocks.push({ header: node, nodes: [] });
+            continue;
+        }
+
+        blocks[blocks.length - 1].nodes.push(node);
+    }
+
+    return blocks;
+}
+
+function formatManifestEntry(node, maxKeyLength) {
+    return `${node.key}:${' '.repeat(Math.max(maxKeyLength - node.key.length + 1, 1))}${node.value}`;
+}
+
+function renderManifestBlock(block, outputLines) {
+    let maxKeyLength = 0;
+
+    if (block.header != null) {
+        outputLines.push(`[${block.header.name}]`);
+    }
+
+    for (const node of block.nodes) {
+        if (node.type === 'entry') {
+            maxKeyLength = Math.max(maxKeyLength, node.key.length);
+        }
+    }
+
+    for (const node of block.nodes) {
+        if (node.type === 'blank') {
+            outputLines.push('');
+            continue;
+        }
+
+        if (node.type === 'comment') {
+            outputLines.push(node.text);
+            continue;
+        }
+
+        if (node.type === 'entry') {
+            outputLines.push(formatManifestEntry(node, maxKeyLength));
+            continue;
+        }
+
+        outputLines.push(node.text);
+    }
+}
+
+function formatFengManifestSource(source) {
+    const normalized = normalizeText(source);
+    const hasTrailingNewline = normalized.endsWith('\n');
+    const rawLines = hasTrailingNewline ? normalized.slice(0, -1).split('\n') : normalized.split('\n');
+    const nodes = rawLines.map(parseManifestLine);
+    const blocks = groupManifestBlocks(nodes);
+    const outputLines = [];
+
+    for (const block of blocks) {
+        if (block.header == null && block.nodes.length === 0) {
+            continue;
+        }
+        renderManifestBlock(block, outputLines);
+    }
+
+    const formatted = outputLines.join('\n');
+
+    return hasTrailingNewline ? `${formatted}\n` : formatted;
+}
+
 module.exports = {
-    formatFengSource
+    formatFengSource,
+    formatFengManifestSource
 };

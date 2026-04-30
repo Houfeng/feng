@@ -55,9 +55,9 @@ function loadExtensionModule() {
     }
 }
 
-function createDocument(pathname) {
+function createDocument(pathname, languageId = 'feng') {
     return {
-        languageId: 'feng',
+        languageId,
         uri: {
             scheme: 'file',
             fsPath: pathname,
@@ -84,7 +84,33 @@ function createCollectionRecorder() {
 
 async function run() {
     const extension = loadExtensionModule();
-    const { createDiagnosticController } = extension.__test__;
+    const { createDiagnosticController, isCheckableFengDocument, formatDocumentSource } = extension.__test__;
+
+    assert.strictEqual(isCheckableFengDocument(createDocument('/tmp/manifest.fm', 'feng-manifest')), false);
+
+    {
+        const sourceDocument = {
+            languageId: 'feng',
+            getText() {
+                return 'fn main(args:string[]):void {}\n';
+            }
+        };
+        const manifestDocument = {
+            languageId: 'feng-manifest',
+            getText() {
+                return '[package]\nname:"demo"\nversion:"0.1.0"\n';
+            }
+        };
+
+        assert.strictEqual(
+            formatDocumentSource(sourceDocument, { insertSpaces: true, tabSize: 4 }),
+            'fn main(args: string[]): void {}\n'
+        );
+        assert.strictEqual(
+            formatDocumentSource(manifestDocument, { insertSpaces: true, tabSize: 4 }),
+            '[package]\nname:    "demo"\nversion: "0.1.0"\n'
+        );
+    }
 
     {
         const document = createDocument('/tmp/open.ff');

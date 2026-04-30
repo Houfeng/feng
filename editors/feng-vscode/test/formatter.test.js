@@ -1,9 +1,13 @@
 const assert = require('assert');
 
-const { formatFengSource } = require('../formatter');
+const { formatFengSource, formatFengManifestSource } = require('../formatter');
 
 function runCase(name, input, expected, options) {
     assert.strictEqual(formatFengSource(input, options), expected, name);
+}
+
+function runManifestCase(name, input, expected) {
+    assert.strictEqual(formatFengManifestSource(input), expected, name);
 }
 
 runCase(
@@ -41,6 +45,18 @@ runCase(
     'normalizes compound and bitwise operators',
     'fn run():void {\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask>>=1;\nmask&=3;\n}\n',
     'fn run(): void {\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask >>= 1;\n    mask &= 3;\n}\n'
+);
+
+runManifestCase(
+    'formats manifest sections comments and aligned values',
+    '#package\n [package] \nname:"examples"\nversion:  "0.1.0"\nout:"build/"\n\n# deps\n[dependencies]\ndemo:"0.1.0"\nbase.core:"1.2.3"\n',
+    '# package\n[package]\nname:    "examples"\nversion: "0.1.0"\nout:     "build/"\n\n# deps\n[dependencies]\ndemo:      "0.1.0"\nbase.core: "1.2.3"\n'
+);
+
+runManifestCase(
+    'preserves unknown manifest lines while normalizing known ones',
+    '[package]\nname:"demo"\ninvalid line\n#note\n',
+    '[package]\nname: "demo"\ninvalid line\n# note\n'
 );
 
 console.log('formatter tests passed');
