@@ -1,4 +1,4 @@
-mod feng.examples;
+mod feng.examples.hello_world;
 
 @cdecl("libc")
 extern fn puts(msg: string): int;
@@ -12,8 +12,7 @@ type User {
   }
 }
 
-/* main function */
-fn main(args: string[]): void {
+fn hello_world_example(args: string[]): void {
   let user = User {
     name: "Houfeng",
     age: 18

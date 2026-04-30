@@ -1,4 +1,4 @@
-mod feng.examples;
+mod feng.examples.debug;
 
 spec CommitOptions {
   var message: i32;
@@ -19,8 +19,7 @@ type User {
   }
 }
 
-// 主函数
-fn main(args: string[]) {
+fn debug_example(args: string[]) {
   let user = User();
   user.commit(1);
 }
