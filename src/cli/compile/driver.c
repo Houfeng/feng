@@ -452,6 +452,13 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
+        /* Generated C may emit fit-helper functions that are not exercised
+         * by the current program (e.g. unused coercion sites). They are
+         * intentional artefacts of codegen, not user code, so silence the
+         * resulting -Wunused-function noise on the host compile. */
+        if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
         if (ok && !argv_push(&av, include_flag)) { ok = false; }
         if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
@@ -488,6 +495,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
             if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
+            /* See bin path above: silence unused-function noise from
+             * generated fit helpers for the lib compile too. */
+            if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
             if (ok && !argv_push(&av, include_flag)) { ok = false; }
             if (ok && !argv_push(&av, "-c")) { ok = false; }
             if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
