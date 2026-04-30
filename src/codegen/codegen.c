@@ -271,6 +271,11 @@ typedef struct UserType {
     UserMethod *methods;
     size_t      method_count;
     const FengDecl *decl;
+    /* Owning program — set when the type shell is registered while emitting
+     * that program. Used by cg_find_user_type to enforce per-program
+     * (module / `use`) visibility so two distinct types that happen to share
+     * a simple name in different modules cannot be conflated. */
+    const FengProgram *owner_program;
 } UserType;
 
 /* Object-form spec registry (Step 4b — value model fat spec). One entry per
@@ -332,6 +337,8 @@ typedef struct UserSpec {
     UserSpecMember *members;
     size_t          member_count;
     const FengDecl *decl;
+    /* Owning program — see UserType.owner_program. */
+    const FengProgram *owner_program;
 } UserSpec;
 
 /* `fit T :: S { ... }` registry (Step 4b-γ). One entry per fit declaration.
@@ -569,6 +576,17 @@ typedef struct CG {
      * up Phase 1B cyclicity markers without re-running SCC. */
     const FengSemanticAnalysis *analysis;
 
+    /* Currently active source program for diagnostics and per-module
+     * symbol resolution. Set/reset at the boundaries of every per-program
+     * pass and around per-(type|spec|fit) operations dispatched from a
+     * global walk. cg_fail uses it to populate FengCodegenError.path so
+     * multi-file projects report the *real* file the failing token came
+     * from rather than falling back to whichever source happens to be
+     * first in the input list. cg_find_user_type / cg_find_user_spec use
+     * it to filter candidate symbols by per-program visibility so two
+     * unrelated `User` types in different modules cannot collide. */
+    const FengProgram *cur_program;
+
     /* Error state. */
     FengCodegenError *error;
     bool failed;
@@ -627,6 +645,13 @@ static bool cg_fail(CG *cg, FengToken token, const char *fmt, ...) {
         cg->error->message = cg_vformat(fmt, ap);
         va_end(ap);
         cg->error->token = token;
+        /* Pin the diagnostic to the source program currently being emitted.
+         * Without this the CLI falls back to sources[0].path which, in
+         * multi-file projects, is the first input alphabetically — almost
+         * never the file the failing token actually came from. */
+        if (!cg->error->path && cg->cur_program) {
+            cg->error->path = cg->cur_program->path;
+        }
     }
     return false;
 }
@@ -794,24 +819,89 @@ static const BuiltinTypeMap k_builtin_types[] = {
     {"string", CG_TYPE_STRING},
 };
 
-static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
-    for (size_t i = 0; i < cg->user_type_count; i++) {
-        if (strlen(cg->user_types[i].feng_name) == len &&
-            memcmp(cg->user_types[i].feng_name, name, len) == 0) {
-            return &cg->user_types[i];
+/* Compare two module qualified names (segment slices) for exact equality. */
+static bool cg_module_segments_equal(const FengSlice *a, size_t an,
+                                     const FengSlice *b, size_t bn) {
+    if (an != bn) return false;
+    for (size_t i = 0; i < an; i++) {
+        if (a[i].length != b[i].length) return false;
+        if (memcmp(a[i].data, b[i].data, a[i].length) != 0) return false;
+    }
+    return true;
+}
+
+/* True iff `consumer` can see top-level decls owned by `provider`:
+ *   - same program (a decl always sees itself / its own siblings); or
+ *   - same module across different files (semantic groups them together); or
+ *   - `consumer` lists `provider`'s module name in its `use` declarations.
+ * The visibility check is deliberately structural and does NOT consult
+ * `pu` markers \u2014 semantic has already accepted the program as well-typed,
+ * so any name the user wrote is by construction visible. We only need to
+ * pick the *correct* candidate when multiple modules expose a same-simple-named
+ * type, which is the exact bug this guards against. */
+static bool cg_program_can_see(const FengProgram *consumer,
+                               const FengProgram *provider) {
+    if (!consumer || !provider) return true;       /* not yet pinned */
+    if (consumer == provider) return true;
+    if (cg_module_segments_equal(consumer->module_segments,
+                                 consumer->module_segment_count,
+                                 provider->module_segments,
+                                 provider->module_segment_count)) {
+        return true;
+    }
+    for (size_t i = 0; i < consumer->use_count; i++) {
+        const FengUseDecl *u = &consumer->uses[i];
+        if (cg_module_segments_equal(u->segments, u->segment_count,
+                                     provider->module_segments,
+                                     provider->module_segment_count)) {
+            return true;
         }
     }
+    return false;
+}
+
+static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
+    /* Prefer a match owned by the program currently being emitted, then any
+     * match visible from it. Falling back to the global list (when nothing
+     * matches under visibility filtering) preserves single-file / legacy
+     * behaviour and keeps cross-program emit-time helpers (e.g. fit-target
+     * resolution before cur_program has been pinned) working. */
+    const UserType *visible = NULL;
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        const UserType *ut = &cg->user_types[i];
+        if (strlen(ut->feng_name) != len ||
+            memcmp(ut->feng_name, name, len) != 0) continue;
+        if (cg->cur_program && ut->owner_program == cg->cur_program) {
+            return ut;                 /* own-program wins outright */
+        }
+        if (!cg->cur_program ||
+            cg_program_can_see(cg->cur_program, ut->owner_program)) {
+            if (!visible) visible = ut;
+        }
+    }
+    if (visible) return visible;
+    /* No visible match: leave NULL so callers can issue an "unknown type"
+     * diagnostic against the offending token. We deliberately do NOT fall
+     * back to a hidden, non-visible candidate \u2014 doing so reintroduces the
+     * silent cross-module aliasing bug this helper exists to prevent. */
     return NULL;
 }
 
 static const UserSpec *cg_find_user_spec(const CG *cg, const char *name, size_t len) {
+    const UserSpec *visible = NULL;
     for (size_t i = 0; i < cg->user_spec_count; i++) {
-        if (strlen(cg->user_specs[i].feng_name) == len &&
-            memcmp(cg->user_specs[i].feng_name, name, len) == 0) {
-            return &cg->user_specs[i];
+        const UserSpec *us = &cg->user_specs[i];
+        if (strlen(us->feng_name) != len ||
+            memcmp(us->feng_name, name, len) != 0) continue;
+        if (cg->cur_program && us->owner_program == cg->cur_program) {
+            return us;
+        }
+        if (!cg->cur_program ||
+            cg_program_can_see(cg->cur_program, us->owner_program)) {
+            if (!visible) visible = us;
         }
     }
-    return NULL;
+    return visible;
 }
 
 static const UserType *cg_find_user_type_by_decl(const CG *cg, const FengDecl *decl) {
@@ -1029,6 +1119,7 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     }
     UserType *t = &cg->user_types[cg->user_type_count++];
     memset(t, 0, sizeof *t);
+    t->owner_program = cg->cur_program;
     t->feng_name = strndup(decl->as.type_decl.name.data,
                            decl->as.type_decl.name.length);
     t->decl = decl;
@@ -1188,6 +1279,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     }
     UserSpec *s = &cg->user_specs[cg->user_spec_count++];
     memset(s, 0, sizeof *s);
+    s->owner_program = cg->cur_program;
     s->decl = decl;
     s->feng_name = strndup(decl->as.spec_decl.name.data,
                            decl->as.spec_decl.name.length);
@@ -4996,6 +5088,7 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
 
 static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_TYPE) {
@@ -5011,22 +5104,26 @@ static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
             if (!cg_register_user_spec_shell(cg, d)) return false;
         }
     }
+    cg->cur_program = NULL;
     return true;
 }
 
 static bool cg_pass_register_fit_shells(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_FIT) {
             if (!cg_register_user_fit_shell(cg, d)) return false;
         }
     }
+    cg->cur_program = NULL;
     return true;
 }
 
 static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind != FENG_DECL_GLOBAL_BINDING) continue;
@@ -5045,12 +5142,14 @@ static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
         }
         free(cty);
     }
+    cg->cur_program = NULL;
     return true;
 }
 
 static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                FengCompileTarget target) {
     if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
     /* Pass 4: walk top-level decls in source order for externs / functions /
      * methods. Type decls themselves emit only their methods here. */
     for (size_t i = 0; i < prog->declaration_count; i++) {
@@ -5101,6 +5200,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 break;
         }
     }
+    cg->cur_program = NULL;
     return true;
 }
 
@@ -5109,7 +5209,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
  * (shells, fits, module bindings, decl emission) re-anchor `cg->module_mangle`
  * via cg_emit_module_header before processing each program; passes that walk
  * already-registered shells (member registration, type/spec body emission)
- * are program-agnostic and run once over the global cg arrays. */
+ * are program-agnostic and pin `cg->cur_program` per element so visibility
+ * filtering and diagnostic paths report the right module / source file. */
 static bool cg_emit_all_programs(CG *cg,
                                  const FengProgram *const *programs,
                                  size_t program_count,
@@ -5119,28 +5220,53 @@ static bool cg_emit_all_programs(CG *cg,
         if (!cg_pass_register_type_shells(cg, programs[p])) return false;
     }
     /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
-     * every shell, regardless of owning program). */
+     * every shell, regardless of owning program). cur_program is pinned to
+     * each type's owning program so cg_resolve_type's visibility filter
+     * picks the right same-simple-named candidate. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
-        if (!cg_register_user_type_members(cg, &cg->user_types[i])) return false;
+        cg->cur_program = cg->user_types[i].owner_program;
+        bool ok = cg_register_user_type_members(cg, &cg->user_types[i]);
+        cg->cur_program = NULL;
+        if (!ok) return false;
     }
     /* Pass 2.5: register spec members. */
     for (size_t i = 0; i < cg->user_spec_count; i++) {
-        if (!cg_register_user_spec_members(cg, &cg->user_specs[i])) return false;
+        cg->cur_program = cg->user_specs[i].owner_program;
+        bool ok = cg_register_user_spec_members(cg, &cg->user_specs[i]);
+        cg->cur_program = NULL;
+        if (!ok) return false;
     }
     /* Pass 2.7: register fit shells (mangled per owning program), then
-     * fit members (program-agnostic). */
+     * fit members. The fit-body's name lookups must see the fit's own
+     * program (not the target type's), so cur_program is set from the
+     * fit declaration's owning program when registering members. */
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_register_fit_shells(cg, programs[p])) return false;
     }
     for (size_t i = 0; i < cg->user_fit_count; i++) {
-        if (!cg_register_user_fit_members(cg, &cg->user_fits[i])) return false;
+        /* Locate the owning program by scanning programs for the fit decl. */
+        const FengProgram *owner = NULL;
+        for (size_t p = 0; p < program_count && !owner; p++) {
+            for (size_t k = 0; k < programs[p]->declaration_count; k++) {
+                if (programs[p]->declarations[k] == cg->user_fits[i].decl) {
+                    owner = programs[p];
+                    break;
+                }
+            }
+        }
+        cg->cur_program = owner;
+        bool ok = cg_register_user_fit_members(cg, &cg->user_fits[i]);
+        cg->cur_program = NULL;
+        if (!ok) return false;
     }
     /* Pass 2b: register module-level let/var bindings + emit static storage. */
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_register_module_bindings(cg, programs[p])) return false;
     }
     /* Pass 3 + 3.5a/3.5b: emit type forwards/defs and spec forwards/defs.
-     * These walk the global cg shell arrays, so a single global pass suffices. */
+     * These walk the global cg shell arrays. cur_program is pinned per
+     * element so any diagnostic raised mid-emission reports the correct
+     * source file. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         cg_emit_user_type_forward(cg, &cg->user_types[i]);
     }
@@ -5148,10 +5274,16 @@ static bool cg_emit_all_programs(CG *cg,
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
     for (size_t i = 0; i < cg->user_type_count; i++) {
+        cg->cur_program = cg->user_types[i].owner_program;
         cg_emit_user_type_definition(cg, &cg->user_types[i]);
+        cg->cur_program = NULL;
+        if (cg->failed) return false;
     }
     for (size_t i = 0; i < cg->user_spec_count; i++) {
+        cg->cur_program = cg->user_specs[i].owner_program;
         cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
+        cg->cur_program = NULL;
+        if (cg->failed) return false;
     }
     /* Pass 4: per-program decl emission (externs / functions / methods /
      * finalizers / fit method bodies). */

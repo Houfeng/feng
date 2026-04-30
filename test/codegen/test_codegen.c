@@ -169,9 +169,103 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
+/* Regression for the multi-file project bug where two distinct `type User`
+ * declarations in two different modules were conflated by codegen because
+ * the user-type lookup keyed on the simple name only. With the visibility
+ * filter in place, each module's identifier `User` must resolve to its
+ * OWN type decl, and field access against that type must succeed against
+ * the matching field set even when the other module's `User` carries a
+ * different (and incompatible) field set. */
+static void test_same_named_types_in_distinct_modules(void) {
+    static const char *kHelloSrc =
+        "mod feng.codegen.dup.hello;\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "fn make_hello(): string {\n"
+        "    let u = User { name: \"hi\" };\n"
+        "    return u.name;\n"
+        "}\n";
+    static const char *kDebugSrc =
+        "mod feng.codegen.dup.debug;\n"
+        "type User {\n"
+        "    let id: i32;\n"
+        "}\n"
+        "fn make_debug(): i32 {\n"
+        "    let u = User { id: 7 };\n"
+        "    return u.id;\n"
+        "}\n";
+
+    FengProgram *prog_hello = parse_or_die(kHelloSrc, "tests/dup_hello.ff");
+    FengProgram *prog_debug = parse_or_die(kDebugSrc, "tests/dup_debug.ff");
+
+    const FengProgram *programs[2] = { prog_hello, prog_debug };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr,
+                "codegen error: path=%s msg=%s line=%u col=%u\n",
+                cgerr.path ? cgerr.path : "(null)",
+                cgerr.message ? cgerr.message : "(unknown)",
+                cgerr.token.line, cgerr.token.column);
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* Both User types must be emitted with module-qualified C struct names. */
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__dup__hello__User") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__dup__debug__User") != NULL);
+    /* The hello User must carry a `name` field; the debug User must carry an
+     * `id` field. If codegen had wired the wrong type, one of these would be
+     * missing on its expected struct. */
+    {
+        const char *hello_struct = strstr(out.c_source,
+            "struct Feng__feng__codegen__dup__hello__User {");
+        const char *debug_struct = strstr(out.c_source,
+            "struct Feng__feng__codegen__dup__debug__User {");
+        ASSERT(hello_struct != NULL);
+        ASSERT(debug_struct != NULL);
+        const char *hello_end = strstr(hello_struct, "};");
+        const char *debug_end = strstr(debug_struct, "};");
+        ASSERT(hello_end != NULL && debug_end != NULL);
+        /* hello.User has only `name`; debug.User has only `id`. */
+        size_t hello_len = (size_t)(hello_end - hello_struct);
+        size_t debug_len = (size_t)(debug_end - debug_struct);
+        ASSERT(memmem(hello_struct, hello_len, "name", 4U) != NULL);
+        ASSERT(memmem(hello_struct, hello_len, "id;", 3U) == NULL);
+        ASSERT(memmem(debug_struct, debug_len, "id;", 3U) != NULL);
+        ASSERT(memmem(debug_struct, debug_len, "name;", 5U) == NULL);
+    }
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(prog_hello);
+    feng_program_free(prog_debug);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
+    test_same_named_types_in_distinct_modules();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }
