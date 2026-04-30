@@ -8,6 +8,7 @@
     "kinded",
     "libc",
     "libname",
+    "miniz",
     "nums",
     "venv"
   ]

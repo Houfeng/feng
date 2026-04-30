@@ -309,7 +309,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 - `docs/feng-build.md`：编译器/构建工具分层。
 - `docs/feng-cli.md`：CLI 表面定义。
 - `docs/feng-package.md`：`.fi`、`.fb`、`feng.fm`、`mod` 目录规则。
-- `src/archive/`：规划中的 `.fb` 归档共享层；`feng build` / `pack` 与后续核心编译器都复用这里的 reader / writer 能力。
+- `src/archive/`：规划中的 `.fb` 归档共享层；上层通常通过 `fb.*` 复用 `.fb` 级 reader / writer 能力，`zip.*` 仅作为内部容器封装保留给 `fb.*` 使用。
 - `src/cli/main.c`：当前 CLI 只有 `lex` / `parse` / `semantic` / `check`，后续要演进为真正驱动器。
 - `src/parser/parser.h`：AST、`FengResolvedCallable`、表达式/语句/类型引用结构。
 - `src/semantic/semantic.h`：`FengSemanticAnalysis` / `FengSemanticModule` 是当前最自然的发码输入边界。

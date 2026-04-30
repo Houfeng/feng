@@ -125,10 +125,13 @@ src/cli/
 
 - `project/` 只是 `src/cli/` 内部的子目录，不是独立项目模块。
 - `project/common.*` 与 `project/manifest.*` 负责供 `build/check/run/clean/pack` 复用，不把项目逻辑散落到每个命令文件里重复实现。
-- `.fb` 的归档读写能力不放在 `project/` 下，而是上提到共享的 `src/archive/`；这样 `feng build`、`feng pack` 与后续核心编译器读取 `.fb` 时可以共用同一套 reader / writer 能力。
+- `.fb` 的归档读写能力不放在 `project/` 下，而是上提到共享的 `src/archive/`；这样 `feng build`、`feng pack` 与后续核心编译器读取 `.fb` 时可以共用同一套 archive reader / writer 能力。
 - `src/archive/fb.*` 负责 `.fb` 语义层（读取 `feng.fm`、列出 `mod/*.fi`、定位平台库文件、写包），`src/archive/zip.*` 负责 ZIP 容器层的统一封装。
+- 对更上层模块，通常不应直接依赖 `src/archive/zip.*`；默认应通过 `src/archive/fb.*` 获取更便捷的 `.fb` 级能力。`zip.*` 只作为 `fb.*` 的内部容器层存在，避免把 ZIP entry、压缩方式和第三方实现细节扩散到业务代码。
 - ZIP/Deflate 本身不建议自行实现；建议 vendored `third_party/miniz`，并只通过 `src/archive/zip.*` 暴露 Feng 需要的最小操作，避免把第三方类型和接口扩散到业务代码。
 - 压缩策略建议固定为：`feng.fm` 与 `.fi` 使用 Deflate，`.a` / `.lib` / `.so` / `.dylib` / `.dll` 等正式库文件默认使用 Store；这样既保留 ZIP 的随机读取优势，又避免对库文件做收益有限的重复压缩。
+- `src/archive/zip.*` 的最小能力面至少包括四类核心操作：① 获取 entry 列表，并支持按前缀或路径遍历查找；② 按归档内路径把文件内容读到内存；③ 按归档内路径把指定文件释放到磁盘指定位置，自动创建父目录并保留必要元信息；④ 创建 writer、写入文件（来自内存或磁盘源）、选择 Store/Deflate，并将完整 ZIP 保存到指定磁盘路径。这些能力主要由 `fb.*` 在内部组合后向上层提供更便捷的 `.fb` 语义接口。
+- 除上述四类核心操作外，`zip.*` 还应统一提供 entry 元信息查询（路径、大小、压缩方式、模式位）、路径规范化与明确的错误返回，避免上层直接依赖底层第三方库的细节。
 
 ### 4.3 `main.c` 的职责边界
 
@@ -205,7 +208,7 @@ src/cli/
 1. 先补齐底层编译路径对 `target = lib` 的支持，使项目级 `build` 可以稳定产出库项目所需制品。
 2. 在 `pack` 中读取项目上下文，校验 `target = lib`，并复用 `build` 或其底层产物准备流程。
 3. 建立 `.fb` 打包 staging 目录，明确 `feng.fm`、`mod/`、`lib/` 等内容的来源与落点；其中包内 `feng.fm` 仅视为分发元信息，供 `feng build` / `deps` / `pack` 等上层工具读取，不作为编译器消费 `.fb` 的输入；编译器只消费 `.fi` 与实际库文件布局。
-4. 在共享的 `src/archive/` 中封装 `.fb` 压缩打包与读取逻辑；其中 `zip.*` 作为 vendored `miniz` 的统一 wrapper 处理底层 ZIP 容器，`fb.*` 处理 `.fb` 语义层；压缩策略固定为文本 entry 用 Deflate、正式库文件用 Store，并满足“保留文件系统信息”和“效率可接受”两条约束。
+4. 在共享的 `src/archive/` 中封装 `.fb` 压缩打包与读取逻辑；其中 `zip.*` 作为 vendored `miniz` 的统一 wrapper 处理底层 ZIP 容器，并至少覆盖“获取文件列表 / 按路径读取到内存 / 按路径释放到磁盘 / 创建并写出 ZIP”四类核心能力，`fb.*` 处理 `.fb` 语义层；压缩策略固定为文本 entry 用 Deflate、正式库文件用 Store，并满足“保留文件系统信息”和“效率可接受”两条约束。
 
 验收：
 
