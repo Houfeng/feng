@@ -281,6 +281,14 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
                     echo "FAIL[pack_lib] packaged .ft has wrong magic: '$magic'"
                     failures=$((failures + 1))
                 fi
+                disk_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
+                if [[ ! -f "$disk_ft" ]]; then
+                    echo "FAIL[pack_lib] missing on-disk source .ft for byte-equality check"
+                    failures=$((failures + 1))
+                elif ! cmp -s "$WORK/pack_lib.ft" "$disk_ft"; then
+                    echo "FAIL[pack_lib] packaged .ft bytes differ from on-disk source"
+                    failures=$((failures + 1))
+                fi
             else
                 echo "FAIL[pack_lib] failed to extract packaged .ft"
                 sed 's/^/  /' "$WORK/pack_lib.ft.err"
