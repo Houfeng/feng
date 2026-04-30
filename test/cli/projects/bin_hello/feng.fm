@@ -1,5 +1,6 @@
-name:hello_project
-version:0.1.0
-target:bin
-src:src/
-out:build/
+[package]
+name: "hello_project"
+version: "0.1.0"
+target: "bin"
+src: "src/"
+out: "build/"

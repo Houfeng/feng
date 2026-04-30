@@ -1,5 +1,9 @@
-name: examples
-version: 0.1.0
-target: lib
-src: src/
-out: build/
+[package]
+name: "examples"
+version: "0.1.0"
+target: "lib"
+src: "src/"
+out: "build/"
+
+[dependencies]
+demo: "0.1.0"

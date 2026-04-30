@@ -96,10 +96,13 @@ if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample-ap
     if [[ ! -f "$INIT_BIN_FIXTURE/feng.fm" ]]; then
         echo "FAIL[init_bin] missing feng.fm"
         failures=$((failures + 1))
-    elif ! grep -qx 'name:sample_app' "$INIT_BIN_FIXTURE/feng.fm"; then
+    elif ! grep -qx '\[package\]' "$INIT_BIN_FIXTURE/feng.fm"; then
+        echo "FAIL[init_bin] manifest missing [package] section"
+        failures=$((failures + 1))
+    elif ! grep -qx 'name: "sample_app"' "$INIT_BIN_FIXTURE/feng.fm"; then
         echo "FAIL[init_bin] manifest missing explicit package name"
         failures=$((failures + 1))
-    elif ! grep -qx 'target:bin' "$INIT_BIN_FIXTURE/feng.fm"; then
+    elif ! grep -qx 'target: "bin"' "$INIT_BIN_FIXTURE/feng.fm"; then
         echo "FAIL[init_bin] manifest missing target:bin"
         failures=$((failures + 1))
     fi
@@ -119,10 +122,13 @@ if expect_ok init_lib bash -lc "cd '$INIT_LIB_FIXTURE' && '$FENG' init --target=
     if [[ ! -f "$INIT_LIB_FIXTURE/feng.fm" ]]; then
         echo "FAIL[init_lib] missing feng.fm"
         failures=$((failures + 1))
-    elif ! grep -qx "name:$expected_init_lib_name" "$INIT_LIB_FIXTURE/feng.fm"; then
+    elif ! grep -qx '\[package\]' "$INIT_LIB_FIXTURE/feng.fm"; then
+        echo "FAIL[init_lib] manifest missing [package] section"
+        failures=$((failures + 1))
+    elif ! grep -qx "name: \"$expected_init_lib_name\"" "$INIT_LIB_FIXTURE/feng.fm"; then
         echo "FAIL[init_lib] manifest missing derived package name"
         failures=$((failures + 1))
-    elif ! grep -qx 'target:lib' "$INIT_LIB_FIXTURE/feng.fm"; then
+    elif ! grep -qx 'target: "lib"' "$INIT_LIB_FIXTURE/feng.fm"; then
         echo "FAIL[init_lib] manifest missing target:lib"
         failures=$((failures + 1))
     fi
@@ -248,19 +254,23 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
             sed 's/^/  /' "$WORK/pack_lib.manifest.err"
             failures=$((failures + 1))
         else
-            if ! grep -qx 'name:hello_library' "$WORK/pack_lib.manifest"; then
+            if ! grep -qx '\[package\]' "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing [package] section"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'name: "hello_library"' "$WORK/pack_lib.manifest"; then
                 echo "FAIL[pack_lib] packaged manifest missing name"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx 'version:0.1.0' "$WORK/pack_lib.manifest"; then
+            if ! grep -qx 'version: "0.1.0"' "$WORK/pack_lib.manifest"; then
                 echo "FAIL[pack_lib] packaged manifest missing version"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx "arch:$HOST_TARGET" "$WORK/pack_lib.manifest"; then
+            if ! grep -qx "arch: \"$HOST_TARGET\"" "$WORK/pack_lib.manifest"; then
                 echo "FAIL[pack_lib] packaged manifest missing host arch"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx 'abi:feng' "$WORK/pack_lib.manifest"; then
+            if ! grep -qx 'abi: "feng"' "$WORK/pack_lib.manifest"; then
                 echo "FAIL[pack_lib] packaged manifest missing abi:feng"
                 failures=$((failures + 1))
             fi

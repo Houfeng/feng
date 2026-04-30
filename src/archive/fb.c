@@ -92,7 +92,7 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
     char *library_entry_path = NULL;
     bool ok = false;
 
-    manifest = dup_printf("name:%s\nversion:%s\narch:%s\nabi:feng\n",
+    manifest = dup_printf("[package]\nname: \"%s\"\nversion: \"%s\"\narch: \"%s\"\nabi: \"feng\"\n",
                           spec->package_name,
                           spec->package_version,
                           host_target);

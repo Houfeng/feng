@@ -445,7 +445,7 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
         goto cleanup;
     }
 
-    manifest_content = dup_printf("name:%s\nversion:0.1.0\ntarget:%s\nsrc:src/\nout:build/\n",
+    manifest_content = dup_printf("[package]\nname: \"%s\"\nversion: \"0.1.0\"\ntarget: \"%s\"\nsrc: \"src/\"\nout: \"build/\"\n",
                                   package_name,
                                   options.target_lib ? "lib" : "bin");
     if (manifest_content == NULL) {

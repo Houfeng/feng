@@ -318,11 +318,12 @@ static void test_init_creates_bin_project(void) {
     manifest_text = read_text_file(manifest_path);
     main_text = read_text_file(main_path);
     ASSERT(strcmp(manifest_text,
-                  "name:demo_app\n"
-                  "version:0.1.0\n"
-                  "target:bin\n"
-                  "src:src/\n"
-                  "out:build/\n") == 0);
+                  "[package]\n"
+                  "name: \"demo_app\"\n"
+                  "version: \"0.1.0\"\n"
+                  "target: \"bin\"\n"
+                  "src: \"src/\"\n"
+                  "out: \"build/\"\n") == 0);
     ASSERT(strcmp(main_text,
                   "mod demo_app;\n"
                   "\n"
@@ -360,7 +361,7 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     manifest_path = path_join(project_dir, "feng.fm");
     src_dir = path_join(project_dir, "src");
     lib_path = path_join(src_dir, "lib.ff");
-    expected_manifest = dup_printf("name:_9_demo_lib\nversion:0.1.0\ntarget:lib\nsrc:src/\nout:build/\n");
+    expected_manifest = dup_printf("[package]\nname: \"_9_demo_lib\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
     expected_lib_text = dup_printf("mod _9_demo_lib;\n\nfn helper(): int {\n  return 0;\n}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
@@ -456,11 +457,12 @@ static void test_init_prefixes_keyword_package_name(void) {
     manifest_text = read_text_file(manifest_path);
     main_text = read_text_file(main_path);
     ASSERT(strcmp(manifest_text,
-                  "name:_if\n"
-                  "version:0.1.0\n"
-                  "target:bin\n"
-                  "src:src/\n"
-                  "out:build/\n") == 0);
+                  "[package]\n"
+                  "name: \"_if\"\n"
+                  "version: \"0.1.0\"\n"
+                  "target: \"bin\"\n"
+                  "src: \"src/\"\n"
+                  "out: \"build/\"\n") == 0);
     ASSERT(strcmp(main_text,
                   "mod _if;\n"
                   "\n"
@@ -511,9 +513,11 @@ static void test_init_rejects_non_empty_directory(void) {
 
 static void test_manifest_defaults(void) {
     static const char *kManifest =
-        "name:demo\n"
-        "version:0.1.0\n"
-        "target:bin\n";
+        "# manifest\n"
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n";
     FengCliProjectManifest manifest = {0};
     FengCliProjectError error = {0};
 
@@ -530,15 +534,16 @@ static void test_manifest_defaults(void) {
 
 static void test_manifest_rejects_duplicate_field(void) {
     static const char *kManifest =
-        "name:demo\n"
-        "version:0.1.0\n"
-        "target:bin\n"
-        "target:lib\n";
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "target: \"lib\"\n";
     FengCliProjectManifest manifest = {0};
     FengCliProjectError error = {0};
 
     ASSERT(!feng_cli_project_manifest_parse("/tmp/feng.fm", kManifest, &manifest, &error));
-    ASSERT(error.line == 4U);
+    ASSERT(error.line == 5U);
     ASSERT(error.message != NULL);
 
     feng_cli_project_manifest_dispose(&manifest);
@@ -568,11 +573,16 @@ static void test_project_open_collects_sources(void) {
 
     mkdir_p(nested_dir);
     write_text_file(manifest_path,
-                    "name:demo\n"
-                    "version:0.1.0\n"
-                    "target:bin\n"
-                    "src:src/\n"
-                    "out:dist/\n");
+                    "# project\n"
+                    "[package]\n"
+                    "name: \"demo\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"dist/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "base: \"1.0.0\"\n");
     write_text_file(main_path, "mod demo.main;\nfn main(args: string[]) {}\n");
     write_text_file(helper_path, "mod demo.main;\nfn helper(): int { return 1; }\n");
 
@@ -602,8 +612,9 @@ static void test_project_open_collects_sources(void) {
 
 static void test_manifest_requires_target(void) {
     static const char *kManifest =
-        "name:demo\n"
-        "version:0.1.0\n";
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n";
     FengCliProjectManifest manifest = {0};
     FengCliProjectError error = {0};
 

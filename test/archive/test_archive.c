@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "archive/fm.h"
 #include "archive/zip.h"
 
 #define ASSERT(expr) \
@@ -260,9 +261,56 @@ static void test_zip_rejects_invalid_entry_path(void) {
     remove_tree(root);
 }
 
+static void test_fm_parses_sections_comments_and_strings(void) {
+    static const char *kManifest =
+        "# package\n"
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "\n"
+        "# dependencies\n"
+        "[dependencies]\n"
+        "base.core: \"1.0.0\"\n";
+    FengFmDocument document = {0};
+    FengFmError error = {0};
+
+    ASSERT(feng_fm_parse("/tmp/feng.fm", kManifest, &document, &error));
+    ASSERT(document.section_count == 2U);
+    ASSERT(document.entry_count == 3U);
+    ASSERT(strcmp(document.sections[0].name, "package") == 0);
+    ASSERT(document.sections[0].line == 2U);
+    ASSERT(strcmp(document.sections[1].name, "dependencies") == 0);
+    ASSERT(document.sections[1].line == 7U);
+    ASSERT(strcmp(document.entries[0].section, "package") == 0);
+    ASSERT(strcmp(document.entries[0].key, "name") == 0);
+    ASSERT(strcmp(document.entries[0].value, "demo") == 0);
+    ASSERT(strcmp(document.entries[2].section, "dependencies") == 0);
+    ASSERT(strcmp(document.entries[2].key, "base.core") == 0);
+    ASSERT(strcmp(document.entries[2].value, "1.0.0") == 0);
+
+    feng_fm_document_dispose(&document);
+    feng_fm_error_dispose(&error);
+}
+
+static void test_fm_rejects_field_outside_section(void) {
+    static const char *kManifest = "name: \"demo\"\n";
+    FengFmDocument document = {0};
+    FengFmError error = {0};
+
+    ASSERT(!feng_fm_parse("/tmp/feng.fm", kManifest, &document, &error));
+    ASSERT(error.line == 1U);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "inside a section") != NULL);
+
+    feng_fm_document_dispose(&document);
+    feng_fm_error_dispose(&error);
+}
+
 int main(void) {
     test_zip_roundtrip();
     test_zip_rejects_invalid_entry_path();
+    test_fm_parses_sections_comments_and_strings();
+    test_fm_rejects_field_outside_section();
     fprintf(stdout, "archive tests passed\n");
     return 0;
 }

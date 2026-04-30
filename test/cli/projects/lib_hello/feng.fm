@@ -1,5 +1,6 @@
-name:hello_library
-version:0.1.0
-target:lib
-src:src/
-out:build/
+[package]
+name: "hello_library"
+version: "0.1.0"
+target: "lib"
+src: "src/"
+out: "build/"
