@@ -12,6 +12,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "lexer/token.h"
+
 typedef struct InitOptions {
     const char *package_name;
     bool target_lib;
@@ -88,6 +90,169 @@ static bool parse_target_value(const char *value, bool *out_target_lib) {
     return false;
 }
 
+static bool is_ascii_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static bool is_ascii_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static bool is_forbidden_identifier_word(const char *text, size_t length) {
+    FengTokenKind keyword_kind;
+
+    if (feng_lookup_keyword(text, length, &keyword_kind)) {
+        return true;
+    }
+    if (feng_is_reserved_word(text, length)) {
+        return true;
+    }
+    return (length == 4U && strncmp(text, "true", 4U) == 0)
+        || (length == 5U && strncmp(text, "false", 5U) == 0);
+}
+
+static bool ensure_capacity(char **buffer, size_t *capacity, size_t needed) {
+    char *grown;
+    size_t new_capacity;
+
+    if (needed + 1U <= *capacity) {
+        return true;
+    }
+
+    new_capacity = *capacity == 0U ? 32U : *capacity;
+    while (needed + 1U > new_capacity) {
+        new_capacity *= 2U;
+    }
+
+    grown = (char *)realloc(*buffer, new_capacity);
+    if (grown == NULL) {
+        return false;
+    }
+    *buffer = grown;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool append_char(char **buffer, size_t *length, size_t *capacity, char c) {
+    if (!ensure_capacity(buffer, capacity, *length + 1U)) {
+        return false;
+    }
+    (*buffer)[(*length)++] = c;
+    (*buffer)[*length] = '\0';
+    return true;
+}
+
+static bool append_slice(char **buffer,
+                         size_t *length,
+                         size_t *capacity,
+                         const char *text,
+                         size_t text_length) {
+    if (!ensure_capacity(buffer, capacity, *length + text_length)) {
+        return false;
+    }
+    memcpy(*buffer + *length, text, text_length);
+    *length += text_length;
+    (*buffer)[*length] = '\0';
+    return true;
+}
+
+static char *normalize_name_segment(const char *text, size_t length) {
+    size_t capacity = length * 2U + 4U;
+    char *out = (char *)malloc(capacity);
+    size_t out_length = 0U;
+    size_t index;
+
+    if (out == NULL) {
+        return NULL;
+    }
+
+    for (index = 0U; index < length; ++index) {
+        char c = text[index];
+
+        if (is_ascii_alpha(c) || c == '_') {
+            out[out_length++] = c;
+            continue;
+        }
+        if (is_ascii_digit(c)) {
+            if (out_length == 0U) {
+                out[out_length++] = '_';
+            }
+            out[out_length++] = c;
+            continue;
+        }
+        if (out_length == 0U || out[out_length - 1U] != '_') {
+            out[out_length++] = '_';
+        }
+    }
+
+    if (out_length == 0U) {
+        out[out_length++] = '_';
+    }
+    out[out_length] = '\0';
+
+    if (is_forbidden_identifier_word(out, out_length)) {
+        memmove(out + 1U, out, out_length + 1U);
+        out[0] = '_';
+    }
+    return out;
+}
+
+static char *normalize_package_name(const char *raw_name) {
+    const char *cursor;
+    const char *segment_start;
+    char *normalized = NULL;
+    size_t normalized_length = 0U;
+    size_t normalized_capacity = 0U;
+
+    if (raw_name == NULL) {
+        return dup_n("app", 3U);
+    }
+
+    segment_start = raw_name;
+    for (cursor = raw_name;; ++cursor) {
+        if (*cursor == '.' || *cursor == '\0') {
+            if (cursor > segment_start) {
+                char *segment = normalize_name_segment(segment_start,
+                                                       (size_t)(cursor - segment_start));
+                size_t segment_length;
+
+                if (segment == NULL) {
+                    free(normalized);
+                    return NULL;
+                }
+                segment_length = strlen(segment);
+                if (normalized_length > 0U) {
+                    if (!append_char(&normalized, &normalized_length, &normalized_capacity, '.')) {
+                        free(segment);
+                        free(normalized);
+                        return NULL;
+                    }
+                }
+                if (!append_slice(&normalized,
+                                  &normalized_length,
+                                  &normalized_capacity,
+                                  segment,
+                                  segment_length)) {
+                    free(segment);
+                    free(normalized);
+                    return NULL;
+                }
+                free(segment);
+            }
+            if (*cursor == '\0') {
+                break;
+            }
+            segment_start = cursor + 1;
+        }
+    }
+
+    if (normalized_length == 0U) {
+        free(normalized);
+        return dup_n("app", 3U);
+    }
+    return normalized;
+}
+
 static bool parse_args(const char *program, int argc, char **argv, InitOptions *out_options) {
     int index;
 
@@ -101,22 +266,6 @@ static bool parse_args(const char *program, int argc, char **argv, InitOptions *
             print_usage(program);
             return false;
         }
-        if (strcmp(arg, "--target") == 0) {
-            const char *value;
-
-            if (index + 1 >= argc) {
-                fprintf(stderr, "--target requires `bin` or `lib`\n");
-                print_usage(program);
-                return false;
-            }
-            value = argv[++index];
-            if (!parse_target_value(value, &out_options->target_lib)) {
-                fprintf(stderr, "--target must be `bin` or `lib`\n");
-                print_usage(program);
-                return false;
-            }
-            continue;
-        }
         if (strncmp(arg, "--target=", 9) == 0) {
             if (!parse_target_value(arg + 9, &out_options->target_lib)) {
                 fprintf(stderr, "--target must be `bin` or `lib`\n");
@@ -124,6 +273,11 @@ static bool parse_args(const char *program, int argc, char **argv, InitOptions *
                 return false;
             }
             continue;
+        }
+        if (strcmp(arg, "--target") == 0) {
+            fprintf(stderr, "--target requires `=<bin|lib>`\n");
+            print_usage(program);
+            return false;
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
@@ -249,7 +403,8 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     InitDirectoryState directory_state;
     char *directory_error = NULL;
     char *derived_name = NULL;
-    const char *package_name;
+    const char *raw_package_name;
+    char *package_name = NULL;
     char *manifest_content = NULL;
     char *write_error = NULL;
     const char *source_path;
@@ -274,14 +429,20 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    package_name = options.package_name;
-    if (package_name == NULL) {
+    raw_package_name = options.package_name;
+    if (raw_package_name == NULL) {
         derived_name = derive_default_package_name();
         if (derived_name == NULL) {
             fprintf(stderr, "failed to derive package name from current directory\n");
             return 1;
         }
-        package_name = derived_name;
+        raw_package_name = derived_name;
+    }
+
+    package_name = normalize_package_name(raw_package_name);
+    if (package_name == NULL) {
+        fprintf(stderr, "out of memory normalizing package name\n");
+        goto cleanup;
     }
 
     manifest_content = dup_printf("name:%s\nversion:0.1.0\ntarget:%s\nsrc:src/\nout:build/\n",
@@ -336,6 +497,7 @@ cleanup:
         }
     }
     free(write_error);
+    free(package_name);
     free(source_template);
     free(manifest_content);
     free(derived_name);

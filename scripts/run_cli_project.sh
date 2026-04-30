@@ -85,14 +85,14 @@ expect_fail() {
 }
 
 if expect_ok help "$FENG" --help; then
-    if ! grep -q ' init  \[<pkg-name>\] \[--target <bin|lib>\]' "$WORK/help.err"; then
+    if ! grep -q ' init  \[<name>\] \[--target=<bin|lib>\]' "$WORK/help.err"; then
         echo "FAIL[help] missing init usage line"
         failures=$((failures + 1))
     fi
 fi
 
 mkdir -p "$INIT_BIN_FIXTURE"
-if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample_app"; then
+if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample-app"; then
     if [[ ! -f "$INIT_BIN_FIXTURE/feng.fm" ]]; then
         echo "FAIL[init_bin] missing feng.fm"
         failures=$((failures + 1))
@@ -112,9 +112,10 @@ if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample_ap
     fi
 fi
 
+INIT_LIB_FIXTURE="$WORK/init-lib-default"
 mkdir -p "$INIT_LIB_FIXTURE"
-if expect_ok init_lib bash -lc "cd '$INIT_LIB_FIXTURE' && '$FENG' init --target lib"; then
-    expected_init_lib_name="$(basename "$INIT_LIB_FIXTURE")"
+if expect_ok init_lib bash -lc "cd '$INIT_LIB_FIXTURE' && '$FENG' init --target=lib"; then
+    expected_init_lib_name='init_lib_default'
     if [[ ! -f "$INIT_LIB_FIXTURE/feng.fm" ]]; then
         echo "FAIL[init_lib] missing feng.fm"
         failures=$((failures + 1))

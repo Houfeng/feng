@@ -305,7 +305,7 @@ static void test_init_creates_bin_project(void) {
     ASSERT(saved_cwd >= 0);
     ASSERT(chdir(project_dir) == 0);
     {
-        char *argv[] = { "demo_app" };
+        char *argv[] = { "demo-app" };
         ASSERT(feng_cli_project_init_main("feng", 1, argv) == 0);
     }
     ASSERT(fchdir(saved_cwd) == 0);
@@ -339,7 +339,8 @@ static void test_init_creates_bin_project(void) {
 }
 
 static void test_init_creates_lib_project_using_current_directory_name(void) {
-    char template_path[] = "/tmp/feng_cli_init_lib_XXXXXX";
+    char template_path[] = "/tmp/feng_cli_init_lib_root_XXXXXX";
+    char *root_dir;
     char *project_dir;
     char *manifest_path;
     char *src_dir;
@@ -349,21 +350,18 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     char *expected_manifest;
     char *expected_lib_text;
     char *remove_error = NULL;
-    const char *directory_name;
     int saved_cwd;
 
-    project_dir = mkdtemp(template_path);
-    ASSERT(project_dir != NULL);
-    directory_name = strrchr(project_dir, '/');
-    directory_name = directory_name != NULL ? directory_name + 1 : project_dir;
+    root_dir = mkdtemp(template_path);
+    ASSERT(root_dir != NULL);
+    project_dir = path_join(root_dir, "9-demo-lib");
+    ASSERT(mkdir(project_dir, 0775) == 0);
 
     manifest_path = path_join(project_dir, "feng.fm");
     src_dir = path_join(project_dir, "src");
     lib_path = path_join(src_dir, "lib.ff");
-    expected_manifest = dup_printf("name:%s\nversion:0.1.0\ntarget:lib\nsrc:src/\nout:build/\n",
-                                   directory_name);
-    expected_lib_text = dup_printf("mod %s;\n\nfn helper(): int {\n  return 0;\n}\n",
-                                   directory_name);
+    expected_manifest = dup_printf("name:_9_demo_lib\nversion:0.1.0\ntarget:lib\nsrc:src/\nout:build/\n");
+    expected_lib_text = dup_printf("mod _9_demo_lib;\n\nfn helper(): int {\n  return 0;\n}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
 
@@ -371,8 +369,8 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     ASSERT(saved_cwd >= 0);
     ASSERT(chdir(project_dir) == 0);
     {
-        char *argv[] = { "--target", "lib" };
-        ASSERT(feng_cli_project_init_main("feng", 2, argv) == 0);
+        char *argv[] = { "--target=lib" };
+        ASSERT(feng_cli_project_init_main("feng", 1, argv) == 0);
     }
     ASSERT(fchdir(saved_cwd) == 0);
     close(saved_cwd);
@@ -390,10 +388,90 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     free(manifest_text);
     free(expected_lib_text);
     free(expected_manifest);
-    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    ASSERT(feng_cli_project_remove_tree(root_dir, &remove_error));
     free(remove_error);
     free(lib_path);
     free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
+static void test_init_rejects_space_separated_target_value(void) {
+    char template_path[] = "/tmp/feng_cli_init_target_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *remove_error = NULL;
+    int saved_cwd;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+
+    saved_cwd = open(".", O_RDONLY);
+    ASSERT(saved_cwd >= 0);
+    ASSERT(chdir(project_dir) == 0);
+    {
+        char *argv[] = { "--target", "lib" };
+        ASSERT(run_init_quiet_stderr(2, argv) != 0);
+    }
+    ASSERT(fchdir(saved_cwd) == 0);
+    close(saved_cwd);
+
+    ASSERT(!path_exists(manifest_path));
+    ASSERT(!path_exists(src_dir));
+
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(src_dir);
+    free(manifest_path);
+}
+
+static void test_init_prefixes_keyword_package_name(void) {
+    char template_path[] = "/tmp/feng_cli_init_keyword_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *main_path;
+    char *manifest_text;
+    char *main_text;
+    char *remove_error = NULL;
+    int saved_cwd;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    manifest_path = path_join(project_dir, "feng.fm");
+    main_path = path_join(project_dir, "src/main.ff");
+
+    saved_cwd = open(".", O_RDONLY);
+    ASSERT(saved_cwd >= 0);
+    ASSERT(chdir(project_dir) == 0);
+    {
+        char *argv[] = { "if" };
+        ASSERT(feng_cli_project_init_main("feng", 1, argv) == 0);
+    }
+    ASSERT(fchdir(saved_cwd) == 0);
+    close(saved_cwd);
+
+    manifest_text = read_text_file(manifest_path);
+    main_text = read_text_file(main_path);
+    ASSERT(strcmp(manifest_text,
+                  "name:_if\n"
+                  "version:0.1.0\n"
+                  "target:bin\n"
+                  "src:src/\n"
+                  "out:build/\n") == 0);
+    ASSERT(strcmp(main_text,
+                  "mod _if;\n"
+                  "\n"
+                  "fn main(args: string[]) {\n"
+                  "}\n") == 0);
+
+    free(main_text);
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(main_path);
     free(manifest_path);
 }
 
@@ -544,6 +622,8 @@ int main(void) {
     test_manifest_requires_target();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();
+    test_init_rejects_space_separated_target_value();
+    test_init_prefixes_keyword_package_name();
     test_init_rejects_non_empty_directory();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     fprintf(stdout, "cli tests passed\n");
