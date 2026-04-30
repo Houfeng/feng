@@ -131,7 +131,7 @@ static bool parse_args(const char *program, int argc, char **argv, InitOptions *
             return false;
         }
         if (out_options->package_name != NULL) {
-            fprintf(stderr, "init accepts at most one <pkg-name> argument\n");
+            fprintf(stderr, "init accepts at most one <name> argument\n");
             print_usage(program);
             return false;
         }
