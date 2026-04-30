@@ -303,6 +303,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 ## 5. 关键文件
 
+- `dev/feng-phase3-pending.md`：Phase 3 的施工权威入口，包含 `src/symbol/` 建议文件树与最小公共 API 边界。
 - `docs/feng-language.md`：语言总入口，已明确底层可映射为 C。
 - `docs/feng-principles.md`：已明确保持可直接编译为 C 的目标。
 - `docs/feng-lifetime.md`：ARC、cycle collector、终结器、C retain/release 的规范落点。

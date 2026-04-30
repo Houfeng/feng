@@ -148,6 +148,169 @@ src/cli/
 - `src/archive/zip.*` 的最小能力面至少包括四类核心操作：① 获取 entry 列表，并支持按前缀或路径遍历查找；② 按归档内路径把文件内容读到内存；③ 按归档内路径把指定文件释放到磁盘指定位置，自动创建父目录并保留必要元信息；④ 创建 writer、写入文件（来自内存或磁盘源）、选择 Store/Deflate，并将完整 ZIP 保存到指定磁盘路径。这些能力主要由 `fb.*` 在内部组合后向上层提供更便捷的 `.fb` 语义接口。
 - 除上述四类核心操作外，`zip.*` 还应统一提供 entry 元信息查询（路径、大小、压缩方式、模式位）、路径规范化与明确的错误返回，避免上层直接依赖底层第三方库的细节。
 
+#### 4.2.1 `src/symbol/` 建议文件树
+
+前面的总树只标了 `src/symbol/` 的大致角色；若进入实际实现，建议把该目录进一步细化为：
+
+```text
+src/symbol/
+  symbol.h            # 中立模块符号图、基础枚举、错误类型与释放入口
+  symbol.c
+  export.h            # 分析结果 -> 模块符号图 -> 输出目录 的高层导出入口
+  export.c
+  provider.h          # 核心分析器可依赖的抽象查询接口
+  provider.c
+  ft.h                # `.ft` 单文件读写 facade
+  ft.c                # 共享 facade / profile / 路径辅助
+  ft_read.c           # FST1 -> 模块符号图 / 查询来源
+  ft_write.c          # 模块符号图 -> FST1
+  ft_internal.h       # 仅 `src/symbol/` 内部共享的编码/解码辅助
+```
+
+约束如下：
+
+- 对 `src/cli/` 而言，默认只应直接依赖 `export.h`，不直接依赖 `ft.h`。
+- 对核心分析器而言，默认只应直接依赖 `provider.h` 中的抽象查询接口，不直接依赖 `ft.h`。
+- 对 `pack` 而言，默认不应直接依赖 `src/symbol/` 的任何低层文件级 API；它只复用 `build/mod/**/*.ft` 的现成产物。
+- 若首版想控制文件数，`ft.c`、`ft_read.c`、`ft_write.c` 可先合并为一个实现文件；但对外头文件仍建议保持 `ft.h` 稳定，避免后续再改调用边界。
+
+#### 4.2.2 `src/symbol/` 最小公共 API
+
+建议先把 `src/symbol/` 的公共面压到四个头文件，并且每个头文件只服务一个方向的调用者。
+
+`symbol.h` 负责声明中立数据模型与生命周期函数：
+
+```c
+typedef enum FengSymbolProfile {
+  FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC = 1,
+  FENG_SYMBOL_PROFILE_WORKSPACE_CACHE = 2
+} FengSymbolProfile;
+
+typedef struct FengSymbolGraph FengSymbolGraph;
+typedef struct FengSymbolModuleGraph FengSymbolModuleGraph;
+
+typedef struct FengSymbolError {
+  const char *path;
+  char *message;
+  FengToken token;
+} FengSymbolError;
+
+size_t feng_symbol_graph_module_count(const FengSymbolGraph *graph);
+const FengSymbolModuleGraph *feng_symbol_graph_module_at(const FengSymbolGraph *graph,
+                             size_t index);
+
+void feng_symbol_graph_free(FengSymbolGraph *graph);
+void feng_symbol_error_free(FengSymbolError *error);
+```
+
+`export.h` 负责给 CLI / 构建层一个足够高层的导出入口：
+
+```c
+typedef struct FengSymbolExportOptions {
+  const char *public_root;      /* 例如 build/mod；NULL 表示跳过 */
+  const char *workspace_root;   /* 例如 build/obj/symbols；NULL 表示跳过 */
+  bool emit_docs;               /* 仅在前端已保留 comments 时生效 */
+  bool emit_spans;              /* workspace-cache 才允许为 true */
+} FengSymbolExportOptions;
+
+bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
+               FengSymbolGraph **out_graph,
+               FengSymbolError *out_error);
+
+bool feng_symbol_export_graph(const FengSymbolGraph *graph,
+                const FengSymbolExportOptions *options,
+                FengSymbolError *out_error);
+
+bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
+                 const FengSymbolExportOptions *options,
+                 FengSymbolError *out_error);
+```
+
+说明：
+
+- `src/cli/compile/direct.c` 和项目级 `build/check` 最多只需要调用 `feng_symbol_export_analysis(...)` 这一类 one-shot 入口。
+- 是否同时导出 public / workspace 两套产物，由 `FengSymbolExportOptions` 决定，而不是让 CLI 自己理解 `.ft` profile 细节。
+- comments / docs 后续可以补；在前端尚未保留 comments 时，`emit_docs = true` 也应退化为“不写 `DOCS` 节”，而不是要求 CLI 或分析器感知文档注释编码逻辑。
+
+`provider.h` 负责给核心分析器暴露抽象查询接口：
+
+```c
+typedef struct FengSymbolProvider FengSymbolProvider;
+typedef struct FengSymbolImportedModule FengSymbolImportedModule;
+typedef struct FengSymbolDeclView FengSymbolDeclView;
+typedef struct FengSymbolFitView FengSymbolFitView;
+
+bool feng_symbol_provider_create(FengSymbolProvider **out_provider,
+                 FengSymbolError *out_error);
+
+bool feng_symbol_provider_add_graph(FengSymbolProvider *provider,
+                  const FengSymbolGraph *graph,
+                  FengSymbolError *out_error);
+
+bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
+                    const char *root_path,
+                    FengSymbolProfile profile,
+                    FengSymbolError *out_error);
+
+const FengSymbolImportedModule *feng_symbol_provider_find_module(
+  const FengSymbolProvider *provider,
+  const FengSlice *segments,
+  size_t segment_count);
+
+const FengSymbolDeclView *feng_symbol_module_find_public_type(
+  const FengSymbolImportedModule *module,
+  FengSlice name);
+
+const FengSymbolDeclView *feng_symbol_module_find_public_spec(
+  const FengSymbolImportedModule *module,
+  FengSlice name);
+
+const FengSymbolDeclView *feng_symbol_module_find_public_value(
+  const FengSymbolImportedModule *module,
+  FengSlice name);
+
+const FengSymbolDeclView *feng_symbol_decl_find_public_member(
+  const FengSymbolDeclView *owner,
+  FengSlice name);
+
+size_t feng_symbol_module_fit_count(const FengSymbolImportedModule *module);
+const FengSymbolFitView *feng_symbol_module_fit_at(const FengSymbolImportedModule *module,
+                           size_t index);
+
+void feng_symbol_provider_free(FengSymbolProvider *provider);
+```
+
+说明：
+
+- 这组 API 才是后续核心分析器应该依赖的边界；分析器不关心数据来自源码缓存、内存图还是 `.ft`。
+- `provider_add_graph(...)` 让当前工程内的内存结果与后续 `.ft` 读取结果都能走同一套查询路径。
+- `provider_add_ft_root(...)` 用来把 `build/obj/symbols/` 或 `.fb/mod/` 接成同一 provider；分析器仍只看到查询接口。
+- 若未来发现 `fit` 查询需要更强的定向索引，可以在 `FengSymbolFitView` 一层追加 API；但第一版不建议把 `.ft` section 或 attr key 直接泄露到 provider 边界。
+
+`ft.h` 只保留最小单文件读写入口，默认供 `src/symbol/` 内部与读写测试使用：
+
+```c
+typedef struct FengSymbolFtReadOptions {
+  FengSymbolProfile expected_profile;
+} FengSymbolFtReadOptions;
+
+bool feng_symbol_ft_read_file(const char *path,
+                const FengSymbolFtReadOptions *options,
+                FengSymbolGraph **out_graph,
+                FengSymbolError *out_error);
+
+bool feng_symbol_ft_write_module(const FengSymbolModuleGraph *module,
+                 FengSymbolProfile profile,
+                 const char *path,
+                 FengSymbolError *out_error);
+```
+
+边界约束：
+
+- `src/cli/` 不应直接调用 `feng_symbol_ft_read_file(...)` 或 `feng_symbol_ft_write_module(...)`；CLI 只调度 `export.h` 暴露的高层入口。
+- 核心分析器也不应直接 include `ft.h`；它只看 `provider.h`。
+- `ft.h` 的职责是“单文件读写 `.ft`”，不负责目录扫描、编译驱动编排或打包 staging。
+
 ### 4.3 `main.c` 的职责边界
 
 `src/cli/main.c` 在 Phase 3 之后仍只负责：
