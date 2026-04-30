@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "cli/common.h"
 #include "cli/compile/driver.h"
@@ -68,6 +69,96 @@ static char *path_join(const char *a, const char *b) {
     return out;
 }
 
+static char *path_dirname_dup(const char *path) {
+    const char *slash = strrchr(path, '/');
+    char *out;
+    size_t len;
+
+    if (slash == NULL) {
+        out = malloc(2U);
+        if (out != NULL) {
+            out[0] = '.';
+            out[1] = '\0';
+        }
+        return out;
+    }
+
+    len = (size_t)(slash - path);
+    if (len == 0U) {
+        out = malloc(2U);
+        if (out != NULL) {
+            out[0] = '/';
+            out[1] = '\0';
+        }
+        return out;
+    }
+
+    out = malloc(len + 1U);
+    if (out == NULL) return NULL;
+    memcpy(out, path, len);
+    out[len] = '\0';
+    return out;
+}
+
+static char *replace_with_sibling_filename(const char *path, const char *filename) {
+    char *dir = path_dirname_dup(path);
+    char *out;
+
+    if (dir == NULL) return NULL;
+    out = path_join(dir, filename);
+    free(dir);
+    return out;
+}
+
+static void cleanup_empty_ir_dirs(const char *c_path) {
+    char *ir_c_dir = path_dirname_dup(c_path);
+    char *ir_dir;
+
+    if (ir_c_dir == NULL) return;
+    ir_dir = path_dirname_dup(ir_c_dir);
+    if (ir_dir == NULL) {
+        free(ir_c_dir);
+        return;
+    }
+
+    if (rmdir(ir_c_dir) != 0 && errno != ENOENT && errno != ENOTEMPTY) {
+        fprintf(stderr,
+                "warning: could not remove empty IR directory %s: %s\n",
+                ir_c_dir, strerror(errno));
+    }
+    if (rmdir(ir_dir) != 0 && errno != ENOENT && errno != ENOTEMPTY) {
+        fprintf(stderr,
+                "warning: could not remove empty IR directory %s: %s\n",
+                ir_dir, strerror(errno));
+    }
+
+    free(ir_dir);
+    free(ir_c_dir);
+}
+
+static void cleanup_intermediate_outputs(const char *c_path, bool cleanup_dirs) {
+    char *object_path = replace_with_sibling_filename(c_path, "feng.o");
+    bool can_cleanup_dirs = true;
+
+    if (object_path != NULL && unlink(object_path) != 0 && errno != ENOENT) {
+        fprintf(stderr,
+                "warning: could not remove intermediate %s: %s\n",
+                object_path, strerror(errno));
+        can_cleanup_dirs = false;
+    }
+    if (unlink(c_path) != 0 && errno != ENOENT) {
+        fprintf(stderr,
+                "warning: could not remove intermediate %s: %s\n",
+                c_path, strerror(errno));
+        can_cleanup_dirs = false;
+    }
+    if (cleanup_dirs && can_cleanup_dirs) {
+        cleanup_empty_ir_dirs(c_path);
+    }
+
+    free(object_path);
+}
+
 /* --- diagnostic callbacks ----------------------------------------------- */
 
 static void on_parse_error(void *user,
@@ -113,6 +204,7 @@ static void on_semantic_info(void *user,
 
 int feng_cli_direct_main(const char *program, int argc, char **argv) {
     FengCliDirectOptions opts = {0};
+    char *c_path = NULL;
     if (!feng_cli_direct_options_parse(program, argc, argv, &opts)) {
         return 1;
     }
@@ -144,6 +236,18 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
+    c_path = path_join(ir_dir, "feng.c");
+    if (c_path == NULL) {
+        fprintf(stderr, "out of memory composing IR path\n");
+        free(ir_dir); free(artifact_dir);
+        feng_cli_direct_options_dispose(&opts);
+        return 1;
+    }
+    if (!opts.keep_intermediate) {
+        /* Non-keep builds should not inherit stale IR from an earlier
+         * successful run or a prior host-compiler failure. */
+        cleanup_intermediate_outputs(c_path, false);
+    }
 
     /* Drive the shared frontend pipeline across every input file. */
     FengSemanticAnalysis *analysis = NULL;
@@ -168,6 +272,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
 
     int rc = feng_cli_frontend_run(&input, &callbacks, &outputs);
     if (rc != 0) {
+        if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
+        free(c_path);
         free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return rc;
@@ -190,10 +296,12 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
                                   &cgerr.token,
                                   blame_src != NULL ? blame_src->source : NULL,
                                   blame_src != NULL ? blame_src->source_length : 0U);
+        if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
+        free(c_path);
         free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
@@ -202,20 +310,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     /* Persist the generated C aggregate at <out>/ir/c/feng.c. The fixed
      * filename is intentional for P4: until P5 lands the link step we keep
      * the path predictable so smoke and tooling can introspect output. */
-    char *c_path = path_join(ir_dir, "feng.c");
-    if (c_path == NULL) {
-        fprintf(stderr, "out of memory composing IR path\n");
-        feng_codegen_error_free(&cgerr);
-        feng_codegen_output_free(&out);
-        feng_semantic_analysis_free(analysis);
-        feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(artifact_dir);
-        feng_cli_direct_options_dispose(&opts);
-        return 1;
-    }
     FILE *f = fopen(c_path, "wb");
     if (f == NULL) {
         fprintf(stderr, "failed to open %s for write: %s\n", c_path, strerror(errno));
+        if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
         free(c_path);
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
@@ -229,6 +327,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     fclose(f);
     if (written != out.c_source_length) {
         fprintf(stderr, "short write to %s\n", c_path);
+        if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
         free(c_path);
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
@@ -284,6 +383,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     }
     if (artifact_path == NULL) {
         fprintf(stderr, "out of memory composing artifact path\n");
+        if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
         free(c_path);
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
@@ -305,6 +405,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         prog_array = calloc(prog_count, sizeof(*prog_array));
         if (prog_array == NULL) {
             fprintf(stderr, "out of memory collecting programs for driver\n");
+            if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
             free(artifact_path);
             free(c_path);
             feng_codegen_error_free(&cgerr);

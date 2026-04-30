@@ -23,9 +23,10 @@
  *   4. For `lib`, compile the generated C to an object file and archive it
  *      into a static library at `out_path`.
  *
- * On success returns 0. On failure returns non-zero; the caller is
- * expected to preserve the C path so users can inspect or pass it to a
- * standalone compiler.
+ * On success returns 0. On failure returns non-zero. Host-compiler
+ * failures intentionally preserve the generated C path so users can
+ * inspect or pass it to a standalone compiler; earlier-phase cleanup is
+ * handled by the direct/project command layer before invoking the driver.
  */
 
 struct FengProgram;

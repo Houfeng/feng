@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +7,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "cli/cli.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
 
@@ -23,6 +25,10 @@ static char *dup_cstr(const char *text) {
     ASSERT(out != NULL);
     memcpy(out, text, length + 1U);
     return out;
+}
+
+void feng_cli_print_usage(const char *program) {
+    (void)program;
 }
 
 static char *path_join(const char *lhs, const char *rhs) {
@@ -73,6 +79,145 @@ static void write_text_file(const char *path, const char *content) {
     ASSERT(file != NULL);
     ASSERT(fwrite(content, 1U, strlen(content), file) == strlen(content));
     fclose(file);
+}
+
+static int path_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+static char *make_out_option(const char *out_dir) {
+    size_t len = strlen(out_dir);
+    char *out = (char *)malloc(len + 7U);
+
+    ASSERT(out != NULL);
+    memcpy(out, "--out=", 6U);
+    memcpy(out + 6U, out_dir, len + 1U);
+    return out;
+}
+
+static int run_direct_quiet_stderr(int argc, char **argv) {
+    int saved_stderr;
+    int null_fd;
+    int rc;
+
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    null_fd = open("/dev/null", O_WRONLY);
+    ASSERT(null_fd >= 0);
+    ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+    close(null_fd);
+
+    rc = feng_cli_direct_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    return rc;
+}
+
+static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
+    char template_path[] = "/tmp/feng_cli_direct_ir_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *good_path;
+    char *bad_path;
+    char *out_dir;
+    char *c_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    src_dir = path_join(workspace_dir, "src");
+    good_path = path_join(src_dir, "good.ff");
+    bad_path = path_join(src_dir, "bad.ff");
+    out_dir = path_join(workspace_dir, "out");
+    c_path = path_join(out_dir, "ir/c/feng.c");
+
+    mkdir_p(src_dir);
+    write_text_file(good_path,
+                    "mod test.cli.good;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *argv[] = {
+            good_path,
+            "--target=bin",
+            out_dir,
+            "--name=demo",
+        };
+        char *out_opt = make_out_option(out_dir);
+        argv[2] = out_opt;
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(!path_exists(c_path));
+        free(out_opt);
+    }
+
+    write_text_file(good_path,
+                    "mod test.cli.good;\n"
+                    "fn main(args: string[]) {\n");
+
+    {
+        char *argv[] = {
+            good_path,
+            "--target=bin",
+            out_dir,
+            "--name=demo",
+        };
+        char *out_opt = make_out_option(out_dir);
+        argv[2] = out_opt;
+        ASSERT(run_direct_quiet_stderr(4, argv) != 0);
+        ASSERT(!path_exists(c_path));
+        free(out_opt);
+    }
+
+    write_text_file(bad_path,
+                    "mod test.cli.keep;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *argv[] = {
+            bad_path,
+            "--target=bin",
+            out_dir,
+            "--name=demo",
+            "--keep-ir",
+        };
+        char *out_opt = make_out_option(out_dir);
+        argv[2] = out_opt;
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(path_exists(c_path));
+        free(out_opt);
+    }
+
+    write_text_file(bad_path,
+                    "mod test.cli.keep;\n"
+                    "fn main(args: string[]) {\n");
+
+    {
+        char *argv[] = {
+            bad_path,
+            "--target=bin",
+            out_dir,
+            "--name=demo",
+            "--keep-ir",
+        };
+        char *out_opt = make_out_option(out_dir);
+        argv[2] = out_opt;
+        ASSERT(run_direct_quiet_stderr(5, argv) != 0);
+        ASSERT(path_exists(c_path));
+        free(out_opt);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(c_path);
+    free(out_dir);
+    free(bad_path);
+    free(good_path);
+    free(src_dir);
 }
 
 static void test_manifest_defaults(void) {
@@ -186,6 +331,7 @@ int main(void) {
     test_manifest_rejects_duplicate_field();
     test_project_open_collects_sources();
     test_manifest_requires_target();
+    test_direct_build_cleans_stale_ir_on_frontend_failure();
     fprintf(stdout, "cli tests passed\n");
     return 0;
 }

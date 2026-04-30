@@ -32,7 +32,7 @@ typedef struct FengCliDirectOptions {
     FengCompileTarget target;     /* P4: only BIN supported. */
     const char *out_dir;          /* required: <out>/ir/c, <out>/bin */
     bool release;                 /* P4: parsed but reported as not-yet-implemented */
-    bool keep_intermediate;       /* P5: keep <out>/ir/c artifacts on success */
+    bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
