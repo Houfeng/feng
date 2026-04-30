@@ -167,5 +167,6 @@ feng src/*.ff --pkg a.fb --pkg b.fb
 
 - [feng-language.md](./feng-language.md): 语言总体规范，包含模块、类型、函数、C 互操作概要。
 - [feng-package.md](./feng-package.md): `.fb` 包格式、`feng.fm` 清单、`.fi` 文件结构与生成规则。
+- [feng-symbol-table.md](./feng-symbol-table.md): `.ft` 符号表格式、profile 常量与二进制布局。
 - [feng-interop.md](./feng-interop.md): `@cdecl`/`@stdcall`/`@fastcall` 注解语法与 C 互操作规则。
 - 本文档: 编译器与构建工具的职责划分、参数协议、模块索引机制与链接信息收集规则。

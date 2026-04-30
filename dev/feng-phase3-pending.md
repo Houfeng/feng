@@ -236,7 +236,7 @@ src/cli/
 ### P5 `.ft` 生成与最终回归
 
 > `.ft` 生成仍属于 Phase 3，但作为本阶段最后一项功能任务处理。
-> 具体草案见 [feng-phase3-symbol-table-draft.md](./feng-phase3-symbol-table-draft.md)。
+> 具体规范见 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)。
 
 ## 6. 建议落地顺序
 
