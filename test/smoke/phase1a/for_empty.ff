@@ -1,0 +1,18 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+// All three clauses optional. The empty condition means "always true";
+// the loop must terminate via `break`.
+fn main(args: string[]) {
+    var n: i32 = 0;
+    for ;; {
+        if n == 2 {
+            break;
+        }
+        puts("loop");
+        n = n + 1;
+    }
+    puts("done");
+}

@@ -398,6 +398,13 @@ typedef struct Scope {
     size_t        count;
     size_t        capacity;
     bool          is_loop;       /* this scope is a loop body root */
+    /* If non-NULL, `continue` inside this loop emits `goto <continue_label>;`
+     * instead of C `continue;`. Used by the three-clause `for` form so a
+     * `continue` jumps to the update step (which lives after the body block,
+     * before the next iteration of the C `for(;;)`). The string is owned by
+     * the codegen instance (lives in cur_body's identifier pool) and freed
+     * by the caller that created the scope. */
+    const char   *continue_label;
     /* try_depth observed at the moment this scope was pushed. Used by
      * break/continue to refuse jumping across an enclosing try frame in
      * Phase 1A (where stack-based exception cleanup is not yet wired). */
@@ -3920,6 +3927,381 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/* `for` statement — supports both forms documented in docs/feng-flow.md §6:
+ *
+ *   1. Three-clause:  for [init]; [cond]; [update] { body }
+ *   2. for/in       :  for let|var IT in SEQ { body }
+ *
+ * Compilation strategy (production-grade, mirroring `while` for ARC and
+ * cleanup-chain bookkeeping; jumps are routed through goto-labels so a
+ * `continue` runs the update step before re-entering the loop):
+ *
+ *   {                              // outer scope
+ *       <init or seq materialise>  // lives until loop exits
+ *       for (;;) {
+ *           bool _cond_N;
+ *           { <cond eval>; _cond_N = ...; }   // condition scope (release temps)
+ *           if (!_cond_N) break;
+ *           <body>                 // body scope = loop scope; continue_label set
+ *           _cont_N: ;             // continue lands here
+ *           { <update> }           // update scope (release temps)
+ *       }
+ *   }
+ *
+ * For `for/in`, the iteration sequence is materialised once into the outer
+ * scope so its +1 reference is held for the whole loop. Each iteration the
+ * body scope re-declares the iter binding, retaining the array slot value
+ * if it is managed; the per-iter release happens through the body scope's
+ * normal release path (and through the break/continue path via the
+ * inclusive release added in cg_emit_break_continue).
+ *
+ * Limitations honoured here:
+ *   - The semantic analyzer (analyzer.c) restricts the for/in sequence to
+ *     `T[]` / `T[]!` and ensures the iter binding's mutability matches use.
+ *   - try-frame crossing is rejected by cg_emit_break_continue (Phase 1A).
+ */
+static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
+    int id = cg->label_counter++;
+    char cont_label[64];
+    snprintf(cont_label, sizeof cont_label, "_cont_%d", id);
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+
+    /* Outer scope: holds the optional `for (init; ...)` binding. The init
+     * may be a binding or an assignment / expression statement. We push a
+     * scope so binding-form inits are released when the loop exits, and so
+     * a binding declared here is invisible outside the for. */
+    Scope *outer_scope = scope_push(cg->cur_scope);
+    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = outer_scope;
+
+    if (stmt->as.for_stmt.init != NULL) {
+        if (!cg_emit_stmt(cg, stmt->as.for_stmt.init)) {
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
+    }
+
+    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+
+    /* Condition: optional. Empty condition means "always true" per spec. */
+    if (stmt->as.for_stmt.condition != NULL) {
+        Scope *cond_scope = scope_push(cg->cur_scope);
+        if (!cond_scope) {
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        cg->cur_scope = cond_scope;
+        ExprResult cond;
+        if (!cg_emit_expr(cg, stmt->as.for_stmt.condition, &cond)) {
+            cg->cur_scope = cond_scope->parent;
+            scope_pop_free(cond_scope);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
+        if (cond.type->kind != CG_TYPE_BOOL) {
+            er_free(&cond);
+            cg->cur_scope = cond_scope->parent;
+            scope_pop_free(cond_scope);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: for condition must be bool");
+        }
+        char *cond_tmp = cg_fresh_temp(cg, "_fcond");
+        buf_append_fmt(cg->cur_body, "        bool %s = %s;\n",
+                       cond_tmp, cond.c_expr);
+        er_free(&cond);
+        cg_release_scope(cg, cond_scope);
+        cg->cur_scope = cond_scope->parent;
+        scope_pop_free(cond_scope);
+        buf_append_fmt(cg->cur_body, "        if (!%s) break;\n", cond_tmp);
+        free(cond_tmp);
+    }
+
+    /* Body: loop scope, with continue_label so `continue` jumps to update. */
+    cg->loop_depth++;
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (!body_scope) {
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    body_scope->is_loop = true;
+    /* Stash label in a stable buffer associated with cur_body — we use the
+     * outer scope as the lifetime anchor by allocating on the heap and
+     * tracking via the items list: simpler to embed the literal in body_scope
+     * via a strdup that we free after the loop closes. */
+    char *cont_label_owned = strdup(cont_label);
+    body_scope->continue_label = cont_label_owned;
+    cg->cur_scope = body_scope;
+    if (!cg_emit_block(cg, stmt->as.for_stmt.body)) {
+        cg->cur_scope = body_scope->parent;
+        body_scope->continue_label = NULL;
+        scope_pop_free(body_scope);
+        free(cont_label_owned);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+    cg_release_scope(cg, body_scope);
+    cg->cur_scope = body_scope->parent;
+    body_scope->continue_label = NULL;
+    scope_pop_free(body_scope);
+    free(cont_label_owned);
+    cg->loop_depth--;
+
+    /* Continue label: lands here after body, before update. */
+    buf_append_fmt(cg->cur_body, "        %s: ;\n", cont_label);
+
+    /* Update: optional. Wrapped in its own scope so any temporaries from
+     * the update statement are released before the next iteration. */
+    if (stmt->as.for_stmt.update != NULL) {
+        Scope *upd_scope = scope_push(cg->cur_scope);
+        if (!upd_scope) {
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        cg->cur_scope = upd_scope;
+        if (!cg_emit_stmt(cg, stmt->as.for_stmt.update)) {
+            cg->cur_scope = upd_scope->parent;
+            scope_pop_free(upd_scope);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
+        cg_release_scope(cg, upd_scope);
+        cg->cur_scope = upd_scope->parent;
+        scope_pop_free(upd_scope);
+    }
+
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    /* Outer scope cleanup (init binding release). */
+    cg_release_scope(cg, outer_scope);
+    cg->cur_scope = outer_scope->parent;
+    scope_pop_free(outer_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
+static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
+    int id = cg->label_counter++;
+    char cont_label[64];
+    snprintf(cont_label, sizeof cont_label, "_cont_%d", id);
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+
+    /* Outer scope: holds the materialised iteration sequence (so its +1
+     * reference outlives the loop) and the loop index. */
+    Scope *outer_scope = scope_push(cg->cur_scope);
+    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = outer_scope;
+
+    ExprResult seq;
+    if (!cg_emit_expr(cg, stmt->as.for_stmt.iter_expr, &seq)) {
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+    if (seq.type->kind != CG_TYPE_ARRAY || seq.type->element == NULL) {
+        er_free(&seq);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: for/in sequence must be an array");
+    }
+    /* Stash the element type before materialise possibly invalidates seq.type's
+     * lifetime via cgtype clone semantics. cg_materialize_to_local hands
+     * ownership of the type to the scope's Local. */
+    CGType *element_type = cgtype_clone(seq.type->element);
+    if (!element_type) {
+        er_free(&seq);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    /* Materialise the sequence into a local that owns +1 if it's an owning
+     * temp; if it was borrowed (e.g. a bound var read), we still hold the
+     * borrow for the loop's lifetime — but to be safe across mutation we
+     * retain into a fresh slot. */
+    char *seq_tmp;
+    if (seq.owns_ref) {
+        seq_tmp = cg_materialize_to_local(cg, &seq, "_fseq");
+    } else {
+        /* Borrowed: retain into a managed local so a subsequent re-assignment
+         * to the source variable does not drop the array we are iterating. */
+        seq_tmp = cg_fresh_temp(cg, "_fseq");
+        if (seq_tmp) {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = %s; feng_retain(%s);\n",
+                seq_tmp, seq.c_expr, seq_tmp);
+            scope_add(cg->cur_scope, seq_tmp, seq_tmp,
+                      cgtype_clone(seq.type), false);
+            cg_emit_cleanup_push_for_managed_local(cg, seq_tmp);
+        }
+        er_free(&seq);
+    }
+    if (!seq_tmp) {
+        cgtype_free(element_type);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+
+    char *idx_var = cg_fresh_temp(cg, "_fidx");
+    buf_append_fmt(cg->cur_body, "    size_t %s = 0;\n", idx_var);
+
+    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    buf_append_fmt(cg->cur_body,
+                   "        if (%s >= feng_array_length(%s)) break;\n",
+                   idx_var, seq_tmp);
+
+    /* Body scope: loop scope, hosts the per-iteration iter binding. */
+    cg->loop_depth++;
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (!body_scope) {
+        free(idx_var); free(seq_tmp); cgtype_free(element_type);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    body_scope->is_loop = true;
+    char *cont_label_owned = strdup(cont_label);
+    body_scope->continue_label = cont_label_owned;
+    cg->cur_scope = body_scope;
+
+    /* Declare the iter binding for this iteration. It joins body_scope so
+     * the existing release path (normal-end + break/continue inclusive
+     * release) handles managed/aggregate ARC correctly. */
+    const FengBinding *ib = &stmt->as.for_stmt.iter_binding;
+    char *iter_cname = cg_local_cname(cg, ib->name.data, ib->name.length);
+    if (!iter_cname) {
+        free(cont_label_owned);
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(idx_var); free(seq_tmp); cgtype_free(element_type);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    char *elem_cty = cg_ctype_dup(element_type);
+    /* Slot read: ((T*)feng_array_data(seq))[idx]. */
+    if (cgtype_is_managed(element_type)) {
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_retain(%s);\n",
+            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname);
+    } else if (cgtype_is_aggregate(element_type)) {
+        const char *desc = cg_aggregate_field_desc_name(element_type);
+        if (!desc) {
+            free(elem_cty); free(iter_cname); free(cont_label_owned);
+            body_scope->continue_label = NULL;
+            cg->cur_scope = body_scope->parent;
+            scope_pop_free(body_scope);
+            free(idx_var); free(seq_tmp); cgtype_free(element_type);
+            cg->loop_depth--;
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: missing aggregate descriptor for spec for/in element");
+        }
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_aggregate_retain(&%s, &%s);\n",
+            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname, desc);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = ((%s *)feng_array_data(%s))[%s];\n",
+            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var);
+    }
+    free(elem_cty);
+    /* Register iter binding in body scope under its Feng name and arrange
+     * cleanup. We mirror cg_emit_binding's tail. */
+    if (!scope_add(cg->cur_scope, "_unused_internal_name__", iter_cname,
+                   cgtype_clone(element_type), false)) {
+        free(iter_cname); free(cont_label_owned);
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(idx_var); free(seq_tmp); cgtype_free(element_type);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
+    free(added->name);
+    added->name = strndup(ib->name.data, ib->name.length);
+    if (cgtype_is_managed(element_type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, iter_cname);
+    } else if (cgtype_is_aggregate(element_type)) {
+        cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname);
+    }
+    free(iter_cname);
+
+    if (!cg_emit_block(cg, stmt->as.for_stmt.body)) {
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(cont_label_owned);
+        free(idx_var); free(seq_tmp); cgtype_free(element_type);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+    cg_release_scope(cg, body_scope);
+    body_scope->continue_label = NULL;
+    cg->cur_scope = body_scope->parent;
+    scope_pop_free(body_scope);
+    free(cont_label_owned);
+    cg->loop_depth--;
+
+    /* Continue label: lands here after body, before index advance. */
+    buf_append_fmt(cg->cur_body, "        %s: ;\n", cont_label);
+    buf_append_fmt(cg->cur_body, "        %s++;\n", idx_var);
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    free(idx_var); free(seq_tmp); cgtype_free(element_type);
+
+    cg_release_scope(cg, outer_scope);
+    cg->cur_scope = outer_scope->parent;
+    scope_pop_free(outer_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
+static bool cg_emit_for(CG *cg, const FengStmt *stmt) {
+    if (stmt->as.for_stmt.is_for_in) {
+        return cg_emit_for_in(cg, stmt);
+    }
+    return cg_emit_for_three(cg, stmt);
+}
+
 static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) {
     if (cg->loop_depth == 0) {
         return cg_fail(cg, stmt->token,
@@ -3938,7 +4320,22 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
             is_break ? "break" : "continue");
     }
     cg_release_through(cg, stop);
-    buf_append_fmt(cg->cur_body, "    %s;\n", is_break ? "break" : "continue");
+    /* Also release the loop scope itself: the C `break;` / `continue;` (or
+     * the `goto _cont_N;` for three-clause `for`) jumps past the body's
+     * closing brace, which is where the body-scope releases would otherwise
+     * be emitted. Without this, any managed local declared at body-level
+     * would leak (and unbalance the per-thread cleanup chain) on the
+     * break / continue path. The normal end-of-iteration release path is
+     * mutually exclusive with these jumps, so the slot is released exactly
+     * once on every control-flow path. */
+    if (stop != NULL) {
+        cg_release_scope(cg, stop);
+    }
+    if (!is_break && stop != NULL && stop->continue_label != NULL) {
+        buf_append_fmt(cg->cur_body, "    goto %s;\n", stop->continue_label);
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s;\n", is_break ? "break" : "continue");
+    }
     return true;
 }
 
@@ -4143,6 +4540,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_RETURN:   return cg_emit_return(cg, stmt);
         case FENG_STMT_IF:       return cg_emit_if(cg, stmt);
         case FENG_STMT_WHILE:    return cg_emit_while(cg, stmt);
+        case FENG_STMT_FOR:      return cg_emit_for(cg, stmt);
         case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);
         case FENG_STMT_CONTINUE: return cg_emit_break_continue(cg, stmt, false);
         case FENG_STMT_THROW:    return cg_emit_throw(cg, stmt);

@@ -1,0 +1,14 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn main(args: string[]) {
+    for var i: i32 = 0; i < 10; i = i + 1 {
+        if i == 3 {
+            break;
+        }
+        puts("step");
+    }
+    puts("done");
+}

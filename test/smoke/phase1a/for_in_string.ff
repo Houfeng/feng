@@ -1,0 +1,12 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fn main(args: string[]) {
+    let words: string[] = ["alpha", "beta", "gamma"];
+    for let w in words {
+        puts(w);
+    }
+    puts("done");
+}
