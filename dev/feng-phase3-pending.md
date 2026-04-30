@@ -78,9 +78,15 @@ Phase 3 完成后，CLI 表面至少应满足以下结构：
 
 ### 4.2 代码组织
 
-项目相关逻辑仍然归属于 `src/cli/`，建议按“入口 / 公共能力 / 编译器底层 / 项目级命令 / tool 子命令”组织：
+项目相关逻辑仍然归属于 `src/cli/`，`.fb` 的归档读写能力单独上提为共享层；整体建议按“入口 / 公共能力 / 编译器底层 / 项目级命令 / 归档层 / tool 子命令”组织：
 
 ```text
+src/
+  archive/
+    fb.c                # .fb reader/writer facade，供 build / pack / compiler 共用
+    fb.h
+    zip.c               # ZIP container 读写与 entry 元信息处理
+    zip.h
 src/cli/
   main.c
   cli.h
@@ -103,8 +109,6 @@ src/cli/
     run.c
     clean.c
     pack.c
-    archive.c           # .fb 打包与解包格式封装
-    archive.h
   tool/
     tool.c
     lex.c
@@ -117,7 +121,8 @@ src/cli/
 
 - `project/` 只是 `src/cli/` 内部的子目录，不是独立项目模块。
 - `project/common.*` 与 `project/manifest.*` 负责供 `build/check/run/clean/pack` 复用，不把项目逻辑散落到每个命令文件里重复实现。
-- `.fb` 打包相关逻辑单独收敛在 `project/archive.*`，避免把压缩格式、元信息保留和目录遍历细节塞进 `pack.c`。
+- `.fb` 的归档读写能力不放在 `project/` 下，而是上提到共享的 `src/archive/`；这样 `feng build`、`feng pack` 与后续核心编译器读取 `.fb` 时可以共用同一套 reader / writer 能力。
+- `src/archive/fb.*` 负责 `.fb` 语义层（读取 `feng.fm`、列出 `mod/*.fi`、定位平台库文件、写包），`src/archive/zip.*` 负责底层 ZIP entry 读写与元信息保留。
 
 ### 4.3 `main.c` 的职责边界
 
@@ -194,7 +199,7 @@ src/cli/
 1. 先补齐底层编译路径对 `target = lib` 的支持，使项目级 `build` 可以稳定产出库项目所需制品。
 2. 在 `pack` 中读取项目上下文，校验 `target = lib`，并复用 `build` 或其底层产物准备流程。
 3. 建立 `.fb` 打包 staging 目录，明确 `feng.fm`、`mod/`、`lib/` 等内容的来源与落点；其中包内 `feng.fm` 仅视为分发元信息，供 `feng build` / `deps` / `pack` 等上层工具读取，不作为编译器消费 `.fb` 的输入；编译器只消费 `.fi` 与实际库文件布局。
-4. 在 `project/archive.*` 中封装 `.fb` 压缩打包逻辑；打包格式选型必须满足“保留文件系统信息”和“效率可接受”两条约束。
+4. 在共享的 `src/archive/` 中封装 `.fb` 压缩打包与读取逻辑；其中 `zip.*` 处理底层 ZIP 容器，`fb.*` 处理 `.fb` 语义层；打包格式选型必须满足“保留文件系统信息”和“效率可接受”两条约束。
 
 验收：
 
