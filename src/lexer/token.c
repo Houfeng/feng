@@ -73,6 +73,16 @@ const char *feng_token_kind_name(FengTokenKind kind) {
             return "SLASH";
         case FENG_TOKEN_PERCENT:
             return "PERCENT";
+        case FENG_TOKEN_PLUS_ASSIGN:
+            return "PLUS_ASSIGN";
+        case FENG_TOKEN_MINUS_ASSIGN:
+            return "MINUS_ASSIGN";
+        case FENG_TOKEN_STAR_ASSIGN:
+            return "STAR_ASSIGN";
+        case FENG_TOKEN_SLASH_ASSIGN:
+            return "SLASH_ASSIGN";
+        case FENG_TOKEN_PERCENT_ASSIGN:
+            return "PERCENT_ASSIGN";
         case FENG_TOKEN_ASSIGN:
             return "ASSIGN";
         case FENG_TOKEN_NOT:
@@ -95,14 +105,24 @@ const char *feng_token_kind_name(FengTokenKind kind) {
             return "OR_OR";
         case FENG_TOKEN_AMP:
             return "AMP";
+        case FENG_TOKEN_AMP_ASSIGN:
+            return "AMP_ASSIGN";
         case FENG_TOKEN_PIPE:
             return "PIPE";
+        case FENG_TOKEN_PIPE_ASSIGN:
+            return "PIPE_ASSIGN";
         case FENG_TOKEN_CARET:
             return "CARET";
+        case FENG_TOKEN_CARET_ASSIGN:
+            return "CARET_ASSIGN";
         case FENG_TOKEN_SHL:
             return "SHL";
+        case FENG_TOKEN_SHL_ASSIGN:
+            return "SHL_ASSIGN";
         case FENG_TOKEN_SHR:
             return "SHR";
+        case FENG_TOKEN_SHR_ASSIGN:
+            return "SHR_ASSIGN";
         case FENG_TOKEN_ARROW:
             return "ARROW";
         case FENG_TOKEN_TILDE:

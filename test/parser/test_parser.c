@@ -577,6 +577,42 @@ static void test_tilde_unary_parsing(void) {
     feng_program_free(program);
 }
 
+static void test_compound_assignment_parsing(void) {
+    const char *source =
+        "mod demo.ops;\n"
+        "fn run() {\n"
+        "    var total: float = 7.8;\n"
+        "    total %= 3.2;\n"
+        "    var mask: i32 = 1;\n"
+        "    mask >>= 1;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengStmt *assign_a;
+    const FengStmt *assign_b;
+
+    ASSERT(feng_parse_source(source, strlen(source), "compound_assign_parse.f", &program, &error));
+    ASSERT(program != NULL);
+
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 4U);
+
+    assign_a = body->statements[1];
+    ASSERT(assign_a->kind == FENG_STMT_ASSIGN);
+    ASSERT(assign_a->as.assign.op == FENG_TOKEN_PERCENT_ASSIGN);
+    ASSERT(assign_a->as.assign.target->kind == FENG_EXPR_IDENTIFIER);
+    ASSERT(assign_a->as.assign.value->kind == FENG_EXPR_FLOAT);
+
+    assign_b = body->statements[3];
+    ASSERT(assign_b->kind == FENG_STMT_ASSIGN);
+    ASSERT(assign_b->as.assign.op == FENG_TOKEN_SHR_ASSIGN);
+    ASSERT(assign_b->as.assign.target->kind == FENG_EXPR_IDENTIFIER);
+    ASSERT(assign_b->as.assign.value->kind == FENG_EXPR_INTEGER);
+
+    feng_program_free(program);
+}
+
 static void test_lambda_block_body_parses(void) {
     const char *source =
         "mod demo.main;\n"
@@ -761,6 +797,7 @@ int main(void) {
     test_parse_error_direct_finalizer_call();
     test_bitwise_expr_parsing();
     test_tilde_unary_parsing();
+    test_compound_assignment_parsing();
     test_lambda_block_body_parses();
     test_lambda_block_body_with_arrow_is_rejected();
     puts("parser tests passed");

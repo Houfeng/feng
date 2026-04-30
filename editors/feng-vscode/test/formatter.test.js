@@ -37,4 +37,10 @@ runCase(
     { insertSpaces: false, tabSize: 4 }
 );
 
+runCase(
+    'normalizes compound and bitwise operators',
+    'fn run():void {\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask>>=1;\nmask&=3;\n}\n',
+    'fn run(): void {\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask >>= 1;\n    mask &= 3;\n}\n'
+);
+
 console.log('formatter tests passed');

@@ -328,6 +328,36 @@ static void test_bitwise_tokens(void) {
     next_token(&lexer, FENG_TOKEN_EOF);
 }
 
+static void test_compound_assignment_tokens(void) {
+    FengLexer lexer;
+    const char *source =
+        "a += b -= c *= d /= e %= f &= g |= h ^= i <<= 1 >>= 2";
+
+    feng_lexer_init(&lexer, source, strlen(source), "compound_assign.f");
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_PLUS_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_MINUS_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_STAR_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_SLASH_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_PERCENT_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_AMP_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_PIPE_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_CARET_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    next_token(&lexer, FENG_TOKEN_SHL_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_INTEGER);
+    next_token(&lexer, FENG_TOKEN_SHR_ASSIGN);
+    next_token(&lexer, FENG_TOKEN_INTEGER);
+    next_token(&lexer, FENG_TOKEN_EOF);
+}
+
 static void test_numeric_literal_bases_and_separators(void) {
     FengLexer lexer;
     FengToken token;
@@ -423,6 +453,7 @@ int main(void) {
     test_comments_crlf_and_custom_annotations();
     test_error_tokens();
     test_bitwise_tokens();
+    test_compound_assignment_tokens();
     test_numeric_literal_bases_and_separators();
     test_numeric_literal_rejects_trailing_underscore();
     test_flow_control_tokens();

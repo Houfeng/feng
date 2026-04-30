@@ -262,10 +262,57 @@ static void test_same_named_types_in_distinct_modules(void) {
     feng_program_free(prog_debug);
 }
 
+static void test_float_modulo_codegen_uses_math_runtime(void) {
+    static const char *kOpsSrc =
+        "mod feng.codegen.ops;\n"
+        "fn run() {\n"
+        "    var total: float = (float)7.8;\n"
+        "    total %= (float)3.2;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kOpsSrc, "tests/ops.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error: %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "#include <math.h>") != NULL);
+    ASSERT(strstr(out.c_source, "fmodf(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
     test_same_named_types_in_distinct_modules();
+    test_float_modulo_codegen_uses_math_runtime();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

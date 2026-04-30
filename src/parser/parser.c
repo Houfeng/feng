@@ -158,6 +158,39 @@ static bool parser_match(Parser *parser, FengTokenKind kind) {
     return true;
 }
 
+static bool token_is_assignment_operator(FengTokenKind kind) {
+    switch (kind) {
+        case FENG_TOKEN_ASSIGN:
+        case FENG_TOKEN_PLUS_ASSIGN:
+        case FENG_TOKEN_MINUS_ASSIGN:
+        case FENG_TOKEN_STAR_ASSIGN:
+        case FENG_TOKEN_SLASH_ASSIGN:
+        case FENG_TOKEN_PERCENT_ASSIGN:
+        case FENG_TOKEN_AMP_ASSIGN:
+        case FENG_TOKEN_PIPE_ASSIGN:
+        case FENG_TOKEN_CARET_ASSIGN:
+        case FENG_TOKEN_SHL_ASSIGN:
+        case FENG_TOKEN_SHR_ASSIGN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool parser_match_assignment_operator(Parser *parser, FengTokenKind *out_kind) {
+    FengTokenKind kind = parser_current(parser)->kind;
+
+    if (!token_is_assignment_operator(kind)) {
+        return false;
+    }
+
+    (void)parser_advance(parser);
+    if (out_kind != NULL) {
+        *out_kind = kind;
+    }
+    return true;
+}
+
 static bool parser_error_at(Parser *parser, const FengToken *token, const char *message) {
     if (parser->error.message == NULL) {
         parser->error.message = message;
@@ -2695,13 +2728,20 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
         return NULL;
     }
 
-    if (terminator != FENG_TOKEN_EOF && parser_match(parser, FENG_TOKEN_ASSIGN)) {
+    if (terminator != FENG_TOKEN_EOF) {
+        FengTokenKind assign_op;
+
+        if (!parser_match_assignment_operator(parser, &assign_op)) {
+            return stmt;
+        }
+
         FengStmt *assign = new_stmt(parser, FENG_STMT_ASSIGN, stmt->token);
 
         if (assign == NULL) {
             free_stmt(stmt);
             return NULL;
         }
+        assign->as.assign.op = assign_op;
         assign->as.assign.target = stmt->as.expr;
         assign->as.assign.value = parse_expression(parser);
         free(stmt);

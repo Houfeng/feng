@@ -1,5 +1,6 @@
 #include "semantic/semantic.h"
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -2196,6 +2197,11 @@ static bool inferred_expr_type_is_integer(InferredExprType expr_type) {
     return builtin_name != NULL && builtin_type_name_is_integer(slice_from_cstr(builtin_name));
 }
 
+static bool inferred_expr_type_is_float(InferredExprType expr_type) {
+    return inferred_expr_type_is_numeric(expr_type) &&
+           !inferred_expr_type_is_integer(expr_type);
+}
+
 static bool inferred_expr_type_is_bool(InferredExprType expr_type) {
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
 
@@ -2220,6 +2226,16 @@ static const char *format_operator_name(FengTokenKind kind) {
             return "/";
         case FENG_TOKEN_PERCENT:
             return "%";
+        case FENG_TOKEN_PLUS_ASSIGN:
+            return "+=";
+        case FENG_TOKEN_MINUS_ASSIGN:
+            return "-=";
+        case FENG_TOKEN_STAR_ASSIGN:
+            return "*=";
+        case FENG_TOKEN_SLASH_ASSIGN:
+            return "/=";
+        case FENG_TOKEN_PERCENT_ASSIGN:
+            return "%=";
         case FENG_TOKEN_NOT:
             return "!";
         case FENG_TOKEN_TILDE:
@@ -2242,16 +2258,79 @@ static const char *format_operator_name(FengTokenKind kind) {
             return "||";
         case FENG_TOKEN_AMP:
             return "&";
+        case FENG_TOKEN_AMP_ASSIGN:
+            return "&=";
         case FENG_TOKEN_PIPE:
             return "|";
+        case FENG_TOKEN_PIPE_ASSIGN:
+            return "|=";
         case FENG_TOKEN_CARET:
             return "^";
+        case FENG_TOKEN_CARET_ASSIGN:
+            return "^=";
         case FENG_TOKEN_SHL:
             return "<<";
+        case FENG_TOKEN_SHL_ASSIGN:
+            return "<<=";
         case FENG_TOKEN_SHR:
             return ">>";
+        case FENG_TOKEN_SHR_ASSIGN:
+            return ">>=";
         default:
             return "?";
+    }
+}
+
+static FengTokenKind assignment_operator_binary_operator(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_PLUS_ASSIGN:
+            return FENG_TOKEN_PLUS;
+        case FENG_TOKEN_MINUS_ASSIGN:
+            return FENG_TOKEN_MINUS;
+        case FENG_TOKEN_STAR_ASSIGN:
+            return FENG_TOKEN_STAR;
+        case FENG_TOKEN_SLASH_ASSIGN:
+            return FENG_TOKEN_SLASH;
+        case FENG_TOKEN_PERCENT_ASSIGN:
+            return FENG_TOKEN_PERCENT;
+        case FENG_TOKEN_AMP_ASSIGN:
+            return FENG_TOKEN_AMP;
+        case FENG_TOKEN_PIPE_ASSIGN:
+            return FENG_TOKEN_PIPE;
+        case FENG_TOKEN_CARET_ASSIGN:
+            return FENG_TOKEN_CARET;
+        case FENG_TOKEN_SHL_ASSIGN:
+            return FENG_TOKEN_SHL;
+        case FENG_TOKEN_SHR_ASSIGN:
+            return FENG_TOKEN_SHR;
+        default:
+            return FENG_TOKEN_ERROR;
+    }
+}
+
+static bool assignment_operator_is_numeric_compound(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_PLUS_ASSIGN:
+        case FENG_TOKEN_MINUS_ASSIGN:
+        case FENG_TOKEN_STAR_ASSIGN:
+        case FENG_TOKEN_SLASH_ASSIGN:
+        case FENG_TOKEN_PERCENT_ASSIGN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool assignment_operator_is_bitwise_compound(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_AMP_ASSIGN:
+        case FENG_TOKEN_PIPE_ASSIGN:
+        case FENG_TOKEN_CARET_ASSIGN:
+        case FENG_TOKEN_SHL_ASSIGN:
+        case FENG_TOKEN_SHR_ASSIGN:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -2372,6 +2451,148 @@ static int canonical_integer_bit_width(const char *canonical_name) {
     return 0;
 }
 
+static bool validate_integer_shift_rhs_range(ResolveContext *context,
+                                             FengToken anchor,
+                                             InferredExprType left_type,
+                                             const FengExpr *right_expr) {
+    FengConstValue shift_value;
+
+    if (!evaluate_constant_expr(context, right_expr, &shift_value) ||
+        shift_value.kind != FENG_CONST_INT) {
+        return true;
+    }
+
+    int64_t shift_amount = shift_value.i;
+    int bit_width = canonical_integer_bit_width(
+        inferred_expr_type_builtin_canonical_name(left_type));
+
+    if (bit_width <= 0 ||
+        (shift_amount >= 0 && shift_amount < (int64_t)bit_width)) {
+        return true;
+    }
+
+    char *lt_name = format_inferred_expr_type_name(left_type);
+    char *msg = format_message(
+        "shift amount %lld is out of range for type '%s' (must be in [0, %d))",
+        (long long)shift_amount,
+        lt_name != NULL ? lt_name : "<unknown>",
+        bit_width);
+
+    free(lt_name);
+    return resolver_append_error(context, anchor, msg);
+}
+
+static bool validate_division_or_modulo_rhs_zero(ResolveContext *context,
+                                                 FengToken anchor,
+                                                 FengTokenKind op,
+                                                 InferredExprType left_type,
+                                                 InferredExprType right_type,
+                                                 const FengExpr *right_expr,
+                                                 const char *context_label) {
+    FengConstValue rhs_value;
+    const char *kind_word;
+
+    if (!evaluate_constant_expr(context, right_expr, &rhs_value)) {
+        return true;
+    }
+
+    if (op == FENG_TOKEN_SLASH &&
+        inferred_expr_type_is_integer(left_type) &&
+        inferred_expr_type_is_integer(right_type) &&
+        rhs_value.kind == FENG_CONST_INT && rhs_value.i == 0) {
+        kind_word = "division";
+    } else if (op == FENG_TOKEN_PERCENT &&
+               inferred_expr_type_is_integer(left_type) &&
+               inferred_expr_type_is_integer(right_type) &&
+               rhs_value.kind == FENG_CONST_INT && rhs_value.i == 0) {
+        kind_word = "modulo";
+    } else if (op == FENG_TOKEN_PERCENT &&
+               inferred_expr_type_is_float(left_type) &&
+               inferred_expr_type_is_float(right_type) &&
+               rhs_value.kind == FENG_CONST_FLOAT && rhs_value.f == 0.0) {
+        kind_word = "modulo";
+    } else {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        anchor,
+        format_message("%s by zero in %s '%s' expression",
+                       kind_word,
+                       context_label,
+                       format_operator_name(op)));
+}
+
+static bool validate_compound_assignment(ResolveContext *context, const FengStmt *stmt) {
+    InferredExprType left_type = infer_expr_type(context, stmt->as.assign.target);
+    InferredExprType right_type = infer_expr_type(context, stmt->as.assign.value);
+    FengTokenKind binary_op = assignment_operator_binary_operator(stmt->as.assign.op);
+    const char *operator_name = format_operator_name(stmt->as.assign.op);
+    char *left_type_name;
+    char *right_type_name;
+    char *message;
+
+    if (binary_op == FENG_TOKEN_ERROR) {
+        return resolver_append_error(context,
+                                     stmt->token,
+                                     format_message("unsupported compound assignment operator '%s'",
+                                                    operator_name));
+    }
+
+    if (assignment_operator_is_numeric_compound(stmt->as.assign.op) &&
+        inferred_expr_types_equal(context, left_type, right_type) &&
+        inferred_expr_type_is_numeric(left_type)) {
+        if ((binary_op == FENG_TOKEN_SHL || binary_op == FENG_TOKEN_SHR) &&
+            !validate_integer_shift_rhs_range(context,
+                                              stmt->token,
+                                              left_type,
+                                              stmt->as.assign.value)) {
+            return false;
+        }
+        return validate_division_or_modulo_rhs_zero(context,
+                                                    stmt->token,
+                                                    binary_op,
+                                                    left_type,
+                                                    right_type,
+                                                    stmt->as.assign.value,
+                                                    "compile-time compound");
+    }
+
+    if (assignment_operator_is_bitwise_compound(stmt->as.assign.op) &&
+        inferred_expr_types_equal(context, left_type, right_type) &&
+        inferred_expr_type_is_integer(left_type)) {
+        if (binary_op == FENG_TOKEN_SHL || binary_op == FENG_TOKEN_SHR) {
+            return validate_integer_shift_rhs_range(context,
+                                                    stmt->token,
+                                                    left_type,
+                                                    stmt->as.assign.value);
+        }
+        return true;
+    }
+
+    left_type_name = format_inferred_expr_type_name(left_type);
+    right_type_name = format_inferred_expr_type_name(right_type);
+
+    if (assignment_operator_is_numeric_compound(stmt->as.assign.op)) {
+        message = format_message(
+            "compound assignment operator '%s' requires operands of the same numeric type, got '%s' and '%s'",
+            operator_name,
+            left_type_name != NULL ? left_type_name : "<unknown>",
+            right_type_name != NULL ? right_type_name : "<unknown>");
+    } else {
+        message = format_message(
+            "compound assignment operator '%s' requires operands of the same integer type, got '%s' and '%s'",
+            operator_name,
+            left_type_name != NULL ? left_type_name : "<unknown>",
+            right_type_name != NULL ? right_type_name : "<unknown>");
+    }
+
+    free(left_type_name);
+    free(right_type_name);
+    return resolver_append_error(context, stmt->token, message);
+}
+
 static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
     InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
@@ -2382,45 +2603,18 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
 
     if (binary_expr_types_are_valid(context, expr->as.binary.op, left_type, right_type)) {
         if (expr->as.binary.op == FENG_TOKEN_SHL || expr->as.binary.op == FENG_TOKEN_SHR) {
-            FengConstValue shift_value;
-
-            if (evaluate_constant_expr(context, expr->as.binary.right, &shift_value) &&
-                shift_value.kind == FENG_CONST_INT) {
-                int64_t shift_amount = shift_value.i;
-                int bit_width = canonical_integer_bit_width(
-                    inferred_expr_type_builtin_canonical_name(left_type));
-
-                if (bit_width > 0 && (shift_amount < 0 || shift_amount >= (int64_t)bit_width)) {
-                    char *lt_name = format_inferred_expr_type_name(left_type);
-                    char *msg = format_message(
-                        "shift amount %lld is out of range for type '%s' (must be in [0, %d))",
-                        (long long)shift_amount,
-                        lt_name != NULL ? lt_name : "<unknown>",
-                        bit_width);
-
-                    free(lt_name);
-                    return resolver_append_error(context, expr->token, msg);
-                }
-            }
+            return validate_integer_shift_rhs_range(context,
+                                                    expr->token,
+                                                    left_type,
+                                                    expr->as.binary.right);
         }
-        if ((expr->as.binary.op == FENG_TOKEN_SLASH ||
-             expr->as.binary.op == FENG_TOKEN_PERCENT) &&
-            inferred_expr_type_is_integer(left_type) &&
-            inferred_expr_type_is_integer(right_type)) {
-            FengConstValue rhs_value;
-
-            if (evaluate_constant_expr(context, expr->as.binary.right, &rhs_value) &&
-                rhs_value.kind == FENG_CONST_INT && rhs_value.i == 0) {
-                const char *kind_word =
-                    expr->as.binary.op == FENG_TOKEN_SLASH ? "division" : "modulo";
-                char *msg = format_message(
-                    "%s by zero in compile-time '%s' expression",
-                    kind_word,
-                    format_operator_name(expr->as.binary.op));
-                return resolver_append_error(context, expr->token, msg);
-            }
-        }
-        return true;
+        return validate_division_or_modulo_rhs_zero(context,
+                                                    expr->token,
+                                                    expr->as.binary.op,
+                                                    left_type,
+                                                    right_type,
+                                                    expr->as.binary.right,
+                                                    "compile-time");
     }
 
     left_type_name = format_inferred_expr_type_name(left_type);
@@ -6748,7 +6942,14 @@ static bool evaluate_constant_binary(ResolveContext *context,
             case FENG_TOKEN_MINUS:   result = a - b; break;
             case FENG_TOKEN_STAR:    result = a * b; break;
             case FENG_TOKEN_SLASH:   result = a / b; break;
-            case FENG_TOKEN_PERCENT: return false; /* '%' undefined for floats in Feng */
+                case FENG_TOKEN_PERCENT:
+                    if (b == 0.0) {
+                        report_const_eval_error(context, expr,
+                            "modulo by zero in compile-time '%' expression");
+                        return false;
+                    }
+                    result = fmod(a, b);
+                    break;
             default:                 return false;
         }
         *out = const_float_value(result);
@@ -9587,6 +9788,9 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             }
             if (!resolve_expr(context, stmt->as.assign.value, allow_self)) {
                 return false;
+            }
+            if (stmt->as.assign.op != FENG_TOKEN_ASSIGN) {
+                return validate_compound_assignment(context, stmt);
             }
             return validate_expr_against_expected_inferred_type(
                 context,

@@ -14,6 +14,7 @@
 
 #include <ctype.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -2039,6 +2040,61 @@ static const char *cg_binop_c(FengTokenKind op) {
     }
 }
 
+static FengTokenKind cg_assignment_binary_op(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_PLUS_ASSIGN:
+            return FENG_TOKEN_PLUS;
+        case FENG_TOKEN_MINUS_ASSIGN:
+            return FENG_TOKEN_MINUS;
+        case FENG_TOKEN_STAR_ASSIGN:
+            return FENG_TOKEN_STAR;
+        case FENG_TOKEN_SLASH_ASSIGN:
+            return FENG_TOKEN_SLASH;
+        case FENG_TOKEN_PERCENT_ASSIGN:
+            return FENG_TOKEN_PERCENT;
+        case FENG_TOKEN_AMP_ASSIGN:
+            return FENG_TOKEN_AMP;
+        case FENG_TOKEN_PIPE_ASSIGN:
+            return FENG_TOKEN_PIPE;
+        case FENG_TOKEN_CARET_ASSIGN:
+            return FENG_TOKEN_CARET;
+        case FENG_TOKEN_SHL_ASSIGN:
+            return FENG_TOKEN_SHL;
+        case FENG_TOKEN_SHR_ASSIGN:
+            return FENG_TOKEN_SHR;
+        default:
+            return FENG_TOKEN_ERROR;
+    }
+}
+
+static bool cg_assignment_is_compound(FengTokenKind op) {
+    return op != FENG_TOKEN_ASSIGN;
+}
+
+static bool cg_append_numeric_op_expr(Buf *b,
+                                      CGTypeKind kind,
+                                      const char *lhs,
+                                      FengTokenKind op,
+                                      const char *rhs) {
+    const char *cty = cgtype_to_c(kind);
+    const char *cop = cg_binop_c(op);
+
+    if (op == FENG_TOKEN_PERCENT && kind == CG_TYPE_F32) {
+        buf_append_fmt(b, "fmodf((float)(%s), (float)(%s))", lhs, rhs);
+        return true;
+    }
+    if (op == FENG_TOKEN_PERCENT && kind == CG_TYPE_F64) {
+        buf_append_fmt(b, "fmod((double)(%s), (double)(%s))", lhs, rhs);
+        return true;
+    }
+    if (cop == NULL) {
+        return false;
+    }
+
+    buf_append_fmt(b, "((%s)%s %s (%s)%s)", cty, lhs, cop, cty, rhs);
+    return true;
+}
+
 static bool cg_unify_numeric(CG *cg, FengToken tok, ExprResult *l, ExprResult *r,
                              CGType **out_common) {
     CGTypeKind lk = l->type->kind, rk = r->type->kind;
@@ -2151,7 +2207,16 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     Buf b; buf_init(&b);
     const char *cty = cgtype_to_c(common->kind);
-    buf_append_fmt(&b, "((%s)%s %s (%s)%s)", cty, lr.c_expr, cop, cty, rr.c_expr);
+    if (e->as.binary.op == FENG_TOKEN_PERCENT && cgtype_is_float(common->kind)) {
+        if (!cg_append_numeric_op_expr(&b, common->kind, lr.c_expr, e->as.binary.op, rr.c_expr)) {
+            cgtype_free(common);
+            er_free(&lr);
+            er_free(&rr);
+            return cg_fail(cg, e->token, "codegen: unsupported float modulo operation");
+        }
+    } else {
+        buf_append_fmt(&b, "((%s)%s %s (%s)%s)", cty, lr.c_expr, cop, cty, rr.c_expr);
+    }
     out->c_expr = b.data;
     if (is_cmp) {
         cgtype_free(common);
@@ -3626,6 +3691,8 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
 
 static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     const FengExpr *target = stmt->as.assign.target;
+    const bool is_compound = cg_assignment_is_compound(stmt->as.assign.op);
+    const FengTokenKind binary_op = cg_assignment_binary_op(stmt->as.assign.op);
     if (target->kind == FENG_EXPR_INDEX) {
         ExprResult recv;
         if (!cg_emit_expr(cg, target->as.index.object, &recv)) return false;
@@ -3652,6 +3719,73 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                        idx_tmp, ix.c_expr);
         buf_append_fmt(cg->cur_body, "    feng_array_check_index(%s, %s);\n",
                        recv.c_expr, idx_tmp);
+        if (is_compound) {
+            char *elem_cty = cg_ctype_dup(recv.type->element);
+            char *old_tmp = NULL;
+            ExprResult v;
+            Buf expr;
+
+            if (!elem_cty || !cgtype_is_numeric(recv.type->element->kind)) {
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&ix);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: compound indexed assignment requires a numeric element type");
+            }
+
+            old_tmp = cg_fresh_temp(cg, "_old");
+            if (!old_tmp) {
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&ix);
+                er_free(&recv);
+                return false;
+            }
+
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = ((%s *)feng_array_data(%s))[%s];\n",
+                elem_cty, old_tmp, elem_cty, recv.c_expr, idx_tmp);
+
+            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                free(old_tmp);
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&ix);
+                er_free(&recv);
+                return false;
+            }
+
+            buf_init(&expr);
+            if (!cg_append_numeric_op_expr(&expr,
+                                           recv.type->element->kind,
+                                           old_tmp,
+                                           binary_op,
+                                           v.c_expr)) {
+                buf_free(&expr);
+                er_free(&v);
+                free(old_tmp);
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&ix);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: unsupported compound indexed assignment operator");
+            }
+
+            buf_append_fmt(cg->cur_body,
+                "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
+                elem_cty, recv.c_expr, idx_tmp, elem_cty, expr.data);
+
+            buf_free(&expr);
+            er_free(&v);
+            free(old_tmp);
+            free(elem_cty);
+            free(idx_tmp);
+            er_free(&ix);
+            er_free(&recv);
+            return true;
+        }
         ExprResult v;
         if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
             free(idx_tmp); er_free(&ix); er_free(&recv); return false;
@@ -3724,6 +3858,63 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     sm->feng_name);
             }
             cg_materialize_to_local(cg, &recv, "_t");
+            if (is_compound) {
+                char *field_cty = cg_ctype_dup(sm->type);
+                char *old_tmp = NULL;
+                ExprResult v;
+                Buf expr;
+
+                if (!field_cty || !cgtype_is_numeric(sm->type->kind)) {
+                    free(field_cty);
+                    er_free(&recv);
+                    return cg_fail(cg, stmt->token,
+                        "codegen: compound spec field assignment requires a numeric field type");
+                }
+
+                old_tmp = cg_fresh_temp(cg, "_old");
+                if (!old_tmp) {
+                    free(field_cty);
+                    er_free(&recv);
+                    return false;
+                }
+
+                buf_append_fmt(cg->cur_body,
+                    "    %s %s = %s.witness->get_%s(%s.subject);\n",
+                    field_cty, old_tmp, recv.c_expr, sm->c_field_name, recv.c_expr);
+
+                if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                    free(old_tmp);
+                    free(field_cty);
+                    er_free(&recv);
+                    return false;
+                }
+
+                buf_init(&expr);
+                if (!cg_append_numeric_op_expr(&expr,
+                                               sm->type->kind,
+                                               old_tmp,
+                                               binary_op,
+                                               v.c_expr)) {
+                    buf_free(&expr);
+                    er_free(&v);
+                    free(old_tmp);
+                    free(field_cty);
+                    er_free(&recv);
+                    return cg_fail(cg, stmt->token,
+                        "codegen: unsupported compound spec field assignment operator");
+                }
+
+                buf_append_fmt(cg->cur_body,
+                    "    %s.witness->set_%s(%s.subject, (%s)(%s));\n",
+                    recv.c_expr, sm->c_field_name, recv.c_expr, field_cty, expr.data);
+
+                buf_free(&expr);
+                er_free(&v);
+                free(old_tmp);
+                free(field_cty);
+                er_free(&recv);
+                return true;
+            }
             ExprResult v;
             if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                 er_free(&recv); return false;
@@ -3768,6 +3959,63 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
+        if (is_compound) {
+            char *field_cty = cg_ctype_dup(uf->type);
+            char *old_tmp = NULL;
+            ExprResult v;
+            Buf expr;
+
+            if (!field_cty || !cgtype_is_numeric(uf->type->kind)) {
+                free(field_cty);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: compound member assignment requires a numeric field type");
+            }
+
+            old_tmp = cg_fresh_temp(cg, "_old");
+            if (!old_tmp) {
+                free(field_cty);
+                er_free(&recv);
+                return false;
+            }
+
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = (%s)->%s;\n",
+                field_cty, old_tmp, recv.c_expr, uf->c_name);
+
+            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                free(old_tmp);
+                free(field_cty);
+                er_free(&recv);
+                return false;
+            }
+
+            buf_init(&expr);
+            if (!cg_append_numeric_op_expr(&expr,
+                                           uf->type->kind,
+                                           old_tmp,
+                                           binary_op,
+                                           v.c_expr)) {
+                buf_free(&expr);
+                er_free(&v);
+                free(old_tmp);
+                free(field_cty);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: unsupported compound member assignment operator");
+            }
+
+            buf_append_fmt(cg->cur_body,
+                "    (%s)->%s = (%s)(%s);\n",
+                recv.c_expr, uf->c_name, field_cty, expr.data);
+
+            buf_free(&expr);
+            er_free(&v);
+            free(old_tmp);
+            free(field_cty);
+            er_free(&recv);
+            return true;
+        }
         ExprResult v;
         if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
             er_free(&recv); return false;
@@ -3810,6 +4058,54 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "codegen: cannot assign to immutable module binding '%s'",
                 mb->feng_name);
         }
+        if (is_compound) {
+            char *cty = cg_ctype_dup(mb->type);
+            char *old_tmp = NULL;
+            ExprResult v;
+            Buf expr;
+
+            if (!cty || !cgtype_is_numeric(mb->type->kind)) {
+                free(cty);
+                return cg_fail(cg, stmt->token,
+                    "codegen: compound assignment requires a numeric binding type");
+            }
+
+            old_tmp = cg_fresh_temp(cg, "_old");
+            if (!old_tmp) {
+                free(cty);
+                return false;
+            }
+
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, mb->c_name);
+            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                free(old_tmp);
+                free(cty);
+                return false;
+            }
+
+            buf_init(&expr);
+            if (!cg_append_numeric_op_expr(&expr,
+                                           mb->type->kind,
+                                           old_tmp,
+                                           binary_op,
+                                           v.c_expr)) {
+                buf_free(&expr);
+                er_free(&v);
+                free(old_tmp);
+                free(cty);
+                return cg_fail(cg, stmt->token,
+                    "codegen: unsupported compound assignment operator");
+            }
+
+            buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                           mb->c_name, cty, expr.data);
+
+            buf_free(&expr);
+            er_free(&v);
+            free(old_tmp);
+            free(cty);
+            return true;
+        }
         ExprResult v;
         if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
         if (cgtype_is_managed(mb->type)) {
@@ -3828,6 +4124,54 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             free(cty);
         }
         er_free(&v);
+        return true;
+    }
+    if (is_compound) {
+        char *cty = cg_ctype_dup(l->type);
+        char *old_tmp = NULL;
+        ExprResult v;
+        Buf expr;
+
+        if (!cty || !cgtype_is_numeric(l->type->kind)) {
+            free(cty);
+            return cg_fail(cg, stmt->token,
+                "codegen: compound assignment requires a numeric local type");
+        }
+
+        old_tmp = cg_fresh_temp(cg, "_old");
+        if (!old_tmp) {
+            free(cty);
+            return false;
+        }
+
+        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, l->c_name);
+        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            free(old_tmp);
+            free(cty);
+            return false;
+        }
+
+        buf_init(&expr);
+        if (!cg_append_numeric_op_expr(&expr,
+                                       l->type->kind,
+                                       old_tmp,
+                                       binary_op,
+                                       v.c_expr)) {
+            buf_free(&expr);
+            er_free(&v);
+            free(old_tmp);
+            free(cty);
+            return cg_fail(cg, stmt->token,
+                "codegen: unsupported compound assignment operator");
+        }
+
+        buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                       l->c_name, cty, expr.data);
+
+        buf_free(&expr);
+        er_free(&v);
+        free(old_tmp);
+        free(cty);
         return true;
     }
     ExprResult v;
@@ -5969,6 +6313,7 @@ static char *cg_finalize(CG *cg) {
     buf_append_cstr(&out,
         "/* Feng generated code — do not edit. */\n"
         "#include <stdbool.h>\n"
+        "#include <math.h>\n"
         "#include <stddef.h>\n"
         "#include <stdint.h>\n"
         "#include <string.h>\n"

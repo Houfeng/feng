@@ -584,18 +584,33 @@ static FengToken scan_token_internal(FengLexer *lexer) {
             }
             return make_token(lexer, FENG_TOKEN_DOT, start_offset, start_line, start_column);
         case '+':
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_PLUS_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_PLUS, start_offset, start_line, start_column);
         case '*':
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_STAR_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_STAR, start_offset, start_line, start_column);
         case '/':
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_SLASH_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_SLASH, start_offset, start_line, start_column);
         case '%':
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_PERCENT_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_PERCENT, start_offset, start_line, start_column);
         case '~':
             return make_token(lexer, FENG_TOKEN_TILDE, start_offset, start_line, start_column);
         case '-':
             if (lexer_match(lexer, '>')) {
                 return make_token(lexer, FENG_TOKEN_ARROW, start_offset, start_line, start_column);
+            }
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_MINUS_ASSIGN, start_offset, start_line, start_column);
             }
             return make_token(lexer, FENG_TOKEN_MINUS, start_offset, start_line, start_column);
         case '=':
@@ -609,32 +624,47 @@ static FengToken scan_token_internal(FengLexer *lexer) {
             }
             return make_token(lexer, FENG_TOKEN_NOT, start_offset, start_line, start_column);
         case '<':
+            if (lexer_match(lexer, '<')) {
+                if (lexer_match(lexer, '=')) {
+                    return make_token(lexer, FENG_TOKEN_SHL_ASSIGN, start_offset, start_line, start_column);
+                }
+                return make_token(lexer, FENG_TOKEN_SHL, start_offset, start_line, start_column);
+            }
             if (lexer_match(lexer, '=')) {
                 return make_token(lexer, FENG_TOKEN_LE, start_offset, start_line, start_column);
             }
-            if (lexer_match(lexer, '<')) {
-                return make_token(lexer, FENG_TOKEN_SHL, start_offset, start_line, start_column);
-            }
             return make_token(lexer, FENG_TOKEN_LT, start_offset, start_line, start_column);
         case '>':
+            if (lexer_match(lexer, '>')) {
+                if (lexer_match(lexer, '=')) {
+                    return make_token(lexer, FENG_TOKEN_SHR_ASSIGN, start_offset, start_line, start_column);
+                }
+                return make_token(lexer, FENG_TOKEN_SHR, start_offset, start_line, start_column);
+            }
             if (lexer_match(lexer, '=')) {
                 return make_token(lexer, FENG_TOKEN_GE, start_offset, start_line, start_column);
-            }
-            if (lexer_match(lexer, '>')) {
-                return make_token(lexer, FENG_TOKEN_SHR, start_offset, start_line, start_column);
             }
             return make_token(lexer, FENG_TOKEN_GT, start_offset, start_line, start_column);
         case '&':
             if (lexer_match(lexer, '&')) {
                 return make_token(lexer, FENG_TOKEN_AND_AND, start_offset, start_line, start_column);
             }
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_AMP_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_AMP, start_offset, start_line, start_column);
         case '|':
             if (lexer_match(lexer, '|')) {
                 return make_token(lexer, FENG_TOKEN_OR_OR, start_offset, start_line, start_column);
             }
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_PIPE_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_PIPE, start_offset, start_line, start_column);
         case '^':
+            if (lexer_match(lexer, '=')) {
+                return make_token(lexer, FENG_TOKEN_CARET_ASSIGN, start_offset, start_line, start_column);
+            }
             return make_token(lexer, FENG_TOKEN_CARET, start_offset, start_line, start_column);
         default:
             return make_error(lexer,

@@ -267,6 +267,7 @@ struct FengStmt {
         FengBlock *block;
         FengBinding binding;
         struct {
+            FengTokenKind op;
             FengExpr *target;
             FengExpr *value;
         } assign;

@@ -2955,6 +2955,53 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     feng_program_free(program);
 }
 
+static void test_compound_assignment_accepts_numeric_and_bitwise_targets(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var rem: double = 7.8;\n"
+        "    rem %= 3.2;\n"
+        "    var mask: i32 = 8;\n"
+        "    mask >>= 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("compound_assign_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_compound_assignment_rejects_string_plus_equal(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var name: string = \"a\";\n"
+        "    name += \"b\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("compound_assign_string_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "compound_assign_string_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "compound assignment operator '+=' requires operands of the same numeric type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_inferred_array_literal_binding_supports_index_read_write(void) {
     const char *source =
         "mod demo.main;\n"
@@ -3821,6 +3868,47 @@ static void test_const_fold_modulo_by_zero_rejected(void) {
     ASSERT(strstr(errors[0].message, "modulo by zero") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_const_fold_float_modulo_by_zero_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: double = 1.0 % 0.0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("const_fold_float_mod_zero.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "modulo by zero") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_float_modulo_expression_is_accepted(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let rem: double = 7.8 % 3.2;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("float_mod_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -8392,6 +8480,8 @@ int main(void) {
     test_alias_public_let_binding_assignment_rejects_non_writable_target();
     test_index_assignment_accepts_explicit_array_target();
     test_index_assignment_rejects_non_matching_array_element_type();
+    test_compound_assignment_accepts_numeric_and_bitwise_targets();
+    test_compound_assignment_rejects_string_plus_equal();
     test_inferred_array_literal_binding_supports_index_read_write();
     test_inferred_array_literal_binding_rejects_non_matching_index_assignment();
     test_inferred_array_literal_rejects_mixed_element_types();
@@ -8432,6 +8522,8 @@ int main(void) {
     test_const_fold_arithmetic_overflows_narrow_target();
     test_const_fold_division_by_zero_rejected();
     test_const_fold_modulo_by_zero_rejected();
+    test_const_fold_float_modulo_by_zero_rejected();
+    test_float_modulo_expression_is_accepted();
     test_const_fold_i64_overflow_rejected();
     test_const_fold_shift_amount_via_const_expr();
     test_const_fold_cast_truncation_then_target_check();

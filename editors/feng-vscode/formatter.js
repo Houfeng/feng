@@ -29,8 +29,12 @@ const KEYWORDS = new Set([
 const CONTROL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'catch', 'return', 'throw']);
 const PREFIX_CONTEXT_KEYWORDS = new Set(['if', 'while', 'return', 'throw']);
 const PREFIX_OPERATORS = new Set(['!', '-', '*', '+']);
-const MULTI_CHAR_OPERATORS = new Set(['->', '&&', '||', '==', '!=', '<=', '>=']);
-const SINGLE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '=', '!', '<', '>']);
+const THREE_CHAR_OPERATORS = new Set(['<<=', '>>=']);
+const MULTI_CHAR_OPERATORS = new Set([
+    '->', '&&', '||', '==', '!=', '<=', '>=',
+    '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<', '>>'
+]);
+const SINGLE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '=', '!', '<', '>', '&', '|', '^', '~']);
 const DELIMITERS = new Set(['(', ')', '[', ']', '{', '}']);
 const PUNCTUATION = new Set([',', ':', ';', '.']);
 const OPEN_TO_CLOSE = {
@@ -126,6 +130,7 @@ function tokenize(source) {
     while (index < source.length) {
         const current = source[index];
         const next = index + 1 < source.length ? source[index + 1] : '';
+        const threeChars = source.slice(index, index + 3);
         const twoChars = source.slice(index, index + 2);
 
         if (current === ' ' || current === '\t' || current === '\r') {
@@ -262,6 +267,12 @@ function tokenize(source) {
 
             tokens.push({ type: 'number', value: source.slice(index, end) });
             index = end;
+            continue;
+        }
+
+        if (THREE_CHAR_OPERATORS.has(threeChars)) {
+            tokens.push(classifySymbol(threeChars));
+            index += 3;
             continue;
         }
 
