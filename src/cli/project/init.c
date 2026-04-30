@@ -33,7 +33,7 @@ static const char *kLibTemplate =
     "mod lib;\n"
     "\n"
     "fn helper(): int {\n"
-    "  return 42;\n"
+    "  return 0;\n"
     "}\n";
 
 static void print_usage(const char *program) {
