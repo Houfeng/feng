@@ -1,9 +1,12 @@
+# 当前包基础信息
 [package]
-name: "examples"
+name:    "examples"
 version: "0.1.0"
-target: "lib"
-src: "src/"
-out: "build/"
+target:  "lib"
+src:     "src/"
+out:     "build/"
 
+# 当前包的依赖项，格式为：依赖包名称: 版本号
+# 总是使用固定版本号，不能使用范围或通配符
 [dependencies]
 demo: "0.1.0"
