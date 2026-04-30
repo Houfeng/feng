@@ -43,8 +43,8 @@ runCase(
 
 runCase(
     'normalizes compound and bitwise operators',
-    'fn run():void {\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask>>=1;\nmask&=3;\n}\n',
-    'fn run(): void {\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask >>= 1;\n    mask &= 3;\n}\n'
+    'fn run():void {\nvar count:i32=1;\ncount+=2;\ncount-=3;\ncount*=4;\ncount/=5;\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask&=3;\nmask|=4;\nmask^=1;\nmask<<=2;\nmask>>=1;\n}\n',
+    'fn run(): void {\n    var count: i32 = 1;\n    count += 2;\n    count -= 3;\n    count *= 4;\n    count /= 5;\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask &= 3;\n    mask |= 4;\n    mask ^= 1;\n    mask <<= 2;\n    mask >>= 1;\n}\n'
 );
 
 runManifestCase(

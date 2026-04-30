@@ -4,8 +4,8 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 
 ## Features
 
-- Syntax highlighting: Covers common Feng keywords, strings, comments, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
-- Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, and aligns manifest values inside `.fm` sections.
+- Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
+- Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
 - Diagnostics: If `feng check` is available on your machine, diagnostics are shown automatically when a file is opened or saved, and are cleared as soon as you start editing.
 - Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
 
@@ -39,7 +39,7 @@ The formatter is designed to cover the most common cleanup tasks in everyday dev
 - Adjust indentation around `{}`, `()`, and `[]`
 - Remove trailing whitespace at the end of each line
 - Normalize line endings to `\n`
-- Normalize binary operator spacing, for example `a+b` → `a + b`
+- Normalize binary and compound operator spacing, for example `a+b` → `a + b`, `total+=1` → `total += 1`, `mask>>=1` → `mask >>= 1`
 - Normalize parameter and argument lists, for example `fn add(a:int,b:int)` → `fn add(a: int, b: int)`
 - Normalize spacing around `:`, `,`, and `{}` in object literals and type annotations
 
