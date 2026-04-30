@@ -8,19 +8,20 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s build [<path>] [--release]\n", program);
     fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
-    fprintf(stderr, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stderr, "  %s run   [<path>] [--release] [-- <program-args>...]\n", program);
     fprintf(stderr, "  %s clean [<path>]\n", program);
-    fprintf(stderr, "  %s pack [<path>] [--release]\n", program);
-    fprintf(stderr, "  %s <files...> --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]\n", program);
-    fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
-    fprintf(stderr, "  %s tool lex <file>\n", program);
-    fprintf(stderr, "  %s tool parse <file>\n", program);
-    fprintf(stderr, "  %s tool semantic [--target=bin|lib] <file> [more files...]\n", program);
-    fprintf(stderr, "  %s tool check [--target=bin|lib] <file> [more files...]\n", program);
+    fprintf(stderr, "  %s pack  [<path>] [--release]\n", program);
+    fprintf(stderr, "  %s <files...> [--target=bin|lib] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "\n");
-    fprintf(stderr, "  Direct mode: compile one or more .ff files into <out>/bin via <out>/ir/c.\n");
-    fprintf(stderr, "  --target defaults to 'bin'; '--target=lib' is reserved for `tool` analysis.\n");
-    fprintf(stderr, "  --release is parsed but not yet implemented (P4).\n");
+    // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
+    // fprintf(stderr, "  %s tool lex <file>\n", program);
+    // fprintf(stderr, "  %s tool parse <file>\n", program);
+    // fprintf(stderr, "  %s tool semantic [--target=bin|lib] <file> [more files...]\n", program);
+    // fprintf(stderr, "  %s tool check [--target=bin|lib] <file> [more files...]\n", program);
+    // fprintf(stderr, "\n");
+    // fprintf(stderr, "  Direct mode: compile one or more .ff files into <out>/bin via <out>/ir/c.\n");
+    // fprintf(stderr, "  --target defaults to 'bin'; '--target=lib' is reserved for `tool` analysis.\n");
+    // fprintf(stderr, "  --release is parsed but not yet implemented (P4).\n");
 }
 
 int main(int argc, char **argv) {
