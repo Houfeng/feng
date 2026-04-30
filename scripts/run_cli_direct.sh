@@ -100,11 +100,21 @@ if expect_ok "keep_ir" "$FENG" "$FIXTURE" --out="$out2" --keep-ir; then
     fi
 fi
 
-# 3. --target=lib must be rejected by direct mode
-expect_fail "lib_rejected" "$FENG" "$FIXTURE" --target=lib --out="$WORK/case_lib" || true
-if ! grep -q "lib is not yet supported" "$WORK/lib_rejected.err"; then
-    echo "FAIL[lib_rejected] missing target=lib diagnostic"
-    failures=$((failures + 1))
+# 3. --target=lib should produce a static archive under <out>/lib
+out3="$WORK/case_lib"
+if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib --out="$out3" --name=hello_lib; then
+    lib="$out3/lib/libhello_lib.a"
+    if [[ ! -f "$lib" ]]; then
+        echo "FAIL[lib_static] missing archive $lib"
+        failures=$((failures + 1))
+    elif ! ar -t "$lib" | grep -q '^feng.o$'; then
+        echo "FAIL[lib_static] archive does not contain feng.o"
+        failures=$((failures + 1))
+    fi
+    if [[ -f "$out3/ir/c/feng.c" ]]; then
+        echo "FAIL[lib_static] IR file should be cleaned without --keep-ir"
+        failures=$((failures + 1))
+    fi
 fi
 
 # 4. missing --out

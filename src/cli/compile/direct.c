@@ -117,16 +117,6 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    /* P4 only supports BIN. LIB is recognised at parse time so it can be
-     * rejected here with a clear, actionable diagnostic instead of silently
-     * routing through an unsupported codegen path. */
-    if (opts.target == FENG_COMPILE_TARGET_LIB) {
-        fprintf(stderr,
-                "error: --target=lib is not yet supported by direct compile mode (P4).\n"
-                "       use `feng tool semantic --target=lib <files>` for analysis only.\n");
-        feng_cli_direct_options_dispose(&opts);
-        return 1;
-    }
     if (opts.release) {
         fprintf(stderr,
                 "warning: --release is parsed but not yet implemented; building debug-equivalent output.\n");
@@ -134,22 +124,23 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
 
     /* Materialise the output layout up front. */
     char *ir_dir = path_join(opts.out_dir, "ir/c");
-    char *bin_dir = path_join(opts.out_dir, "bin");
-    if (ir_dir == NULL || bin_dir == NULL) {
+    char *artifact_dir = path_join(opts.out_dir,
+                                   opts.target == FENG_COMPILE_TARGET_BIN ? "bin" : "lib");
+    if (ir_dir == NULL || artifact_dir == NULL) {
         fprintf(stderr, "out of memory preparing output layout\n");
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
     if (mkdirs(ir_dir) != 0) {
         fprintf(stderr, "failed to create %s: %s\n", ir_dir, strerror(errno));
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
-    if (mkdirs(bin_dir) != 0) {
-        fprintf(stderr, "failed to create %s: %s\n", bin_dir, strerror(errno));
-        free(ir_dir); free(bin_dir);
+    if (mkdirs(artifact_dir) != 0) {
+        fprintf(stderr, "failed to create %s: %s\n", artifact_dir, strerror(errno));
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -177,7 +168,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
 
     int rc = feng_cli_frontend_run(&input, &callbacks, &outputs);
     if (rc != 0) {
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return rc;
     }
@@ -203,7 +194,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -218,7 +209,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -230,7 +221,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -243,17 +234,20 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
 
-    /* Compose the bin path. Prefer an explicit `--name` override; otherwise
-     * derive the stem from the first input's basename. The multi-target naming
-     * convention may be revisited once the package model lands. */
-    char *bin_path = NULL;
+    /* Compose the final artifact path. Prefer an explicit `--name` override;
+     * otherwise derive the stem from the first input's basename. */
+    char *artifact_path = NULL;
+    char *artifact_name = NULL;
     if (opts.artifact_name != NULL) {
-        bin_path = path_join(bin_dir, opts.artifact_name);
+        artifact_name = malloc(strlen(opts.artifact_name) + 1U);
+        if (artifact_name != NULL) {
+            strcpy(artifact_name, opts.artifact_name);
+        }
     } else {
         const char *first = opts.inputs[0];
         const char *slash = strrchr(first, '/');
@@ -265,18 +259,37 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         if (stem != NULL) {
             memcpy(stem, base, stem_len);
             stem[stem_len] = '\0';
-            bin_path = path_join(bin_dir, stem);
-            free(stem);
+            artifact_name = stem;
         }
     }
-    if (bin_path == NULL) {
-        fprintf(stderr, "out of memory composing bin path\n");
+    if (artifact_name != NULL && opts.target == FENG_COMPILE_TARGET_LIB) {
+        char *lib_name = NULL;
+        if (strncmp(artifact_name, "lib", 3) == 0) {
+            lib_name = malloc(strlen(artifact_name) + 3U);
+            if (lib_name != NULL) {
+                snprintf(lib_name, strlen(artifact_name) + 3U, "%s.a", artifact_name);
+            }
+        } else {
+            lib_name = malloc(strlen(artifact_name) + 6U);
+            if (lib_name != NULL) {
+                snprintf(lib_name, strlen(artifact_name) + 6U, "lib%s.a", artifact_name);
+            }
+        }
+        free(artifact_name);
+        artifact_name = lib_name;
+    }
+    if (artifact_name != NULL) {
+        artifact_path = path_join(artifact_dir, artifact_name);
+        free(artifact_name);
+    }
+    if (artifact_path == NULL) {
+        fprintf(stderr, "out of memory composing artifact path\n");
         free(c_path);
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(bin_dir);
+        free(ir_dir); free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -292,13 +305,13 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         prog_array = calloc(prog_count, sizeof(*prog_array));
         if (prog_array == NULL) {
             fprintf(stderr, "out of memory collecting programs for driver\n");
-            free(bin_path);
+            free(artifact_path);
             free(c_path);
             feng_codegen_error_free(&cgerr);
             feng_codegen_output_free(&out);
             feng_semantic_analysis_free(analysis);
             feng_cli_free_loaded_sources(sources, source_count);
-            free(ir_dir); free(bin_dir);
+            free(ir_dir); free(artifact_dir);
             feng_cli_direct_options_dispose(&opts);
             return 1;
         }
@@ -312,8 +325,9 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
 
     FengCliDriverOptions drv = {
         .program_path = program,
+        .target = opts.target,
         .c_path = c_path,
-        .out_bin_path = bin_path,
+        .out_path = artifact_path,
         .programs = prog_array,
         .program_count = prog_count,
         .keep_intermediate = opts.keep_intermediate,
@@ -321,13 +335,13 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     int drv_rc = feng_cli_compile_driver_invoke(&drv);
 
     free(prog_array);
-    free(bin_path);
+    free(artifact_path);
     free(c_path);
     feng_codegen_error_free(&cgerr);
     feng_codegen_output_free(&out);
     feng_semantic_analysis_free(analysis);
     feng_cli_free_loaded_sources(sources, source_count);
-    free(ir_dir); free(bin_dir);
+    free(ir_dir); free(artifact_dir);
     feng_cli_direct_options_dispose(&opts);
     return drv_rc;
 }

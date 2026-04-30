@@ -1,0 +1,4 @@
+mod feng.cli.project.invalid;
+
+fn main(args: string[]) {
+}

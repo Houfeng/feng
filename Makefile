@@ -22,6 +22,8 @@ TEST_PARSER_SRCS := $(wildcard test/parser/*.c)
 TEST_SEMANTIC_SRCS := $(wildcard test/semantic/*.c)
 TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
+TEST_CLI_SRCS := $(wildcard test/cli/*.c)
+TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/project/common.c src/cli/project/manifest.c
 
 CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(CLI_SRCS))
 RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS))
@@ -30,10 +32,11 @@ TEST_PARSER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $
 TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(TEST_SEMANTIC_SRCS))
 TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIME_SRCS))
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(TEST_CODEGEN_SRCS))
+TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
 DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
 	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
-	$(TEST_CODEGEN_OBJS:.o=.d)
+	$(TEST_CODEGEN_OBJS:.o=.d) $(TEST_CLI_OBJS:.o=.d)
 
 LIB_DIR := $(BUILD_DIR)/lib
 RUNTIME_LIB := $(LIB_DIR)/libfeng_runtime.a
@@ -46,18 +49,22 @@ cli: $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB)
 
-test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen smoke cli-tests
+test: $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_cli smoke cli-tests cli-project-tests
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
 	$(BIN_DIR)/test_semantic
 	$(BIN_DIR)/test_runtime
 	$(BIN_DIR)/test_codegen
+	$(BIN_DIR)/test_cli
 
 smoke: cli runtime
 	./scripts/run_smoke.sh
 
 cli-tests: cli runtime
 	./scripts/run_cli_direct.sh
+
+cli-project-tests: cli runtime
+	./scripts/run_cli_project.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)
@@ -82,6 +89,10 @@ $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS)
 $(BIN_DIR)/test_codegen: $(TEST_CODEGEN_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CODEGEN_OBJS) $(LDFLAGS) -o $@
+
+$(BIN_DIR)/test_cli: $(TEST_CLI_OBJS)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) -o $@
 
 $(RUNTIME_LIB): $(RUNTIME_OBJS)
 	@mkdir -p $(LIB_DIR)

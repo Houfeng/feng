@@ -89,6 +89,18 @@ static void cleanup_empty_ir_dirs(const char *c_path) {
     free(ir_c_dir);
 }
 
+static char *replace_with_sibling_filename(const char *path, const char *filename) {
+    char *dir = path_dirname_dup(path);
+    char *out;
+
+    if (dir == NULL) {
+        return NULL;
+    }
+    out = path_join2(dir, filename);
+    free(dir);
+    return out;
+}
+
 /* --- runtime artefact discovery ----------------------------------------- */
 
 /* Resolve the running executable's absolute path. Returns a malloc'd
@@ -369,32 +381,37 @@ static int spawn_and_wait(char *const argv[]) {
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
-    if (opts == NULL || opts->c_path == NULL || opts->out_bin_path == NULL) {
+    if (opts == NULL || opts->c_path == NULL || opts->out_path == NULL) {
         fprintf(stderr, "internal error: driver invoked with NULL options\n");
         return 2;
     }
 
-    char *runtime_lib = locate_runtime_lib(opts->program_path);
-    if (runtime_lib == NULL) {
-        fprintf(stderr,
-                "error: cannot locate libfeng_runtime.a.\n"
-                "  set FENG_RUNTIME_LIB=<path-to-libfeng_runtime.a> or run from a\n"
-                "  build tree where build/lib/libfeng_runtime.a exists.\n");
-        return 1;
-    }
     char *include_dir = locate_runtime_include(opts->program_path);
     if (include_dir == NULL) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
                 "  set FENG_RUNTIME_INCLUDE=<dir-containing-runtime/feng_runtime.h>\n"
                 "  or run from a build tree containing src/runtime/feng_runtime.h.\n");
-        free(runtime_lib);
         return 1;
+    }
+
+    char *runtime_lib = NULL;
+    if (opts->target == FENG_COMPILE_TARGET_BIN) {
+        runtime_lib = locate_runtime_lib(opts->program_path);
+        if (runtime_lib == NULL) {
+            fprintf(stderr,
+                    "error: cannot locate libfeng_runtime.a.\n"
+                    "  set FENG_RUNTIME_LIB=<path-to-libfeng_runtime.a> or run from a\n"
+                    "  build tree where build/lib/libfeng_runtime.a exists.\n");
+            free(include_dir);
+            return 1;
+        }
     }
 
     char **libs = NULL;
     size_t lib_count = 0;
-    if (collect_link_libs(opts->programs, opts->program_count, &libs, &lib_count) != 0) {
+    if (opts->target == FENG_COMPILE_TARGET_BIN
+        && collect_link_libs(opts->programs, opts->program_count, &libs, &lib_count) != 0) {
         fprintf(stderr, "error: out of memory collecting link libraries\n");
         free(runtime_lib);
         free(include_dir);
@@ -404,43 +421,22 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     const char *cc = getenv("CC");
     if (cc == NULL || cc[0] == '\0') cc = "cc";
 
-    /* Build the cc argv. We keep the flag set aligned with the existing
-     * smoke harness for predictable diagnostics across the migration. */
-    ArgVec av = {0};
+    int rc = 0;
     char *include_flag = NULL;
+    char *object_path = NULL;
+    ArgVec av = {0};
     bool ok = true;
-    if (!argv_push(&av, cc)) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-std=c11")) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-O2")) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-Wall")) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-Wextra")) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-pedantic")) { ok = false; goto build_done; }
-    {
-        size_t need = strlen(include_dir) + 3U;
-        include_flag = malloc(need);
-        if (include_flag == NULL) { ok = false; goto build_done; }
-        snprintf(include_flag, need, "-I%s", include_dir);
-        if (!argv_push(&av, include_flag)) { ok = false; goto build_done; }
-    }
-    if (!argv_push(&av, opts->c_path)) { ok = false; goto build_done; }
-    if (!argv_push(&av, runtime_lib)) { ok = false; goto build_done; }
-    if (!argv_push(&av, "-lpthread")) { ok = false; goto build_done; }
-    for (size_t i = 0; i < lib_count; ++i) {
-        size_t need = strlen(libs[i]) + 3U;
-        char *flag = malloc(need);
-        if (flag == NULL) { ok = false; goto build_done; }
-        snprintf(flag, need, "-l%s", libs[i]);
-        bool pushed = argv_push(&av, flag);
-        free(flag);
-        if (!pushed) { ok = false; goto build_done; }
-    }
-    if (!argv_push(&av, "-o")) { ok = false; goto build_done; }
-    if (!argv_push(&av, opts->out_bin_path)) { ok = false; goto build_done; }
 
-build_done:
+    size_t include_need = strlen(include_dir) + 3U;
+    include_flag = malloc(include_need);
+    if (include_flag == NULL) {
+        ok = false;
+    } else {
+        snprintf(include_flag, include_need, "-I%s", include_dir);
+    }
+
     if (!ok) {
-        fprintf(stderr, "error: out of memory building cc argv\n");
-        argv_free(&av);
+        fprintf(stderr, "error: out of memory building compiler argv\n");
         free(include_flag);
         for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
         free(libs);
@@ -449,19 +445,92 @@ build_done:
         return 1;
     }
 
-    int rc = spawn_and_wait(av.items);
-    argv_free(&av);
-    free(include_flag);
+    if (opts->target == FENG_COMPILE_TARGET_BIN) {
+        if (!argv_push(&av, cc)) { ok = false; }
+        if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
+        if (ok && !argv_push(&av, "-O2")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wall")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
+        if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
+        if (ok && !argv_push(&av, include_flag)) { ok = false; }
+        if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
+        if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
+        if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
+        for (size_t i = 0; ok && i < lib_count; ++i) {
+            size_t need = strlen(libs[i]) + 3U;
+            char *flag = malloc(need);
+            if (flag == NULL) {
+                ok = false;
+                break;
+            }
+            snprintf(flag, need, "-l%s", libs[i]);
+            ok = argv_push(&av, flag);
+            free(flag);
+        }
+        if (ok && !argv_push(&av, "-o")) { ok = false; }
+        if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
+        if (!ok) {
+            fprintf(stderr, "error: out of memory building cc argv\n");
+            rc = 1;
+        } else {
+            rc = spawn_and_wait(av.items);
+        }
+        argv_free(&av);
+    } else {
+        object_path = replace_with_sibling_filename(opts->c_path, "feng.o");
+        if (object_path == NULL) {
+            fprintf(stderr, "error: out of memory composing object path\n");
+            rc = 1;
+        } else {
+            if (!argv_push(&av, cc)) { ok = false; }
+            if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
+            if (ok && !argv_push(&av, "-O2")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wall")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
+            if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
+            if (ok && !argv_push(&av, include_flag)) { ok = false; }
+            if (ok && !argv_push(&av, "-c")) { ok = false; }
+            if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
+            if (ok && !argv_push(&av, "-o")) { ok = false; }
+            if (ok && !argv_push(&av, object_path)) { ok = false; }
+            if (!ok) {
+                fprintf(stderr, "error: out of memory building cc argv\n");
+                rc = 1;
+            } else {
+                rc = spawn_and_wait(av.items);
+            }
+            argv_free(&av);
+        }
+
+        if (rc == 0) {
+            const char *ar = getenv("AR");
+            if (ar == NULL || ar[0] == '\0') ar = "ar";
+            if (!argv_push(&av, ar)) { ok = false; }
+            if (ok && !argv_push(&av, "rcs")) { ok = false; }
+            if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
+            if (ok && !argv_push(&av, object_path)) { ok = false; }
+            if (!ok) {
+                fprintf(stderr, "error: out of memory building archive argv\n");
+                rc = 1;
+            } else {
+                rc = spawn_and_wait(av.items);
+            }
+            argv_free(&av);
+        }
+    }
+
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
     free(runtime_lib);
     free(include_dir);
+    free(include_flag);
 
     if (rc != 0) {
         fprintf(stderr,
                 "error: host C compiler failed (exit=%d).\n"
                 "  generated C kept at: %s\n",
                 rc, opts->c_path);
+        free(object_path);
         return rc;
     }
 
@@ -470,6 +539,12 @@ build_done:
      * alone, which keeps future multi-artefact layouts safe. */
     if (!opts->keep_intermediate) {
         bool can_cleanup_dirs = true;
+        if (object_path != NULL && unlink(object_path) != 0 && errno != ENOENT) {
+            fprintf(stderr,
+                    "warning: could not remove intermediate %s: %s\n",
+                    object_path, strerror(errno));
+            can_cleanup_dirs = false;
+        }
         if (unlink(opts->c_path) != 0 && errno != ENOENT) {
             fprintf(stderr,
                     "warning: could not remove intermediate %s: %s\n",
@@ -480,5 +555,6 @@ build_done:
             cleanup_empty_ir_dirs(opts->c_path);
         }
     }
+    free(object_path);
     return 0;
 }

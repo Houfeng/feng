@@ -6,6 +6,11 @@
 
 void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "  %s build [<path>] [--release]\n", program);
+    fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
+    fprintf(stderr, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stderr, "  %s clean [<path>]\n", program);
+    fprintf(stderr, "  %s pack [<path>]\n", program);
     fprintf(stderr, "  %s <files...> --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stderr, "  %s tool lex <file>\n", program);
@@ -38,11 +43,26 @@ int main(int argc, char **argv) {
         return feng_cli_tool_main(program, rest_argc, rest_argv);
     }
 
+    if (strcmp(cmd, "build") == 0) {
+        return feng_cli_project_build_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "check") == 0) {
+        return feng_cli_project_check_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "run") == 0) {
+        return feng_cli_project_run_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "clean") == 0) {
+        return feng_cli_project_clean_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "pack") == 0) {
+        return feng_cli_project_pack_main(program, rest_argc, rest_argv);
+    }
+
     if (strcmp(cmd, "compile") == 0
         || strcmp(cmd, "lex") == 0
         || strcmp(cmd, "parse") == 0
-        || strcmp(cmd, "semantic") == 0
-        || strcmp(cmd, "check") == 0) {
+        || strcmp(cmd, "semantic") == 0) {
         fprintf(stderr,
                 "`%s %s ...` is no longer a top-level command; use `%s tool %s ...` instead.\n",
                 program, cmd, program, cmd);

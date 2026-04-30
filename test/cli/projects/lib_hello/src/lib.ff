@@ -1,0 +1,5 @@
+mod feng.cli.project.lib;
+
+fn helper(): int {
+    return 42;
+}

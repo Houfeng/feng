@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "semantic/semantic.h"
+
 /*
  * Host C compiler driver (P5).
  *
@@ -15,9 +17,11 @@
  *      to derive additional `-l<lib>` link flags. The reserved library
  *      name "libc" / "c" is skipped because it is implicit on POSIX
  *      hosts. Other names have a leading "lib" prefix stripped.
- *   3. Spawn ${CC:-cc} with a fixed compiler flag set, the generated C
- *      source, the runtime archive, `-lpthread`, and the derived link
- *      flags, producing the final executable at `out_bin_path`.
+ *   3. For `bin`, spawn ${CC:-cc} with a fixed compiler flag set, the
+ *      generated C source, the runtime archive, `-lpthread`, and the
+ *      derived link flags, producing the final executable at `out_path`.
+ *   4. For `lib`, compile the generated C to an object file and archive it
+ *      into a static library at `out_path`.
  *
  * On success returns 0. On failure returns non-zero; the caller is
  * expected to preserve the C path so users can inspect or pass it to a
@@ -30,8 +34,9 @@ typedef struct FengCliDriverOptions {
     /* argv[0] of the host process — used to locate runtime artefacts
      * relative to the executable when no environment override is set. */
     const char *program_path;
+    FengCompileTarget target;
     const char *c_path;
-    const char *out_bin_path;
+    const char *out_path;
     const struct FengProgram *const *programs;
     size_t program_count;
     bool keep_intermediate;
