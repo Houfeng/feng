@@ -38,7 +38,7 @@ static const char *kLibTemplate =
 
 static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s init [<pkg-name>] [--target <bin|lib>]\n", program);
+    fprintf(stderr, "  %s init [<name>] [--target <bin|lib>]\n", program);
 }
 
 static char *dup_n(const char *text, size_t length) {
