@@ -83,6 +83,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     FengCliProjectError project_error = {0};
     FengFbLibraryBundleSpec spec = {0};
     char *library_path = NULL;
+    char *public_mod_root = NULL;
     char *error_message = NULL;
     int rc = 1;
 
@@ -113,11 +114,18 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         rc = 1;
         goto done;
     }
+    public_mod_root = dup_printf("%s/mod", context.out_root);
+    if (public_mod_root == NULL) {
+        fprintf(stderr, "error: out of memory while preparing package paths\n");
+        rc = 1;
+        goto done;
+    }
 
     spec.package_path = context.package_path;
     spec.package_name = context.manifest.name;
     spec.package_version = context.manifest.version;
     spec.library_path = library_path;
+    spec.public_mod_root = public_mod_root;
 
     if (!feng_fb_write_library_bundle(&spec, &error_message)) {
         fprintf(stderr,
@@ -131,6 +139,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
 
 done:
     free(error_message);
+    free(public_mod_root);
     free(library_path);
     feng_cli_project_context_dispose(&context);
     feng_cli_project_error_dispose(&project_error);

@@ -1,5 +1,5 @@
-mod feng.cli.project.lib;
+pu mod feng.cli.project.lib;
 
-fn helper(): int {
+pu fn helper(): int {
     return 42;
 }

@@ -865,7 +865,6 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
-    uint64_t file_offset;
 
     if (module == NULL || path == NULL) {
         return false;
@@ -896,8 +895,6 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     header.section_dir_offset = FENG_SYMBOL_FT_HEADER_SIZE;
     header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE;
 
-    file_offset = FENG_SYMBOL_FT_HEADER_SIZE + (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE * 8U);
-
     if (!buffer_align8(&payload, path, module->root_decl.token, out_error)) {
         goto cleanup;
     }
@@ -905,18 +902,19 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
 #define APPEND_SECTION(kind_value, flags_value, count_value, entry_size_value, buffer_ptr) \
     do { \
         if ((buffer_ptr)->length > 0U || (kind_value) <= FENG_SYMBOL_FT_SEC_RELS) { \
-            if (!buffer_align8(&payload, path, module->root_decl.token, out_error) || \
-                !buffer_append(&payload, (buffer_ptr)->data, (buffer_ptr)->length, path, module->root_decl.token, out_error)) { \
+            if (!buffer_align8(&payload, path, module->root_decl.token, out_error)) { \
+                goto cleanup; \
+            } \
+            sections[section_count].offset = header.payload_offset + (uint64_t)payload.length; \
+            if (!buffer_append(&payload, (buffer_ptr)->data, (buffer_ptr)->length, path, module->root_decl.token, out_error)) { \
                 goto cleanup; \
             } \
             sections[section_count].kind = (kind_value); \
             sections[section_count].flags = (flags_value); \
             sections[section_count].count = (count_value); \
-            sections[section_count].offset = header.payload_offset + file_offset - FENG_SYMBOL_FT_HEADER_SIZE - (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE * 8U); \
             sections[section_count].size = (buffer_ptr)->length; \
             sections[section_count].entry_size = (entry_size_value); \
             sections[section_count].reserved = 0U; \
-            file_offset = sections[section_count].offset + sections[section_count].size; \
             ++section_count; \
         } \
     } while (0)
@@ -924,7 +922,6 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE + (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
                                                                     (6U + (ctx.attr_count > 0U ? 1U : 0U) +
                                                                      (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
-    file_offset = header.payload_offset;
     APPEND_SECTION(FENG_SYMBOL_FT_SEC_STRS,
                    FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_SORTED,
                    (uint32_t)ctx.string_count,

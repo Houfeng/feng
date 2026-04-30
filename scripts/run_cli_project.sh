@@ -234,8 +234,8 @@ if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
         echo "FAIL[build_lib] missing workspace symbol table $workspace_ft"
         failures=$((failures + 1))
     fi
-    if [[ -e "$public_ft" ]]; then
-        echo "FAIL[build_lib] private module should not emit public symbol table $public_ft"
+    if [[ ! -f "$public_ft" ]]; then
+        echo "FAIL[build_lib] missing public symbol table $public_ft"
         failures=$((failures + 1))
     fi
 fi
@@ -265,6 +265,25 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
             fi
             if ! grep -qx "lib/$HOST_TARGET/libhello_library.a" "$WORK/pack_lib.entries"; then
                 echo "FAIL[pack_lib] bundle missing host library entry"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'mod/feng/cli/project/lib.ft' "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing public module .ft"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'mod/feng/' "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing intermediate module directory"
+                failures=$((failures + 1))
+            fi
+            if unzip -p "$package" mod/feng/cli/project/lib.ft >"$WORK/pack_lib.ft" 2>"$WORK/pack_lib.ft.err"; then
+                magic="$(head -c 4 "$WORK/pack_lib.ft")"
+                if [[ "$magic" != "FST1" ]]; then
+                    echo "FAIL[pack_lib] packaged .ft has wrong magic: '$magic'"
+                    failures=$((failures + 1))
+                fi
+            else
+                echo "FAIL[pack_lib] failed to extract packaged .ft"
+                sed 's/^/  /' "$WORK/pack_lib.ft.err"
                 failures=$((failures + 1))
             fi
         fi

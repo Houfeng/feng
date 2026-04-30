@@ -25,6 +25,7 @@ typedef struct ReadContext {
     size_t decl_count;
     uint32_t *decl_symbol_ids;
     FengSymbolModuleGraph *module;
+    uint32_t module_full_name_str;
 } ReadContext;
 
 static uint16_t read_u16_le(const unsigned char *data) {
@@ -465,10 +466,12 @@ static bool parse_symbols(ReadContext *ctx,
                          ? feng_symbol_internal_dup_cstr(ctx->module->primary_path)
                          : NULL;
         decl->value_type = parse_type_by_id(ctx, type_ref, path, out_error);
-        decl->fit_target = parse_type_by_id(ctx, extra_ref, path, out_error);
+        decl->fit_target = decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_MODULE
+                               ? NULL
+                               : parse_type_by_id(ctx, extra_ref, path, out_error);
         if ((name_str != 0U && decl->name == NULL) ||
             (type_ref != 0U && decl->value_type == NULL) ||
-            (extra_ref != 0U && decl->fit_target == NULL)) {
+            (decode_decl_kind(kind) != FENG_SYMBOL_DECL_KIND_MODULE && extra_ref != 0U && decl->fit_target == NULL)) {
             free(decl->name);
             free(decl->path);
             feng_symbol_internal_type_free(decl->value_type);
@@ -537,6 +540,7 @@ static bool parse_symbols(ReadContext *ctx,
             }
             ctx->module->profile = (FengSymbolProfile)ctx->header.profile;
             ctx->module->root_decl = *decl;
+            ctx->module_full_name_str = extra_ref;
             memset(decl, 0, sizeof(*decl));
             free(ctx->decls[symbol_index]);
             ctx->decls[symbol_index] = &ctx->module->root_decl;
@@ -595,7 +599,10 @@ static bool attach_decl_hierarchy(ReadContext *ctx,
 static bool parse_module_segments(ReadContext *ctx,
                                   const char *path,
                                   FengSymbolError *out_error) {
-    const char *name = ctx->module->root_decl.name != NULL ? ctx->module->root_decl.name : "";
+    const char *full = ctx->module_full_name_str != 0U ? string_at(ctx, ctx->module_full_name_str) : NULL;
+    const char *name = full != NULL && *full != '\0'
+                           ? full
+                           : (ctx->module->root_decl.name != NULL ? ctx->module->root_decl.name : "");
     char *copy = feng_symbol_internal_dup_cstr(name);
     char *cursor;
     size_t count = 1U;
