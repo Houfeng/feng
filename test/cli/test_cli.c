@@ -106,6 +106,18 @@ static int path_exists(const char *path) {
     return stat(path, &st) == 0;
 }
 
+static void assert_file_magic(const char *path, const char *magic, size_t magic_len) {
+    FILE *file;
+    char buffer[8] = {0};
+
+    ASSERT(magic_len <= sizeof(buffer));
+    file = fopen(path, "rb");
+    ASSERT(file != NULL);
+    ASSERT(fread(buffer, 1U, magic_len, file) == magic_len);
+    ASSERT(memcmp(buffer, magic, magic_len) == 0);
+    fclose(file);
+}
+
 static char *read_text_file(const char *path) {
     FILE *file;
     long length;
@@ -280,6 +292,60 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     free(out_dir);
     free(bad_path);
     free(good_path);
+    free(src_dir);
+}
+
+static void test_direct_build_emits_symbol_tables(void) {
+    char template_path[] = "/tmp/feng_cli_direct_symbols_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *out_dir;
+    char *public_ft_path;
+    char *workspace_ft_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "out");
+    public_ft_path = path_join(out_dir, "mod/test/cli/symbols.ft");
+    workspace_ft_path = path_join(out_dir, "obj/symbols/test/cli/symbols.ft");
+
+    mkdir_p(src_dir);
+    write_text_file(source_path,
+                    "pu mod test.cli.symbols;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_dir,
+            "--name=symbols",
+        };
+        char *out_opt = make_out_option(out_dir);
+        argv[2] = out_opt;
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(public_ft_path));
+    ASSERT(path_exists(workspace_ft_path));
+    assert_file_magic(public_ft_path, "FST1", 4U);
+    assert_file_magic(workspace_ft_path, "FST1", 4U);
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(workspace_ft_path);
+    free(public_ft_path);
+    free(out_dir);
+    free(source_path);
     free(src_dir);
 }
 
@@ -637,6 +703,7 @@ int main(void) {
     test_init_prefixes_keyword_package_name();
     test_init_rejects_non_empty_directory();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
+    test_direct_build_emits_symbol_tables();
     fprintf(stdout, "cli tests passed\n");
     return 0;
 }

@@ -68,6 +68,8 @@ fi
 out1="$WORK/case_full"
 if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
     bin="$out1/bin/hello"
+    workspace_ft="$out1/obj/symbols/feng/smoke.ft"
+    public_ft="$out1/mod/feng/smoke.ft"
     if [[ ! -x "$bin" ]]; then
         echo "FAIL[full_pipeline] missing executable $bin"
         failures=$((failures + 1))
@@ -87,6 +89,14 @@ if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
     fi
     if [[ -d "$out1/ir" ]]; then
         echo "FAIL[full_pipeline] empty IR directory should be cleaned without --keep-ir"
+        failures=$((failures + 1))
+    fi
+    if [[ ! -f "$workspace_ft" ]]; then
+        echo "FAIL[full_pipeline] missing workspace symbol table $workspace_ft"
+        failures=$((failures + 1))
+    fi
+    if [[ -e "$public_ft" ]]; then
+        echo "FAIL[full_pipeline] private module should not emit public symbol table $public_ft"
         failures=$((failures + 1))
     fi
 fi

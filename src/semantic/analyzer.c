@@ -3408,6 +3408,47 @@ static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *con
     return NULL;
 }
 
+static bool record_type_fact_for_site(ResolveContext *context,
+                                      const void *site,
+                                      InferredExprType expr_type) {
+    if (context == NULL || context->analysis == NULL || site == NULL ||
+        !inferred_expr_type_is_known(expr_type)) {
+        return true;
+    }
+
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+            return feng_semantic_record_type_fact(context->analysis,
+                                                  site,
+                                                  FENG_SEMANTIC_TYPE_FACT_BUILTIN,
+                                                  expr_type.builtin_name,
+                                                  NULL,
+                                                  NULL);
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return feng_semantic_record_type_fact(context->analysis,
+                                                  site,
+                                                  FENG_SEMANTIC_TYPE_FACT_TYPE_REF,
+                                                  (FengSlice){0},
+                                                  expr_type.type_ref,
+                                                  NULL);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            return feng_semantic_record_type_fact(context->analysis,
+                                                  site,
+                                                  FENG_SEMANTIC_TYPE_FACT_DECL,
+                                                  (FengSlice){0},
+                                                  NULL,
+                                                  expr_type.type_decl);
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return true;
+    }
+
+    return true;
+}
+
 static const FengTypeMember *find_type_field_member(const FengDecl *type_decl, FengSlice name) {
     size_t member_index;
 
@@ -9675,9 +9716,12 @@ static bool resolve_binding(ResolveContext *context,
             return false;
         }
     }
+    binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
+                                         : infer_expr_type(context, binding->initializer);
+    if (!record_type_fact_for_site(context, binding, binding_type)) {
+        return false;
+    }
     if (add_to_scope) {
-        binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
-                                             : infer_expr_type(context, binding->initializer);
         return resolver_add_local_typed_name_with_source(
             context, binding->name, binding_type, binding->mutability, binding->initializer);
     }
@@ -10050,6 +10094,19 @@ static bool resolve_callable(ResolveContext *context,
     if (ok && !cache_callable_exception_escape(
                   context, callable, context->current_callable_has_escaping_exception)) {
         ok = false;
+    }
+    if (ok) {
+        InferredExprType resolved_return_type = callable->return_type != NULL
+                                                    ? inferred_expr_type_from_type_ref(callable->return_type)
+                                                    : inferred_expr_type_builtin("void");
+
+        if (!is_constructor && callable->return_type == NULL && context->current_callable_saw_return) {
+            resolved_return_type = context->current_callable_inferred_return_type;
+        }
+
+        if (!record_type_fact_for_site(context, callable, resolved_return_type)) {
+            ok = false;
+        }
     }
     context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
     context->current_callable_saw_return = previous_callable_saw_return;
@@ -11188,6 +11245,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                         context->self_capturable = true;
                     }
                     {
+                        InferredExprType field_type;
                         bool init_ok = resolve_expr(context, member->as.field.initializer, false);
                         bool match_ok = init_ok &&
                                          validate_expr_against_expected_type(
@@ -11200,6 +11258,13 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             context->current_type_decl = previous_type_decl;
                         }
                         if (!init_ok || !match_ok) {
+                            return false;
+                        }
+
+                        field_type = member->as.field.type != NULL
+                                         ? inferred_expr_type_from_type_ref(member->as.field.type)
+                                         : infer_expr_type(context, member->as.field.initializer);
+                        if (!record_type_fact_for_site(context, member, field_type)) {
                             return false;
                         }
                     }
@@ -12206,6 +12271,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->modules);
     free(analysis->type_markers);
+    free(analysis->type_facts);
     for (index = 0U; index < analysis->spec_relation_count; ++index) {
         free(analysis->spec_relations[index].sources);
     }

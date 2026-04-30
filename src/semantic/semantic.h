@@ -43,6 +43,21 @@ typedef struct FengSemanticTypeMarker {
     bool is_potentially_cyclic;
 } FengSemanticTypeMarker;
 
+typedef enum FengSemanticTypeFactKind {
+    FENG_SEMANTIC_TYPE_FACT_UNKNOWN = 0,
+    FENG_SEMANTIC_TYPE_FACT_BUILTIN,
+    FENG_SEMANTIC_TYPE_FACT_TYPE_REF,
+    FENG_SEMANTIC_TYPE_FACT_DECL
+} FengSemanticTypeFactKind;
+
+typedef struct FengSemanticTypeFact {
+    const void *site;
+    FengSemanticTypeFactKind kind;
+    FengSlice builtin_name;
+    const FengTypeRef *type_ref;
+    const FengDecl *type_decl;
+} FengSemanticTypeFact;
+
 /* Source classification for a single (type_decl, spec_decl) satisfaction
  * relation. See dev/feng-spec-semantic-draft.md §6 / §9.1. The distinction
  * between HEAD and PARENT preserves the provenance chain needed for
@@ -152,6 +167,9 @@ typedef struct FengSemanticAnalysis {
     FengSemanticTypeMarker *type_markers;
     size_t type_marker_count;
     size_t type_marker_capacity;
+    FengSemanticTypeFact *type_facts;
+    size_t type_fact_count;
+    size_t type_fact_capacity;
     FengSpecRelation *spec_relations;
     size_t spec_relation_count;
     size_t spec_relation_capacity;
@@ -193,6 +211,16 @@ void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
  * unknown decl (including non-type decls and out-of-analysis decls). */
 bool feng_semantic_type_is_potentially_cyclic(const FengSemanticAnalysis *analysis,
                                               const FengDecl *type_decl);
+
+bool feng_semantic_record_type_fact(const FengSemanticAnalysis *analysis,
+                                    const void *site,
+                                    FengSemanticTypeFactKind kind,
+                                    FengSlice builtin_name,
+                                    const FengTypeRef *type_ref,
+                                    const FengDecl *type_decl);
+
+const FengSemanticTypeFact *feng_semantic_lookup_type_fact(const FengSemanticAnalysis *analysis,
+                                                           const void *site);
 
 /* Internal post-pass entry — populates analysis->type_markers. Idempotent.
  * Implemented in cyclic.c; declared here so analyzer.c can call it on the

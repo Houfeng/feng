@@ -158,6 +158,8 @@ rm -rf "$LIB_FIXTURE/build"
 
 if expect_ok build "$FENG" build "$FIXTURE"; then
     bin="$FIXTURE/build/bin/hello_project"
+    workspace_ft="$FIXTURE/build/obj/symbols/feng/cli/project.ft"
+    public_ft="$FIXTURE/build/mod/feng/cli/project.ft"
     if [[ ! -x "$bin" ]]; then
         echo "FAIL[build] missing executable $bin"
         failures=$((failures + 1))
@@ -170,6 +172,14 @@ if expect_ok build "$FENG" build "$FIXTURE"; then
             echo "  actual:   $actual"
             failures=$((failures + 1))
         fi
+    fi
+    if [[ ! -f "$workspace_ft" ]]; then
+        echo "FAIL[build] missing workspace symbol table $workspace_ft"
+        failures=$((failures + 1))
+    fi
+    if [[ -e "$public_ft" ]]; then
+        echo "FAIL[build] private module should not emit public symbol table $public_ft"
+        failures=$((failures + 1))
     fi
 fi
 
@@ -211,11 +221,21 @@ fi
 
 if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
     lib="$LIB_FIXTURE/build/lib/libhello_library.a"
+    workspace_ft="$LIB_FIXTURE/build/obj/symbols/feng/cli/project/lib.ft"
+    public_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
     if [[ ! -f "$lib" ]]; then
         echo "FAIL[build_lib] missing archive $lib"
         failures=$((failures + 1))
     elif ! ar -t "$lib" | grep -q '^feng.o$'; then
         echo "FAIL[build_lib] archive does not contain feng.o"
+        failures=$((failures + 1))
+    fi
+    if [[ ! -f "$workspace_ft" ]]; then
+        echo "FAIL[build_lib] missing workspace symbol table $workspace_ft"
+        failures=$((failures + 1))
+    fi
+    if [[ -e "$public_ft" ]]; then
+        echo "FAIL[build_lib] private module should not emit public symbol table $public_ft"
         failures=$((failures + 1))
     fi
 fi

@@ -13,6 +13,7 @@
 #include "cli/compile/options.h"
 #include "cli/frontend.h"
 #include "codegen/codegen.h"
+#include "symbol/export.h"
 
 /* --- helpers ------------------------------------------------------------- */
 
@@ -205,6 +206,8 @@ static void on_semantic_info(void *user,
 int feng_cli_direct_main(const char *program, int argc, char **argv) {
     FengCliDirectOptions opts = {0};
     char *c_path = NULL;
+    char *public_symbol_dir = NULL;
+    char *workspace_symbol_dir = NULL;
     if (!feng_cli_direct_options_parse(program, argc, argv, &opts)) {
         return 1;
     }
@@ -218,28 +221,43 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     char *ir_dir = path_join(opts.out_dir, "ir/c");
     char *artifact_dir = path_join(opts.out_dir,
                                    opts.target == FENG_COMPILE_TARGET_BIN ? "bin" : "lib");
-    if (ir_dir == NULL || artifact_dir == NULL) {
+    public_symbol_dir = path_join(opts.out_dir, "mod");
+    workspace_symbol_dir = path_join(opts.out_dir, "obj/symbols");
+    if (ir_dir == NULL || artifact_dir == NULL || public_symbol_dir == NULL ||
+        workspace_symbol_dir == NULL) {
         fprintf(stderr, "out of memory preparing output layout\n");
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
     if (mkdirs(ir_dir) != 0) {
         fprintf(stderr, "failed to create %s: %s\n", ir_dir, strerror(errno));
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
     if (mkdirs(artifact_dir) != 0) {
         fprintf(stderr, "failed to create %s: %s\n", artifact_dir, strerror(errno));
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
     c_path = path_join(ir_dir, "feng.c");
     if (c_path == NULL) {
         fprintf(stderr, "out of memory composing IR path\n");
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -274,9 +292,50 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     if (rc != 0) {
         if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
         free(c_path);
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return rc;
+    }
+
+    {
+        FengSymbolExportOptions symbol_options = {
+            .public_root = public_symbol_dir,
+            .workspace_root = workspace_symbol_dir,
+            .emit_docs = true,
+            .emit_spans = true,
+        };
+        FengSymbolError symbol_error = {0};
+
+        if (!feng_symbol_export_analysis(analysis, &symbol_options, &symbol_error)) {
+            const FengCliLoadedSource *blame_src = NULL;
+
+            if (symbol_error.path != NULL) {
+                blame_src = feng_cli_find_loaded_source(sources, source_count, symbol_error.path);
+            }
+            feng_cli_print_diagnostic(stderr,
+                                      symbol_error.path != NULL
+                                          ? symbol_error.path
+                                          : (source_count > 0 ? sources[0].path : "<input>"),
+                                      "symbol export error",
+                                      symbol_error.message != NULL ? symbol_error.message : "(unknown)",
+                                      &symbol_error.token,
+                                      blame_src != NULL ? blame_src->source : NULL,
+                                      blame_src != NULL ? blame_src->source_length : 0U);
+            if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
+            feng_symbol_error_free(&symbol_error);
+            free(c_path);
+            free(workspace_symbol_dir);
+            free(public_symbol_dir);
+            free(ir_dir);
+            free(artifact_dir);
+            feng_semantic_analysis_free(analysis);
+            feng_cli_free_loaded_sources(sources, source_count);
+            feng_cli_direct_options_dispose(&opts);
+            return 1;
+        }
     }
 
     /* Codegen aggregate (multi-file capable, see P3). */
@@ -302,7 +361,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
         free(c_path);
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -319,7 +381,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -333,7 +398,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -389,7 +457,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_cli_free_loaded_sources(sources, source_count);
-        free(ir_dir); free(artifact_dir);
+        free(workspace_symbol_dir);
+        free(public_symbol_dir);
+        free(ir_dir);
+        free(artifact_dir);
         feng_cli_direct_options_dispose(&opts);
         return 1;
     }
@@ -412,7 +483,10 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
             feng_codegen_output_free(&out);
             feng_semantic_analysis_free(analysis);
             feng_cli_free_loaded_sources(sources, source_count);
-            free(ir_dir); free(artifact_dir);
+            free(workspace_symbol_dir);
+            free(public_symbol_dir);
+            free(ir_dir);
+            free(artifact_dir);
             feng_cli_direct_options_dispose(&opts);
             return 1;
         }
@@ -438,11 +512,14 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     free(prog_array);
     free(artifact_path);
     free(c_path);
+    free(workspace_symbol_dir);
+    free(public_symbol_dir);
     feng_codegen_error_free(&cgerr);
     feng_codegen_output_free(&out);
     feng_semantic_analysis_free(analysis);
     feng_cli_free_loaded_sources(sources, source_count);
-    free(ir_dir); free(artifact_dir);
+    free(ir_dir);
+    free(artifact_dir);
     feng_cli_direct_options_dispose(&opts);
     return drv_rc;
 }
