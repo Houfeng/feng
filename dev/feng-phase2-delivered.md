@@ -1,6 +1,6 @@
 # Feng Phase 2 — Delivered
 
-> 本文件记录 [feng-phase2-pending.md](feng-phase2-pending.md) 中各步骤的实际落地情况。所有交付都按"先文档、再代码、最后测试"的规范推进，每步完成后跑全量回归（`make test`），保持仓库始终绿色。
+> 本文件记录 [feng-phase2-guide-delivered.md](feng-phase2-guide-delivered.md) 中各步骤的实际落地情况。所有交付都按"先文档、再代码、最后测试"的规范推进，每步完成后跑全量回归（`make test`），保持仓库始终绿色。
 
 ## P0 CLI 结构重组（已交付）
 
