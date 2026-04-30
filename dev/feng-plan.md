@@ -9,7 +9,7 @@
 
 - [x] **第二阶段**：暂保持 C ABI 现状不变，先不扩 C ABI，也不处理外部包，只支持本地源码直接编译到可执行文件，而不是只停在“生成目标代码文件”。这一阶段把单包本地编译闭环打通：语义分析输出进入 C 发码，生成 C 文件，调用宿主 C 编译器，连上最小运行时，跑通 hello world、对象、数组、控制流、异常这类本地程序。
 
-- [ ] **第三阶段**：完善 CLI 和本地项目工作流，落地 build、check、run、clean、pack，并实现 feng.fm 解析、.fb 打包与 `.ft` 生成；其中 `.ft` 生成仍属于第三阶段，但作为该阶段最后一项功能任务处理。此时先解决“本地项目能打包”，不要求先消费外部包。
+- [ ] **第三阶段**：完善 CLI 和本地项目工作流，落地 build、check、run、clean、pack，并实现 feng.fm 解析、.fb 打包与 `.ft` 生成调度；其中 `.ft` 的模块符号图、读写与查询适配核心逻辑统一收敛到 `src/symbol/`，CLI 只负责调度。`.ft` 生成仍属于第三阶段，但作为该阶段最后一项功能任务处理。此时先解决“本地项目能打包”，不要求先消费外部包。
 
 - [ ] **第四阶段**：支持外部包 + 本地源码混编。引入包索引、缓存、mod/.ft 解析、跨包 use 消解、lib 和 clib 选择，让本地源码可以引用外部 .fb，同时保持当前本地源码路径不回退。
 
@@ -218,12 +218,14 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 - 本地项目 `pack`
 - `.fb` 打包
 - 本地包产物布局
-- `.ft` 生成（作为本阶段最后一项功能任务）
+- `.ft` 生成调度（作为本阶段最后一项功能任务）
+- `src/symbol/` 中的模块符号图、`.ft` 导出 / 读取与查询适配核心层
 
 边界：
 
 - 此时只要求“本地项目能打包”。
 - 不要求外部依赖解析。
+- CLI 自身不承载语义分析实现或 `.ft` 生成 / 读取核心逻辑，只负责调度现有分析器与 `src/symbol/` 提供的公共入口。
 - `.ft` 生成仍在 Phase 3 内完成，但安排在 `build/check/run/clean/pack` 与 `.fb` 打包稳定之后，作为阶段末项处理。
 
 ### Phase 4：支持外部包 + 本地源码
@@ -312,9 +314,10 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 - [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)：`.ft` 二进制布局、profile 分层与本地缓存规则。
 - `src/archive/`：规划中的 `.fb` 归档共享层；上层通常通过 `fb.*` 复用 `.fb` 级 reader / writer 能力，`zip.*` 仅作为内部容器封装保留给 `fb.*` 使用。
 - `src/cli/main.c`：当前 CLI 只有 `lex` / `parse` / `semantic` / `check`，后续要演进为真正驱动器。
+- `src/symbol/`：规划中的符号表核心层，统一承载中立模块符号图、`.ft` 导出 / 读取和查询适配；CLI 与打包层只调度其入口，不内嵌实现细节。
 - `src/parser/parser.h`：AST、`FengResolvedCallable`、表达式/语句/类型引用结构。
-- `src/semantic/semantic.h`：`FengSemanticAnalysis` / `FengSemanticModule` 是当前最自然的发码输入边界。
-- `src/semantic/analyzer.c`：需要在不破坏现有前端行为的前提下补充后端所需元数据与验证。
+- `src/semantic/semantic.h`：`FengSemanticAnalysis` / `FengSemanticModule` 是当前最自然的发码输入边界，也应继续作为 `src/symbol/` 消费分析结果的主边界。
+- `src/semantic/analyzer.c`：保持核心分析逻辑与查询接口边界，不直接感知 `.ft` 导出 / 读取实现。
 - `Makefile`：当前只覆盖 CLI 和前端测试，后续会扩展 runtime / codegen / smoke tests。
 - `test/semantic/test_semantic.c`：现有语义回归入口，继续作为前端稳定性基线。
 - `examples/hello_world.ff`：本地源码闭环的最小 smoke case。
