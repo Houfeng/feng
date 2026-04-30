@@ -27,7 +27,7 @@ TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
-	src/cli/project/common.c src/cli/project/manifest.c \
+	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/compile/options.c src/cli/compile/direct.c src/cli/compile/driver.c
 
 CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))

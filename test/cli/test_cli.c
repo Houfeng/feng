@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -24,6 +25,25 @@ static char *dup_cstr(const char *text) {
     char *out = (char *)malloc(length + 1U);
     ASSERT(out != NULL);
     memcpy(out, text, length + 1U);
+    return out;
+}
+
+static char *dup_printf(const char *fmt, ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *out;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    ASSERT(needed >= 0);
+
+    out = (char *)malloc((size_t)needed + 1U);
+    ASSERT(out != NULL);
+    vsnprintf(out, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
     return out;
 }
 
@@ -86,6 +106,28 @@ static int path_exists(const char *path) {
     return stat(path, &st) == 0;
 }
 
+static char *read_text_file(const char *path) {
+    FILE *file;
+    long length;
+    char *content;
+    size_t read_size;
+
+    file = fopen(path, "rb");
+    ASSERT(file != NULL);
+    ASSERT(fseek(file, 0L, SEEK_END) == 0);
+    length = ftell(file);
+    ASSERT(length >= 0L);
+    ASSERT(fseek(file, 0L, SEEK_SET) == 0);
+
+    content = (char *)malloc((size_t)length + 1U);
+    ASSERT(content != NULL);
+    read_size = fread(content, 1U, (size_t)length, file);
+    ASSERT(read_size == (size_t)length);
+    content[length] = '\0';
+    fclose(file);
+    return content;
+}
+
 static char *make_out_option(const char *out_dir) {
     size_t len = strlen(out_dir);
     char *out = (char *)malloc(len + 7U);
@@ -110,6 +152,27 @@ static int run_direct_quiet_stderr(int argc, char **argv) {
     close(null_fd);
 
     rc = feng_cli_direct_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    return rc;
+}
+
+static int run_init_quiet_stderr(int argc, char **argv) {
+    int saved_stderr;
+    int null_fd;
+    int rc;
+
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    null_fd = open("/dev/null", O_WRONLY);
+    ASSERT(null_fd >= 0);
+    ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+    close(null_fd);
+
+    rc = feng_cli_project_init_main("feng", argc, argv);
 
     fflush(stderr);
     ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
@@ -218,6 +281,154 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     free(bad_path);
     free(good_path);
     free(src_dir);
+}
+
+static void test_init_creates_bin_project(void) {
+    char template_path[] = "/tmp/feng_cli_init_bin_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *main_path;
+    char *manifest_text;
+    char *main_text;
+    char *remove_error = NULL;
+    int saved_cwd;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    main_path = path_join(src_dir, "main.ff");
+
+    saved_cwd = open(".", O_RDONLY);
+    ASSERT(saved_cwd >= 0);
+    ASSERT(chdir(project_dir) == 0);
+    {
+        char *argv[] = { "demo_app" };
+        ASSERT(feng_cli_project_init_main("feng", 1, argv) == 0);
+    }
+    ASSERT(fchdir(saved_cwd) == 0);
+    close(saved_cwd);
+
+    ASSERT(path_exists(manifest_path));
+    ASSERT(path_exists(src_dir));
+    ASSERT(path_exists(main_path));
+
+    manifest_text = read_text_file(manifest_path);
+    main_text = read_text_file(main_path);
+    ASSERT(strcmp(manifest_text,
+                  "name:demo_app\n"
+                  "version:0.1.0\n"
+                  "target:bin\n"
+                  "src:src/\n"
+                  "out:build/\n") == 0);
+    ASSERT(strcmp(main_text,
+                  "mod main;\n"
+                  "\n"
+                  "fn main(args: string[]) {\n"
+                  "}\n") == 0);
+
+    free(main_text);
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(main_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
+static void test_init_creates_lib_project_using_current_directory_name(void) {
+    char template_path[] = "/tmp/feng_cli_init_lib_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *lib_path;
+    char *manifest_text;
+    char *lib_text;
+    char *expected_manifest;
+    char *remove_error = NULL;
+    const char *directory_name;
+    int saved_cwd;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    directory_name = strrchr(project_dir, '/');
+    directory_name = directory_name != NULL ? directory_name + 1 : project_dir;
+
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    lib_path = path_join(src_dir, "lib.ff");
+    expected_manifest = dup_printf("name:%s\nversion:0.1.0\ntarget:lib\nsrc:src/\nout:build/\n",
+                                   directory_name);
+    ASSERT(expected_manifest != NULL);
+
+    saved_cwd = open(".", O_RDONLY);
+    ASSERT(saved_cwd >= 0);
+    ASSERT(chdir(project_dir) == 0);
+    {
+        char *argv[] = { "--target", "lib" };
+        ASSERT(feng_cli_project_init_main("feng", 2, argv) == 0);
+    }
+    ASSERT(fchdir(saved_cwd) == 0);
+    close(saved_cwd);
+
+    ASSERT(path_exists(manifest_path));
+    ASSERT(path_exists(src_dir));
+    ASSERT(path_exists(lib_path));
+
+    manifest_text = read_text_file(manifest_path);
+    lib_text = read_text_file(lib_path);
+    ASSERT(strcmp(manifest_text, expected_manifest) == 0);
+    ASSERT(strcmp(lib_text,
+                  "mod lib;\n"
+                  "\n"
+                  "fn helper(): int {\n"
+                  "    return 42;\n"
+                  "}\n") == 0);
+
+    free(lib_text);
+    free(manifest_text);
+    free(expected_manifest);
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(lib_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
+static void test_init_rejects_non_empty_directory(void) {
+    char template_path[] = "/tmp/feng_cli_init_nonempty_XXXXXX";
+    char *project_dir;
+    char *existing_path;
+    char *manifest_path;
+    char *src_dir;
+    char *remove_error = NULL;
+    int saved_cwd;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    existing_path = path_join(project_dir, "README.md");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    write_text_file(existing_path, "occupied\n");
+
+    saved_cwd = open(".", O_RDONLY);
+    ASSERT(saved_cwd >= 0);
+    ASSERT(chdir(project_dir) == 0);
+    ASSERT(run_init_quiet_stderr(0, NULL) != 0);
+    ASSERT(fchdir(saved_cwd) == 0);
+    close(saved_cwd);
+
+    ASSERT(path_exists(existing_path));
+    ASSERT(!path_exists(manifest_path));
+    ASSERT(!path_exists(src_dir));
+
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(src_dir);
+    free(manifest_path);
+    free(existing_path);
 }
 
 static void test_manifest_defaults(void) {
@@ -331,6 +542,9 @@ int main(void) {
     test_manifest_rejects_duplicate_field();
     test_project_open_collects_sources();
     test_manifest_requires_target();
+    test_init_creates_bin_project();
+    test_init_creates_lib_project_using_current_directory_name();
+    test_init_rejects_non_empty_directory();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     fprintf(stdout, "cli tests passed\n");
     return 0;

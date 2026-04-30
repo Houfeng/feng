@@ -6,6 +6,7 @@
 
 void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "  %s init  [<name>] [--target <bin|lib>]\n", program);
     fprintf(stderr, "  %s build [<path>] [--release]\n", program);
     fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
     fprintf(stderr, "  %s run   [<path>] [--release] [-- <program-args>...]\n", program);
@@ -44,6 +45,9 @@ int main(int argc, char **argv) {
         return feng_cli_tool_main(program, rest_argc, rest_argv);
     }
 
+    if (strcmp(cmd, "init") == 0) {
+        return feng_cli_project_init_main(program, rest_argc, rest_argv);
+    }
     if (strcmp(cmd, "build") == 0) {
         return feng_cli_project_build_main(program, rest_argc, rest_argv);
     }

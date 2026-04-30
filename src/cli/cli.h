@@ -17,6 +17,7 @@ void feng_cli_print_usage(const char *program);
 
 int feng_cli_tool_main(const char *program, int argc, char **argv);
 
+int feng_cli_project_init_main(const char *program, int argc, char **argv);
 int feng_cli_project_build_main(const char *program, int argc, char **argv);
 int feng_cli_project_check_main(const char *program, int argc, char **argv);
 int feng_cli_project_run_main(const char *program, int argc, char **argv);

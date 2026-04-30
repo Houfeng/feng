@@ -82,7 +82,9 @@ feng init [<pkg-name>] [--target <bin|lib>]
 
 说明:
 
-- 在当前目录初始化项目,生成 `feng.fm`、`src/` 及示例入口文件。
+- `init` 只在当前目录为空时允许执行;若当前目录存在除 `.` 与 `..` 之外的任意目录项,应报错退出,且不得覆盖或追加任何现有文件。
+- 初始化成功时写入当前目录下的 `feng.fm`,其中至少包含 `name`、`version`、`target`、`src` 与 `out` 字段; `version` 固定初始化为 `0.1.0`, `src` 与 `out` 分别初始化为 `src/` 与 `build/`。
+- `target = bin` 时生成 `src/main.ff` 作为可执行项目入口模板; `target = lib` 时生成 `src/lib.ff` 作为库项目模板。
 
 ### 4.2 `feng build`
 

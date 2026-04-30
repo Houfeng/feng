@@ -58,6 +58,9 @@ if [[ ! -f "$RT_LIB" ]]; then
 fi
 
 failures=0
+INIT_BIN_FIXTURE="$WORK/init_bin"
+INIT_LIB_FIXTURE="$WORK/init_lib_default"
+INIT_NONEMPTY_FIXTURE="$WORK/init_nonempty"
 
 expect_ok() {
     local label="$1"; shift
@@ -80,6 +83,68 @@ expect_fail() {
     fi
     return 0
 }
+
+if expect_ok help "$FENG" --help; then
+    if ! grep -q ' init  \[<pkg-name>\] \[--target <bin|lib>\]' "$WORK/help.err"; then
+        echo "FAIL[help] missing init usage line"
+        failures=$((failures + 1))
+    fi
+fi
+
+mkdir -p "$INIT_BIN_FIXTURE"
+if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample_app"; then
+    if [[ ! -f "$INIT_BIN_FIXTURE/feng.fm" ]]; then
+        echo "FAIL[init_bin] missing feng.fm"
+        failures=$((failures + 1))
+    elif ! grep -qx 'name:sample_app' "$INIT_BIN_FIXTURE/feng.fm"; then
+        echo "FAIL[init_bin] manifest missing explicit package name"
+        failures=$((failures + 1))
+    elif ! grep -qx 'target:bin' "$INIT_BIN_FIXTURE/feng.fm"; then
+        echo "FAIL[init_bin] manifest missing target:bin"
+        failures=$((failures + 1))
+    fi
+    if [[ ! -f "$INIT_BIN_FIXTURE/src/main.ff" ]]; then
+        echo "FAIL[init_bin] missing src/main.ff"
+        failures=$((failures + 1))
+    elif ! grep -qx 'mod main;' "$INIT_BIN_FIXTURE/src/main.ff"; then
+        echo "FAIL[init_bin] starter source missing module declaration"
+        failures=$((failures + 1))
+    fi
+fi
+
+mkdir -p "$INIT_LIB_FIXTURE"
+if expect_ok init_lib bash -lc "cd '$INIT_LIB_FIXTURE' && '$FENG' init --target lib"; then
+    expected_init_lib_name="$(basename "$INIT_LIB_FIXTURE")"
+    if [[ ! -f "$INIT_LIB_FIXTURE/feng.fm" ]]; then
+        echo "FAIL[init_lib] missing feng.fm"
+        failures=$((failures + 1))
+    elif ! grep -qx "name:$expected_init_lib_name" "$INIT_LIB_FIXTURE/feng.fm"; then
+        echo "FAIL[init_lib] manifest missing derived package name"
+        failures=$((failures + 1))
+    elif ! grep -qx 'target:lib' "$INIT_LIB_FIXTURE/feng.fm"; then
+        echo "FAIL[init_lib] manifest missing target:lib"
+        failures=$((failures + 1))
+    fi
+    if [[ ! -f "$INIT_LIB_FIXTURE/src/lib.ff" ]]; then
+        echo "FAIL[init_lib] missing src/lib.ff"
+        failures=$((failures + 1))
+    elif ! grep -qx 'mod lib;' "$INIT_LIB_FIXTURE/src/lib.ff"; then
+        echo "FAIL[init_lib] starter library source missing module declaration"
+        failures=$((failures + 1))
+    fi
+fi
+
+mkdir -p "$INIT_NONEMPTY_FIXTURE"
+printf 'occupied\n' >"$INIT_NONEMPTY_FIXTURE/README.md"
+expect_fail init_nonempty bash -lc "cd '$INIT_NONEMPTY_FIXTURE' && '$FENG' init blocked" || true
+if ! grep -q 'current directory is not empty' "$WORK/init_nonempty.err"; then
+    echo "FAIL[init_nonempty] missing non-empty directory diagnostic"
+    failures=$((failures + 1))
+fi
+if [[ -e "$INIT_NONEMPTY_FIXTURE/feng.fm" || -d "$INIT_NONEMPTY_FIXTURE/src" ]]; then
+    echo "FAIL[init_nonempty] init should not create files in a non-empty directory"
+    failures=$((failures + 1))
+fi
 
 rm -rf "$FIXTURE/build"
 rm -rf "$LIB_FIXTURE/build"
