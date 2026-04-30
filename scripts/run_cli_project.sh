@@ -11,6 +11,43 @@ EXPECTED="$ROOT/test/cli/projects/bin_hello.expected"
 WORK="$(mktemp -d -t feng_cli_project_XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
+detect_host_target() {
+    local os arch
+
+    case "$(uname -s)" in
+        Darwin)
+            os="macos"
+            ;;
+        Linux)
+            os="linux"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            os="windows"
+            ;;
+        *)
+            echo "unsupported host OS for project smoke: $(uname -s)" >&2
+            exit 2
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        arm64|aarch64)
+            arch="arm64"
+            ;;
+        x86_64|amd64)
+            arch="x64"
+            ;;
+        *)
+            echo "unsupported host architecture for project smoke: $(uname -m)" >&2
+            exit 2
+            ;;
+    esac
+
+    printf '%s-%s\n' "$os" "$arch"
+}
+
+HOST_TARGET="$(detect_host_target)"
+
 if [[ ! -x "$FENG" ]]; then
     echo "missing $FENG (run 'make cli' first)" >&2
     exit 2
@@ -111,6 +148,71 @@ if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
     fi
 fi
 
+if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
+    package="$LIB_FIXTURE/build/hello_library-0.1.0.fb"
+    if [[ ! -f "$package" ]]; then
+        echo "FAIL[pack_lib] missing bundle $package"
+        failures=$((failures + 1))
+    else
+        if ! unzip -Z1 "$package" >"$WORK/pack_lib.entries" 2>"$WORK/pack_lib.entries.err"; then
+            echo "FAIL[pack_lib] failed to list bundle entries"
+            sed 's/^/  /' "$WORK/pack_lib.entries.err"
+            failures=$((failures + 1))
+        else
+            if ! grep -qx 'feng.fm' "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing feng.fm"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'mod/' "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing mod/ directory"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx "lib/$HOST_TARGET/" "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing host library directory"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx "lib/$HOST_TARGET/libhello_library.a" "$WORK/pack_lib.entries"; then
+                echo "FAIL[pack_lib] bundle missing host library entry"
+                failures=$((failures + 1))
+            fi
+        fi
+
+        if ! unzip -p "$package" feng.fm >"$WORK/pack_lib.manifest" 2>"$WORK/pack_lib.manifest.err"; then
+            echo "FAIL[pack_lib] failed to read packaged feng.fm"
+            sed 's/^/  /' "$WORK/pack_lib.manifest.err"
+            failures=$((failures + 1))
+        else
+            if ! grep -qx 'name:hello_library' "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing name"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'version:0.1.0' "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing version"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx "arch:$HOST_TARGET" "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing host arch"
+                failures=$((failures + 1))
+            fi
+            if ! grep -qx 'abi:feng' "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing abi:feng"
+                failures=$((failures + 1))
+            fi
+        fi
+
+        if unzip -p "$package" "lib/$HOST_TARGET/libhello_library.a" >"$WORK/pack_lib.a" 2>"$WORK/pack_lib.a.err"; then
+            if ! ar -t "$WORK/pack_lib.a" | grep -q '^feng.o$'; then
+                echo "FAIL[pack_lib] packaged archive does not contain feng.o"
+                failures=$((failures + 1))
+            fi
+        else
+            echo "FAIL[pack_lib] failed to extract packaged archive"
+            sed 's/^/  /' "$WORK/pack_lib.a.err"
+            failures=$((failures + 1))
+        fi
+    fi
+fi
+
 if expect_ok clean_lib "$FENG" clean "$LIB_FIXTURE"; then
     if [[ -e "$LIB_FIXTURE/build" ]]; then
         echo "FAIL[clean_lib] expected $LIB_FIXTURE/build to be removed"
@@ -124,11 +226,12 @@ if ! grep -q 'unsupported manifest field' "$WORK/invalid_manifest.err"; then
     failures=$((failures + 1))
 fi
 
-expect_fail pack_pending "$FENG" pack "$FIXTURE" || true
-if ! grep -q 'not yet available' "$WORK/pack_pending.err"; then
-    echo "FAIL[pack_pending] missing pack pending diagnostic"
+expect_fail pack_requires_lib "$FENG" pack "$FIXTURE" || true
+if ! grep -q 'requires `target:lib`' "$WORK/pack_requires_lib.err"; then
+    echo "FAIL[pack_requires_lib] missing target=lib diagnostic"
     failures=$((failures + 1))
 fi
+
 
 if [[ $failures -gt 0 ]]; then
     echo "cli (project mode): $failures failure(s)"

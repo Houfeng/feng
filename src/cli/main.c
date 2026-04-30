@@ -10,7 +10,7 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
     fprintf(stderr, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
     fprintf(stderr, "  %s clean [<path>]\n", program);
-    fprintf(stderr, "  %s pack [<path>]\n", program);
+    fprintf(stderr, "  %s pack [<path>] [--release]\n", program);
     fprintf(stderr, "  %s <files...> --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stderr, "  %s tool lex <file>\n", program);
