@@ -24,13 +24,13 @@ typedef enum InitDirectoryState {
 } InitDirectoryState;
 
 static const char *kBinTemplate =
-    "mod main;\n"
+    "mod %s;\n"
     "\n"
     "fn main(args: string[]) {\n"
     "}\n";
 
 static const char *kLibTemplate =
-    "mod lib;\n"
+    "mod %s;\n"
     "\n"
     "fn helper(): int {\n"
     "  return 0;\n"
@@ -38,7 +38,7 @@ static const char *kLibTemplate =
 
 static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s init [<name>] [--target <bin|lib>]\n", program);
+    fprintf(stderr, "  %s init [<name>] [--target=<bin|lib>]\n", program);
 }
 
 static char *dup_n(const char *text, size_t length) {
@@ -253,7 +253,7 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     char *manifest_content = NULL;
     char *write_error = NULL;
     const char *source_path;
-    const char *source_template;
+    char *source_template = NULL;
     bool created_src_dir = false;
     bool created_manifest = false;
     bool created_source = false;
@@ -307,7 +307,12 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     created_manifest = true;
 
     source_path = options.target_lib ? "src/lib.ff" : "src/main.ff";
-    source_template = options.target_lib ? kLibTemplate : kBinTemplate;
+    source_template = dup_printf(options.target_lib ? kLibTemplate : kBinTemplate,
+                                 package_name);
+    if (source_template == NULL) {
+        fprintf(stderr, "out of memory preparing starter source file\n");
+        goto cleanup;
+    }
     if (!write_file_exclusive(source_path, source_template, &write_error)) {
         fprintf(stderr, "%s\n", write_error != NULL ? write_error : "failed to create starter source file");
         free(write_error);
@@ -331,6 +336,7 @@ cleanup:
         }
     }
     free(write_error);
+    free(source_template);
     free(manifest_content);
     free(derived_name);
     return rc;

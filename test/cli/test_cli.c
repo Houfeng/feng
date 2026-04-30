@@ -324,7 +324,7 @@ static void test_init_creates_bin_project(void) {
                   "src:src/\n"
                   "out:build/\n") == 0);
     ASSERT(strcmp(main_text,
-                  "mod main;\n"
+                  "mod demo_app;\n"
                   "\n"
                   "fn main(args: string[]) {\n"
                   "}\n") == 0);
@@ -347,6 +347,7 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     char *manifest_text;
     char *lib_text;
     char *expected_manifest;
+    char *expected_lib_text;
     char *remove_error = NULL;
     const char *directory_name;
     int saved_cwd;
@@ -361,7 +362,10 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     lib_path = path_join(src_dir, "lib.ff");
     expected_manifest = dup_printf("name:%s\nversion:0.1.0\ntarget:lib\nsrc:src/\nout:build/\n",
                                    directory_name);
+    expected_lib_text = dup_printf("mod %s;\n\nfn helper(): int {\n  return 0;\n}\n",
+                                   directory_name);
     ASSERT(expected_manifest != NULL);
+    ASSERT(expected_lib_text != NULL);
 
     saved_cwd = open(".", O_RDONLY);
     ASSERT(saved_cwd >= 0);
@@ -380,15 +384,11 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     manifest_text = read_text_file(manifest_path);
     lib_text = read_text_file(lib_path);
     ASSERT(strcmp(manifest_text, expected_manifest) == 0);
-    ASSERT(strcmp(lib_text,
-                  "mod lib;\n"
-                  "\n"
-                  "fn helper(): int {\n"
-                  "    return 42;\n"
-                  "}\n") == 0);
+    ASSERT(strcmp(lib_text, expected_lib_text) == 0);
 
     free(lib_text);
     free(manifest_text);
+    free(expected_lib_text);
     free(expected_manifest);
     ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
     free(remove_error);

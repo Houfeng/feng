@@ -6,9 +6,9 @@
 
 void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s init  [<name>] [--target <bin|lib>]\n", program);
+    fprintf(stderr, "  %s init  [<name>] [--target=<bin|lib>]\n", program);
     fprintf(stderr, "  %s build [<path>] [--release]\n", program);
-    fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
+    fprintf(stderr, "  %s check [<path>] [--format=<text|json>]\n", program);
     fprintf(stderr, "  %s run   [<path>] [--release] [-- <program-args>...]\n", program);
     fprintf(stderr, "  %s clean [<path>]\n", program);
     fprintf(stderr, "  %s pack  [<path>] [--release]\n", program);

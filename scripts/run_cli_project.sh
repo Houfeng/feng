@@ -106,7 +106,7 @@ if expect_ok init_bin bash -lc "cd '$INIT_BIN_FIXTURE' && '$FENG' init sample_ap
     if [[ ! -f "$INIT_BIN_FIXTURE/src/main.ff" ]]; then
         echo "FAIL[init_bin] missing src/main.ff"
         failures=$((failures + 1))
-    elif ! grep -qx 'mod main;' "$INIT_BIN_FIXTURE/src/main.ff"; then
+    elif ! grep -qx 'mod sample_app;' "$INIT_BIN_FIXTURE/src/main.ff"; then
         echo "FAIL[init_bin] starter source missing module declaration"
         failures=$((failures + 1))
     fi
@@ -128,7 +128,7 @@ if expect_ok init_lib bash -lc "cd '$INIT_LIB_FIXTURE' && '$FENG' init --target 
     if [[ ! -f "$INIT_LIB_FIXTURE/src/lib.ff" ]]; then
         echo "FAIL[init_lib] missing src/lib.ff"
         failures=$((failures + 1))
-    elif ! grep -qx 'mod lib;' "$INIT_LIB_FIXTURE/src/lib.ff"; then
+    elif ! grep -qx "mod $expected_init_lib_name;" "$INIT_LIB_FIXTURE/src/lib.ff"; then
         echo "FAIL[init_lib] starter library source missing module declaration"
         failures=$((failures + 1))
     fi

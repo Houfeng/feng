@@ -72,12 +72,12 @@ feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名
 用法:
 
 ```text
-feng init [<pkg-name>] [--target <bin|lib>]
+feng init [<name>] [--target=<bin|lib>]
 ```
 
 选项:
 
-- `<pkg-name>`: 指定包名,记录到 `feng.fm`;若省略,使用当前目录名。
+- `<name>`: 指定包名,记录到 `feng.fm`;若省略,使用当前目录名。
 - `--target <bin|lib>`: 指定项目类型,`bin` 为可执行项目,`lib` 为库项目,默认 `bin`。
 
 说明:
@@ -85,6 +85,7 @@ feng init [<pkg-name>] [--target <bin|lib>]
 - `init` 只在当前目录为空时允许执行;若当前目录存在除 `.` 与 `..` 之外的任意目录项,应报错退出,且不得覆盖或追加任何现有文件。
 - 初始化成功时写入当前目录下的 `feng.fm`,其中至少包含 `name`、`version`、`target`、`src` 与 `out` 字段; `version` 固定初始化为 `0.1.0`, `src` 与 `out` 分别初始化为 `src/` 与 `build/`。
 - `target = bin` 时生成 `src/main.ff` 作为可执行项目入口模板; `target = lib` 时生成 `src/lib.ff` 作为库项目模板。
+- starter 源文件中的默认 `mod` 声明使用当前包名,便于初始化后直接形成与项目名一致的默认示例; 若用户需要其他模块名,可自行修改源文件。
 
 ### 4.2 `feng build`
 
