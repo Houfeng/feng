@@ -1,5 +1,8 @@
 const assert = require('assert');
 const Module = require('module');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 function loadExtensionModule() {
     const originalLoad = Module._load;
@@ -84,7 +87,14 @@ function createCollectionRecorder() {
 
 async function run() {
     const extension = loadExtensionModule();
-    const { createDiagnosticController, isCheckableFengDocument, formatDocumentSource } = extension.__test__;
+    const {
+        buildCheckCommand,
+        createDiagnosticController,
+        filterEntriesForPath,
+        findProjectManifestPath,
+        isCheckableFengDocument,
+        formatDocumentSource
+    } = extension.__test__;
 
     assert.strictEqual(isCheckableFengDocument(createDocument('/tmp/manifest.fm', 'feng-manifest')), false);
 
@@ -113,6 +123,53 @@ async function run() {
     }
 
     {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'feng-vscode-project-'));
+        const projectDir = path.join(tempRoot, 'demo');
+        const srcDir = path.join(projectDir, 'src');
+        const sourcePath = path.join(srcDir, 'main.ff');
+        const standalonePath = path.join(tempRoot, 'single.ff');
+
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(projectDir, 'feng.fm'), '[package]\nname: "demo"\nversion: "0.1.0"\n');
+        fs.writeFileSync(sourcePath, 'fn main(args: string[]) {}\n');
+        fs.writeFileSync(standalonePath, 'fn main(args: string[]) {}\n');
+
+        assert.strictEqual(findProjectManifestPath(sourcePath), path.join(projectDir, 'feng.fm'));
+        assert.strictEqual(findProjectManifestPath(standalonePath), null);
+        assert.deepStrictEqual(buildCheckCommand(sourcePath), ['check', '--format', 'json', sourcePath]);
+        assert.deepStrictEqual(buildCheckCommand(standalonePath), ['tool', 'check', standalonePath]);
+
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+
+    {
+        const currentPath = '/tmp/open.ff';
+        const filtered = filterEntriesForPath([
+            {
+                path: currentPath,
+                line: 1,
+                col: 1,
+                end_col: 2,
+                severity: 'error',
+                message: 'current file error',
+                source: 'check'
+            },
+            {
+                path: '/tmp/other.ff',
+                line: 1,
+                col: 1,
+                end_col: 2,
+                severity: 'error',
+                message: 'other file error',
+                source: 'check'
+            }
+        ], currentPath);
+
+        assert.strictEqual(filtered.length, 1);
+        assert.strictEqual(filtered[0].message, 'current file error');
+    }
+
+    {
         const document = createDocument('/tmp/open.ff');
         const collection = createCollectionRecorder();
         const controller = createDiagnosticController({
@@ -120,11 +177,20 @@ async function run() {
             async runCheckEntries(filePath) {
                 assert.strictEqual(filePath, '/tmp/open.ff');
                 return [{
+                    path: '/tmp/open.ff',
                     line: 1,
                     col: 2,
                     end_col: 4,
                     severity: 'error',
                     message: 'unexpected token',
+                    source: 'check'
+                }, {
+                    path: '/tmp/other.ff',
+                    line: 2,
+                    col: 1,
+                    end_col: 3,
+                    severity: 'error',
+                    message: 'should be filtered out',
                     source: 'check'
                 }];
             }
@@ -155,6 +221,7 @@ async function run() {
                 }
 
                 return Promise.resolve([{
+                    path: '/tmp/change.ff',
                     line: 2,
                     col: 1,
                     end_col: 3,
@@ -168,6 +235,7 @@ async function run() {
         const staleCheck = controller.checkDocument(document);
         controller.clearDocument(document);
         resolveFirstCheck([{
+            path: '/tmp/change.ff',
             line: 1,
             col: 1,
             end_col: 2,

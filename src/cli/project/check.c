@@ -1,6 +1,7 @@
 #include "cli/cli.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -241,6 +242,7 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
     FengCliDepsResolved resolved = {0};
+    char *manifest_path = NULL;
     FengCliFrontendInput input;
     FengCliFrontendCallbacks callbacks;
     JsonState json_state = { .first = true };
@@ -249,11 +251,18 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     if (!parse_args(program, argc, argv, &path_arg, &format)) {
         return 1;
     }
-    if (!feng_cli_project_open(path_arg, &context, &error)) {
+    if (!feng_cli_project_find_manifest_in_ancestors(path_arg, &manifest_path, &error)) {
         feng_cli_project_print_error(stderr, &error);
         feng_cli_project_error_dispose(&error);
         return 1;
     }
+    if (!feng_cli_project_open(manifest_path, &context, &error)) {
+        free(manifest_path);
+        feng_cli_project_print_error(stderr, &error);
+        feng_cli_project_error_dispose(&error);
+        return 1;
+    }
+    free(manifest_path);
     if (!feng_cli_deps_resolve_for_manifest(program,
                                             context.manifest_path,
                                             false,
@@ -293,5 +302,6 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
 
     feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&context);
+    feng_cli_project_error_dispose(&error);
     return rc;
 }

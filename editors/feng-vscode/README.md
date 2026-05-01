@@ -6,7 +6,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 
 - Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
-- Diagnostics: If `feng check` is available on your machine, diagnostics are shown automatically when a file is opened or saved, and are cleared as soon as you start editing.
+- Diagnostics: If the Feng CLI is available on your machine, the extension prefers project-aware diagnostics. When a source file belongs to a Feng project, it resolves the nearest `feng.fm` and runs project-level `feng check`; standalone files fall back to `feng tool check`. Diagnostics are shown automatically when a file is opened or saved, and are cleared as soon as you start editing.
 - Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
 
 ## Supported File Extensions
@@ -18,7 +18,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 1. Install Feng Language from the VS Code Marketplace.
 2. Open any Feng source file and syntax highlighting will be enabled automatically.
 3. When you want to clean up code, run VS Code's Format Document command.
-4. If you already have the Feng CLI installed, diagnostics will appear automatically for Feng source files when they are opened, disappear while you edit, and reappear after you save.
+4. If you already have the Feng CLI installed, diagnostics will appear automatically for Feng source files when they are opened, disappear while you edit, and reappear after you save. Files inside a Feng project are checked with project-level `feng check`.
 
 ## Optional Configuration
 
@@ -53,7 +53,7 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 
 ## Diagnostics
 
-- Diagnostics depend on the Feng CLI `check` subcommand.
+- Diagnostics prefer the Feng CLI `check` subcommand for files inside a Feng project, and fall back to `feng tool check` for standalone files.
 - The default executable name is `feng`.
 - If your CLI is not in the default lookup path, set `feng.executablePath` to the correct executable location.
 - Diagnostics are triggered when a Feng source file is opened and when it is saved.

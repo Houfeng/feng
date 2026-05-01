@@ -139,6 +139,12 @@ static char *path_dirname_dup(const char *path) {
     return dup_n(path, (size_t)(slash - path));
 }
 
+static bool path_has_basename(const char *path, const char *basename) {
+    const char *slash = strrchr(path, '/');
+    const char *name = slash != NULL ? slash + 1 : path;
+    return strcmp(name, basename) == 0;
+}
+
 static bool path_has_suffix(const char *path, const char *suffix) {
     size_t path_len = strlen(path);
     size_t suffix_len = strlen(suffix);
@@ -293,6 +299,90 @@ bool feng_cli_project_resolve_manifest_path(const char *path_arg,
     }
     *out_manifest_path = manifest_path;
     return true;
+}
+
+bool feng_cli_project_find_manifest_in_ancestors(const char *path_arg,
+                                                 char **out_manifest_path,
+                                                 FengCliProjectError *error) {
+    struct stat st;
+    char *resolved_path = NULL;
+    char *current_dir = NULL;
+
+    *out_manifest_path = NULL;
+
+    if (path_arg == NULL) {
+        return feng_cli_project_resolve_manifest_path(NULL, out_manifest_path, error);
+    }
+    if (stat(path_arg, &st) != 0) {
+        set_error(error, path_arg, 0U, "failed to resolve project path: %s", strerror(errno));
+        return false;
+    }
+
+    resolved_path = realpath(path_arg, NULL);
+    if (resolved_path == NULL) {
+        set_error(error, path_arg, 0U, "failed to resolve project path: %s", strerror(errno));
+        return false;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        current_dir = resolved_path;
+        resolved_path = NULL;
+    } else if (S_ISREG(st.st_mode) && path_has_basename(resolved_path, "feng.fm")) {
+        *out_manifest_path = resolved_path;
+        return true;
+    } else if (S_ISREG(st.st_mode)) {
+        current_dir = path_dirname_dup(resolved_path);
+        free(resolved_path);
+        resolved_path = NULL;
+        if (current_dir == NULL) {
+            set_error(error, path_arg, 0U, "out of memory");
+            return false;
+        }
+    } else {
+        free(resolved_path);
+        set_error(error, path_arg, 0U, "project path must point to a directory or regular file");
+        return false;
+    }
+
+    while (current_dir != NULL) {
+        char *candidate = path_join(current_dir, "feng.fm");
+
+        if (candidate == NULL) {
+            free(current_dir);
+            set_error(error, path_arg, 0U, "out of memory");
+            return false;
+        }
+        if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
+            free(current_dir);
+            *out_manifest_path = candidate;
+            return true;
+        }
+        free(candidate);
+
+        if (strcmp(current_dir, "/") == 0) {
+            break;
+        }
+
+        {
+            char *parent_dir = path_dirname_dup(current_dir);
+
+            if (parent_dir == NULL) {
+                free(current_dir);
+                set_error(error, path_arg, 0U, "out of memory");
+                return false;
+            }
+            if (strcmp(parent_dir, current_dir) == 0) {
+                free(parent_dir);
+                break;
+            }
+            free(current_dir);
+            current_dir = parent_dir;
+        }
+    }
+
+    free(current_dir);
+    set_error(error, path_arg, 0U, "manifest file not found");
+    return false;
 }
 
 static char *resolve_project_path(const char *project_root, const char *raw_path) {

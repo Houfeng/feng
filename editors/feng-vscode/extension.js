@@ -1,5 +1,7 @@
 const vscode = require('vscode');
 const cp = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const { formatFengSource, formatFengManifestSource } = require('./formatter');
 
@@ -7,10 +9,57 @@ function getExecutablePath() {
     return vscode.workspace.getConfiguration('feng').get('executablePath', 'feng');
 }
 
+function isExistingFile(filePath) {
+    try {
+        return fs.statSync(filePath).isFile();
+    } catch (_) {
+        return false;
+    }
+}
+
+function findProjectManifestPath(filePath) {
+    let currentDir;
+
+    if (typeof filePath !== 'string' || filePath.length === 0) {
+        return null;
+    }
+
+    currentDir = path.dirname(path.resolve(filePath));
+    while (true) {
+        const manifestPath = path.join(currentDir, 'feng.fm');
+        if (isExistingFile(manifestPath)) {
+            return manifestPath;
+        }
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) {
+            return null;
+        }
+        currentDir = parentDir;
+    }
+}
+
+function buildCheckCommand(filePath) {
+    if (findProjectManifestPath(filePath) !== null) {
+        return ['check', '--format', 'json', filePath];
+    }
+    return ['tool', 'check', filePath];
+}
+
+function sameFilePath(lhs, rhs) {
+    if (typeof lhs !== 'string' || typeof rhs !== 'string') {
+        return false;
+    }
+    return path.resolve(lhs) === path.resolve(rhs);
+}
+
+function filterEntriesForPath(entries, filePath) {
+    return entries.filter(entry => sameFilePath(entry.path, filePath));
+}
+
 function runCheck(filePath) {
     return new Promise((resolve) => {
         const execPath = getExecutablePath();
-        const proc = cp.spawn(execPath, ['tool', 'check', filePath], {
+        const proc = cp.spawn(execPath, buildCheckCommand(filePath), {
             stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -85,7 +134,9 @@ function createDiagnosticController({ collection, runCheckEntries }) {
             return;
         }
 
-        collection.set(document.uri, entriesToDiagnostics(entries));
+        collection.set(document.uri,
+                       entriesToDiagnostics(filterEntriesForPath(entries,
+                                                                document.uri.fsPath)));
     }
 
     function clearDocument(document) {
@@ -167,9 +218,13 @@ module.exports = {
     activate,
     deactivate,
     __test__: {
+        buildCheckCommand,
         createDiagnosticController,
         entriesToDiagnostics,
+        filterEntriesForPath,
+        findProjectManifestPath,
         isCheckableFengDocument,
+        sameFilePath,
         formatDocumentSource
     }
 };

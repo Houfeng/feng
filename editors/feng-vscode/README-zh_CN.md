@@ -6,7 +6,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 
 - 语法高亮：覆盖 Feng 常见关键字、字符串、注释、赋值与复合运算符，以及基础语法结构，并为 `.fm` 文件提供节标题与 `#` 注释高亮。
 - 文档格式化：统一缩进、空白和常见语法间距，适合日常编辑时快速整理代码；其中包含复合赋值与位移运算符的空格规范；对 `.fm` 文件会额外按节对齐 `key: "value"` 项。
-- 诊断信息：如果本机可用 `feng check`，打开或保存文件时会自动显示检查结果。
+- 诊断信息：如果本机安装了 Feng CLI，扩展会优先做项目感知诊断。若当前源文件属于某个 Feng 项目，扩展会定位最近的 `feng.fm` 并执行项目级 `feng check`；若文件不属于项目，则回退到 `feng tool check`。打开或保存文件时会自动显示检查结果。
 - 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会回退到内置 Feng 文件图标。
 
 ## 支持的文件后缀
@@ -21,7 +21,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 1. 在 VS Code 扩展市场安装 Feng Language。
 2. 打开任意 Feng 源文件，扩展会自动启用语法高亮。
 3. 需要整理代码时，执行 VS Code 的“格式化文档”。
-4. 如果你已经安装 Feng CLI，打开或保存 Feng 源文件时会自动看到诊断信息。
+4. 如果你已经安装 Feng CLI，打开或保存 Feng 源文件时会自动看到诊断信息；属于 Feng 项目的文件会使用项目级 `feng check`。
 
 ## 可选配置
 
@@ -56,7 +56,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 
 ## 诊断说明
 
-- 诊断能力依赖 Feng CLI 的 `check` 子命令。
+- 诊断能力优先依赖 Feng CLI 的 `check` 子命令；对于不属于任何 Feng 项目的独立源文件，会回退到 `feng tool check`。
 - 默认执行程序名为 `feng`。
 - 如果你的 CLI 不在默认路径中，请通过 `feng.executablePath` 指定可执行文件位置。
 - `.fm` 清单文件不会触发 `feng check` 诊断。

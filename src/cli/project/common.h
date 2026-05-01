@@ -27,6 +27,10 @@ bool feng_cli_project_resolve_manifest_path(const char *path_arg,
                                             char **out_manifest_path,
                                             FengCliProjectError *out_error);
 
+bool feng_cli_project_find_manifest_in_ancestors(const char *path_arg,
+                                                 char **out_manifest_path,
+                                                 FengCliProjectError *out_error);
+
 void feng_cli_project_context_dispose(FengCliProjectContext *context);
 
 void feng_cli_project_print_error(FILE *stream, const FengCliProjectError *error);

@@ -995,6 +995,82 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
     free(dep_project_dir);
 }
 
+static void test_project_check_accepts_source_file_path_and_local_dependencies(void) {
+    char template_path[] = "/tmp/feng_cli_check_source_path_XXXXXX";
+    char *workspace_dir;
+    char *dep_project_dir;
+    char *dep_manifest_path;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *root_src_dir;
+    char *root_source_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_project_dir = path_join(workspace_dir, "dep");
+    dep_manifest_path = path_join(dep_project_dir, "feng.fm");
+    dep_src_dir = path_join(dep_project_dir, "src");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    root_src_dir = path_join(root_project_dir, "src");
+    root_source_path = path_join(root_src_dir, "main.ff");
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.localdep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_dep: \"../dep\"\n");
+    write_text_file(root_source_path,
+                    "mod test.cli.localdepapp;\n"
+                    "\n"
+                    "use test.cli.localdep;\n"
+                    "\n"
+                    "fn main(args: string[]) {\n"
+                    "  if dep_value() == 7 {\n"
+                    "  }\n"
+                    "}\n");
+
+    {
+        char *argv[] = { root_source_path };
+        ASSERT(feng_cli_project_check_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(root_source_path);
+    free(root_src_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    free(dep_manifest_path);
+    free(dep_project_dir);
+}
+
 static void test_frontend_outputs_absolute_bundle_paths(void) {
     char template_path[] = "/tmp/feng_cli_frontend_pkg_XXXXXX";
     char *workspace_dir;
@@ -1886,6 +1962,7 @@ int main(void) {
     test_direct_build_sorts_package_libraries_by_dependency();
     test_project_pack_bundle_can_be_consumed();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
+    test_project_check_accepts_source_file_path_and_local_dependencies();
     test_frontend_outputs_absolute_bundle_paths();
     test_direct_build_rejects_bad_package_bundle();
     fprintf(stdout, "cli tests passed\n");
