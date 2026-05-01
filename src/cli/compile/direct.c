@@ -473,6 +473,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_error_free(&cgerr);
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
+        feng_symbol_imported_module_cache_free(imported_module_cache);
+        feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
         feng_cli_free_loaded_sources(sources, source_count);
         free(workspace_symbol_dir);
         free(public_symbol_dir);

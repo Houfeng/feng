@@ -9,7 +9,7 @@
 
 - [x] **第二阶段**：暂保持 C ABI 现状不变，先不扩 C ABI，也不处理外部包，只支持本地源码直接编译到可执行文件，而不是只停在“生成目标代码文件”。这一阶段把单包本地编译闭环打通：语义分析输出进入 C 发码，生成 C 文件，调用宿主 C 编译器，连上最小运行时，跑通 hello world、对象、数组、控制流、异常这类本地程序。
 
-- [ ] **第三阶段**：完善 CLI 和本地项目工作流，落地 build、check、run、clean、pack，并实现 feng.fm 解析、.fb 打包与 `.ft` 生成调度；其中 `.ft` 的模块符号图、读写与查询适配核心逻辑统一收敛到 `src/symbol/`，CLI 只负责调度。`.ft` 生成仍属于第三阶段，但作为该阶段最后一项功能任务处理。此时先解决“本地项目能打包”，不要求先消费外部包。
+- [x] **第三阶段**：完善 CLI 和本地项目工作流，落地 build、check、run、clean、pack，并实现 feng.fm 解析、.fb 打包与 `.ft` 生成调度；其中 `.ft` 的模块符号图、读写与查询适配核心逻辑统一收敛到 `src/symbol/`，CLI 只负责调度。`.ft` 生成仍属于第三阶段，但作为该阶段最后一项功能任务处理。此时先解决“本地项目能打包”，不要求先消费外部包。
 
 - [ ] **第四阶段**：支持外部包 + 本地源码混编。引入包索引、缓存、mod/.ft 解析、跨包 use 消解、lib 和 clib 选择，让本地源码可以引用外部 .fb，同时保持当前本地源码路径不回退。
 
@@ -303,7 +303,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 ## 5. 关键文件
 
-- `dev/feng-phase3-pending.md`：Phase 3 的施工权威入口，包含 `src/symbol/` 建议文件树与最小公共 API 边界。
+- `dev/feng-phase3-delivered.md`：Phase 3 的施工权威入口，包含 `src/symbol/` 建议文件树与最小公共 API 边界。
 - `docs/feng-language.md`：语言总入口，已明确底层可映射为 C。
 - `docs/feng-principles.md`：已明确保持可直接编译为 C 的目标。
 - `docs/feng-lifetime.md`：ARC、cycle collector、终结器、C retain/release 的规范落点。

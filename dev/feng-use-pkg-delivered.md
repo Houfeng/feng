@@ -1,8 +1,9 @@
-# 外部包 use 支持计划
+# 外部包 use 支持交付
 
-> 本文档描述从「`use` 外部模块」到「完整类型检查 → 编译 → 链接 → 运行」的完整实现路线。  
+> 本文档记录从「`use` 外部模块」到「完整类型检查 → 编译 → 链接 → 运行」的完整落地路线与交付结果。  
 > 目标原则：**最小改动、架构合理、面向未来**。  
 > 分四个 Phase 实现，每个 Phase 结束后做一次全量回归（`make test`）。
+> 当前状态：步骤 0–13 已全部完成，相关 codegen / CLI / pack / link 回归与全量 `make test` 已通过。
 
 ## 1. 背景与目标
 
@@ -11,8 +12,8 @@
 - `feng compile --pkg=<path.fb>` CLI 解析
 - Frontend 将 `.fb` 注册为 `FengSymbolProvider`
 - 核心语义查询接口已收敛为 `get_module`；语义分析可通过抽象查询接口拿到外部模块
-- 当前代码已具备“外部 public decl 生成最小 `FengDecl` / `FengProgram` 并注入 analysis”的骨架
-- 但：该骨架当前仍位于 CLI 侧原型实现中；后续需收敛为“symbol 负责构造与释放 API，CLI 只负责调度与生命周期控制”，且目前仍只覆盖最小名字面；完整签名、codegen extern、链接消费尚未完成
+- imported-module cache 已收敛到 symbol 模块，并由 CLI 只负责调度与生命周期控制
+- 外部 decl 已支持完整签名合成、消费者 prototype 发码、bundle 路径透传、按包依赖排序的 `.a` 提取链接，以及 `feng pack -> --pkg consume -> run` 端到端链路
 
 最终目标：`use` 外部包模块后，与 `use` 同编译输入中的普通模块**走完全相同的处理路径**：名字进可见表 → 类型检查 → codegen 生成正确 C → 链接 → 运行正确。
 
