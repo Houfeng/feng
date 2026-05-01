@@ -1,4 +1,4 @@
-mod feng.examples.loop;
+pu mod feng.examples.loop;
 
 @cdecl("libc")
 extern fn puts(msg: string): int;
