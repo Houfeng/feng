@@ -49,6 +49,9 @@ typedef struct FengSymbolError {
 size_t feng_symbol_graph_module_count(const FengSymbolGraph *graph);
 const FengSymbolModuleGraph *feng_symbol_graph_module_at(const FengSymbolGraph *graph,
                                                          size_t index);
+size_t feng_symbol_module_use_count(const FengSymbolModuleGraph *module);
+const char *feng_symbol_module_use_at(const FengSymbolModuleGraph *module,
+                                      size_t index);
 
 void feng_symbol_graph_free(FengSymbolGraph *graph);
 void feng_symbol_error_free(FengSymbolError *error);

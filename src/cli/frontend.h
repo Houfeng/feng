@@ -71,7 +71,12 @@ typedef struct FengCliFrontendOutputs {
     FengCliLoadedSource **out_sources;
     size_t *out_source_count;
     FengSymbolImportedModuleCache **out_imported_module_cache;
+    char ***out_bundle_paths;
+    size_t *out_bundle_count;
 } FengCliFrontendOutputs;
+
+void feng_cli_frontend_bundle_paths_dispose(char **bundle_paths,
+                                            size_t bundle_count);
 
 /*
  * Run the shared frontend pipeline. Returns 0 on success, non-zero on

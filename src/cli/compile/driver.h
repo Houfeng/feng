@@ -40,6 +40,8 @@ typedef struct FengCliDriverOptions {
     const char *out_path;
     const struct FengProgram *const *programs;
     size_t program_count;
+    const char *const *bundle_paths;
+    size_t bundle_count;
     bool keep_intermediate;
 } FengCliDriverOptions;
 

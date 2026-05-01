@@ -9,10 +9,14 @@
 #include "codegen/codegen.h"
 #include "parser/parser.h"
 #include "semantic/semantic.h"
+#include "symbol/export.h"
+#include "symbol/imported_module.h"
+#include "symbol/provider.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define ASSERT(expr)                                                                  \
     do {                                                                              \
@@ -51,6 +55,104 @@ static FengProgram *parse_or_die(const char *source, const char *path) {
         exit(1);
     }
     return program;
+}
+
+typedef struct ImportedSourceFixture {
+    FengProgram *program;
+    FengSemanticAnalysis *analysis;
+    FengSymbolGraph *graph;
+    FengSymbolProvider *provider;
+    FengSymbolImportedModuleCache *cache;
+    FengSymbolError error;
+} ImportedSourceFixture;
+
+static void imported_source_fixture_init(ImportedSourceFixture *fixture,
+                                         const char *path,
+                                         const char *source) {
+    const FengProgram *programs[1];
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(fixture, 0, sizeof(*fixture));
+    fixture->program = parse_or_die(source, path);
+    programs[0] = fixture->program;
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &fixture->analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_symbol_build_graph(fixture->analysis, &fixture->graph, &fixture->error));
+    ASSERT(feng_symbol_provider_create(&fixture->provider, &fixture->error));
+    ASSERT(feng_symbol_provider_add_graph(fixture->provider, fixture->graph, &fixture->error));
+    fixture->cache = feng_symbol_imported_module_cache_create(fixture->provider);
+    ASSERT(fixture->cache != NULL);
+}
+
+static void imported_source_fixture_dispose(ImportedSourceFixture *fixture) {
+    if (fixture == NULL) {
+        return;
+    }
+
+    feng_symbol_imported_module_cache_free(fixture->cache);
+    feng_symbol_provider_free(fixture->provider);
+    feng_symbol_graph_free(fixture->graph);
+    feng_semantic_analysis_free(fixture->analysis);
+    feng_program_free(fixture->program);
+    feng_symbol_error_free(&fixture->error);
+}
+
+static char *make_temp_dir(void) {
+    char *template_path = strdup("/tmp/feng_codegen_imported_XXXXXX");
+    char *result;
+
+    ASSERT(template_path != NULL);
+    result = mkdtemp(template_path);
+    ASSERT(result != NULL);
+    return result;
+}
+
+static int remove_dir_recursive(const char *path) {
+    char command[1024];
+    int written = snprintf(command, sizeof(command), "rm -rf '%s'", path);
+
+    if (written < 0 || (size_t)written >= sizeof(command)) {
+        return -1;
+    }
+    return system(command);
+}
+
+static void write_text_file_or_die(const char *path, const char *text) {
+    FILE *file = fopen(path, "wb");
+    size_t length = strlen(text);
+
+    ASSERT(file != NULL);
+    ASSERT(fwrite(text, 1U, length, file) == length);
+    ASSERT(fclose(file) == 0);
+}
+
+static void compile_generated_c_or_die(const char *c_source) {
+    char *tmp_dir = make_temp_dir();
+    char c_path[1024];
+    char o_path[1024];
+    char command[3072];
+
+    ASSERT(snprintf(c_path, sizeof(c_path), "%s/generated.c", tmp_dir) > 0);
+    ASSERT(snprintf(o_path, sizeof(o_path), "%s/generated.o", tmp_dir) > 0);
+    write_text_file_or_die(c_path, c_source);
+    ASSERT(snprintf(command,
+                    sizeof(command),
+                    "cc -Isrc -Ithird_party/miniz -std=c11 -Werror -c '%s' -o '%s' >/dev/null 2>&1",
+                    c_path,
+                    o_path) > 0);
+    if (system(command) != 0) {
+        fprintf(stderr, "generated C failed to compile: %s\n", command);
+        ASSERT(false);
+    }
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
 }
 
 static size_t count_substr(const char *haystack, const char *needle) {
@@ -167,6 +269,171 @@ static void test_multi_file_lib(void) {
     free(errors);
     feng_program_free(prog_a);
     feng_program_free(prog_c);
+}
+
+static void test_lib_public_functions_are_exported(void) {
+    static const char *kSource =
+        "mod feng.codegen.export;\n"
+        "pu fn public_fn(): i32 {\n"
+        "    return 1;\n"
+        "}\n"
+        "fn hidden_fn(): i32 {\n"
+        "    return 2;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/export_lib.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr);
+    if (!ok) {
+        fprintf(stderr, "codegen error: %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "int32_t feng__feng__codegen__export__public_fn__from__void(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static int32_t feng__feng__codegen__export__public_fn__from__void(") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "static int32_t feng__feng__codegen__export__hidden_fn__from__void(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_imported_feng_function_prototypes_compile(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.api;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n"
+        "pu fn make(): User {\n"
+        "    return User { name: \"hi\" };\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "use vendor.api as api;\n"
+        "fn project() {\n"
+        "    api.make();\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "struct Feng__vendor__api__User;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern const FengTypeDescriptor FengTypeDesc__vendor__api__User;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__vendor__api__User * feng__vendor__api__make__from__void(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__vendor__api__User * feng__vendor__api__make__from__void(void) {") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengTypeDescriptor FengTypeDesc__vendor__api__User = {") == NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_bin_public_functions_remain_static(void) {
+    static const char *kSource =
+        "mod feng.codegen.exportbin;\n"
+        "pu fn public_fn(): i32 {\n"
+        "    return 1;\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/export_bin.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN,
+                                   NULL, &out, &cgerr);
+    if (!ok) {
+        fprintf(stderr, "codegen error: %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static int32_t feng__feng__codegen__exportbin__public_fn__from__void(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
 }
 
 /* Regression for the multi-file project bug where two distinct `type User`
@@ -311,6 +578,9 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
+    test_lib_public_functions_are_exported();
+    test_bin_public_functions_remain_static();
+    test_imported_feng_function_prototypes_compile();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     fprintf(stdout, "codegen tests passed\n");

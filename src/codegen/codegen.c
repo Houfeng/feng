@@ -486,6 +486,7 @@ typedef struct FreeFn {
     size_t    param_count;
     CGType   *return_type;
     const FengDecl *decl;
+    const FengProgram *owner_program;
 } FreeFn;
 
 typedef struct ModuleBinding {
@@ -861,6 +862,25 @@ static bool cg_program_can_see(const FengProgram *consumer,
     return false;
 }
 
+static FengSemanticModuleOrigin cg_program_origin(const CG *cg,
+                                                  const FengProgram *prog) {
+    if (cg == NULL || cg->analysis == NULL || prog == NULL) {
+        return FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
+    }
+
+    for (size_t module_index = 0; module_index < cg->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &cg->analysis->modules[module_index];
+
+        for (size_t program_index = 0; program_index < module->program_count; ++program_index) {
+            if (module->programs[program_index] == prog) {
+                return module->origin;
+            }
+        }
+    }
+
+    return FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
+}
+
 static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
     /* Prefer a match owned by the program currently being emitted, then any
      * match visible from it. Falling back to the global list (when nothing
@@ -1083,6 +1103,7 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     f->c_name = cg_append_param_suffix(f->c_name, f->param_types, f->param_count);
     if (!f->c_name) return false;
     f->decl = decl;
+    f->owner_program = cg->cur_program;
     return true;
 }
 
@@ -2288,11 +2309,93 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         (int)e->as.identifier.length, e->as.identifier.data);
 }
 
+static bool cg_emit_registered_call(CG *cg,
+                                    const FengExpr *e,
+                                    const FreeFn *fn,
+                                    const ExternFn *ext,
+                                    ExprResult *out) {
+    const FengExpr *callee = e->as.call.callee;
+    FengSlice name;
+    size_t expected;
+    Buf args_buf;
+    bool ok = true;
+
+    if (callee->kind == FENG_EXPR_IDENTIFIER) {
+        name = callee->as.identifier;
+    } else {
+        name = callee->as.member.member;
+    }
+
+    if (!ext && !fn) {
+        return cg_fail(cg, e->token,
+            "codegen: undefined function '%.*s'", (int)name.length, name.data);
+    }
+
+    expected = ext ? ext->param_count : fn->param_count;
+    if (e->as.call.arg_count != expected) {
+        return cg_fail(cg, e->token,
+            "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
+            (int)name.length, name.data, expected, e->as.call.arg_count);
+    }
+
+    buf_init(&args_buf);
+    for (size_t i = 0; i < e->as.call.arg_count; i++) {
+        ExprResult ar;
+
+        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+            ok = false;
+            break;
+        }
+        CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
+        if (i) buf_append_cstr(&args_buf, ", ");
+        if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+            cg_materialize_to_local(cg, &ar, "_t");
+        } else if (cgtype_is_aggregate(ar.type)) {
+            cg_materialize_to_local(cg, &ar, "_t");
+        }
+        if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
+            expected_ty && expected_ty->kind == CG_TYPE_STRING) {
+            buf_append_fmt(&args_buf, "feng_string_data(%s)", ar.c_expr);
+        } else {
+            buf_append_cstr(&args_buf, ar.c_expr);
+        }
+        er_free(&ar);
+    }
+    if (!ok) {
+        buf_free(&args_buf);
+        return false;
+    }
+
+    Buf b;
+    buf_init(&b);
+    if (ext) {
+        buf_append_fmt(&b, "%s(%s)", ext->name, args_buf.data ? args_buf.data : "");
+        out->type = cgtype_clone(ext->return_type);
+    } else {
+        buf_append_fmt(&b, "%s(%s)", fn->c_name, args_buf.data ? args_buf.data : "");
+        out->type = cgtype_clone(fn->return_type);
+    }
+    buf_free(&args_buf);
+    out->c_expr = b.data;
+    out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+    return out->c_expr && out->type;
+}
+
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
+    const FengResolvedCallable *rc = &e->as.call.resolved_callable;
     /* Method call: callee is a member access. */
     if (e->as.call.callee->kind == FENG_EXPR_MEMBER) {
         const FengExpr *ma = e->as.call.callee;
+
+        if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl != NULL) {
+            return cg_emit_registered_call(cg,
+                                           e,
+                                           cg_find_free_fn_by_decl(cg, rc->function_decl),
+                                           NULL,
+                                           out);
+        }
+
         ExprResult recv;
         if (!cg_emit_expr(cg, ma->as.member.object, &recv)) return false;
         if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
@@ -2349,7 +2452,6 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 "codegen: method call on non-object value");
         }
         const UserType *ut = recv.type->user;
-        const FengResolvedCallable *rc = &e->as.call.resolved_callable;
         const UserMethod *um = NULL;
         if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD && rc->member) {
             um = cg_user_type_method_by_member(ut, rc->member);
@@ -2428,7 +2530,6 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     }
 
     const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
-    const FengResolvedCallable *rc = &e->as.call.resolved_callable;
     const FreeFn *fn = NULL;
     if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
         fn = cg_find_free_fn_by_decl(cg, rc->function_decl);
@@ -2436,65 +2537,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!fn && !ext) {
         fn = cg_find_free_fn(cg, name.data, name.length);
     }
-    if (!ext && !fn) {
-        return cg_fail(cg, e->token,
-            "codegen: undefined function '%.*s'", (int)name.length, name.data);
-    }
-    size_t expected = ext ? ext->param_count : fn->param_count;
-    if (e->as.call.arg_count != expected) {
-        return cg_fail(cg, e->token,
-            "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
-            (int)name.length, name.data, expected, e->as.call.arg_count);
-    }
-    /* Emit each argument; managed +1 results are lifted into a temp and
-     * registered for release at scope exit (callee borrows). */
-    Buf args_buf; buf_init(&args_buf);
-    bool ok = true;
-    for (size_t i = 0; i < e->as.call.arg_count; i++) {
-        ExprResult ar;
-        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
-        CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
-        if (i) buf_append_cstr(&args_buf, ", ");
-        if (cgtype_is_managed(ar.type) && ar.owns_ref) {
-            cg_materialize_to_local(cg, &ar, "_t");
-        } else if (cgtype_is_aggregate(ar.type)) {
-            /* Step 4b — pass-by-value spec arg. Per the existing calling
-             * convention (Local.is_param: "caller owns"), the callee borrows
-             * the value; no extra retain is required. We still materialise
-             * to a temp so the spec compound literal is evaluated exactly
-             * once before being copied into the C arg list. When the arg
-             * is +1 we register it for release (its subject lifetime is
-             * owned by this scope, not the call). */
-            cg_materialize_to_local(cg, &ar, "_t");
-        }
-        if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
-            expected_ty && expected_ty->kind == CG_TYPE_STRING) {
-            buf_append_fmt(&args_buf, "feng_string_data(%s)", ar.c_expr);
-        } else {
-            buf_append_cstr(&args_buf, ar.c_expr);
-        }
-        er_free(&ar);
-    }
-    if (!ok) { buf_free(&args_buf); return false; }
-
-    Buf b; buf_init(&b);
-    if (ext) {
-        buf_append_fmt(&b, "%s(%s)", ext->name, args_buf.data ? args_buf.data : "");
-        out->type = cgtype_clone(ext->return_type);
-    } else {
-        buf_append_fmt(&b, "%s(%s)", fn->c_name, args_buf.data ? args_buf.data : "");
-        out->type = cgtype_clone(fn->return_type);
-    }
-    buf_free(&args_buf);
-    out->c_expr = b.data;
-    /* Step 4b-γ-2 — function returns transfer +1 ownership for both managed
-     * pointers and aggregate (fat-spec) values. The callee return path
-     * (cg_emit_return) already retains/moves so every managed slot of the
-     * returned struct carries +1; mark the rvalue accordingly so the
-     * receiver (binding init / arg materialisation / further return)
-     * consumes that +1 instead of double-retaining it. */
-    out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
-    return out->c_expr && out->type;
+    return cg_emit_registered_call(cg, e, fn, ext, out);
 }
 
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -5020,6 +5063,49 @@ static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     return true;
 }
 
+static void cg_emit_free_fn_proto(Buf *out, const FreeFn *fn, bool needs_static) {
+    if (needs_static) {
+        buf_append_cstr(out, "static ");
+    }
+    cg_emit_c_type(out, fn->return_type);
+    buf_append_fmt(out, " %s(", fn->c_name);
+    if (fn->param_count == 0) {
+        buf_append_cstr(out, "void");
+    }
+    for (size_t i = 0; i < fn->param_count; i++) {
+        if (i) buf_append_cstr(out, ", ");
+        cg_emit_c_type(out, fn->param_types[i]);
+        buf_append_fmt(out, " %s",
+            fn->param_names[i] ? fn->param_names[i] : "_p");
+    }
+    buf_append_cstr(out, ");\n");
+}
+
+static void cg_emit_user_method_proto(Buf *out,
+                                      const UserType *t,
+                                      const UserMethod *m,
+                                      bool needs_static) {
+    if (needs_static) {
+        buf_append_cstr(out, "static ");
+    }
+    cg_emit_c_type(out, m->return_type);
+    buf_append_fmt(out, " %s(struct %s *self", m->c_name, t->c_struct_name);
+    for (size_t i = 0; i < m->param_count; i++) {
+        buf_append_cstr(out, ", ");
+        cg_emit_c_type(out, m->param_types[i]);
+        buf_append_fmt(out, " %s", m->param_names[i] ? m->param_names[i] : "_p");
+    }
+    buf_append_cstr(out, ");\n");
+}
+
+static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
+    if (!cg_register_free_fn(cg, decl)) {
+        return false;
+    }
+    cg_emit_free_fn_proto(&cg->fn_protos, &cg->free_fns[cg->free_fn_count - 1], false);
+    return true;
+}
+
 static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
     if (fn->return_type->kind != CG_TYPE_VOID &&
         fn->return_type->kind != CG_TYPE_I32) {
@@ -5036,32 +5122,28 @@ static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
     return true;
 }
 
-static bool cg_emit_function(CG *cg, const FengDecl *decl, bool is_main) {
+static bool cg_emit_function(CG *cg,
+                             const FengDecl *decl,
+                             bool is_main,
+                             FengCompileTarget target) {
     if (!cg_register_free_fn(cg, decl)) return false;
     FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
+    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
+                          decl->visibility == FENG_VISIBILITY_PUBLIC);
     cg->cur_fn_is_main = is_main;
     cg->cur_return_type = fn->return_type;
 
     if (is_main && !cg_check_main_signature(cg, fn)) return false;
 
     /* Forward proto. */
-    Buf *p = &cg->fn_protos;
-    buf_append_cstr(p, "static ");
-    cg_emit_c_type(p, fn->return_type);
-    buf_append_fmt(p, " %s(", fn->c_name);
-    if (fn->param_count == 0) buf_append_cstr(p, "void");
-    for (size_t i = 0; i < fn->param_count; i++) {
-        if (i) buf_append_cstr(p, ", ");
-        cg_emit_c_type(p, fn->param_types[i]);
-        buf_append_fmt(p, " %s",
-            fn->param_names[i] ? fn->param_names[i] : "_p");
-    }
-    buf_append_cstr(p, ");\n");
+    cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
 
     /* Body. */
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
-    buf_append_cstr(body, "static ");
+    if (needs_static) {
+        buf_append_cstr(body, "static ");
+    }
     cg_emit_c_type(body, fn->return_type);
     buf_append_fmt(body, " %s(", fn->c_name);
     if (fn->param_count == 0) buf_append_cstr(body, "void");
@@ -5466,6 +5548,9 @@ static bool cg_pass_register_fit_shells(CG *cg, const FengProgram *prog) {
 }
 
 static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; i++) {
@@ -5490,8 +5575,30 @@ static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
     return true;
 }
 
+static bool cg_pass_emit_imported_function_decls(CG *cg, const FengProgram *prog) {
+    if (cg_program_origin(cg, prog) != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+
+        if (d->kind == FENG_DECL_FUNCTION) {
+            if (!cg_emit_imported_function_decl(cg, d)) {
+                return false;
+            }
+        }
+    }
+    cg->cur_program = NULL;
+    return true;
+}
+
 static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                FengCompileTarget target) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
     /* Pass 4: walk top-level decls in source order for externs / functions /
@@ -5539,7 +5646,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 } else {
                     bool is_main = (target == FENG_COMPILE_TARGET_BIN) &&
                                    slice_eq(d->as.function_decl.name, "main");
-                    if (!cg_emit_function(cg, d, is_main)) return false;
+                    if (!cg_emit_function(cg, d, is_main, target)) return false;
                 }
                 break;
         }
@@ -5618,16 +5725,38 @@ static bool cg_emit_all_programs(CG *cg,
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
     for (size_t i = 0; i < cg->user_type_count; i++) {
+        if (cg_program_origin(cg, cg->user_types[i].owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
         cg->cur_program = cg->user_types[i].owner_program;
         cg_emit_user_type_definition(cg, &cg->user_types[i]);
         cg->cur_program = NULL;
         if (cg->failed) return false;
     }
     for (size_t i = 0; i < cg->user_spec_count; i++) {
+        if (cg_program_origin(cg, cg->user_specs[i].owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
         cg->cur_program = cg->user_specs[i].owner_program;
         cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
         cg->cur_program = NULL;
         if (cg->failed) return false;
+    }
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_emit_imported_function_decls(cg, programs[p])) return false;
+    }
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        const UserType *t = &cg->user_types[i];
+
+        if (cg_program_origin(cg, t->owner_program) !=
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        for (size_t mi = 0; mi < t->method_count; mi++) {
+            cg_emit_user_method_proto(&cg->fn_protos, t, &t->methods[mi], false);
+        }
     }
     /* Pass 4: per-program decl emission (externs / functions / methods /
      * finalizers / fit method bodies). */
@@ -6175,16 +6304,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
  * parameter typed as `struct T *`. */
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) {
-    Buf *p = &cg->fn_protos;
-    buf_append_cstr(p, "static ");
-    cg_emit_c_type(p, m->return_type);
-    buf_append_fmt(p, " %s(struct %s *self", m->c_name, t->c_struct_name);
-    for (size_t i = 0; i < m->param_count; i++) {
-        buf_append_cstr(p, ", ");
-        cg_emit_c_type(p, m->param_types[i]);
-        buf_append_fmt(p, " %s", m->param_names[i] ? m->param_names[i] : "_p");
-    }
-    buf_append_cstr(p, ");\n");
+    cg_emit_user_method_proto(&cg->fn_protos, t, m, true);
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
@@ -6303,7 +6423,11 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
 
 static const FreeFn *cg_lookup_main(const CG *cg) {
     for (size_t i = 0; i < cg->free_fn_count; i++) {
-        if (strcmp(cg->free_fns[i].feng_name, "main") == 0) return &cg->free_fns[i];
+        if (strcmp(cg->free_fns[i].feng_name, "main") == 0 &&
+            cg_program_origin(cg, cg->free_fns[i].owner_program) !=
+                FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            return &cg->free_fns[i];
+        }
     }
     return NULL;
 }
@@ -6464,21 +6588,27 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         out_error->path = NULL;
         memset(&out_error->token, 0, sizeof out_error->token);
     }
-    /* Collect every program in deterministic (module, program) order.
-     * Imported-package modules have no local body to emit; they are skipped
-     * here and will be handled by extern declarations in a later phase. */
+    /* Collect every program in deterministic (module, program) order. Local
+     * programs still own body emission; imported-package programs now also
+     * participate so shell/prototype registration can expose Feng ABI types
+     * and callables to consumer codegen without re-emitting bodies. */
     size_t program_total = 0;
+    size_t local_program_total = 0;
+    const FengProgram *first_local_program = NULL;
     for (size_t i = 0; i < analysis->module_count; i++) {
-        if (analysis->modules[i].origin ==
-            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            continue;
-        }
         program_total += analysis->modules[i].program_count;
+        if (analysis->modules[i].origin !=
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            local_program_total += analysis->modules[i].program_count;
+            if (first_local_program == NULL && analysis->modules[i].program_count > 0U) {
+                first_local_program = analysis->modules[i].programs[0];
+            }
+        }
     }
     CG cg = {0};
     cg.error = out_error;
     cg.analysis = analysis;
-    if (program_total == 0) {
+    if (local_program_total == 0) {
         cg_fail(&cg, (FengToken){0}, "codegen: no programs to compile");
         cg_dispose(&cg);
         return false;
@@ -6492,10 +6622,6 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     }
     size_t cursor = 0;
     for (size_t i = 0; i < analysis->module_count; i++) {
-        if (analysis->modules[i].origin ==
-            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            continue;
-        }
         for (size_t j = 0; j < analysis->modules[i].program_count; j++) {
             programs[cursor++] = analysis->modules[i].programs[j];
         }
@@ -6510,7 +6636,8 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     if (target == FENG_COMPILE_TARGET_BIN) {
         const FreeFn *main_fn = cg_lookup_main(&cg);
         if (!main_fn) {
-            cg_fail(&cg, programs[0]->module_token,
+            cg_fail(&cg,
+                first_local_program != NULL ? first_local_program->module_token : (FengToken){0},
                     "codegen: bin target requires `main` function");
             free(programs);
             cg_dispose(&cg);

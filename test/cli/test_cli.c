@@ -6,12 +6,16 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include "archive/fb.h"
 #include "archive/zip.h"
 #include "cli/cli.h"
+#include "cli/frontend.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
+#include "symbol/imported_module.h"
 
 #define ASSERT(expr) \
     do { \
@@ -212,6 +216,50 @@ static void write_bundle_with_bytes_or_die(const char *bundle_path,
                   &zip_error);
     assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
     feng_zip_writer_dispose(&writer);
+}
+
+static void write_library_bundle_or_die(const char *bundle_path,
+                                        const char *package_name,
+                                        const char *package_version,
+                                        const char *library_path,
+                                        const char *public_mod_root) {
+    FengFbLibraryBundleSpec spec = {
+        .package_path = bundle_path,
+        .package_name = package_name,
+        .package_version = package_version,
+        .library_path = library_path,
+        .public_mod_root = public_mod_root,
+    };
+    char *error_message = NULL;
+
+    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
+    free(error_message);
+}
+
+static char *run_binary_capture_stdout_or_die(const char *binary_path) {
+    char template_path[] = "/tmp/feng_cli_run_output_XXXXXX";
+    char *output_dir;
+    char *output_path;
+    char *command;
+    char *content;
+    char *remove_error = NULL;
+    int status;
+
+    output_dir = mkdtemp(template_path);
+    ASSERT(output_dir != NULL);
+    output_path = path_join(output_dir, "stdout.txt");
+    command = dup_printf("'%s' > '%s'", binary_path, output_path);
+    ASSERT(command != NULL);
+    status = system(command);
+    ASSERT(status >= 0);
+    ASSERT(WIFEXITED(status));
+    ASSERT(WEXITSTATUS(status) == 0);
+    content = read_text_file(output_path);
+    ASSERT(feng_cli_project_remove_tree(output_dir, &remove_error));
+    free(remove_error);
+    free(command);
+    free(output_path);
+    return content;
 }
 
 static int run_direct_quiet_stderr(int argc, char **argv) {
@@ -422,7 +470,8 @@ static void test_direct_build_accepts_package_bundle(void) {
     char *main_source_path;
     char *dep_out_dir;
     char *main_out_dir;
-    char *dep_ft_path;
+    char *dep_library_path;
+    char *dep_mod_root;
     char *bundle_path;
     char *remove_error = NULL;
 
@@ -435,8 +484,438 @@ static void test_direct_build_accepts_package_bundle(void) {
     main_source_path = path_join(main_src_dir, "main.ff");
     dep_out_dir = path_join(workspace_dir, "dep/build");
     main_out_dir = path_join(workspace_dir, "main/build");
-    dep_ft_path = path_join(dep_out_dir, "mod/test/cli/pkgdep.ft");
+    dep_library_path = path_join(dep_out_dir, "lib/libdep.a");
+    dep_mod_root = path_join(dep_out_dir, "mod");
     bundle_path = path_join(workspace_dir, "pkgdep.fb");
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(main_src_dir);
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.pkgdep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    write_text_file(main_source_path,
+                    "mod test.cli.pkgmain;\n"
+                    "use test.cli.pkgdep;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *argv[] = {
+            dep_source_path,
+            "--target=lib",
+            out_opt,
+            "--name=dep",
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(out_opt);
+    }
+    ASSERT(path_exists(dep_library_path));
+    ASSERT(path_exists(dep_mod_root));
+    write_library_bundle_or_die(bundle_path,
+                                "dep",
+                                "0.1.0",
+                                dep_library_path,
+                                dep_mod_root);
+
+    {
+        char *out_opt = make_out_option(main_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            main_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(dep_mod_root);
+    free(dep_library_path);
+    free(main_out_dir);
+    free(dep_out_dir);
+    free(main_source_path);
+    free(dep_source_path);
+    free(main_src_dir);
+    free(dep_src_dir);
+}
+
+static void test_direct_build_links_library_from_package_bundle(void) {
+    char template_path[] = "/tmp/feng_cli_direct_pkg_link_XXXXXX";
+    char *workspace_dir;
+    char *dep_src_dir;
+    char *main_src_dir;
+    char *dep_source_path;
+    char *main_source_path;
+    char *dep_out_dir;
+    char *main_out_dir;
+    char *dep_library_path;
+    char *dep_mod_root;
+    char *main_binary_path;
+    char *bundle_path;
+    char *stdout_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    main_src_dir = path_join(workspace_dir, "main/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    main_source_path = path_join(main_src_dir, "main.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    main_out_dir = path_join(workspace_dir, "main/build");
+    dep_library_path = path_join(dep_out_dir, "lib/libpkgdep.a");
+    dep_mod_root = path_join(dep_out_dir, "mod");
+    main_binary_path = path_join(main_out_dir, "bin/main");
+    bundle_path = path_join(workspace_dir, "pkgdep.fb");
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(main_src_dir);
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.pkgdep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    write_text_file(main_source_path,
+                    "mod test.cli.pkgmain;\n"
+                    "use test.cli.pkgdep;\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern fn puts(msg: string): int;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if dep_value() == 7 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "}\n");
+
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *argv[] = {
+            dep_source_path,
+            "--target=lib",
+            out_opt,
+            "--name=pkgdep",
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(dep_library_path));
+    ASSERT(path_exists(dep_mod_root));
+    write_library_bundle_or_die(bundle_path,
+                                "pkgdep",
+                                "0.1.0",
+                                dep_library_path,
+                                dep_mod_root);
+
+    {
+        char *out_opt = make_out_option(main_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            main_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(main_binary_path));
+    stdout_text = run_binary_capture_stdout_or_die(main_binary_path);
+    ASSERT(strcmp(stdout_text, "ok\n") == 0);
+
+    free(stdout_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(main_binary_path);
+    free(dep_mod_root);
+    free(dep_library_path);
+    free(main_out_dir);
+    free(dep_out_dir);
+    free(main_source_path);
+    free(dep_source_path);
+    free(main_src_dir);
+    free(dep_src_dir);
+}
+
+static void test_direct_build_sorts_package_libraries_by_dependency(void) {
+    char template_path[] = "/tmp/feng_cli_direct_pkg_sort_XXXXXX";
+    char *workspace_dir;
+    char *b_src_dir;
+    char *a_src_dir;
+    char *main_src_dir;
+    char *b_source_path;
+    char *a_source_path;
+    char *main_source_path;
+    char *b_out_dir;
+    char *a_out_dir;
+    char *main_out_dir;
+    char *b_library_path;
+    char *a_library_path;
+    char *b_mod_root;
+    char *a_mod_root;
+    char *main_binary_path;
+    char *b_bundle_path;
+    char *a_bundle_path;
+    char *stdout_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    b_src_dir = path_join(workspace_dir, "pkgb/src");
+    a_src_dir = path_join(workspace_dir, "pkga/src");
+    main_src_dir = path_join(workspace_dir, "main/src");
+    b_source_path = path_join(b_src_dir, "b.ff");
+    a_source_path = path_join(a_src_dir, "a.ff");
+    main_source_path = path_join(main_src_dir, "main.ff");
+    b_out_dir = path_join(workspace_dir, "pkgb/build");
+    a_out_dir = path_join(workspace_dir, "pkga/build");
+    main_out_dir = path_join(workspace_dir, "main/build");
+    b_library_path = path_join(b_out_dir, "lib/libpkgb.a");
+    a_library_path = path_join(a_out_dir, "lib/libpkga.a");
+    b_mod_root = path_join(b_out_dir, "mod");
+    a_mod_root = path_join(a_out_dir, "mod");
+    main_binary_path = path_join(main_out_dir, "bin/main");
+    b_bundle_path = path_join(workspace_dir, "pkgb.fb");
+    a_bundle_path = path_join(workspace_dir, "pkga.fb");
+
+    mkdir_p(b_src_dir);
+    mkdir_p(a_src_dir);
+    mkdir_p(main_src_dir);
+    write_text_file(b_source_path,
+                    "pu mod test.cli.pkgb;\n"
+                    "pu fn b_value(): int {\n"
+                    "  return 11;\n"
+                    "}\n");
+    write_text_file(a_source_path,
+                    "pu mod test.cli.pkga;\n"
+                    "use test.cli.pkgb as b;\n"
+                    "pu fn a_value(): int {\n"
+                    "  return b.b_value();\n"
+                    "}\n");
+    write_text_file(main_source_path,
+                    "mod test.cli.pkgconsumer;\n"
+                    "use test.cli.pkga as a;\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern fn puts(msg: string): int;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if a.a_value() == 11 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "}\n");
+
+    {
+        char *out_opt = make_out_option(b_out_dir);
+        char *argv[] = {
+            b_source_path,
+            "--target=lib",
+            out_opt,
+            "--name=pkgb",
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(out_opt);
+    }
+    ASSERT(path_exists(b_library_path));
+    write_library_bundle_or_die(b_bundle_path,
+                                "pkgb",
+                                "0.1.0",
+                                b_library_path,
+                                b_mod_root);
+
+    {
+        char *out_opt = make_out_option(a_out_dir);
+        char *pkg_opt = make_pkg_option(b_bundle_path);
+        char *argv[] = {
+            a_source_path,
+            "--target=lib",
+            out_opt,
+            "--name=pkga",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+    ASSERT(path_exists(a_library_path));
+    write_library_bundle_or_die(a_bundle_path,
+                                "pkga",
+                                "0.1.0",
+                                a_library_path,
+                                a_mod_root);
+
+    {
+        char *out_opt = make_out_option(main_out_dir);
+        char *pkg_b_opt = make_pkg_option(b_bundle_path);
+        char *pkg_a_opt = make_pkg_option(a_bundle_path);
+        char *argv[] = {
+            main_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_b_opt,
+            pkg_a_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 6, argv) == 0);
+        free(pkg_a_opt);
+        free(pkg_b_opt);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(main_binary_path));
+    stdout_text = run_binary_capture_stdout_or_die(main_binary_path);
+    ASSERT(strcmp(stdout_text, "ok\n") == 0);
+
+    free(stdout_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(a_bundle_path);
+    free(b_bundle_path);
+    free(main_binary_path);
+    free(a_mod_root);
+    free(b_mod_root);
+    free(a_library_path);
+    free(b_library_path);
+    free(main_out_dir);
+    free(a_out_dir);
+    free(b_out_dir);
+    free(main_source_path);
+    free(a_source_path);
+    free(b_source_path);
+    free(main_src_dir);
+    free(a_src_dir);
+    free(b_src_dir);
+}
+
+static void test_project_pack_bundle_can_be_consumed(void) {
+    char template_path[] = "/tmp/feng_cli_pack_consume_XXXXXX";
+    char *workspace_dir;
+    char *lib_project_dir;
+    char *lib_manifest_path;
+    char *lib_src_dir;
+    char *lib_source_path;
+    char *bundle_path;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *consumer_out_dir;
+    char *consumer_binary_path;
+    char *stdout_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    lib_project_dir = path_join(workspace_dir, "packlib");
+    lib_manifest_path = path_join(lib_project_dir, "feng.fm");
+    lib_src_dir = path_join(lib_project_dir, "src");
+    lib_source_path = path_join(lib_src_dir, "lib.ff");
+    bundle_path = path_join(lib_project_dir, "build/pkgpack-0.1.0.fb");
+    consumer_src_dir = path_join(workspace_dir, "consumer/src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    consumer_out_dir = path_join(workspace_dir, "consumer/build");
+    consumer_binary_path = path_join(consumer_out_dir, "bin/main");
+
+    mkdir_p(lib_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(lib_manifest_path,
+                    "[package]\n"
+                    "name: \"pkgpack\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(lib_source_path,
+                    "pu mod test.cli.packdep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 9;\n"
+                    "}\n");
+    write_text_file(consumer_source_path,
+                    "mod test.cli.packconsumer;\n"
+                    "use test.cli.packdep;\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern fn puts(msg: string): int;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if dep_value() == 9 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "}\n");
+
+    {
+        char *argv[] = { lib_project_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(bundle_path));
+
+    {
+        char *out_opt = make_out_option(consumer_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            consumer_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(consumer_binary_path));
+    stdout_text = run_binary_capture_stdout_or_die(consumer_binary_path);
+    ASSERT(strcmp(stdout_text, "ok\n") == 0);
+
+    free(stdout_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_binary_path);
+    free(consumer_out_dir);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(bundle_path);
+    free(lib_source_path);
+    free(lib_src_dir);
+    free(lib_manifest_path);
+    free(lib_project_dir);
+}
+
+static void test_frontend_outputs_absolute_bundle_paths(void) {
+    char template_path[] = "/tmp/feng_cli_frontend_pkg_XXXXXX";
+    char *workspace_dir;
+    char *dep_src_dir;
+    char *main_src_dir;
+    char *dep_source_path;
+    char *main_source_path;
+    char *dep_out_dir;
+    char *dep_ft_path;
+    char *bundle_path;
+    char *expected_bundle_path;
+    char *saved_cwd;
+    char *remove_error = NULL;
+    const char *relative_bundle_path = "pkgdep.fb";
+    FengSemanticAnalysis *analysis = NULL;
+    FengCliLoadedSource *sources = NULL;
+    size_t source_count = 0U;
+    FengSymbolImportedModuleCache *imported_module_cache = NULL;
+    char **bundle_paths = NULL;
+    size_t bundle_count = 0U;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    main_src_dir = path_join(workspace_dir, "main/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    main_source_path = path_join(main_src_dir, "main.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    dep_ft_path = path_join(dep_out_dir, "mod/test/cli/pkgdep.ft");
+    bundle_path = path_join(workspace_dir, relative_bundle_path);
 
     mkdir_p(dep_src_dir);
     mkdir_p(main_src_dir);
@@ -462,31 +941,55 @@ static void test_direct_build_accepts_package_bundle(void) {
         ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
         free(out_opt);
     }
+
     ASSERT(path_exists(dep_ft_path));
     write_bundle_with_file_or_die(bundle_path,
                                   "mod/test/cli/pkgdep.ft",
                                   dep_ft_path);
+    expected_bundle_path = realpath(bundle_path, NULL);
+    ASSERT(expected_bundle_path != NULL);
+    saved_cwd = getcwd(NULL, 0);
+    ASSERT(saved_cwd != NULL);
 
     {
-        char *out_opt = make_out_option(main_out_dir);
-        char *pkg_opt = make_pkg_option(bundle_path);
-        char *argv[] = {
-            main_source_path,
-            "--target=bin",
-            out_opt,
-            "--name=main",
-            pkg_opt,
+        char *paths[] = { main_source_path };
+        const char *package_paths[] = { relative_bundle_path };
+        FengCliFrontendInput input = {
+            .path_count = 1,
+            .paths = paths,
+            .target = FENG_COMPILE_TARGET_BIN,
+            .package_path_count = 1,
+            .package_paths = package_paths,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
-        free(pkg_opt);
-        free(out_opt);
+        FengCliFrontendOutputs outputs = {
+            .out_analysis = &analysis,
+            .out_sources = &sources,
+            .out_source_count = &source_count,
+            .out_imported_module_cache = &imported_module_cache,
+            .out_bundle_paths = &bundle_paths,
+            .out_bundle_count = &bundle_count,
+        };
+
+        ASSERT(chdir(workspace_dir) == 0);
+        ASSERT(feng_cli_frontend_run(&input, NULL, &outputs) == 0);
+        ASSERT(chdir(saved_cwd) == 0);
     }
 
+    ASSERT(bundle_count == 1U);
+    ASSERT(bundle_paths != NULL);
+    ASSERT(bundle_paths[0] != NULL);
+    ASSERT(strcmp(bundle_paths[0], expected_bundle_path) == 0);
+
+    free(saved_cwd);
+    free(expected_bundle_path);
+    feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
+    feng_symbol_imported_module_cache_free(imported_module_cache);
+    feng_semantic_analysis_free(analysis);
+    feng_cli_free_loaded_sources(sources, source_count);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
     free(bundle_path);
     free(dep_ft_path);
-    free(main_out_dir);
     free(dep_out_dir);
     free(main_source_path);
     free(dep_source_path);
@@ -903,6 +1406,10 @@ int main(void) {
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
+    test_direct_build_links_library_from_package_bundle();
+    test_direct_build_sorts_package_libraries_by_dependency();
+    test_project_pack_bundle_can_be_consumed();
+    test_frontend_outputs_absolute_bundle_paths();
     test_direct_build_rejects_bad_package_bundle();
     fprintf(stdout, "cli tests passed\n");
     return 0;

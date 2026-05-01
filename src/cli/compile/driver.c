@@ -1,8 +1,10 @@
 #include "cli/compile/driver.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +17,11 @@
 #  include <mach-o/dyld.h>
 #endif
 
+#include "archive/fb.h"
+#include "archive/zip.h"
 #include "parser/parser.h"
+#include "symbol/ft.h"
+#include "symbol/symbol.h"
 
 /* --- small helpers ------------------------------------------------------- */
 
@@ -35,6 +41,32 @@ static char *str_dup_n(const char *s, size_t n) {
 
 static char *str_dup_cstr(const char *s) {
     return str_dup_n(s, strlen(s));
+}
+
+static char *dup_printf(const char *fmt, ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *out;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return NULL;
+    }
+
+    out = malloc((size_t)needed + 1U);
+    if (out == NULL) {
+        va_end(args_copy);
+        return NULL;
+    }
+
+    vsnprintf(out, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    return out;
 }
 
 static char *path_join2(const char *a, const char *b) {
@@ -99,6 +131,638 @@ static char *replace_with_sibling_filename(const char *path, const char *filenam
     out = path_join2(dir, filename);
     free(dir);
     return out;
+}
+
+static const char *path_basename(const char *path) {
+    const char *slash;
+
+    if (path == NULL) {
+        return NULL;
+    }
+    slash = strrchr(path, '/');
+    return slash != NULL ? slash + 1 : path;
+}
+
+static bool set_errorf(char **out_error_message, const char *fmt, ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *message;
+
+    if (out_error_message == NULL) {
+        return false;
+    }
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return false;
+    }
+
+    message = malloc((size_t)needed + 1U);
+    if (message == NULL) {
+        va_end(args_copy);
+        return false;
+    }
+
+    vsnprintf(message, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    *out_error_message = message;
+    return false;
+}
+
+typedef struct BundleScanInfo {
+    char *bundle_path;
+    char *library_entry_path;
+    char **module_names;
+    size_t module_count;
+    size_t module_capacity;
+    char **uses;
+    size_t use_count;
+    size_t use_capacity;
+} BundleScanInfo;
+
+static void free_string_array(char **items, size_t count) {
+    size_t index;
+
+    if (items == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        free(items[index]);
+    }
+    free(items);
+}
+
+static void bundle_scan_info_dispose(BundleScanInfo *info) {
+    if (info == NULL) {
+        return;
+    }
+    free(info->bundle_path);
+    free(info->library_entry_path);
+    free_string_array(info->module_names, info->module_count);
+    free_string_array(info->uses, info->use_count);
+    memset(info, 0, sizeof(*info));
+}
+
+static void bundle_scan_info_array_dispose(BundleScanInfo *infos, size_t count) {
+    size_t index;
+
+    if (infos == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        bundle_scan_info_dispose(&infos[index]);
+    }
+    free(infos);
+}
+
+static bool string_array_push_unique(char ***items,
+                                     size_t *count,
+                                     size_t *capacity,
+                                     const char *text,
+                                     char **out_error_message) {
+    size_t index;
+    char **resized;
+    char *copy;
+
+    for (index = 0U; index < *count; ++index) {
+        if (strcmp((*items)[index], text) == 0) {
+            return true;
+        }
+    }
+
+    if (*count == *capacity) {
+        size_t new_capacity = *capacity == 0U ? 4U : *capacity * 2U;
+        resized = realloc(*items, new_capacity * sizeof(**items));
+        if (resized == NULL) {
+            return set_errorf(out_error_message, "out of memory");
+        }
+        *items = resized;
+        *capacity = new_capacity;
+    }
+
+    copy = str_dup_cstr(text);
+    if (copy == NULL) {
+        return set_errorf(out_error_message, "out of memory");
+    }
+    (*items)[(*count)++] = copy;
+    return true;
+}
+
+static void remove_tree(const char *path) {
+    DIR *dir;
+    struct dirent *entry;
+
+    if (path == NULL) {
+        return;
+    }
+    dir = opendir(path);
+    if (dir == NULL) {
+        if (errno == ENOENT) {
+            return;
+        }
+        (void)unlink(path);
+        return;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        struct stat st;
+        char *child;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        child = path_join2(path, entry->d_name);
+        if (child == NULL) {
+            continue;
+        }
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            remove_tree(child);
+        } else {
+            (void)unlink(child);
+        }
+        free(child);
+    }
+
+    closedir(dir);
+    (void)rmdir(path);
+}
+
+static bool bundle_entry_is_public_ft(const FengZipEntryInfo *entry) {
+    size_t length;
+
+    if (entry == NULL || entry->is_directory) {
+        return false;
+    }
+    if (strncmp(entry->path, "mod/", 4U) != 0) {
+        return false;
+    }
+    length = strlen(entry->path);
+    return length > 7U && strcmp(entry->path + length - 3U, ".ft") == 0;
+}
+
+static bool bundle_entry_is_host_library(const FengZipEntryInfo *entry,
+                                         const char *host_target) {
+    char *prefix;
+    bool matches;
+    size_t prefix_length;
+    size_t path_length;
+
+    if (entry == NULL || entry->is_directory || host_target == NULL) {
+        return false;
+    }
+    prefix = path_join2("lib", host_target);
+    if (prefix == NULL) {
+        return false;
+    }
+    prefix_length = strlen(prefix);
+    path_length = strlen(entry->path);
+    matches = path_length > prefix_length + 1U &&
+              strncmp(entry->path, prefix, prefix_length) == 0 &&
+              entry->path[prefix_length] == '/' &&
+              strcmp(entry->path + path_length - 2U, ".a") == 0;
+    free(prefix);
+    return matches;
+}
+
+static char *module_name_from_entry_path(const char *entry_path) {
+    size_t path_length;
+    size_t name_length;
+    char *out;
+    size_t index;
+
+    if (entry_path == NULL || strncmp(entry_path, "mod/", 4U) != 0) {
+        return NULL;
+    }
+    path_length = strlen(entry_path);
+    if (path_length <= 7U || strcmp(entry_path + path_length - 3U, ".ft") != 0) {
+        return NULL;
+    }
+
+    name_length = path_length - 7U;
+    out = malloc(name_length + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, entry_path + 4U, name_length);
+    out[name_length] = '\0';
+    for (index = 0U; index < name_length; ++index) {
+        if (out[index] == '/') {
+            out[index] = '.';
+        }
+    }
+    return out;
+}
+
+static bool scan_bundle_dependencies(const char *bundle_path,
+                                     const char *host_target,
+                                     BundleScanInfo *out_info,
+                                     char **out_error_message) {
+    FengZipReader reader = {0};
+    char *zip_error = NULL;
+    size_t entry_count;
+    size_t index;
+
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->bundle_path = str_dup_cstr(bundle_path);
+    if (out_info->bundle_path == NULL) {
+        return set_errorf(out_error_message, "out of memory");
+    }
+
+    if (!feng_zip_reader_open(bundle_path, &reader, &zip_error)) {
+        free(out_info->bundle_path);
+        out_info->bundle_path = NULL;
+        return set_errorf(out_error_message,
+                          "failed to open bundle %s: %s",
+                          bundle_path,
+                          zip_error != NULL ? zip_error : "unknown error");
+    }
+
+    entry_count = feng_zip_reader_entry_count(&reader);
+    for (index = 0U; index < entry_count; ++index) {
+        FengZipEntryInfo entry;
+
+        if (!feng_zip_reader_entry_at(&reader, index, &entry, &zip_error)) {
+            feng_zip_reader_dispose(&reader);
+            return set_errorf(out_error_message,
+                              "failed to inspect bundle %s: %s",
+                              bundle_path,
+                              zip_error != NULL ? zip_error : "unknown error");
+        }
+        if (bundle_entry_is_host_library(&entry, host_target)) {
+            if (out_info->library_entry_path != NULL) {
+                feng_zip_reader_dispose(&reader);
+                return set_errorf(out_error_message,
+                                  "bundle %s contains multiple host libraries under lib/%s",
+                                  bundle_path,
+                                  host_target);
+            }
+            out_info->library_entry_path = str_dup_cstr(entry.path);
+            if (out_info->library_entry_path == NULL) {
+                feng_zip_reader_dispose(&reader);
+                return set_errorf(out_error_message, "out of memory");
+            }
+            continue;
+        }
+        if (bundle_entry_is_public_ft(&entry)) {
+            FengSymbolFtReadOptions options = {0};
+            FengSymbolGraph *graph = NULL;
+            FengSymbolError symbol_error = {0};
+            void *data = NULL;
+            size_t data_size = 0U;
+            char *source_name = NULL;
+            char *module_name = NULL;
+            size_t module_index;
+
+            if (!feng_zip_reader_read(&reader, entry.path, &data, &data_size, &zip_error)) {
+                feng_zip_reader_dispose(&reader);
+                return set_errorf(out_error_message,
+                                  "failed to read %s from %s: %s",
+                                  entry.path,
+                                  bundle_path,
+                                  zip_error != NULL ? zip_error : "unknown error");
+            }
+
+            source_name = dup_printf("%s:%s", bundle_path, entry.path);
+            module_name = module_name_from_entry_path(entry.path);
+            options.expected_profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;
+            if (source_name == NULL || module_name == NULL) {
+                feng_zip_free(data);
+                free(source_name);
+                free(module_name);
+                feng_zip_reader_dispose(&reader);
+                return set_errorf(out_error_message, "out of memory");
+            }
+            if (!feng_symbol_ft_read_bytes(data,
+                                           data_size,
+                                           source_name,
+                                           &options,
+                                           &graph,
+                                           &symbol_error)) {
+                feng_zip_free(data);
+                free(source_name);
+                free(module_name);
+                feng_zip_reader_dispose(&reader);
+                return set_errorf(out_error_message,
+                                  "failed to read symbol table %s: %s",
+                                  source_name,
+                                  symbol_error.message != NULL ? symbol_error.message : "unknown error");
+            }
+            if (!string_array_push_unique(&out_info->module_names,
+                                          &out_info->module_count,
+                                          &out_info->module_capacity,
+                                          module_name,
+                                          out_error_message)) {
+                feng_symbol_graph_free(graph);
+                feng_zip_free(data);
+                free(source_name);
+                free(module_name);
+                feng_zip_reader_dispose(&reader);
+                return false;
+            }
+            for (module_index = 0U;
+                 module_index < feng_symbol_graph_module_count(graph);
+                 ++module_index) {
+                const FengSymbolModuleGraph *module = feng_symbol_graph_module_at(graph, module_index);
+                size_t use_index;
+
+                for (use_index = 0U;
+                     use_index < feng_symbol_module_use_count(module);
+                     ++use_index) {
+                    const char *use_name = feng_symbol_module_use_at(module, use_index);
+
+                    if (use_name == NULL) {
+                        continue;
+                    }
+                    if (!string_array_push_unique(&out_info->uses,
+                                                  &out_info->use_count,
+                                                  &out_info->use_capacity,
+                                                  use_name,
+                                                  out_error_message)) {
+                        feng_symbol_graph_free(graph);
+                        feng_zip_free(data);
+                        free(source_name);
+                        free(module_name);
+                        feng_zip_reader_dispose(&reader);
+                        return false;
+                    }
+                }
+            }
+
+            feng_symbol_graph_free(graph);
+            feng_zip_free(data);
+            free(source_name);
+            free(module_name);
+        }
+    }
+
+    feng_zip_reader_dispose(&reader);
+    if (out_info->library_entry_path == NULL) {
+        return set_errorf(out_error_message,
+                          "bundle %s does not contain lib/%s/*.a",
+                          bundle_path,
+                          host_target);
+    }
+    return true;
+}
+
+static ssize_t find_module_owner_index(const BundleScanInfo *bundles,
+                                       size_t bundle_count,
+                                       const char *module_name,
+                                       size_t *out_duplicate_bundle,
+                                       size_t *out_duplicate_index) {
+    size_t bundle_index;
+    ssize_t found = -1;
+
+    for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        size_t module_index;
+
+        for (module_index = 0U; module_index < bundles[bundle_index].module_count; ++module_index) {
+            if (strcmp(bundles[bundle_index].module_names[module_index], module_name) != 0) {
+                continue;
+            }
+            if (found >= 0) {
+                if (out_duplicate_bundle != NULL) {
+                    *out_duplicate_bundle = bundle_index;
+                }
+                if (out_duplicate_index != NULL) {
+                    *out_duplicate_index = (size_t)found;
+                }
+                return -2;
+            }
+            found = (ssize_t)bundle_index;
+        }
+    }
+
+    return found;
+}
+
+static bool topo_sort_bundles(const BundleScanInfo *bundles,
+                              size_t bundle_count,
+                              size_t **out_order,
+                              char **out_error_message) {
+    bool *edges;
+    size_t *indegree;
+    bool *emitted;
+    size_t *order;
+    size_t bundle_index;
+    size_t cursor = 0U;
+
+    *out_order = NULL;
+    if (bundle_count == 0U) {
+        return true;
+    }
+
+    edges = calloc(bundle_count * bundle_count, sizeof(*edges));
+    indegree = calloc(bundle_count, sizeof(*indegree));
+    emitted = calloc(bundle_count, sizeof(*emitted));
+    order = calloc(bundle_count, sizeof(*order));
+    if (edges == NULL || indegree == NULL || emitted == NULL || order == NULL) {
+        free(order);
+        free(emitted);
+        free(indegree);
+        free(edges);
+        return set_errorf(out_error_message, "out of memory");
+    }
+
+    for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        size_t use_index;
+
+        for (use_index = 0U; use_index < bundles[bundle_index].use_count; ++use_index) {
+            size_t duplicate_bundle = 0U;
+            size_t duplicate_index = 0U;
+            ssize_t owner = find_module_owner_index(bundles,
+                                                    bundle_count,
+                                                    bundles[bundle_index].uses[use_index],
+                                                    &duplicate_bundle,
+                                                    &duplicate_index);
+
+            if (owner == -2) {
+                free(order);
+                free(emitted);
+                free(indegree);
+                free(edges);
+                return set_errorf(out_error_message,
+                                  "module %s is provided by both %s and %s",
+                                  bundles[bundle_index].uses[use_index],
+                                  bundles[duplicate_index].bundle_path,
+                                  bundles[duplicate_bundle].bundle_path);
+            }
+            if (owner < 0 || (size_t)owner == bundle_index) {
+                continue;
+            }
+            if (!edges[bundle_index * bundle_count + (size_t)owner]) {
+                edges[bundle_index * bundle_count + (size_t)owner] = true;
+                indegree[(size_t)owner] += 1U;
+            }
+        }
+    }
+
+    while (cursor < bundle_count) {
+        bool found = false;
+
+        for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+            size_t target_index;
+
+            if (emitted[bundle_index] || indegree[bundle_index] != 0U) {
+                continue;
+            }
+            emitted[bundle_index] = true;
+            order[cursor++] = bundle_index;
+            for (target_index = 0U; target_index < bundle_count; ++target_index) {
+                if (edges[bundle_index * bundle_count + target_index]) {
+                    indegree[target_index] -= 1U;
+                }
+            }
+            found = true;
+            break;
+        }
+
+        if (!found) {
+            free(order);
+            free(emitted);
+            free(indegree);
+            free(edges);
+            return set_errorf(out_error_message,
+                              "package dependency cycle detected among --pkg bundles");
+        }
+    }
+
+    free(emitted);
+    free(indegree);
+    free(edges);
+    *out_order = order;
+    return true;
+}
+
+static bool extract_sorted_bundle_libraries(const BundleScanInfo *bundles,
+                                            size_t bundle_count,
+                                            const size_t *order,
+                                            char ***out_library_paths,
+                                            size_t *out_library_count,
+                                            char **out_temp_dir,
+                                            char **out_error_message) {
+    char *template_path;
+    size_t index;
+    char **library_paths;
+
+    *out_library_paths = NULL;
+    *out_library_count = 0U;
+    *out_temp_dir = NULL;
+    if (bundle_count == 0U) {
+        return true;
+    }
+
+    template_path = str_dup_cstr("/tmp/feng_bundle_link_XXXXXX");
+    library_paths = calloc(bundle_count, sizeof(*library_paths));
+    if (template_path == NULL || library_paths == NULL) {
+        free(library_paths);
+        free(template_path);
+        return set_errorf(out_error_message, "out of memory");
+    }
+    if (mkdtemp(template_path) == NULL) {
+        free(library_paths);
+        free(template_path);
+        return set_errorf(out_error_message,
+                          "failed to create bundle temp directory: %s",
+                          strerror(errno));
+    }
+
+    for (index = 0U; index < bundle_count; ++index) {
+        const BundleScanInfo *bundle = &bundles[order[index]];
+        FengZipReader reader = {0};
+        char *zip_error = NULL;
+
+        library_paths[index] = dup_printf("%s/%03zu_%s",
+                                          template_path,
+                                          index,
+                                          path_basename(bundle->library_entry_path));
+        if (library_paths[index] == NULL) {
+            free_string_array(library_paths, bundle_count);
+            remove_tree(template_path);
+            free(template_path);
+            return set_errorf(out_error_message, "out of memory");
+        }
+        if (!feng_zip_reader_open(bundle->bundle_path, &reader, &zip_error)) {
+            free_string_array(library_paths, bundle_count);
+            remove_tree(template_path);
+            free(template_path);
+            return set_errorf(out_error_message,
+                              "failed to open bundle %s: %s",
+                              bundle->bundle_path,
+                              zip_error != NULL ? zip_error : "unknown error");
+        }
+        if (!feng_zip_reader_extract(&reader,
+                                     bundle->library_entry_path,
+                                     library_paths[index],
+                                     &zip_error)) {
+            feng_zip_reader_dispose(&reader);
+            free_string_array(library_paths, bundle_count);
+            remove_tree(template_path);
+            free(template_path);
+            return set_errorf(out_error_message,
+                              "failed to extract %s from %s: %s",
+                              bundle->library_entry_path,
+                              bundle->bundle_path,
+                              zip_error != NULL ? zip_error : "unknown error");
+        }
+        feng_zip_reader_dispose(&reader);
+    }
+
+    *out_library_paths = library_paths;
+    *out_library_count = bundle_count;
+    *out_temp_dir = template_path;
+    return true;
+}
+
+static bool collect_bundle_link_libraries(const char *const *bundle_paths,
+                                          size_t bundle_count,
+                                          const char *host_target,
+                                          char ***out_library_paths,
+                                          size_t *out_library_count,
+                                          char **out_temp_dir,
+                                          char **out_error_message) {
+    BundleScanInfo *bundles;
+    size_t *order = NULL;
+    size_t index;
+    bool ok = false;
+
+    bundles = calloc(bundle_count, sizeof(*bundles));
+    if (bundles == NULL) {
+        return set_errorf(out_error_message, "out of memory");
+    }
+
+    for (index = 0U; index < bundle_count; ++index) {
+        if (!scan_bundle_dependencies(bundle_paths[index],
+                                      host_target,
+                                      &bundles[index],
+                                      out_error_message)) {
+            goto done;
+        }
+    }
+    if (!topo_sort_bundles(bundles, bundle_count, &order, out_error_message)) {
+        goto done;
+    }
+    if (!extract_sorted_bundle_libraries(bundles,
+                                         bundle_count,
+                                         order,
+                                         out_library_paths,
+                                         out_library_count,
+                                         out_temp_dir,
+                                         out_error_message)) {
+        goto done;
+    }
+
+    ok = true;
+
+done:
+    free(order);
+    bundle_scan_info_array_dispose(bundles, bundle_count);
+    return ok;
 }
 
 /* --- runtime artefact discovery ----------------------------------------- */
@@ -396,6 +1060,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     }
 
     char *runtime_lib = NULL;
+    char *host_target = NULL;
+    char *bundle_error = NULL;
+    char *bundle_temp_dir = NULL;
+    char **bundle_libs = NULL;
+    size_t bundle_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         runtime_lib = locate_runtime_lib(opts->program_path);
         if (runtime_lib == NULL) {
@@ -406,6 +1075,35 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             free(include_dir);
             return 1;
         }
+        if (opts->bundle_count > 0U) {
+            if (!feng_fb_detect_host_target(&host_target, &bundle_error)) {
+                fprintf(stderr,
+                        "error: cannot determine host target for package bundles: %s\n",
+                        bundle_error != NULL ? bundle_error : "unknown error");
+                free(bundle_error);
+                free(runtime_lib);
+                free(include_dir);
+                return 1;
+            }
+            free(bundle_error);
+            bundle_error = NULL;
+            if (!collect_bundle_link_libraries(opts->bundle_paths,
+                                               opts->bundle_count,
+                                               host_target,
+                                               &bundle_libs,
+                                               &bundle_lib_count,
+                                               &bundle_temp_dir,
+                                               &bundle_error)) {
+                fprintf(stderr,
+                        "error: failed to prepare package libraries: %s\n",
+                        bundle_error != NULL ? bundle_error : "unknown error");
+                free(bundle_error);
+                free(host_target);
+                free(runtime_lib);
+                free(include_dir);
+                return 1;
+            }
+        }
     }
 
     char **libs = NULL;
@@ -413,6 +1111,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (opts->target == FENG_COMPILE_TARGET_BIN
         && collect_link_libs(opts->programs, opts->program_count, &libs, &lib_count) != 0) {
         fprintf(stderr, "error: out of memory collecting link libraries\n");
+        free_string_array(bundle_libs, bundle_lib_count);
+        remove_tree(bundle_temp_dir);
+        free(bundle_temp_dir);
+        free(host_target);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -440,6 +1142,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free(include_flag);
         for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
         free(libs);
+        free_string_array(bundle_libs, bundle_lib_count);
+        remove_tree(bundle_temp_dir);
+        free(bundle_temp_dir);
+        free(host_target);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -461,6 +1167,9 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
         if (ok && !argv_push(&av, include_flag)) { ok = false; }
         if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
+        for (size_t i = 0; ok && i < bundle_lib_count; ++i) {
+            if (!argv_push(&av, bundle_libs[i])) { ok = false; }
+        }
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
         if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
         for (size_t i = 0; ok && i < lib_count; ++i) {
@@ -533,6 +1242,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
+    free_string_array(bundle_libs, bundle_lib_count);
+    remove_tree(bundle_temp_dir);
+    free(bundle_temp_dir);
+    free(host_target);
+    free(bundle_error);
     free(runtime_lib);
     free(include_dir);
     free(include_flag);

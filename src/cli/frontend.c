@@ -9,6 +9,19 @@
 #include "symbol/imported_module.h"
 #include "symbol/provider.h"
 
+void feng_cli_frontend_bundle_paths_dispose(char **bundle_paths,
+                                            size_t bundle_count) {
+    size_t index;
+
+    if (bundle_paths == NULL) {
+        return;
+    }
+    for (index = 0U; index < bundle_count; ++index) {
+        free(bundle_paths[index]);
+    }
+    free(bundle_paths);
+}
+
 static int load_and_parse(const FengCliFrontendInput *input,
                           FengCliLoadedSource *sources,
                           const FengProgram **programs,
@@ -48,15 +61,20 @@ static int load_and_parse(const FengCliFrontendInput *input,
 }
 
 static int load_package_sources(const FengCliFrontendInput *input,
-                                FengSymbolProvider **out_provider) {
+                                FengSymbolProvider **out_provider,
+                                char ***out_bundle_paths,
+                                size_t *out_bundle_count) {
     FengSymbolProvider *provider = NULL;
+    char **bundle_paths = NULL;
     FengSymbolError error = {0};
     int index;
 
-    if (out_provider == NULL) {
+    if (out_provider == NULL || out_bundle_paths == NULL || out_bundle_count == NULL) {
         return 1;
     }
     *out_provider = NULL;
+    *out_bundle_paths = NULL;
+    *out_bundle_count = 0U;
     if (input->package_path_count <= 0) {
         return 0;
     }
@@ -71,26 +89,49 @@ static int load_package_sources(const FengCliFrontendInput *input,
         feng_symbol_error_free(&error);
         return 1;
     }
+    bundle_paths = calloc((size_t)input->package_path_count, sizeof(*bundle_paths));
+    if (bundle_paths == NULL) {
+        fprintf(stderr, "out of memory\n");
+        feng_symbol_provider_free(provider);
+        return 1;
+    }
     for (index = 0; index < input->package_path_count; ++index) {
         const char *package_path = input->package_paths[index];
+        char *resolved_path;
 
         if (package_path == NULL || package_path[0] == '\0') {
             fprintf(stderr, "frontend: package path must not be empty\n");
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths,
+                                                   (size_t)input->package_path_count);
             feng_symbol_provider_free(provider);
             return 1;
         }
-        if (!feng_symbol_provider_add_bundle(provider, package_path, &error)) {
+        resolved_path = realpath(package_path, NULL);
+        if (resolved_path == NULL) {
+            fprintf(stderr, "failed to resolve package %s: %s\n",
+                    package_path, strerror(errno));
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths,
+                                                   (size_t)input->package_path_count);
+            feng_symbol_provider_free(provider);
+            return 1;
+        }
+        bundle_paths[index] = resolved_path;
+        if (!feng_symbol_provider_add_bundle(provider, resolved_path, &error)) {
             fprintf(stderr,
                     "failed to load package %s: %s\n",
-                    error.path != NULL ? error.path : package_path,
+                    error.path != NULL ? error.path : resolved_path,
                     error.message != NULL ? error.message : "unknown error");
             feng_symbol_error_free(&error);
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths,
+                                                   (size_t)input->package_path_count);
             feng_symbol_provider_free(provider);
             return 1;
         }
     }
 
     *out_provider = provider;
+    *out_bundle_paths = bundle_paths;
+    *out_bundle_count = (size_t)input->package_path_count;
     return 0;
 }
 
@@ -107,6 +148,8 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
     size_t error_count = 0U;
     int exit_code = 0;
     FengSymbolImportedModuleCache *imported_module_cache = NULL;
+    char **bundle_paths = NULL;
+    size_t bundle_count = 0U;
     FengSemanticImportedModuleQuery imported_query = {0};
     FengSemanticAnalyzeOptions semantic_options = {0};
 
@@ -129,7 +172,7 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
         goto cleanup;
     }
 
-    exit_code = load_package_sources(input, &provider);
+    exit_code = load_package_sources(input, &provider, &bundle_paths, &bundle_count);
     if (exit_code != 0) {
         goto cleanup;
     }
@@ -204,8 +247,17 @@ cleanup:
             *outputs->out_imported_module_cache = imported_module_cache;
             imported_module_cache = NULL;
         }
+        if (outputs->out_bundle_paths != NULL) {
+            *outputs->out_bundle_paths = bundle_paths;
+            bundle_paths = NULL;
+        }
+        if (outputs->out_bundle_count != NULL) {
+            *outputs->out_bundle_count = bundle_count;
+            bundle_count = 0U;
+        }
     }
 
+    feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
     feng_symbol_imported_module_cache_free(imported_module_cache);
     feng_semantic_analysis_free(analysis);
     feng_cli_free_loaded_sources(sources, (size_t)input->path_count);

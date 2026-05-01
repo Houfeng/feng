@@ -723,6 +723,18 @@ const FengSymbolModuleGraph *feng_symbol_graph_module_at(const FengSymbolGraph *
     return graph->modules[index];
 }
 
+size_t feng_symbol_module_use_count(const FengSymbolModuleGraph *module) {
+    return module != NULL ? module->use_count : 0U;
+}
+
+const char *feng_symbol_module_use_at(const FengSymbolModuleGraph *module,
+                                      size_t index) {
+    if (module == NULL || index >= module->use_count) {
+        return NULL;
+    }
+    return module->uses[index];
+}
+
 void feng_symbol_graph_free(FengSymbolGraph *graph) {
     size_t index;
 

@@ -273,6 +273,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     FengCliLoadedSource *sources = NULL;
     size_t source_count = 0U;
     FengSymbolImportedModuleCache *imported_module_cache = NULL;
+    char **bundle_paths = NULL;
+    size_t bundle_count = 0U;
     FengCliFrontendInput input = {
         .path_count = opts.input_count,
         .paths = (char **)opts.inputs,
@@ -291,6 +293,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         .out_sources = &sources,
         .out_source_count = &source_count,
         .out_imported_module_cache = &imported_module_cache,
+        .out_bundle_paths = &bundle_paths,
+        .out_bundle_count = &bundle_count,
     };
 
     int rc = feng_cli_frontend_run(&input, &callbacks, &outputs);
@@ -338,6 +342,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
             free(artifact_dir);
             feng_semantic_analysis_free(analysis);
             feng_symbol_imported_module_cache_free(imported_module_cache);
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
             feng_cli_free_loaded_sources(sources, source_count);
             feng_cli_direct_options_dispose(&opts);
             return 1;
@@ -366,6 +371,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_symbol_imported_module_cache_free(imported_module_cache);
+        feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
         feng_cli_free_loaded_sources(sources, source_count);
         free(c_path);
         free(workspace_symbol_dir);
@@ -388,6 +394,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_symbol_imported_module_cache_free(imported_module_cache);
+        feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
         feng_cli_free_loaded_sources(sources, source_count);
         free(workspace_symbol_dir);
         free(public_symbol_dir);
@@ -406,6 +413,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         feng_codegen_output_free(&out);
         feng_semantic_analysis_free(analysis);
         feng_symbol_imported_module_cache_free(imported_module_cache);
+        feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
         feng_cli_free_loaded_sources(sources, source_count);
         free(workspace_symbol_dir);
         free(public_symbol_dir);
@@ -492,6 +500,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
             feng_codegen_output_free(&out);
             feng_semantic_analysis_free(analysis);
             feng_symbol_imported_module_cache_free(imported_module_cache);
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
             feng_cli_free_loaded_sources(sources, source_count);
             free(workspace_symbol_dir);
             free(public_symbol_dir);
@@ -515,6 +524,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         .out_path = artifact_path,
         .programs = prog_array,
         .program_count = prog_count,
+        .bundle_paths = (const char *const *)bundle_paths,
+        .bundle_count = bundle_count,
         .keep_intermediate = opts.keep_intermediate,
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);
@@ -528,6 +539,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     feng_codegen_output_free(&out);
     feng_semantic_analysis_free(analysis);
     feng_symbol_imported_module_cache_free(imported_module_cache);
+    feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
     feng_cli_free_loaded_sources(sources, source_count);
     free(ir_dir);
     free(artifact_dir);

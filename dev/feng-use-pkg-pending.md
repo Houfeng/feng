@@ -267,6 +267,12 @@ cc ... feng.c libfeng_runtime.a <sorted_A.a> <sorted_B.a> ... -lpthread -o outpu
 > 本批完成门槛：现有 pkg 相关行为保持不变，新增 cache 生命周期测试通过，并执行一次全量 `make test` 回归。
 > 下一批实施批次：步骤 6、7、8。
 > 本批目标：让 imported-module cache 生成完整 decl 签名，并让外部函数、外部类型成员、外部 spec 关系真正进入语义类型检查。
+> 当前后续实施批次：步骤 9。
+> 本批目标：先完成 3a，只让 `target=lib` 的 public 顶层函数导出非 `static` 符号；不在本批引入 imported-module `extern` 声明 emit。
+> 步骤 10 已完成：消费者 codegen 现已为 imported Feng decl 发 ABI 一致的 prototype；imported type/spec 只参与壳与 forward/prototype，不重复生成外部函数 body 与 descriptor 定义；模块别名函数调用已走 `resolved_callable.function_decl` 的 free-fn 发码路径，并已用 `clang/cc -c` 级别回归锁住。
+> 步骤 11 已完成：frontend 已把 `--pkg` 解析出的 bundle 收敛成绝对路径列表输出给 direct/driver；driver option 已具备稳定 bundle 输入面；并已用 frontend 级回归锁住相对路径输入转绝对路径的行为。
+> 步骤 12 已完成：driver 现已按 `.fb` 中 `mod/*.ft` 的 `uses` 关系解析跨包依赖，按包粒度排序并提取 `lib/<host-target>/*.a` 参与最终 bin 链接；已用单包真实运行和跨包逆序输入两类 CLI 回归锁住。
+> 步骤 13 已完成：已补充 `feng pack -> --pkg consume -> compile -> link -> run` 的端到端 CLI 回归，并完成全量 `make test`。当前 `.fb/use` 从语义、codegen 到链接与运行的主链路已打通。
 
 下面按“先收敛职责边界，再补语义，再补 codegen，再补链接”的顺序执行。每一步都只引入当前阶段最小必要改动，避免核心编译器被迫感知 symbol 实现细节。
 
