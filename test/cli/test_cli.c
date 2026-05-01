@@ -448,6 +448,7 @@ static void test_direct_build_accepts_package_bundle(void) {
                     "fn main(args: string[]) {}\n");
     write_text_file(main_source_path,
                     "mod test.cli.pkgmain;\n"
+                    "use test.cli.pkgdep;\n"
                     "fn main(args: string[]) {}\n");
 
     {

@@ -366,6 +366,7 @@ static void test_provider_loads_bundle_public_module(void) {
     FengSlice segments[4];
     const FengSymbolImportedModule *module = NULL;
     const FengSymbolDeclView *answer_decl = NULL;
+    const FengSymbolDeclView *public_decl = NULL;
 
     ASSERT(snprintf(public_root, sizeof(public_root), "%s/bundle_mod", tmp_dir) > 0);
     ASSERT(snprintf(public_ft,
@@ -394,6 +395,12 @@ static void test_provider_loads_bundle_public_module(void) {
     segments[3] = slice_from_cstr("bundle");
     module = feng_symbol_provider_find_module(provider, segments, 4U);
     ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_public_decl_count(module) == 1U);
+    public_decl = feng_symbol_module_public_decl_at(module, 0U);
+    ASSERT(public_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(public_decl) == FENG_SYMBOL_DECL_KIND_FUNCTION);
+    ASSERT(slice_equals_cstr(feng_symbol_decl_name(public_decl), "answer"));
+    ASSERT(feng_symbol_module_public_decl_at(module, 1U) == NULL);
     answer_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("answer"));
     ASSERT(answer_decl != NULL);
     ASSERT(feng_symbol_decl_kind(answer_decl) == FENG_SYMBOL_DECL_KIND_FUNCTION);

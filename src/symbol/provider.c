@@ -313,6 +313,45 @@ static const FengSymbolDeclView *module_public_value_at(const FengSymbolImported
     return NULL;
 }
 
+static size_t module_public_decl_count(const FengSymbolImportedModule *module) {
+    size_t index;
+    size_t count = 0U;
+
+    if (module == NULL || module->module == NULL) {
+        return 0U;
+    }
+    for (index = 0U; index < module->module->root_decl.member_count; ++index) {
+        const FengSymbolDeclView *decl = module->module->root_decl.members[index];
+
+        if (decl != NULL && decl->visibility == FENG_VISIBILITY_PUBLIC) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static const FengSymbolDeclView *module_public_decl_at(const FengSymbolImportedModule *module,
+                                                       size_t index) {
+    size_t cursor = 0U;
+    size_t member_index;
+
+    if (module == NULL || module->module == NULL) {
+        return NULL;
+    }
+    for (member_index = 0U; member_index < module->module->root_decl.member_count; ++member_index) {
+        const FengSymbolDeclView *decl = module->module->root_decl.members[member_index];
+
+        if (decl == NULL || decl->visibility != FENG_VISIBILITY_PUBLIC) {
+            continue;
+        }
+        if (cursor == index) {
+            return decl;
+        }
+        ++cursor;
+    }
+    return NULL;
+}
+
 static size_t decl_count_public_members(const FengSymbolDeclView *owner, FengSlice name) {
     size_t index;
     size_t count = 0U;
@@ -752,6 +791,16 @@ const FengSymbolDeclView *feng_symbol_module_find_public_value(
     const FengSymbolImportedModule *module,
     FengSlice name) {
     return feng_symbol_module_public_value_at(module, name, 0U);
+}
+
+size_t feng_symbol_module_public_decl_count(const FengSymbolImportedModule *module) {
+    return module_public_decl_count(module);
+}
+
+const FengSymbolDeclView *feng_symbol_module_public_decl_at(
+    const FengSymbolImportedModule *module,
+    size_t index) {
+    return module_public_decl_at(module, index);
 }
 
 size_t feng_symbol_module_public_value_count(const FengSymbolImportedModule *module,

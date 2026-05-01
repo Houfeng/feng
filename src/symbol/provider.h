@@ -48,6 +48,12 @@ const FengSymbolDeclView *feng_symbol_module_find_public_value(
     const FengSymbolImportedModule *module,
     FengSlice name);
 
+size_t feng_symbol_module_public_decl_count(const FengSymbolImportedModule *module);
+
+const FengSymbolDeclView *feng_symbol_module_public_decl_at(
+    const FengSymbolImportedModule *module,
+    size_t index);
+
 size_t feng_symbol_module_public_value_count(const FengSymbolImportedModule *module,
                                              FengSlice name);
 
