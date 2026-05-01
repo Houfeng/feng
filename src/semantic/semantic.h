@@ -30,6 +30,10 @@ typedef struct FengSemanticModule {
     const FengProgram **programs;
     size_t program_count;
     size_t program_capacity;
+    /* true when this module comes from an external .fb bundle and has no local
+     * source body; codegen skips it and check_symbol_conflicts is not run on
+     * it (its symbols are already resolved by the package compiler). */
+    bool is_external_package;
 } FengSemanticModule;
 
 /* Per-`type` marker computed from the static managed-reference graph.
@@ -197,9 +201,15 @@ typedef enum FengCompileTarget {
 
 typedef struct FengSemanticImportedModuleQuery {
     const void *user;
-    bool (*module_exists)(const void *user,
-                          const FengSlice *segments,
-                          size_t segment_count);
+    /* Return the pre-built FengSemanticModule for the given path, or NULL if
+     * the module is not available in any registered external package.  The
+     * returned pointer must remain valid for the lifetime of the analysis
+     * (i.e. until feng_semantic_analysis_free is called).
+     * Returning non-NULL is equivalent to "module exists"; returning NULL
+     * means the module was not found and the analyzer will report an error. */
+    const FengSemanticModule *(*get_module)(const void *user,
+                                            const FengSlice *segments,
+                                            size_t segment_count);
 } FengSemanticImportedModuleQuery;
 
 typedef struct FengSemanticAnalyzeOptions {

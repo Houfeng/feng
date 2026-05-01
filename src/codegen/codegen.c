@@ -6464,9 +6464,15 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         out_error->path = NULL;
         memset(&out_error->token, 0, sizeof out_error->token);
     }
-    /* Collect every program in deterministic (module, program) order. */
+    /* Collect every program in deterministic (module, program) order.
+     * External package modules (is_external_package == true) have no local
+     * body to emit; they are skipped here and will be handled by extern
+     * declarations in a later phase. */
     size_t program_total = 0;
     for (size_t i = 0; i < analysis->module_count; i++) {
+        if (analysis->modules[i].is_external_package) {
+            continue;
+        }
         program_total += analysis->modules[i].program_count;
     }
     CG cg = {0};
@@ -6486,6 +6492,9 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     }
     size_t cursor = 0;
     for (size_t i = 0; i < analysis->module_count; i++) {
+        if (analysis->modules[i].is_external_package) {
+            continue;
+        }
         for (size_t j = 0; j < analysis->modules[i].program_count; j++) {
             programs[cursor++] = analysis->modules[i].programs[j];
         }

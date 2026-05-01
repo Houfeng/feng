@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cli/pkg_bridge.h"
 #include "parser/parser.h"
 #include "symbol/provider.h"
 
@@ -93,14 +94,7 @@ static int load_package_sources(const FengCliFrontendInput *input,
     return 0;
 }
 
-static bool provider_module_exists(const void *user,
-                                   const FengSlice *segments,
-                                   size_t segment_count) {
-    const FengSymbolProvider *provider = (const FengSymbolProvider *)user;
-
-    return provider != NULL &&
-           feng_symbol_provider_find_module(provider, segments, segment_count) != NULL;
-}
+/* ---------- frontend run ------------------------------------------------- */
 
 int feng_cli_frontend_run(const FengCliFrontendInput *input,
                           const FengCliFrontendCallbacks *callbacks,
@@ -112,7 +106,8 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
     int exit_code = 0;
-    FengSemanticImportedModuleQuery imported_query = {0};
+    FengCliPkgBridge *bridge = NULL;
+    FengSemanticImportedModuleQuery bridge_query = {0};
     FengSemanticAnalyzeOptions semantic_options = {0};
 
     if (input == NULL || input->path_count <= 0 || input->paths == NULL) {
@@ -141,9 +136,14 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
 
     semantic_options.target = input->target;
     if (provider != NULL) {
-        imported_query.user = provider;
-        imported_query.module_exists = provider_module_exists;
-        semantic_options.imported_modules = &imported_query;
+        bridge = feng_cli_pkg_bridge_create(provider);
+        if (bridge == NULL) {
+            fprintf(stderr, "out of memory\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        bridge_query = feng_cli_pkg_bridge_as_query(bridge);
+        semantic_options.imported_modules = &bridge_query;
     }
 
     if (!feng_semantic_analyze_with_options(programs,
@@ -186,6 +186,12 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
     }
 
 cleanup:
+    /* Free the bridge first (its synthetic FengDecl/FengProgram objects are no
+     * longer needed once semantic analysis is done).  Callers skip external
+     * modules in codegen/export, and feng_semantic_analysis_free only frees
+     * the programs-pointer-array it allocated — not the FengProgram objects
+     * themselves — so dangling pointers in external-module entries are safe. */
+    feng_cli_pkg_bridge_free(bridge);
     feng_symbol_provider_free(provider);
     feng_semantic_errors_free(errors, error_count);
     free(programs);

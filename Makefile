@@ -28,7 +28,7 @@ TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
-TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
+TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c src/cli/pkg_bridge.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/compile/options.c src/cli/compile/direct.c src/cli/compile/driver.c
 

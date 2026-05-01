@@ -2003,9 +2003,17 @@ bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
     }
 
     for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
-        FengSymbolModuleGraph *module_graph = build_module_graph(analysis,
-                                                                 &analysis->modules[module_index],
-                                                                 out_error);
+        FengSymbolModuleGraph *module_graph;
+
+        /* External package modules are already compiled; they do not generate
+         * new symbol-table output for the current compilation unit. */
+        if (analysis->modules[module_index].is_external_package) {
+            continue;
+        }
+
+        module_graph = build_module_graph(analysis,
+                                          &analysis->modules[module_index],
+                                          out_error);
         if (module_graph == NULL ||
             !feng_symbol_internal_graph_append_module(graph, module_graph, out_error)) {
             if (module_graph != NULL) {

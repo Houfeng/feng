@@ -850,11 +850,49 @@ static size_t find_module_index(const FengSemanticAnalysis *analysis, const Feng
         analysis, program->module_segments, program->module_segment_count);
 }
 
-static bool imported_query_has_module(const FengSemanticImportedModuleQuery *query,
-                                      const FengSlice *segments,
-                                      size_t segment_count) {
-    return query != NULL && query->module_exists != NULL &&
-           query->module_exists(query->user, segments, segment_count);
+/* Inject a pre-built external FengSemanticModule into analysis.
+ * A fresh programs pointer-array is allocated and owned by analysis so that
+ * feng_semantic_analysis_free can call free() on it without touching the
+ * caller's allocations.  The FengProgram objects themselves remain owned by
+ * the caller (SyntheticCtx in frontend.c). */
+static bool add_external_module(FengSemanticAnalysis *analysis,
+                                const FengSemanticModule *ext) {
+    FengSemanticModule mod;
+    size_t i;
+
+    if (ext == NULL) {
+        return true;
+    }
+
+    memset(&mod, 0, sizeof(mod));
+    mod.segments = ext->segments;
+    mod.segment_count = ext->segment_count;
+    mod.visibility = ext->visibility;
+    mod.is_external_package = true;
+    mod.program_count = ext->program_count;
+    mod.program_capacity = ext->program_count;
+
+    if (ext->program_count > 0U) {
+        mod.programs = (const FengProgram **)calloc(ext->program_count,
+                                                    sizeof(*mod.programs));
+        if (mod.programs == NULL) {
+            return false;
+        }
+        for (i = 0U; i < ext->program_count; ++i) {
+            mod.programs[i] = ext->programs[i];
+        }
+    }
+
+    if (!append_raw((void **)&analysis->modules,
+                    &analysis->module_count,
+                    &analysis->module_capacity,
+                    sizeof(mod),
+                    &mod)) {
+        free(mod.programs);
+        return false;
+    }
+
+    return true;
 }
 
 static const FengSemanticModule *find_decl_provider_module(const FengSemanticAnalysis *analysis,
@@ -11532,7 +11570,6 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
-                                   const FengSemanticImportedModuleQuery *imported_query,
                                    CallableReturnCache *callable_return_cache,
                                    CallableExceptionEscapeCache *callable_exception_escape_cache,
                                    FengSemanticError **errors,
@@ -11810,11 +11847,6 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
             target_index =
                 find_module_index_by_path(analysis, use_decl->segments, use_decl->segment_count);
             if (target_index == analysis->module_count) {
-                if (imported_query_has_module(imported_query,
-                                              use_decl->segments,
-                                              use_decl->segment_count)) {
-                    continue;
-                }
                 char *module_name = format_module_name(use_decl->segments, use_decl->segment_count);
 
                 ok = append_error(
@@ -11939,6 +11971,11 @@ static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analy
     for (module_index = 0U; module_index < analysis->module_count; ++module_index) {
         const FengSemanticModule *module = &analysis->modules[module_index];
         size_t program_index;
+
+        /* External package modules have no local bodies to infer. */
+        if (module->is_external_package) {
+            continue;
+        }
 
         for (program_index = 0U; program_index < module->program_count; ++program_index) {
             const FengProgram *program = module->programs[program_index];
@@ -12190,6 +12227,35 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         }
     }
 
+    /* Pre-inject synthetic FengSemanticModule entries for any external-package
+     * 'use' targets.  After injection, find_module_index_by_path() finds them
+     * like any local module, so check_symbol_conflicts and build_program_aliases
+     * need no special-case logic for external modules. */
+    if (ok && imported_query != NULL && imported_query->get_module != NULL) {
+        for (program_index = 0U; program_index < program_count && ok; ++program_index) {
+            const FengProgram *prog = programs[program_index];
+            size_t use_index;
+
+            for (use_index = 0U; use_index < prog->use_count && ok; ++use_index) {
+                const FengUseDecl *use_decl = &prog->uses[use_index];
+                size_t target_index;
+                const FengSemanticModule *ext;
+
+                target_index = find_module_index_by_path(
+                    analysis, use_decl->segments, use_decl->segment_count);
+                if (target_index < analysis->module_count) {
+                    continue; /* already known (local or already injected) */
+                }
+
+                ext = imported_query->get_module(
+                    imported_query->user, use_decl->segments, use_decl->segment_count);
+                if (ext != NULL) {
+                    ok = add_external_module(analysis, ext);
+                }
+            }
+        }
+    }
+
     max_iterations = count_all_callables(analysis) + 1U;
     if (max_iterations == 0U) {
         max_iterations = 1U;
@@ -12202,9 +12268,11 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         for (program_index = 0U;
              program_index < analysis->module_count && ok && error_count == 0U;
              ++program_index) {
+            if (analysis->modules[program_index].is_external_package) {
+                continue; /* external modules are pre-resolved; skip semantic analysis */
+            }
             ok = check_symbol_conflicts(analysis,
                                         &analysis->modules[program_index],
-                                        imported_query,
                                         &callable_return_cache,
                                         &callable_exception_escape_cache,
                                         &errors,

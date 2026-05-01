@@ -4369,28 +4369,39 @@ typedef struct ExternalModuleQueryFixture {
     const char **segments;
     size_t segment_count;
     size_t call_count;
+    /* A minimal pre-built module returned when the path matches. */
+    FengSemanticModule match_module;
 } ExternalModuleQueryFixture;
 
-static bool external_module_query_exists(const void *user,
-                                         const FengSlice *segments,
-                                         size_t segment_count) {
+static const FengSemanticModule *external_module_query_get_module(
+    const void *user,
+    const FengSlice *segments,
+    size_t segment_count) {
     ExternalModuleQueryFixture *fixture = (ExternalModuleQueryFixture *)user;
     size_t index;
 
     ASSERT(fixture != NULL);
     ++fixture->call_count;
     if (segment_count != fixture->segment_count) {
-        return false;
+        return NULL;
     }
     for (index = 0U; index < segment_count; ++index) {
         const char *expected = fixture->segments[index];
 
         if (strlen(expected) != segments[index].length ||
             memcmp(expected, segments[index].data, segments[index].length) != 0) {
-            return false;
+            return NULL;
         }
     }
-    return true;
+    /* Return a pre-built module with no programs (just module existence). */
+    fixture->match_module.segments = segments;
+    fixture->match_module.segment_count = segment_count;
+    fixture->match_module.visibility = FENG_VISIBILITY_PUBLIC;
+    fixture->match_module.programs = NULL;
+    fixture->match_module.program_count = 0U;
+    fixture->match_module.program_capacity = 0U;
+    fixture->match_module.is_external_package = true;
+    return &fixture->match_module;
 }
 
 static void test_unknown_use_module_rejected_without_import_query(void) {
@@ -4418,8 +4429,8 @@ static void test_external_use_module_accepted_via_import_query(void) {
         "use vendor.math;\n"
         "fn run() {}\n";
     const char *segments[] = {"vendor", "math"};
-    ExternalModuleQueryFixture fixture = {segments, 2U, 0U};
-    FengSemanticImportedModuleQuery query = {&fixture, external_module_query_exists};
+    ExternalModuleQueryFixture fixture = {segments, 2U, 0U, {0}};
+    FengSemanticImportedModuleQuery query = {&fixture, external_module_query_get_module};
     FengSemanticAnalyzeOptions options = {FENG_COMPILE_TARGET_LIB, &query};
     FengProgram *program = parse_program_or_die("known_use_external.f", source);
     const FengProgram *programs[] = {program};
