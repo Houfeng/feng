@@ -238,7 +238,7 @@ static const FengSemanticModule *bridge_get_module(const void *user,
     entry.sem_mod.visibility = FENG_VISIBILITY_PUBLIC;
     entry.sem_mod.program_count = 1U;
     entry.sem_mod.program_capacity = 1U;
-    entry.sem_mod.is_external_package = true;
+    entry.sem_mod.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
     /* sem_mod.programs and prog_ptr fixed below after append */
 
     ep = bridge_append(b, &entry);

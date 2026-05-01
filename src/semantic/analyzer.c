@@ -868,7 +868,7 @@ static bool add_external_module(FengSemanticAnalysis *analysis,
     mod.segments = ext->segments;
     mod.segment_count = ext->segment_count;
     mod.visibility = ext->visibility;
-    mod.is_external_package = true;
+    mod.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
     mod.program_count = ext->program_count;
     mod.program_capacity = ext->program_count;
 
@@ -11973,7 +11973,7 @@ static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analy
         size_t program_index;
 
         /* External package modules have no local bodies to infer. */
-        if (module->is_external_package) {
+        if (module->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
         }
 
@@ -12268,7 +12268,8 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         for (program_index = 0U;
              program_index < analysis->module_count && ok && error_count == 0U;
              ++program_index) {
-            if (analysis->modules[program_index].is_external_package) {
+            if (analysis->modules[program_index].origin ==
+                FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                 continue; /* external modules are pre-resolved; skip semantic analysis */
             }
             ok = check_symbol_conflicts(analysis,

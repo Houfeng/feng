@@ -4400,7 +4400,7 @@ static const FengSemanticModule *external_module_query_get_module(
     fixture->match_module.programs = NULL;
     fixture->match_module.program_count = 0U;
     fixture->match_module.program_capacity = 0U;
-    fixture->match_module.is_external_package = true;
+    fixture->match_module.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
     return &fixture->match_module;
 }
 

@@ -2007,7 +2007,8 @@ bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
 
         /* External package modules are already compiled; they do not generate
          * new symbol-table output for the current compilation unit. */
-        if (analysis->modules[module_index].is_external_package) {
+        if (analysis->modules[module_index].origin ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
         }
 

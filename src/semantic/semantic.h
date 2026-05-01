@@ -23,6 +23,11 @@ typedef struct FengSemanticInfo {
     FengToken token;
 } FengSemanticInfo;
 
+typedef enum FengSemanticModuleOrigin {
+    FENG_SEMANTIC_MODULE_ORIGIN_LOCAL = 0,
+    FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE
+} FengSemanticModuleOrigin;
+
 typedef struct FengSemanticModule {
     const FengSlice *segments;
     size_t segment_count;
@@ -30,10 +35,11 @@ typedef struct FengSemanticModule {
     const FengProgram **programs;
     size_t program_count;
     size_t program_capacity;
-    /* true when this module comes from an external .fb bundle and has no local
-     * source body; codegen skips it and check_symbol_conflicts is not run on
-     * it (its symbols are already resolved by the package compiler). */
-    bool is_external_package;
+    /* Tracks whether this module comes from the current compile input or from
+     * an imported .fb bundle. Imported-package modules have no local source
+     * body; codegen skips local body emission and semantic conflict passes
+     * treat them as pre-resolved package output. */
+    FengSemanticModuleOrigin origin;
 } FengSemanticModule;
 
 /* Per-`type` marker computed from the static managed-reference graph.

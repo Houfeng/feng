@@ -181,7 +181,7 @@ static bool cyc_collect_nodes(CycGraph *g, const FengSemanticAnalysis *analysis)
         const FengSemanticModule *mod = &analysis->modules[mi];
         size_t pi;
         /* External package modules have no local type bodies to analyse. */
-        if (mod->is_external_package) {
+        if (mod->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
         }
         for (pi = 0U; pi < mod->program_count; ++pi) {
