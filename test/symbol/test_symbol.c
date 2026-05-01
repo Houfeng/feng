@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "archive/zip.h"
 #include "parser/parser.h"
 #include "semantic/semantic.h"
 #include "symbol/export.h"
@@ -91,6 +92,79 @@ static int remove_dir_recursive(const char *path) {
         return -1;
     }
     return system(command);
+}
+
+static void assert_zip_ok(bool ok, char **zip_error) {
+    if (!ok) {
+        fprintf(stderr,
+                "zip operation failed: %s\n",
+                zip_error != NULL && *zip_error != NULL ? *zip_error : "unknown error");
+        if (zip_error != NULL) {
+            free(*zip_error);
+            *zip_error = NULL;
+        }
+        ASSERT(false);
+    }
+    if (zip_error != NULL) {
+        free(*zip_error);
+        *zip_error = NULL;
+    }
+}
+
+static void export_public_source_or_die(const char *path,
+                                        const char *source,
+                                        const char *public_root) {
+    FengProgram *program = parse_or_die(path, source);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    FengSymbolExportOptions options = {0};
+
+    options.public_root = public_root;
+    if (!feng_symbol_export_analysis(analysis, &options, &error)) {
+        fprintf(stderr,
+                "symbol export failed: %s\n",
+                error.message != NULL ? error.message : "unknown error");
+        ASSERT(false);
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void write_bundle_with_file_or_die(const char *bundle_path,
+                                          const char *entry_path,
+                                          const char *source_path) {
+    FengZipWriter writer = {0};
+    char *zip_error = NULL;
+
+    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
+    assert_zip_ok(feng_zip_writer_add_file(&writer,
+                                           entry_path,
+                                           source_path,
+                                           FENG_ZIP_COMPRESSION_DEFLATE,
+                                           &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
+    feng_zip_writer_dispose(&writer);
+}
+
+static void write_bundle_with_bytes_or_die(const char *bundle_path,
+                                           const char *entry_path,
+                                           const void *data,
+                                           size_t data_size) {
+    FengZipWriter writer = {0};
+    char *zip_error = NULL;
+
+    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
+    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
+                                            entry_path,
+                                            data,
+                                            data_size,
+                                            FENG_ZIP_COMPRESSION_DEFLATE,
+                                            &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
+    feng_zip_writer_dispose(&writer);
 }
 
 /* Round-trip: write graph -> read back -> provider answers public queries. */
@@ -278,10 +352,140 @@ static void test_reader_rejects_bad_magic(void) {
     free(tmp_dir);
 }
 
+static void test_provider_loads_bundle_public_module(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.bundle;\n"
+        "pu fn answer(): int { return 42; }\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *answer_decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/bundle_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/bundle.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/provider_bundle.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("bundle.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/bundle.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    if (!feng_symbol_provider_add_bundle(provider, bundle_path, &error)) {
+        fprintf(stderr,
+                "add_bundle failed: %s (path=%s)\n",
+                error.message != NULL ? error.message : "(no message)",
+                error.path != NULL ? error.path : "(no path)");
+        ASSERT(false);
+    }
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("bundle");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    answer_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("answer"));
+    ASSERT(answer_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(answer_decl) == FENG_SYMBOL_DECL_KIND_FUNCTION);
+    ASSERT(feng_symbol_decl_param_count(answer_decl) == 0U);
+    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(feng_symbol_decl_return_type(answer_decl)), "i32"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_provider_rejects_duplicate_bundle_module(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.conflict;\n"
+        "pu fn marker(): int { return 1; }\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char first_bundle[1024];
+    char second_bundle[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/conflict_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/conflict.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(first_bundle, sizeof(first_bundle), "%s/first.fb", tmp_dir) > 0);
+    ASSERT(snprintf(second_bundle, sizeof(second_bundle), "%s/second.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("conflict.ff", kSource, public_root);
+    write_bundle_with_file_or_die(first_bundle,
+                                  "mod/feng/test/symbol/conflict.ft",
+                                  public_ft);
+    write_bundle_with_file_or_die(second_bundle,
+                                  "mod/feng/test/symbol/conflict.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, first_bundle, &error));
+    ASSERT(!feng_symbol_provider_add_bundle(provider, second_bundle, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "duplicate imported module") != NULL);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("conflict");
+    ASSERT(feng_symbol_provider_find_module(provider, segments, 4U) != NULL);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_provider_rejects_bad_bundle_symbol_entry(void) {
+    static const char kBadBytes[] = "XXXX";
+
+    char *tmp_dir = make_temp_dir();
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/bad_symbol.fb", tmp_dir) > 0);
+    write_bundle_with_bytes_or_die(bundle_path,
+                                   "mod/feng/test/symbol/bad.ft",
+                                   kBadBytes,
+                                   sizeof(kBadBytes) - 1U);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(!feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "failed to load bundle symbol entry") != NULL);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     test_roundtrip_public_module();
     test_private_module_skipped();
     test_reader_rejects_bad_magic();
+    test_provider_loads_bundle_public_module();
+    test_provider_rejects_duplicate_bundle_module();
+    test_provider_rejects_bad_bundle_symbol_entry();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

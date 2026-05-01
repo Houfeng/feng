@@ -633,6 +633,8 @@ void feng_symbol_internal_imported_module_free(FengSymbolImportedModule *module)
     free(module->fits);
     module->fits = NULL;
     module->fit_count = 0U;
+    free(module->source_path);
+    module->source_path = NULL;
     feng_symbol_internal_module_free(module->module);
     module->module = NULL;
     module->profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;

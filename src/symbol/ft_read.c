@@ -743,6 +743,68 @@ static bool parse_relations(ReadContext *ctx,
     return true;
 }
 
+bool feng_symbol_ft_read_bytes_internal(const void *data,
+                                        size_t length,
+                                        const char *source_name,
+                                        const FengSymbolFtReadOptions *options,
+                                        FengSymbolGraph **out_graph,
+                                        FengSymbolError *out_error) {
+    ReadContext ctx;
+    FengSymbolGraph *graph = NULL;
+    FengSymbolModuleGraph *module_clone = NULL;
+    const unsigned char *bytes = (const unsigned char *)data;
+
+    if (out_graph == NULL || (bytes == NULL && length > 0U)) {
+        return false;
+    }
+    *out_graph = NULL;
+    memset(&ctx, 0, sizeof(ctx));
+
+    ctx.data = bytes;
+    ctx.length = length;
+
+    if (!parse_header(&ctx, source_name, options, out_error) ||
+        !load_required_sections(&ctx, source_name, out_error) ||
+        !parse_strings(&ctx, source_name, out_error) ||
+        !parse_symbols(&ctx, source_name, out_error) ||
+        !attach_decl_hierarchy(&ctx, source_name, out_error) ||
+        !parse_module_segments(&ctx, source_name, out_error) ||
+        !parse_attrs(&ctx, source_name, out_error) ||
+        !parse_spans(&ctx, source_name, out_error) ||
+        !parse_relations(&ctx, source_name, out_error)) {
+        read_context_dispose(&ctx);
+        return false;
+    }
+
+    module_clone = feng_symbol_internal_module_clone(ctx.module,
+                                                     (FengSymbolProfile)ctx.header.profile,
+                                                     out_error);
+    if (module_clone == NULL) {
+        read_context_dispose(&ctx);
+        return false;
+    }
+
+    graph = (FengSymbolGraph *)calloc(1U, sizeof(*graph));
+    if (graph == NULL) {
+        feng_symbol_internal_module_free(module_clone);
+        read_context_dispose(&ctx);
+        return feng_symbol_internal_set_error(out_error,
+                                              source_name,
+                                              (FengToken){0},
+                                              "out of memory allocating symbol graph");
+    }
+    if (!feng_symbol_internal_graph_append_module(graph, module_clone, out_error)) {
+        feng_symbol_internal_module_free(module_clone);
+        feng_symbol_graph_free(graph);
+        read_context_dispose(&ctx);
+        return false;
+    }
+
+    *out_graph = graph;
+    read_context_dispose(&ctx);
+    return true;
+}
+
 bool feng_symbol_ft_read_file_internal(const char *path,
                                        const FengSymbolFtReadOptions *options,
                                        FengSymbolGraph **out_graph,
@@ -750,15 +812,12 @@ bool feng_symbol_ft_read_file_internal(const char *path,
     FILE *file = NULL;
     long length;
     unsigned char *data = NULL;
-    ReadContext ctx;
-    FengSymbolGraph *graph = NULL;
-    FengSymbolModuleGraph *module_clone = NULL;
+    bool ok;
 
     if (out_graph == NULL || path == NULL) {
         return false;
     }
     *out_graph = NULL;
-    memset(&ctx, 0, sizeof(ctx));
 
     file = fopen(path, "rb");
     if (file == NULL) {
@@ -793,50 +852,10 @@ bool feng_symbol_ft_read_file_internal(const char *path,
         return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "failed to read symbol table bytes");
     }
     fclose(file);
-    file = NULL;
 
-    ctx.data = data;
-    ctx.length = (size_t)length;
-
-    if (!parse_header(&ctx, path, options, out_error) ||
-        !load_required_sections(&ctx, path, out_error) ||
-        !parse_strings(&ctx, path, out_error) ||
-        !parse_symbols(&ctx, path, out_error) ||
-        !attach_decl_hierarchy(&ctx, path, out_error) ||
-        !parse_module_segments(&ctx, path, out_error) ||
-        !parse_attrs(&ctx, path, out_error) ||
-        !parse_spans(&ctx, path, out_error) ||
-        !parse_relations(&ctx, path, out_error)) {
-        free(data);
-        read_context_dispose(&ctx);
-        return false;
-    }
-
-    module_clone = feng_symbol_internal_module_clone(ctx.module,
-                                                     (FengSymbolProfile)ctx.header.profile,
-                                                     out_error);
-    if (module_clone == NULL) {
-        free(data);
-        read_context_dispose(&ctx);
-        return false;
-    }
-
-    graph = (FengSymbolGraph *)calloc(1U, sizeof(*graph));
-    if (graph == NULL || !feng_symbol_internal_graph_append_module(graph, module_clone, out_error)) {
-        if (graph != NULL) {
-            feng_symbol_graph_free(graph);
-        } else {
-            feng_symbol_internal_module_free(module_clone);
-        }
-        free(data);
-        read_context_dispose(&ctx);
-        return false;
-    }
-
-    *out_graph = graph;
+    ok = feng_symbol_ft_read_bytes_internal(data, (size_t)length, path, options, out_graph, out_error);
     free(data);
-    read_context_dispose(&ctx);
-    return true;
+    return ok;
 }
 
 

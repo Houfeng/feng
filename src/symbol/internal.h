@@ -107,6 +107,7 @@ struct FengSymbolFitView {
 struct FengSymbolImportedModule {
     FengSymbolModuleGraph *module;
     FengSymbolProfile profile;
+    char *source_path;
     FengSymbolFitView *fits;
     size_t fit_count;
 };

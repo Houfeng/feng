@@ -27,6 +27,10 @@ bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
                                       FengSymbolProfile profile,
                                       FengSymbolError *out_error);
 
+bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
+                                     const char *bundle_path,
+                                     FengSymbolError *out_error);
+
 const FengSymbolImportedModule *feng_symbol_provider_find_module(
     const FengSymbolProvider *provider,
     const FengSlice *segments,

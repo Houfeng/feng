@@ -6,8 +6,14 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "archive/zip.h"
 #include "symbol/ft.h"
 #include "symbol/internal.h"
+
+typedef enum ProviderDuplicatePolicy {
+    PROVIDER_DUPLICATE_PREFER_PROFILE,
+    PROVIDER_DUPLICATE_REJECT
+} ProviderDuplicatePolicy;
 
 static FengSlice slice_from_cstr(const char *text) {
     FengSlice slice = {0};
@@ -23,10 +29,123 @@ static bool cstr_equals_slice(const char *text, FengSlice slice) {
     return text != NULL && strlen(text) == slice.length && memcmp(text, slice.data, slice.length) == 0;
 }
 
+static bool cstr_equals_buffer(const char *text, const char *buffer, size_t length) {
+    return text != NULL && strlen(text) == length && memcmp(text, buffer, length) == 0;
+}
+
 static bool path_has_ft_extension(const char *path) {
     size_t length = strlen(path);
 
     return length >= 3U && strcmp(path + length - 3U, ".ft") == 0;
+}
+
+static bool bundle_entry_is_public_ft(const FengZipEntryInfo *entry) {
+    return entry != NULL && !entry->is_directory && strncmp(entry->path, "mod/", 4U) == 0 &&
+           entry->path[4] != '\0' && path_has_ft_extension(entry->path);
+}
+
+static char *module_name_dup(const FengSymbolModuleGraph *module) {
+    size_t index;
+    size_t total = 0U;
+    char *name;
+    size_t cursor = 0U;
+
+    if (module == NULL || module->segment_count == 0U) {
+        return feng_symbol_internal_dup_cstr("<anonymous>");
+    }
+    for (index = 0U; index < module->segment_count; ++index) {
+        if (module->segments[index] == NULL) {
+            return feng_symbol_internal_dup_cstr("<invalid>");
+        }
+        total += strlen(module->segments[index]);
+        if (index + 1U < module->segment_count) {
+            ++total;
+        }
+    }
+    name = (char *)malloc(total + 1U);
+    if (name == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < module->segment_count; ++index) {
+        size_t length = strlen(module->segments[index]);
+        memcpy(name + cursor, module->segments[index], length);
+        cursor += length;
+        if (index + 1U < module->segment_count) {
+            name[cursor++] = '.';
+        }
+    }
+    name[cursor] = '\0';
+    return name;
+}
+
+static char *bundle_entry_label_dup(const char *bundle_path, const char *entry_path) {
+    size_t bundle_length = strlen(bundle_path);
+    size_t entry_length = strlen(entry_path);
+    char *label = (char *)malloc(bundle_length + entry_length + 2U);
+
+    if (label == NULL) {
+        return NULL;
+    }
+    memcpy(label, bundle_path, bundle_length);
+    label[bundle_length] = '!';
+    memcpy(label + bundle_length + 1U, entry_path, entry_length);
+    label[bundle_length + entry_length + 1U] = '\0';
+    return label;
+}
+
+static bool module_matches_bundle_entry(const FengSymbolModuleGraph *module, const char *entry_path) {
+    size_t path_length = strlen(entry_path);
+    const char *cursor;
+    const char *limit;
+    size_t segment_index = 0U;
+
+    if (module == NULL || module->segment_count == 0U || path_length <= 7U ||
+        strncmp(entry_path, "mod/", 4U) != 0 || !path_has_ft_extension(entry_path)) {
+        return false;
+    }
+    cursor = entry_path + 4U;
+    limit = entry_path + path_length - 3U;
+    while (cursor < limit) {
+        const char *slash = memchr(cursor, '/', (size_t)(limit - cursor));
+        const char *segment_end = slash != NULL ? slash : limit;
+        size_t segment_length = (size_t)(segment_end - cursor);
+
+        if (segment_length == 0U || segment_index >= module->segment_count ||
+            !cstr_equals_buffer(module->segments[segment_index], cursor, segment_length)) {
+            return false;
+        }
+        ++segment_index;
+        if (slash == NULL) {
+            break;
+        }
+        cursor = slash + 1U;
+    }
+    return segment_index == module->segment_count;
+}
+
+static bool provider_reserve_modules(FengSymbolProvider *provider,
+                                     size_t min_capacity,
+                                     FengSymbolError *out_error) {
+    FengSymbolImportedModule *grown;
+    size_t new_capacity;
+
+    if (provider->module_capacity >= min_capacity) {
+        return true;
+    }
+    new_capacity = provider->module_capacity == 0U ? 8U : provider->module_capacity;
+    while (new_capacity < min_capacity) {
+        new_capacity *= 2U;
+    }
+    grown = (FengSymbolImportedModule *)realloc(provider->modules, new_capacity * sizeof(*grown));
+    if (grown == NULL) {
+        return feng_symbol_internal_set_error(out_error,
+                                              NULL,
+                                              (FengToken){0},
+                                              "out of memory growing imported module table");
+    }
+    provider->modules = grown;
+    provider->module_capacity = new_capacity;
+    return true;
 }
 
 static char *path_join(const char *lhs, const char *rhs) {
@@ -66,15 +185,58 @@ static bool module_matches_segments(const FengSymbolImportedModule *module,
     return true;
 }
 
+static bool module_matches_module(const FengSymbolImportedModule *existing,
+                                  const FengSymbolModuleGraph *incoming) {
+    size_t index;
+
+    if (existing == NULL || existing->module == NULL || incoming == NULL ||
+        existing->module->segment_count != incoming->segment_count) {
+        return false;
+    }
+    for (index = 0U; index < incoming->segment_count; ++index) {
+        const char *lhs = existing->module->segments[index];
+        const char *rhs = incoming->segments[index];
+        if (lhs == NULL || rhs == NULL || strcmp(lhs, rhs) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool provider_append_module(FengSymbolProvider *provider,
                                    FengSymbolImportedModule incoming,
+                                   ProviderDuplicatePolicy duplicate_policy,
                                    FengSymbolError *out_error) {
     size_t index;
 
     for (index = 0U; index < provider->module_count; ++index) {
-        if (module_matches_segments(&provider->modules[index],
-                                    (const FengSlice *)incoming.module->segments,
-                                    incoming.module->segment_count)) {
+        if (module_matches_module(&provider->modules[index], incoming.module)) {
+            if (duplicate_policy == PROVIDER_DUPLICATE_REJECT) {
+                char *module_name = module_name_dup(incoming.module);
+                const char *existing_source = provider->modules[index].source_path != NULL
+                                                  ? provider->modules[index].source_path
+                                                  : "<unknown>";
+                const char *incoming_source = incoming.source_path != NULL ? incoming.source_path : "<unknown>";
+                bool ok;
+
+                if (module_name == NULL) {
+                    feng_symbol_internal_imported_module_free(&incoming);
+                    return feng_symbol_internal_set_error(out_error,
+                                                          NULL,
+                                                          (FengToken){0},
+                                                          "out of memory reporting duplicate imported module");
+                }
+                ok = feng_symbol_internal_set_error(out_error,
+                                                    NULL,
+                                                    (FengToken){0},
+                                                    "duplicate imported module '%s' from '%s' and '%s'",
+                                                    module_name,
+                                                    existing_source,
+                                                    incoming_source);
+                free(module_name);
+                feng_symbol_internal_imported_module_free(&incoming);
+                return ok;
+            }
             if (incoming.profile >= provider->modules[index].profile) {
                 feng_symbol_internal_imported_module_free(&provider->modules[index]);
                 provider->modules[index] = incoming;
@@ -85,20 +247,9 @@ static bool provider_append_module(FengSymbolProvider *provider,
         }
     }
 
-    if (provider->module_count == provider->module_capacity) {
-        size_t new_capacity = provider->module_capacity == 0U ? 8U : provider->module_capacity * 2U;
-        FengSymbolImportedModule *grown = (FengSymbolImportedModule *)realloc(
-            provider->modules,
-            new_capacity * sizeof(*grown));
-        if (grown == NULL) {
-            feng_symbol_internal_imported_module_free(&incoming);
-            return feng_symbol_internal_set_error(out_error,
-                                                  incoming.module != NULL ? incoming.module->primary_path : NULL,
-                                                  (FengToken){0},
-                                                  "out of memory growing imported module table");
-        }
-        provider->modules = grown;
-        provider->module_capacity = new_capacity;
+    if (!provider_reserve_modules(provider, provider->module_count + 1U, out_error)) {
+        feng_symbol_internal_imported_module_free(&incoming);
+        return false;
     }
 
     provider->modules[provider->module_count++] = incoming;
@@ -201,6 +352,8 @@ static const FengSymbolDeclView *decl_public_member_at(const FengSymbolDeclView 
 
 static bool provider_add_graph_internal(FengSymbolProvider *provider,
                                         const FengSymbolGraph *graph,
+                                        ProviderDuplicatePolicy duplicate_policy,
+                                        const char *source_path,
                                         FengSymbolError *out_error) {
     size_t module_index;
 
@@ -210,12 +363,24 @@ static bool provider_add_graph_internal(FengSymbolProvider *provider,
 
         imported.profile = module->profile != 0 ? module->profile : FENG_SYMBOL_PROFILE_WORKSPACE_CACHE;
         imported.module = feng_symbol_internal_module_clone(module, imported.profile, out_error);
-        if (imported.module == NULL ||
-            !feng_symbol_internal_imported_module_init_fit_views(&imported, out_error) ||
-            !provider_append_module(provider, imported, out_error)) {
-            if (imported.module != NULL) {
+        if (imported.module == NULL) {
+            return false;
+        }
+        if (source_path != NULL) {
+            imported.source_path = feng_symbol_internal_dup_cstr(source_path);
+            if (imported.source_path == NULL) {
                 feng_symbol_internal_imported_module_free(&imported);
+                return feng_symbol_internal_set_error(out_error,
+                                                      NULL,
+                                                      (FengToken){0},
+                                                      "out of memory recording imported module source");
             }
+        }
+        if (!feng_symbol_internal_imported_module_init_fit_views(&imported, out_error)) {
+            feng_symbol_internal_imported_module_free(&imported);
+            return false;
+        }
+        if (!provider_append_module(provider, imported, duplicate_policy, out_error)) {
             return false;
         }
     }
@@ -284,7 +449,11 @@ static bool provider_load_ft_tree(FengSymbolProvider *provider,
             FengSymbolFtReadOptions options = {.expected_profile = profile};
             FengSymbolGraph *graph = NULL;
             bool ok = feng_symbol_ft_read_file(path, &options, &graph, out_error) &&
-                      provider_add_graph_internal(provider, graph, out_error);
+                      provider_add_graph_internal(provider,
+                                                  graph,
+                                                  PROVIDER_DUPLICATE_PREFER_PROFILE,
+                                                  root_path,
+                                                  out_error);
             feng_symbol_graph_free(graph);
             free(path);
             if (!ok) {
@@ -298,6 +467,176 @@ static bool provider_load_ft_tree(FengSymbolProvider *provider,
     }
 
     closedir(dir);
+    return true;
+}
+
+static bool provider_set_zip_error(FengSymbolError *out_error,
+                                   const char *bundle_path,
+                                   const char *message,
+                                   char *zip_error) {
+    bool ok = feng_symbol_internal_set_error(out_error,
+                                             bundle_path,
+                                             (FengToken){0},
+                                             "%s: %s",
+                                             message,
+                                             zip_error != NULL ? zip_error : "unknown archive error");
+    free(zip_error);
+    return ok;
+}
+
+static void provider_dispose_contents(FengSymbolProvider *provider) {
+    size_t index;
+
+    if (provider == NULL) {
+        return;
+    }
+    for (index = 0U; index < provider->module_count; ++index) {
+        feng_symbol_internal_imported_module_free(&provider->modules[index]);
+    }
+    free(provider->modules);
+    memset(provider, 0, sizeof(*provider));
+}
+
+static bool provider_validate_bundle_graph(const FengSymbolGraph *graph,
+                                           const char *bundle_path,
+                                           const char *entry_path,
+                                           FengSymbolError *out_error) {
+    const FengSymbolModuleGraph *module;
+    char *module_name;
+    bool ok;
+
+    if (feng_symbol_graph_module_count(graph) != 1U) {
+        return feng_symbol_internal_set_error(out_error,
+                                              bundle_path,
+                                              (FengToken){0},
+                                              "bundle entry '%s' must contain exactly one module symbol table",
+                                              entry_path);
+    }
+    module = feng_symbol_graph_module_at(graph, 0U);
+    if (module_matches_bundle_entry(module, entry_path)) {
+        return true;
+    }
+
+    module_name = module_name_dup(module);
+    if (module_name == NULL) {
+        return feng_symbol_internal_set_error(out_error,
+                                              bundle_path,
+                                              (FengToken){0},
+                                              "out of memory reporting bundle module path mismatch");
+    }
+    ok = feng_symbol_internal_set_error(out_error,
+                                        bundle_path,
+                                        (FengToken){0},
+                                        "bundle entry '%s' declares module '%s'",
+                                        entry_path,
+                                        module_name);
+    free(module_name);
+    return ok;
+}
+
+static bool provider_load_bundle_entry(FengSymbolProvider *staging,
+                                       const FengZipReader *reader,
+                                       const char *bundle_path,
+                                       const char *entry_path,
+                                       FengSymbolError *out_error) {
+    void *data = NULL;
+    size_t data_size = 0U;
+    char *zip_error = NULL;
+    char *source_label = NULL;
+    FengSymbolFtReadOptions options = {.expected_profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC};
+    FengSymbolGraph *graph = NULL;
+    FengSymbolError entry_error = {0};
+    bool ok;
+
+    if (!feng_zip_reader_read(reader, entry_path, &data, &data_size, &zip_error)) {
+        return provider_set_zip_error(out_error, bundle_path, "failed to read bundle symbol entry", zip_error);
+    }
+
+    source_label = bundle_entry_label_dup(bundle_path, entry_path);
+    if (source_label == NULL) {
+        feng_zip_free(data);
+        return feng_symbol_internal_set_error(out_error,
+                                              bundle_path,
+                                              (FengToken){0},
+                                              "out of memory describing bundle symbol entry");
+    }
+
+    if (!feng_symbol_ft_read_bytes(data, data_size, source_label, &options, &graph, &entry_error)) {
+        ok = feng_symbol_internal_set_error(out_error,
+                                            bundle_path,
+                                            (FengToken){0},
+                                            "failed to load bundle symbol entry '%s': %s",
+                                            entry_path,
+                                            entry_error.message != NULL ? entry_error.message : "invalid symbol table");
+        feng_symbol_error_free(&entry_error);
+        free(source_label);
+        feng_zip_free(data);
+        return ok;
+    }
+    feng_zip_free(data);
+
+    if (!provider_validate_bundle_graph(graph, bundle_path, entry_path, out_error) ||
+        !provider_add_graph_internal(staging,
+                                     graph,
+                                     PROVIDER_DUPLICATE_REJECT,
+                                     source_label,
+                                     out_error)) {
+        feng_symbol_graph_free(graph);
+        free(source_label);
+        return false;
+    }
+
+    feng_symbol_graph_free(graph);
+    free(source_label);
+    return true;
+}
+
+static bool provider_merge_staged_modules(FengSymbolProvider *provider,
+                                          FengSymbolProvider *staging,
+                                          FengSymbolError *out_error) {
+    size_t index;
+
+    for (index = 0U; index < staging->module_count; ++index) {
+        size_t existing_index;
+
+        for (existing_index = 0U; existing_index < provider->module_count; ++existing_index) {
+            if (module_matches_module(&provider->modules[existing_index], staging->modules[index].module)) {
+                char *module_name = module_name_dup(staging->modules[index].module);
+                const char *existing_source = provider->modules[existing_index].source_path != NULL
+                                                  ? provider->modules[existing_index].source_path
+                                                  : "<unknown>";
+                const char *incoming_source = staging->modules[index].source_path != NULL
+                                                  ? staging->modules[index].source_path
+                                                  : "<unknown>";
+                bool ok;
+
+                if (module_name == NULL) {
+                    return feng_symbol_internal_set_error(out_error,
+                                                          NULL,
+                                                          (FengToken){0},
+                                                          "out of memory reporting duplicate imported module");
+                }
+                ok = feng_symbol_internal_set_error(out_error,
+                                                    NULL,
+                                                    (FengToken){0},
+                                                    "duplicate imported module '%s' from '%s' and '%s'",
+                                                    module_name,
+                                                    existing_source,
+                                                    incoming_source);
+                free(module_name);
+                return ok;
+            }
+        }
+    }
+
+    if (!provider_reserve_modules(provider, provider->module_count + staging->module_count, out_error)) {
+        return false;
+    }
+    for (index = 0U; index < staging->module_count; ++index) {
+        provider->modules[provider->module_count++] = staging->modules[index];
+        memset(&staging->modules[index], 0, sizeof(staging->modules[index]));
+    }
+    staging->module_count = 0U;
     return true;
 }
 
@@ -319,7 +658,11 @@ bool feng_symbol_provider_add_graph(FengSymbolProvider *provider,
     if (provider == NULL || graph == NULL) {
         return false;
     }
-    return provider_add_graph_internal(provider, graph, out_error);
+    return provider_add_graph_internal(provider,
+                                       graph,
+                                       PROVIDER_DUPLICATE_PREFER_PROFILE,
+                                       NULL,
+                                       out_error);
 }
 
 bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
@@ -330,6 +673,50 @@ bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
         return false;
     }
     return provider_load_ft_tree(provider, root_path, profile, out_error);
+}
+
+bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
+                                     const char *bundle_path,
+                                     FengSymbolError *out_error) {
+    FengZipReader reader = {0};
+    FengSymbolProvider staging = {0};
+    char *zip_error = NULL;
+    size_t entry_count;
+    size_t index;
+
+    if (provider == NULL || bundle_path == NULL) {
+        return false;
+    }
+    if (!feng_zip_reader_open(bundle_path, &reader, &zip_error)) {
+        return provider_set_zip_error(out_error, bundle_path, "failed to open bundle", zip_error);
+    }
+
+    entry_count = feng_zip_reader_entry_count(&reader);
+    for (index = 0U; index < entry_count; ++index) {
+        FengZipEntryInfo entry;
+
+        if (!feng_zip_reader_entry_at(&reader, index, &entry, &zip_error)) {
+            provider_dispose_contents(&staging);
+            feng_zip_reader_dispose(&reader);
+            return provider_set_zip_error(out_error, bundle_path, "failed to inspect bundle entry", zip_error);
+        }
+        if (!bundle_entry_is_public_ft(&entry)) {
+            continue;
+        }
+        if (!provider_load_bundle_entry(&staging, &reader, bundle_path, entry.path, out_error)) {
+            provider_dispose_contents(&staging);
+            feng_zip_reader_dispose(&reader);
+            return false;
+        }
+    }
+
+    feng_zip_reader_dispose(&reader);
+    if (!provider_merge_staged_modules(provider, &staging, out_error)) {
+        provider_dispose_contents(&staging);
+        return false;
+    }
+    provider_dispose_contents(&staging);
+    return true;
 }
 
 const FengSymbolImportedModule *feng_symbol_provider_find_module(
@@ -543,14 +930,9 @@ bool feng_symbol_type_array_layer_writable(const FengSymbolTypeView *type, size_
 }
 
 void feng_symbol_provider_free(FengSymbolProvider *provider) {
-    size_t index;
-
     if (provider == NULL) {
         return;
     }
-    for (index = 0U; index < provider->module_count; ++index) {
-        feng_symbol_internal_imported_module_free(&provider->modules[index]);
-    }
-    free(provider->modules);
+    provider_dispose_contents(provider);
     free(provider);
 }

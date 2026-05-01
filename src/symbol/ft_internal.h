@@ -172,5 +172,12 @@ bool feng_symbol_ft_read_file_internal(const char *path,
                                        FengSymbolGraph **out_graph,
                                        FengSymbolError *out_error);
 
+bool feng_symbol_ft_read_bytes_internal(const void *data,
+                                        size_t length,
+                                        const char *source_name,
+                                        const FengSymbolFtReadOptions *options,
+                                        FengSymbolGraph **out_graph,
+                                        FengSymbolError *out_error);
+
 #endif /* FENG_SYMBOL_FT_INTERNAL_H */
 
