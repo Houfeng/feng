@@ -1,0 +1,6 @@
+[package]
+name: "local_dep"
+version: "0.1.0"
+target: "lib"
+src: "src/"
+out: "build/"

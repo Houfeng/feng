@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "archive/fb.h"
+#include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
 static void print_usage(const char *program) {
@@ -81,6 +82,9 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     bool release = false;
     FengCliProjectContext context = {0};
     FengCliProjectError project_error = {0};
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectManifestDependency *direct_dependencies = NULL;
+    size_t direct_dependency_count = 0U;
     FengFbLibraryBundleSpec spec = {0};
     char *library_path = NULL;
     char *public_mod_root = NULL;
@@ -101,7 +105,20 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
                 program);
         goto done;
     }
-    rc = feng_cli_project_invoke_direct_compile(program, &context, release);
+    if (!feng_cli_deps_resolve_for_manifest(program,
+                                            context.manifest_path,
+                                            false,
+                                            &resolved,
+                                            &project_error)) {
+        feng_cli_project_print_error(stderr, &project_error);
+        rc = 1;
+        goto done;
+    }
+    rc = feng_cli_project_invoke_direct_compile_with_packages(program,
+                                                              &context,
+                                                              release,
+                                                              resolved.package_count,
+                                                              (const char *const *)resolved.package_paths);
     if (rc != 0) {
         goto done;
     }
@@ -120,11 +137,22 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         rc = 1;
         goto done;
     }
+    if (!feng_cli_deps_normalize_direct_dependencies(context.manifest_path,
+                                                     &context.manifest,
+                                                     &direct_dependencies,
+                                                     &direct_dependency_count,
+                                                     &project_error)) {
+        feng_cli_project_print_error(stderr, &project_error);
+        rc = 1;
+        goto done;
+    }
 
     spec.package_path = context.package_path;
     spec.package_name = context.manifest.name;
     spec.package_version = context.manifest.version;
     spec.library_path = library_path;
+    spec.dependencies = (const FengFbBundleDependency *)direct_dependencies;
+    spec.dependency_count = direct_dependency_count;
     spec.public_mod_root = public_mod_root;
 
     if (!feng_fb_write_library_bundle(&spec, &error_message)) {
@@ -138,6 +166,8 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     rc = 0;
 
 done:
+    feng_cli_deps_resolved_dispose(&resolved);
+    feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
     free(error_message);
     free(public_mod_root);
     free(library_path);

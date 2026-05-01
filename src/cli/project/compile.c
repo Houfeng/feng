@@ -21,15 +21,18 @@ static char *dup_printf(const char *fmt, const char *value) {
     return out;
 }
 
-int feng_cli_project_invoke_direct_compile(const char *program,
-                                           const FengCliProjectContext *context,
-                                           bool release) {
-    size_t argc = context->source_count + 3U + (release ? 1U : 0U);
+int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
+                                                         const FengCliProjectContext *context,
+                                                         bool release,
+                                                         size_t package_count,
+                                                         const char *const *package_paths) {
+    size_t argc = context->source_count + 3U + (release ? 1U : 0U) + package_count * 2U;
     char **argv = (char **)calloc(argc, sizeof(*argv));
     char *target_opt = NULL;
     char *out_opt = NULL;
     char *name_opt = NULL;
     size_t index;
+    size_t cursor;
     int rc = 1;
 
     if (argv == NULL) {
@@ -52,11 +55,16 @@ int feng_cli_project_invoke_direct_compile(const char *program,
     argv[context->source_count] = target_opt;
     argv[context->source_count + 1U] = out_opt;
     argv[context->source_count + 2U] = name_opt;
+    cursor = context->source_count + 3U;
     if (release) {
-        argv[context->source_count + 3U] = "--release";
+        argv[cursor++] = "--release";
+    }
+    for (index = 0U; index < package_count; ++index) {
+        argv[cursor++] = "--pkg";
+        argv[cursor++] = (char *)package_paths[index];
     }
 
-    rc = feng_cli_direct_main(program, (int)argc, argv);
+    rc = feng_cli_direct_main(program, (int)cursor, argv);
 
 cleanup:
     free(name_opt);
@@ -64,4 +72,14 @@ cleanup:
     free(target_opt);
     free(argv);
     return rc;
+}
+
+int feng_cli_project_invoke_direct_compile(const char *program,
+                                           const FengCliProjectContext *context,
+                                           bool release) {
+    return feng_cli_project_invoke_direct_compile_with_packages(program,
+                                                                context,
+                                                                release,
+                                                                0U,
+                                                                NULL);
 }

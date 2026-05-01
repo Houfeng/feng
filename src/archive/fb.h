@@ -2,12 +2,20 @@
 #define FENG_ARCHIVE_FB_H
 
 #include <stdbool.h>
+#include <stddef.h>
+
+typedef struct FengFbBundleDependency {
+    const char *name;
+    const char *version;
+} FengFbBundleDependency;
 
 typedef struct FengFbLibraryBundleSpec {
     const char *package_path;
     const char *package_name;
     const char *package_version;
     const char *library_path;
+    const FengFbBundleDependency *dependencies;
+    size_t dependency_count;
     /* Optional. When non-NULL, the entire directory tree at this path is
      * mirrored into the `.fb` archive under `mod/`. Only files whose name
      * ends with `.ft` are included; intermediate directories are added so

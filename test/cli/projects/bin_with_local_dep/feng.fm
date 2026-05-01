@@ -1,0 +1,9 @@
+[package]
+name: "local_dep_app"
+version: "0.1.0"
+target: "bin"
+src: "src/"
+out: "build/"
+
+[dependencies]
+local_dep: "../local_dep_lib"

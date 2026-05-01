@@ -242,22 +242,26 @@ static bool collect_sources_recursive(const char *root,
     return true;
 }
 
-static char *resolve_manifest_path(const char *path_arg, FengCliProjectError *error) {
+bool feng_cli_project_resolve_manifest_path(const char *path_arg,
+                                            char **out_manifest_path,
+                                            FengCliProjectError *error) {
     struct stat st;
     char cwd_buffer[4096];
     char *base_path = NULL;
     char *manifest_path = NULL;
     char *resolved = NULL;
 
+    *out_manifest_path = NULL;
+
     if (path_arg == NULL) {
         if (getcwd(cwd_buffer, sizeof(cwd_buffer)) == NULL) {
             set_error(error, NULL, 0U, "failed to resolve current directory: %s", strerror(errno));
-            return NULL;
+            return false;
         }
         base_path = dup_cstr(cwd_buffer);
         if (base_path == NULL) {
             set_error(error, NULL, 0U, "out of memory");
-            return NULL;
+            return false;
         }
         manifest_path = path_join(base_path, "feng.fm");
         free(base_path);
@@ -266,7 +270,7 @@ static char *resolve_manifest_path(const char *path_arg, FengCliProjectError *er
         resolved = realpath(path_arg, NULL);
         if (resolved == NULL) {
             set_error(error, path_arg, 0U, "failed to resolve project directory: %s", strerror(errno));
-            return NULL;
+            return false;
         }
         manifest_path = path_join(resolved, "feng.fm");
         free(resolved);
@@ -274,20 +278,21 @@ static char *resolve_manifest_path(const char *path_arg, FengCliProjectError *er
         manifest_path = realpath(path_arg, NULL);
         if (manifest_path == NULL) {
             set_error(error, path_arg, 0U, "failed to resolve manifest path: %s", strerror(errno));
-            return NULL;
+            return false;
         }
     }
 
     if (manifest_path == NULL) {
         set_error(error, path_arg, 0U, "out of memory");
-        return NULL;
+        return false;
     }
     if (stat(manifest_path, &st) != 0 || !S_ISREG(st.st_mode)) {
         set_error(error, manifest_path, 0U, "manifest file not found");
         free(manifest_path);
-        return NULL;
+        return false;
     }
-    return manifest_path;
+    *out_manifest_path = manifest_path;
+    return true;
 }
 
 static char *resolve_project_path(const char *project_root, const char *raw_path) {
@@ -348,8 +353,7 @@ bool feng_cli_project_open(const char *path_arg,
         return false;
     }
 
-    context.manifest_path = resolve_manifest_path(path_arg, out_error);
-    if (context.manifest_path == NULL) {
+    if (!feng_cli_project_resolve_manifest_path(path_arg, &context.manifest_path, out_error)) {
         return false;
     }
     manifest_source = feng_cli_read_entire_file(context.manifest_path, &manifest_length);

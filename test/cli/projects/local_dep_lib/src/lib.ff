@@ -1,0 +1,5 @@
+pu mod test.cli.localdep;
+
+pu fn dep_value(): int {
+  return 7;
+}

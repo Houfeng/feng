@@ -90,7 +90,7 @@ extern fn ssl_connect(fd: int): int;
 
 ### 3.1 读取项目清单
 
-构建工具读取项目根目录的 `feng.fm`。CLI 传入的 `<path>` 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径。`feng deps install` 使用同样的 `<path>` 规则;`feng deps add` 与 `feng deps remove` 也支持 `<path>`,并将其作为第二个位置参数。项目开发阶段与发布包共用同一格式,区别在于:
+构建工具读取项目根目录的 `feng.fm`。CLI 传入的 `<path>` 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径。`feng deps install` 使用同样的 `<path>` 规则;`feng deps add` 与 `feng deps remove` 也支持 `<path>`。项目开发阶段与发布包共用同一格式,区别在于:
 
 - 开发项目的 `feng.fm` 可以省略 `abi` 字段（或留空），表示"不作为包发布"
 - 发布为 `.fb` 时，`abi` 字段必须存在且与包内目录结构一致
@@ -108,13 +108,15 @@ extern fn ssl_connect(fd: int): int;
 ### 3.2 依赖解析
 
 1. 读取 `feng.fm` 的 `[dependencies]` 节,收集直接依赖列表
-2. 每个依赖都使用 `feng.fm` 中记录的精确版本,不支持版本范围或“最新兼容版本”语义
-3. 对每个依赖检查本地缓存是否已安装;若未安装,立即拉取对应 `.fb` 包到本地缓存
-4. 递归读取每个依赖包内的 `feng.fm`,展开完整依赖图,并按同样规则安装其传递依赖
-5. 若两个不同包依赖同一包的不同精确版本,构建工具报冲突错误,要求用户显式消解版本分歧
-6. 依赖图锁定后,构建工具将其展平成一组确定的 `.fb` 路径列表,作为后续 `--pkg` 参数输入给编译器
+2. 对每个依赖按 [feng-package.md](./feng-package.md) 的规则判定是精确版本还是本地路径
+3. 对远程精确版本依赖检查本地缓存;若未安装或指定了 `--force`,立即从 registry 拉取对应 `.fb` 包到本地缓存
+4. 对本地路径依赖做目标解析: `.fb` 直接纳入图; 目录或显式 `feng.fm` 解析为本地 `target: "lib"` 项目,递归构建后纳入图
+5. 递归读取每个依赖项目或 `.fb` 包内的 `feng.fm`,继续展开其传递依赖
+6. 若两个不同分支依赖同一包的不同精确版本,构建工具报冲突错误,要求用户显式消解版本分歧
+7. 若本地项目依赖图出现循环,构建工具立即报错
+8. 依赖图锁定后,构建工具将其展平成一组确定的 `.fb` 路径列表,作为后续 `--pkg` 参数输入给编译器
 
-`feng deps add` 在写入 `feng.fm` 后立即触发该安装流程。`feng deps install` 会按 `feng.fm` 中声明的精确版本检查并安装全部依赖;默认只安装尚未安装的依赖,传入 `--force` 时强制重新安装全部依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`;其中 `feng pack` 固定使用 `feng build --release`。
+`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`; 其中 `feng pack` 固定使用 `feng build --release`。
 
 ### 3.3 模块名冲突预检
 

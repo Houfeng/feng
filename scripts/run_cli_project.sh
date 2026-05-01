@@ -7,7 +7,10 @@ RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
 FIXTURE="$ROOT/test/cli/projects/bin_hello"
 LIB_FIXTURE="$ROOT/test/cli/projects/lib_hello"
 INVALID_FIXTURE="$ROOT/test/cli/projects/bin_hello_invalid"
+LOCAL_DEP_FIXTURE="$ROOT/test/cli/projects/local_dep_lib"
+LOCAL_DEP_APP_FIXTURE="$ROOT/test/cli/projects/bin_with_local_dep"
 EXPECTED="$ROOT/test/cli/projects/bin_hello.expected"
+LOCAL_DEP_EXPECTED="$ROOT/test/cli/projects/bin_with_local_dep.expected"
 WORK="$(mktemp -d -t feng_cli_project_XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -155,6 +158,8 @@ fi
 
 rm -rf "$FIXTURE/build"
 rm -rf "$LIB_FIXTURE/build"
+rm -rf "$LOCAL_DEP_FIXTURE/build"
+rm -rf "$LOCAL_DEP_APP_FIXTURE/build"
 
 if expect_ok build "$FENG" build "$FIXTURE"; then
     bin="$FIXTURE/build/bin/hello_project"
@@ -199,6 +204,39 @@ if expect_ok run "$FENG" run "$FIXTURE"; then
     expected_text="$(cat "$EXPECTED")"
     if [[ "$actual" != "$expected_text" ]]; then
         echo "FAIL[run] stdout mismatch"
+        echo "  expected: $expected_text"
+        echo "  actual:   $actual"
+        failures=$((failures + 1))
+    fi
+fi
+
+if expect_ok build_local_dep_app "$FENG" build "$LOCAL_DEP_APP_FIXTURE"; then
+    bin="$LOCAL_DEP_APP_FIXTURE/build/bin/local_dep_app"
+    dep_bundle="$LOCAL_DEP_FIXTURE/build/local_dep-0.1.0.fb"
+    if [[ ! -x "$bin" ]]; then
+        echo "FAIL[build_local_dep_app] missing executable $bin"
+        failures=$((failures + 1))
+    else
+        actual="$($bin)"
+        expected_text="$(cat "$LOCAL_DEP_EXPECTED")"
+        if [[ "$actual" != "$expected_text" ]]; then
+            echo "FAIL[build_local_dep_app] stdout mismatch"
+            echo "  expected: $expected_text"
+            echo "  actual:   $actual"
+            failures=$((failures + 1))
+        fi
+    fi
+    if [[ ! -f "$dep_bundle" ]]; then
+        echo "FAIL[build_local_dep_app] missing local dependency bundle $dep_bundle"
+        failures=$((failures + 1))
+    fi
+fi
+
+if expect_ok run_local_dep_app "$FENG" run "$LOCAL_DEP_APP_FIXTURE"; then
+    actual="$(cat "$WORK/run_local_dep_app.out")"
+    expected_text="$(cat "$LOCAL_DEP_EXPECTED")"
+    if [[ "$actual" != "$expected_text" ]]; then
+        echo "FAIL[run_local_dep_app] stdout mismatch"
         echo "  expected: $expected_text"
         echo "  actual:   $actual"
         failures=$((failures + 1))

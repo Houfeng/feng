@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cli/common.h"
+#include "cli/deps/manager.h"
 #include "cli/frontend.h"
 #include "cli/project/common.h"
 
@@ -239,6 +240,7 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     CheckOutputFormat format = CHECK_OUTPUT_TEXT;
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
+    FengCliDepsResolved resolved = {0};
     FengCliFrontendInput input;
     FengCliFrontendCallbacks callbacks;
     JsonState json_state = { .first = true };
@@ -252,12 +254,23 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
         feng_cli_project_error_dispose(&error);
         return 1;
     }
+    if (!feng_cli_deps_resolve_for_manifest(program,
+                                            context.manifest_path,
+                                            false,
+                                            &resolved,
+                                            &error)) {
+        feng_cli_project_print_error(stderr, &error);
+        feng_cli_deps_resolved_dispose(&resolved);
+        feng_cli_project_context_dispose(&context);
+        feng_cli_project_error_dispose(&error);
+        return 1;
+    }
 
     input.path_count = (int)context.source_count;
     input.paths = context.source_paths;
     input.target = context.manifest.target;
-    input.package_path_count = 0;
-    input.package_paths = NULL;
+    input.package_path_count = (int)resolved.package_count;
+    input.package_paths = (const char **)resolved.package_paths;
 
     if (format == CHECK_OUTPUT_JSON) {
         fputs("[\n", stdout);
@@ -278,6 +291,7 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
         fputs("\n]\n", stdout);
     }
 
+    feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&context);
     return rc;
 }

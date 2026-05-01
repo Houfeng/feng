@@ -200,18 +200,20 @@ feng pack [<path>]
 用法:
 
 ```text
-feng deps add <pkg-name[@version]> [<path>]
+feng deps add <pkg-name> <version-or-path> [<path>]
 ```
 
 选项:
 
-- `<pkg-name[@version]>`: 包名,可附加 `@version` 指定版本,例如 `feng deps add mylib@1.2`。若包已存在,覆盖其版本记录并重新拉取该依赖，省略版本时将安装最新版。
+- `<pkg-name>`: 依赖包名。
+- `<version-or-path>`: 精确版本字符串,或以 `./`、`../`、`/` 开头的本地路径。
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 
 说明:
 
-- `deps add` 的 `<path>` 为第二个位置参数。
-- `deps add` 在写入 `feng.fm` 后立即拉取依赖,确保本地安装状态与清单一致。
+- `deps add` 的 `<path>` 为第三个位置参数。
+- 若 `<version-or-path>` 是远程精确版本,`deps add` 在写入 `feng.fm` 后立即安装或校验缓存。
+- 若 `<version-or-path>` 是本地路径,`deps add` 在写入前先校验目标是否合法,但不触发构建。
 
 ### 5.2 `feng deps remove`
 

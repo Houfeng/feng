@@ -67,6 +67,32 @@ static char *dup_printf(const char *fmt, ...) {
     return out;
 }
 
+static bool appendf(char **buffer, size_t *length, const char *fmt, ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *resized;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return false;
+    }
+    resized = (char *)realloc(*buffer, *length + (size_t)needed + 1U);
+    if (resized == NULL) {
+        va_end(args_copy);
+        return false;
+    }
+    *buffer = resized;
+    vsnprintf(*buffer + *length, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    *length += (size_t)needed;
+    return true;
+}
+
 static const char *path_basename(const char *path) {
     const char *slash;
 
@@ -217,17 +243,36 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
                                  char **out_error_message) {
     FengZipWriter writer = {0};
     char *manifest = NULL;
+    size_t manifest_length = 0U;
     char *host_lib_dir = NULL;
     char *library_entry_path = NULL;
+    size_t index;
     bool ok = false;
 
-    manifest = dup_printf("[package]\nname: \"%s\"\nversion: \"%s\"\narch: \"%s\"\nabi: \"feng\"\n",
-                          spec->package_name,
-                          spec->package_version,
-                          host_target);
-    if (manifest == NULL) {
+    if (!appendf(&manifest,
+                 &manifest_length,
+                 "[package]\nname: \"%s\"\nversion: \"%s\"\narch: \"%s\"\nabi: \"feng\"\n",
+                 spec->package_name,
+                 spec->package_version,
+                 host_target)) {
         set_errorf(out_error_message, "out of memory");
         goto done;
+    }
+    if (spec->dependency_count > 0U) {
+        if (!appendf(&manifest, &manifest_length, "\n[dependencies]\n")) {
+            set_errorf(out_error_message, "out of memory");
+            goto done;
+        }
+        for (index = 0U; index < spec->dependency_count; ++index) {
+            if (!appendf(&manifest,
+                         &manifest_length,
+                         "%s: \"%s\"\n",
+                         spec->dependencies[index].name,
+                         spec->dependencies[index].version)) {
+                set_errorf(out_error_message, "out of memory");
+                goto done;
+            }
+        }
     }
     host_lib_dir = dup_printf("lib/%s", host_target);
     if (host_lib_dir == NULL) {
