@@ -10784,9 +10784,39 @@ static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
     return true;
 }
 
+static bool spec_relation_source_visible_from_context(const ResolveContext *ctx,
+                                                      const FengSpecRelationSource *source) {
+    size_t index;
+
+    if (source == NULL) {
+        return false;
+    }
+    if (source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD ||
+        source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT) {
+        return true;
+    }
+    if (ctx == NULL) {
+        return false;
+    }
+    if (source->provider_module == ctx->module) {
+        return true;
+    }
+    if (source->via_fit_decl == NULL ||
+        source->via_fit_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return false;
+    }
+    for (index = 0U; index < ctx->imported_module_count; ++index) {
+        if (ctx->imported_modules[index].target_module == source->provider_module) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
                                           const FengDecl *type_decl,
                                           const FengDecl *spec_decl) {
+    const FengSpecRelation *relation;
     const FengDecl **closure = NULL;
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
@@ -10797,6 +10827,20 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
         type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
         return false;
     }
+
+    if (ctx != NULL && ctx->analysis != NULL) {
+        relation = feng_semantic_lookup_spec_relation(ctx->analysis, type_decl, spec_decl);
+        if (relation == NULL) {
+            return false;
+        }
+        for (i = 0U; i < relation->source_count; ++i) {
+            if (spec_relation_source_visible_from_context(ctx, &relation->sources[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     if (!collect_type_decl_satisfied_specs(ctx, type_decl, &closure,
                                            &closure_count, &closure_capacity)) {
         free(closure);
@@ -12214,19 +12258,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         ok = append_module_program(&analysis->modules[module_index], program);
     }
 
-    /* Phase S1a: spec satisfaction relation sidecar must be available
-     * during the resolve pass so coercion-site recording (Phase S1b) can
-     * link each site back to its justifying relation. The pass walks
-     * declared `satisfies` clauses and `fit` decls — pure AST data that
-     * does not depend on resolved types — so it is safe to run early.
-     * See dev/feng-spec-semantic-draft.md §10. */
-    if (ok && error_count == 0U) {
-        if (!feng_semantic_compute_spec_relations(analysis)) {
-            ok = false;
-            goto finish;
-        }
-    }
-
     /* Pre-inject synthetic FengSemanticModule entries for any external-package
      * 'use' targets.  After injection, find_module_index_by_path() finds them
      * like any local module, so check_symbol_conflicts and build_program_aliases
@@ -12253,6 +12284,19 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                     ok = add_external_module(analysis, ext);
                 }
             }
+        }
+    }
+
+    /* Phase S1a: spec satisfaction relation sidecar must be available
+     * during the resolve pass so coercion-site recording (Phase S1b) can
+     * link each site back to its justifying relation. Imported-package
+     * modules must already be injected before this pass runs so their
+     * declared_specs / parent_specs participate in the same relation table.
+     * See dev/feng-spec-semantic-draft.md §10. */
+    if (ok && error_count == 0U) {
+        if (!feng_semantic_compute_spec_relations(analysis)) {
+            ok = false;
+            goto finish;
         }
     }
 

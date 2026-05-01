@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cli/pkg_bridge.h"
 #include "parser/parser.h"
+#include "symbol/imported_module.h"
 #include "symbol/provider.h"
 
 static int load_and_parse(const FengCliFrontendInput *input,
@@ -106,8 +106,8 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
     int exit_code = 0;
-    FengCliPkgBridge *bridge = NULL;
-    FengSemanticImportedModuleQuery bridge_query = {0};
+    FengSymbolImportedModuleCache *imported_module_cache = NULL;
+    FengSemanticImportedModuleQuery imported_query = {0};
     FengSemanticAnalyzeOptions semantic_options = {0};
 
     if (input == NULL || input->path_count <= 0 || input->paths == NULL) {
@@ -136,14 +136,14 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
 
     semantic_options.target = input->target;
     if (provider != NULL) {
-        bridge = feng_cli_pkg_bridge_create(provider);
-        if (bridge == NULL) {
+        imported_module_cache = feng_symbol_imported_module_cache_create(provider);
+        if (imported_module_cache == NULL) {
             fprintf(stderr, "out of memory\n");
             exit_code = 1;
             goto cleanup;
         }
-        bridge_query = feng_cli_pkg_bridge_as_query(bridge);
-        semantic_options.imported_modules = &bridge_query;
+        imported_query = feng_symbol_imported_module_cache_as_query(imported_module_cache);
+        semantic_options.imported_modules = &imported_query;
     }
 
     if (!feng_semantic_analyze_with_options(programs,
@@ -186,12 +186,6 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
     }
 
 cleanup:
-    /* Free the bridge first (its synthetic FengDecl/FengProgram objects are no
-     * longer needed once semantic analysis is done).  Callers skip external
-     * modules in codegen/export, and feng_semantic_analysis_free only frees
-     * the programs-pointer-array it allocated — not the FengProgram objects
-     * themselves — so dangling pointers in external-module entries are safe. */
-    feng_cli_pkg_bridge_free(bridge);
     feng_symbol_provider_free(provider);
     feng_semantic_errors_free(errors, error_count);
     free(programs);
@@ -206,8 +200,13 @@ cleanup:
             *outputs->out_source_count = (size_t)input->path_count;
             sources = NULL;
         }
+        if (outputs->out_imported_module_cache != NULL) {
+            *outputs->out_imported_module_cache = imported_module_cache;
+            imported_module_cache = NULL;
+        }
     }
 
+    feng_symbol_imported_module_cache_free(imported_module_cache);
     feng_semantic_analysis_free(analysis);
     feng_cli_free_loaded_sources(sources, (size_t)input->path_count);
     return exit_code;

@@ -10,6 +10,7 @@
 #include "semantic/semantic.h"
 #include "symbol/export.h"
 #include "symbol/ft.h"
+#include "symbol/imported_module.h"
 #include "symbol/provider.h"
 #include "symbol/symbol.h"
 
@@ -486,6 +487,77 @@ static void test_provider_rejects_bad_bundle_symbol_entry(void) {
     free(tmp_dir);
 }
 
+static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.imported_cache;\n"
+        "pu fn answer(): int { return 42; }\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSemanticModule *first = NULL;
+    const FengSemanticModule *second = NULL;
+    const FengProgram *program = NULL;
+    const FengDecl *decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_cache_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/imported_cache.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_cache.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("imported_cache.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/imported_cache.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    ASSERT(query.user == cache);
+    ASSERT(query.get_module != NULL);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("imported_cache");
+
+    first = query.get_module(query.user, segments, 4U);
+    ASSERT(first != NULL);
+    ASSERT(first->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE);
+    ASSERT(first->program_count == 1U);
+    second = query.get_module(query.user, segments, 4U);
+    ASSERT(second == first);
+
+    ASSERT(query.get_module(query.user, segments, 3U) == NULL);
+
+    feng_symbol_provider_free(provider);
+    provider = NULL;
+
+    program = first->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl != NULL);
+    ASSERT(decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(slice_equals_cstr(decl->as.function_decl.name, "answer"));
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     test_roundtrip_public_module();
     test_private_module_skipped();
@@ -493,6 +565,7 @@ int main(void) {
     test_provider_loads_bundle_public_module();
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
+    test_imported_module_cache_keeps_synthesized_modules_alive();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

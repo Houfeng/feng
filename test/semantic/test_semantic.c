@@ -4,6 +4,9 @@
 
 #include "parser/parser.h"
 #include "semantic/semantic.h"
+#include "symbol/export.h"
+#include "symbol/imported_module.h"
+#include "symbol/provider.h"
 
 #define ASSERT(expr) \
     do { \
@@ -28,6 +31,53 @@ static FengProgram *parse_program_or_die(const char *path, const char *source) {
     }
     ASSERT(program != NULL);
     return program;
+}
+
+typedef struct ImportedSourceFixture {
+    FengProgram *program;
+    FengSemanticAnalysis *analysis;
+    FengSymbolGraph *graph;
+    FengSymbolProvider *provider;
+    FengSymbolImportedModuleCache *cache;
+    FengSymbolError error;
+} ImportedSourceFixture;
+
+static void imported_source_fixture_init(ImportedSourceFixture *fixture,
+                                         const char *path,
+                                         const char *source) {
+    const FengProgram *programs[1];
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(fixture, 0, sizeof(*fixture));
+    fixture->program = parse_program_or_die(path, source);
+    programs[0] = fixture->program;
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &fixture->analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_symbol_build_graph(fixture->analysis, &fixture->graph, &fixture->error));
+    ASSERT(feng_symbol_provider_create(&fixture->provider, &fixture->error));
+    ASSERT(feng_symbol_provider_add_graph(fixture->provider, fixture->graph, &fixture->error));
+    fixture->cache = feng_symbol_imported_module_cache_create(fixture->provider);
+    ASSERT(fixture->cache != NULL);
+}
+
+static void imported_source_fixture_dispose(ImportedSourceFixture *fixture) {
+    if (fixture == NULL) {
+        return;
+    }
+
+    feng_symbol_imported_module_cache_free(fixture->cache);
+    feng_symbol_provider_free(fixture->provider);
+    feng_symbol_graph_free(fixture->graph);
+    feng_semantic_analysis_free(fixture->analysis);
+    feng_program_free(fixture->program);
+    feng_symbol_error_free(&fixture->error);
 }
 
 /* --- AST call-expr traversal helpers (used by resolved-callable tests) --- */
@@ -4448,6 +4498,181 @@ static void test_external_use_module_accepted_via_import_query(void) {
     feng_program_free(program);
 }
 
+static void test_external_imported_function_argument_type_mismatch(void) {
+    const char *external_source =
+        "pu mod vendor.math;\n"
+        "pu fn add(a: int, b: int): int {\n"
+        "    return a + b;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.math as math;\n"
+        "fn run(): int {\n"
+        "    return math.add(\"oops\", 1);\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_add.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_fn_mismatch_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "external_fn_mismatch_main.f") == 0);
+    ASSERT(strstr(errors[0].message, "function 'math.add' has no overload accepting 2 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_function_argument_type_match(void) {
+    const char *external_source =
+        "pu mod vendor.math;\n"
+        "pu fn add(a: int, b: int): int {\n"
+        "    return a + b;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.math as math;\n"
+        "fn run(): int {\n"
+        "    return math.add(1, 2);\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_add_ok.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_fn_ok_main.f", main_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_field_type_participates_in_typecheck(void) {
+    const char *external_source =
+        "pu mod vendor.model;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.model as model;\n"
+        "fn project(user: model.User): int {\n"
+        "    return user.name;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_user.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_field_type_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "external_field_type_main.f") == 0);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_declared_specs_enable_spec_coercion(void) {
+    const char *external_source =
+        "pu mod vendor.api;\n"
+        "pu spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "pu type User: Named {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.api as api;\n"
+        "fn project(user: api.User): api.Named {\n"
+        "    return user;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_named.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_spec_coercion_main.f", main_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_undefined_identifier_in_function_body(void) {
     const char *source =
         "mod demo.main;\n"
@@ -8628,6 +8853,10 @@ int main(void) {
     test_duplicate_use_alias_in_same_file();
     test_unknown_use_module_rejected_without_import_query();
     test_external_use_module_accepted_via_import_query();
+    test_external_imported_function_argument_type_mismatch();
+    test_external_imported_function_argument_type_match();
+    test_external_imported_field_type_participates_in_typecheck();
+    test_external_imported_declared_specs_enable_spec_coercion();
     test_undefined_identifier_in_function_body();
     test_unknown_type_reference_in_function_signature();
     test_self_is_valid_inside_type_method();

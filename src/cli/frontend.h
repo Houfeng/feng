@@ -8,6 +8,8 @@
 #include "cli/common.h"
 #include "semantic/semantic.h"
 
+typedef struct FengSymbolImportedModuleCache FengSymbolImportedModuleCache;
+
 /*
  * Shared frontend pipeline used by `feng tool semantic`, `feng tool check`,
  * and (Phase 2 P4) the top-level direct compile mode.
@@ -25,8 +27,8 @@
  * On any failure (file IO, parse, semantic), feng_cli_frontend_run sets
  * *out_status to a non-zero exit code; on success status remains 0.
  *
- * On success the caller may take ownership of the produced analysis and
- * loaded sources via *out_analysis / *out_sources / *out_source_count.
+ * On success the caller may take ownership of the produced analysis,
+ * loaded sources, and imported-module cache via the matching out_* fields.
  * Pass NULL for any out_* the caller does not want; this releases the
  * pipeline-owned state automatically.
  */
@@ -68,6 +70,7 @@ typedef struct FengCliFrontendOutputs {
     FengSemanticAnalysis **out_analysis;
     FengCliLoadedSource **out_sources;
     size_t *out_source_count;
+    FengSymbolImportedModuleCache **out_imported_module_cache;
 } FengCliFrontendOutputs;
 
 /*
