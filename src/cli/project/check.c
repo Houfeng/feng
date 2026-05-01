@@ -256,6 +256,8 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     input.path_count = (int)context.source_count;
     input.paths = context.source_paths;
     input.target = context.manifest.target;
+    input.package_path_count = 0;
+    input.package_paths = NULL;
 
     if (format == CHECK_OUTPUT_JSON) {
         fputs("[\n", stdout);

@@ -275,6 +275,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         .path_count = opts.input_count,
         .paths = (char **)opts.inputs,
         .target = opts.target,
+        .package_path_count = opts.package_path_count,
+        .package_paths = opts.package_paths,
     };
     FengCliFrontendCallbacks callbacks = {
         .on_parse_error = on_parse_error,

@@ -4365,6 +4365,78 @@ static void test_duplicate_use_alias_in_same_file(void) {
     feng_program_free(main_program);
 }
 
+typedef struct ExternalModuleQueryFixture {
+    const char **segments;
+    size_t segment_count;
+    size_t call_count;
+} ExternalModuleQueryFixture;
+
+static bool external_module_query_exists(const void *user,
+                                         const FengSlice *segments,
+                                         size_t segment_count) {
+    ExternalModuleQueryFixture *fixture = (ExternalModuleQueryFixture *)user;
+    size_t index;
+
+    ASSERT(fixture != NULL);
+    ++fixture->call_count;
+    if (segment_count != fixture->segment_count) {
+        return false;
+    }
+    for (index = 0U; index < segment_count; ++index) {
+        const char *expected = fixture->segments[index];
+
+        if (strlen(expected) != segments[index].length ||
+            memcmp(expected, segments[index].data, segments[index].length) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void test_unknown_use_module_rejected_without_import_query(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "use vendor.math;\n"
+        "fn run() {}\n";
+    FengProgram *program = parse_program_or_die("unknown_use_external.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "use target module 'vendor.math'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_external_use_module_accepted_via_import_query(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "use vendor.math;\n"
+        "fn run() {}\n";
+    const char *segments[] = {"vendor", "math"};
+    ExternalModuleQueryFixture fixture = {segments, 2U, 0U};
+    FengSemanticImportedModuleQuery query = {&fixture, external_module_query_exists};
+    FengSemanticAnalyzeOptions options = {FENG_COMPILE_TARGET_LIB, &query};
+    FengProgram *program = parse_program_or_die("known_use_external.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze_with_options(programs, 1U, &options, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(fixture.call_count > 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_undefined_identifier_in_function_body(void) {
     const char *source =
         "mod demo.main;\n"
@@ -8543,6 +8615,8 @@ int main(void) {
     test_imported_name_conflicts_between_modules();
     test_alias_import_does_not_inject_short_names();
     test_duplicate_use_alias_in_same_file();
+    test_unknown_use_module_rejected_without_import_query();
+    test_external_use_module_accepted_via_import_query();
     test_undefined_identifier_in_function_body();
     test_unknown_type_reference_in_function_signature();
     test_self_is_valid_inside_type_method();

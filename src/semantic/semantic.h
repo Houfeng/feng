@@ -195,12 +195,31 @@ typedef enum FengCompileTarget {
     FENG_COMPILE_TARGET_LIB      /* library: no main entry required */
 } FengCompileTarget;
 
+typedef struct FengSemanticImportedModuleQuery {
+    const void *user;
+    bool (*module_exists)(const void *user,
+                          const FengSlice *segments,
+                          size_t segment_count);
+} FengSemanticImportedModuleQuery;
+
+typedef struct FengSemanticAnalyzeOptions {
+    FengCompileTarget target;
+    const FengSemanticImportedModuleQuery *imported_modules;
+} FengSemanticAnalyzeOptions;
+
 bool feng_semantic_analyze(const FengProgram *const *programs,
                            size_t program_count,
                            FengCompileTarget target,
                            FengSemanticAnalysis **out_analysis,
                            FengSemanticError **out_errors,
                            size_t *out_error_count);
+
+bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
+                                        size_t program_count,
+                                        const FengSemanticAnalyzeOptions *options,
+                                        FengSemanticAnalysis **out_analysis,
+                                        FengSemanticError **out_errors,
+                                        size_t *out_error_count);
 
 void feng_semantic_analysis_free(FengSemanticAnalysis *analysis);
 void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count);

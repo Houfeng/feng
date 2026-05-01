@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "archive/zip.h"
 #include "cli/cli.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
@@ -148,6 +149,69 @@ static char *make_out_option(const char *out_dir) {
     memcpy(out, "--out=", 6U);
     memcpy(out + 6U, out_dir, len + 1U);
     return out;
+}
+
+static char *make_pkg_option(const char *package_path) {
+    size_t len = strlen(package_path);
+    char *out = (char *)malloc(len + 7U);
+
+    ASSERT(out != NULL);
+    memcpy(out, "--pkg=", 6U);
+    memcpy(out + 6U, package_path, len + 1U);
+    return out;
+}
+
+static void assert_zip_ok(int ok, char **zip_error) {
+    if (!ok) {
+        fprintf(stderr,
+                "zip operation failed: %s\n",
+                zip_error != NULL && *zip_error != NULL ? *zip_error : "unknown error");
+        if (zip_error != NULL) {
+            free(*zip_error);
+            *zip_error = NULL;
+        }
+        ASSERT(false);
+    }
+    if (zip_error != NULL) {
+        free(*zip_error);
+        *zip_error = NULL;
+    }
+}
+
+static void write_bundle_with_file_or_die(const char *bundle_path,
+                                          const char *entry_path,
+                                          const char *source_path) {
+    FengZipWriter writer = {0};
+    char *zip_error = NULL;
+
+    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
+    assert_zip_ok(feng_zip_writer_add_file(&writer,
+                                           entry_path,
+                                           source_path,
+                                           FENG_ZIP_COMPRESSION_DEFLATE,
+                                           &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
+    feng_zip_writer_dispose(&writer);
+}
+
+static void write_bundle_with_bytes_or_die(const char *bundle_path,
+                                           const char *entry_path,
+                                           const void *data,
+                                           size_t data_size) {
+    FengZipWriter writer = {0};
+    char *zip_error = NULL;
+
+    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
+    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
+                                            entry_path,
+                                            data,
+                                            data_size,
+                                            FENG_ZIP_COMPRESSION_DEFLATE,
+                                            &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
+    feng_zip_writer_dispose(&writer);
 }
 
 static int run_direct_quiet_stderr(int argc, char **argv) {
@@ -344,6 +408,139 @@ static void test_direct_build_emits_symbol_tables(void) {
     free(remove_error);
     free(workspace_ft_path);
     free(public_ft_path);
+    free(out_dir);
+    free(source_path);
+    free(src_dir);
+}
+
+static void test_direct_build_accepts_package_bundle(void) {
+    char template_path[] = "/tmp/feng_cli_direct_pkg_XXXXXX";
+    char *workspace_dir;
+    char *dep_src_dir;
+    char *main_src_dir;
+    char *dep_source_path;
+    char *main_source_path;
+    char *dep_out_dir;
+    char *main_out_dir;
+    char *dep_ft_path;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    main_src_dir = path_join(workspace_dir, "main/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    main_source_path = path_join(main_src_dir, "main.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    main_out_dir = path_join(workspace_dir, "main/build");
+    dep_ft_path = path_join(dep_out_dir, "mod/test/cli/pkgdep.ft");
+    bundle_path = path_join(workspace_dir, "pkgdep.fb");
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(main_src_dir);
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.pkgdep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n"
+                    "fn main(args: string[]) {}\n");
+    write_text_file(main_source_path,
+                    "mod test.cli.pkgmain;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *argv[] = {
+            dep_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=dep",
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(out_opt);
+    }
+    ASSERT(path_exists(dep_ft_path));
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/test/cli/pkgdep.ft",
+                                  dep_ft_path);
+
+    {
+        char *out_opt = make_out_option(main_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            main_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(dep_ft_path);
+    free(main_out_dir);
+    free(dep_out_dir);
+    free(main_source_path);
+    free(dep_source_path);
+    free(main_src_dir);
+    free(dep_src_dir);
+}
+
+static void test_direct_build_rejects_bad_package_bundle(void) {
+    static const char kBadBytes[] = "XXXX";
+    char template_path[] = "/tmp/feng_cli_direct_bad_pkg_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *out_dir;
+    char *binary_path;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "out");
+    binary_path = path_join(out_dir, "bin/main");
+    bundle_path = path_join(workspace_dir, "bad.fb");
+
+    mkdir_p(src_dir);
+    write_text_file(source_path,
+                    "mod test.cli.badpkg;\n"
+                    "fn main(args: string[]) {}\n");
+    write_bundle_with_bytes_or_die(bundle_path,
+                                   "mod/test/cli/bad.ft",
+                                   kBadBytes,
+                                   sizeof(kBadBytes) - 1U);
+
+    {
+        char *out_opt = make_out_option(out_dir);
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            "--pkg",
+            bundle_path,
+        };
+        ASSERT(run_direct_quiet_stderr(6, argv) != 0);
+        free(out_opt);
+    }
+    ASSERT(!path_exists(binary_path));
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(binary_path);
     free(out_dir);
     free(source_path);
     free(src_dir);
@@ -704,6 +901,8 @@ int main(void) {
     test_init_rejects_non_empty_directory();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
+    test_direct_build_accepts_package_bundle();
+    test_direct_build_rejects_bad_package_bundle();
     fprintf(stdout, "cli tests passed\n");
     return 0;
 }

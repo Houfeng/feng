@@ -850,6 +850,13 @@ static size_t find_module_index(const FengSemanticAnalysis *analysis, const Feng
         analysis, program->module_segments, program->module_segment_count);
 }
 
+static bool imported_query_has_module(const FengSemanticImportedModuleQuery *query,
+                                      const FengSlice *segments,
+                                      size_t segment_count) {
+    return query != NULL && query->module_exists != NULL &&
+           query->module_exists(query->user, segments, segment_count);
+}
+
 static const FengSemanticModule *find_decl_provider_module(const FengSemanticAnalysis *analysis,
                                                            const FengDecl *decl) {
     size_t module_index;
@@ -11525,6 +11532,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
+                                   const FengSemanticImportedModuleQuery *imported_query,
                                    CallableReturnCache *callable_return_cache,
                                    CallableExceptionEscapeCache *callable_exception_escape_cache,
                                    FengSemanticError **errors,
@@ -11802,6 +11810,11 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
             target_index =
                 find_module_index_by_path(analysis, use_decl->segments, use_decl->segment_count);
             if (target_index == analysis->module_count) {
+                if (imported_query_has_module(imported_query,
+                                              use_decl->segments,
+                                              use_decl->segment_count)) {
+                    continue;
+                }
                 char *module_name = format_module_name(use_decl->segments, use_decl->segment_count);
 
                 ok = append_error(
@@ -12105,12 +12118,12 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
-bool feng_semantic_analyze(const FengProgram *const *programs,
-                           size_t program_count,
-                           FengCompileTarget target,
-                           FengSemanticAnalysis **out_analysis,
-                           FengSemanticError **out_errors,
-                           size_t *out_error_count) {
+bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
+                                        size_t program_count,
+                                        const FengSemanticAnalyzeOptions *options,
+                                        FengSemanticAnalysis **out_analysis,
+                                        FengSemanticError **out_errors,
+                                        size_t *out_error_count) {
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
@@ -12121,6 +12134,9 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
     bool ok = true;
     CallableReturnCache callable_return_cache;
     CallableExceptionEscapeCache callable_exception_escape_cache;
+    FengCompileTarget target = options != NULL ? options->target : FENG_COMPILE_TARGET_BIN;
+    const FengSemanticImportedModuleQuery *imported_query =
+        options != NULL ? options->imported_modules : NULL;
 
     memset(&callable_return_cache, 0, sizeof(callable_return_cache));
     memset(&callable_exception_escape_cache, 0, sizeof(callable_exception_escape_cache));
@@ -12188,6 +12204,7 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
              ++program_index) {
             ok = check_symbol_conflicts(analysis,
                                         &analysis->modules[program_index],
+                                        imported_query,
                                         &callable_return_cache,
                                         &callable_exception_escape_cache,
                                         &errors,
@@ -12257,6 +12274,24 @@ finish:
         }
     }
     return true;
+}
+
+bool feng_semantic_analyze(const FengProgram *const *programs,
+                           size_t program_count,
+                           FengCompileTarget target,
+                           FengSemanticAnalysis **out_analysis,
+                           FengSemanticError **out_errors,
+                           size_t *out_error_count) {
+    FengSemanticAnalyzeOptions options;
+
+    memset(&options, 0, sizeof(options));
+    options.target = target;
+    return feng_semantic_analyze_with_options(programs,
+                                              program_count,
+                                              &options,
+                                              out_analysis,
+                                              out_errors,
+                                              out_error_count);
 }
 
 void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {

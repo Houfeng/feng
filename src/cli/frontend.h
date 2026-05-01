@@ -35,6 +35,8 @@ typedef struct FengCliFrontendInput {
     int path_count;
     char **paths;
     FengCompileTarget target;
+    int package_path_count;
+    const char **package_paths;
 } FengCliFrontendInput;
 
 typedef struct FengCliFrontendCallbacks {

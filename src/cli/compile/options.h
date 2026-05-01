@@ -36,6 +36,8 @@ typedef struct FengCliDirectOptions {
     const char *artifact_name;    /* optional override for the produced artifact stem */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
+    int package_path_count;
+    const char **package_paths;   /* heap-allocated array of borrowed argv ptrs */
 } FengCliDirectOptions;
 
 bool feng_cli_direct_options_parse(const char *program,
