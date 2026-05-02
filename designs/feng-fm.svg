@@ -23,9 +23,9 @@
       <g transform="translate(-12 0)">
         <path d="M64 59H108V77H82V92H102V110H82V141H64V59Z"
           fill="#A78549"/>
-        <rect x="108" y="74" width="20" height="8" rx="3" fill="#A78549" opacity="0.9"/>
-        <rect x="108" y="94" width="28" height="8" rx="3" fill="#A78549" opacity="0.9"/>
-        <rect x="108" y="114" width="22" height="8" rx="3" fill="#A78549" opacity="0.9"/>
+        <rect x="108" y="93" width="20" height="8" rx="3" fill="#A78549" opacity="0.9"/>
+        <rect x="108" y="113" width="28" height="8" rx="3" fill="#A78549" opacity="0.9"/>
+        <rect x="108" y="133" width="22" height="8" rx="3" fill="#A78549" opacity="0.9"/>
       </g>
       </g>
     </g>

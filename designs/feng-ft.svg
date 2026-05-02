@@ -23,11 +23,11 @@
       <g transform="translate(-12 0)">
         <path d="M64 59H104V77H82V92H100V110H82V141H64V59Z"
           fill="#A78549"/>
-        <rect x="108" y="68" width="28" height="64" rx="4"
+        <rect x="108" y="82.5" width="28" height="56" rx="4"
           fill="none" stroke="#A78549" stroke-width="5"/>
-        <path d="M122 68V132" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
-        <path d="M108 89H136" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
-        <path d="M108 110H136" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
+        <path d="M122 82.5V138.5" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
+        <path d="M108 101.5H136" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
+        <path d="M108 119.5H136" fill="none" stroke="#A78549" stroke-width="5" stroke-linecap="round"/>
       </g>
       </g>
     </g>
