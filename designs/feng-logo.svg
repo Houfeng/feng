@@ -1,79 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <!-- Background gradient: top-left to bottom-right -->
-    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0A3D7D"/>
-      <stop offset="50%" stop-color="#3388D8"/>
-      <stop offset="100%" stop-color="#50E3C2"/>
-    </linearGradient>
-    
-    <!-- F shape vertical bar gradient -->
-    <linearGradient id="fVerticalGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#E0F7FF"/>
-      <stop offset="50%" stop-color="#50E3C2"/>
-      <stop offset="100%" stop-color="#2A78C8"/>
-    </linearGradient>
-    
-    <!-- F shape top horizontal bar gradient -->
-    <linearGradient id="fTopBarGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#D0F0FF"/>
-      <stop offset="50%" stop-color="#4DD0E1"/>
-      <stop offset="100%" stop-color="#1A5F9F"/>
-    </linearGradient>
-    
-    <!-- F shape middle horizontal bar gradient -->
-    <linearGradient id="fMiddleBarGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#B0E0FF"/>
-      <stop offset="50%" stop-color="#4DD0E1"/>
-      <stop offset="100%" stop-color="#0A3D7D"/>
-    </linearGradient>
-    
-    <!-- Tiny drop shadow filter -->
-    <filter id="dropShadow" x="-15%" y="-15%" width="130%" height="130%">
-      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.2"/>
-    </filter>
-    
-    <!-- Inner glow filter -->
-    <filter id="innerGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
-      <feOffset in="blur" dx="0" dy="0" result="offsetBlur"/>
-      <feComposite in="SourceGraphic" in2="offsetBlur" operator="over"/>
-    </filter>
-  </defs>
-  
-  <!-- Background rounded rectangle with tiny drop shadow -->
-  <rect x="8" y="8" width="184" height="184" rx="30" ry="30" 
-        fill="url(#bgGradient)" filter="url(#dropShadow)"/>
-  
-  <!-- Highlight border for glass effect -->
-  <rect x="8" y="8" width="184" height="184" rx="30" ry="30" 
-        fill="none" stroke="#A0E0FF" stroke-width="2" opacity="0.35"/>
-  
-  <!-- Central F shape -->
-  <g transform="translate(50, 40)">
-    <!-- Vertical bar of F -->
-    <path d="M 10,10 L 10,110 C 10,115 15,120 20,120 L 35,120 C 40,120 45,115 45,110 L 45,10 C 45,5 40,0 35,0 L 20,0 C 15,0 10,5 10,10 Z" 
-          fill="url(#fVerticalGradient)" opacity="0.95"/>
-    
-    <!-- Top horizontal bar of F -->
-    <path d="M 45,10 L 95,10 C 100,10 105,15 105,20 L 105,35 C 105,40 100,45 95,45 L 45,45 Z" 
-          fill="url(#fTopBarGradient)" opacity="0.95"/>
-    
-    <!-- Middle horizontal bar of F -->
-    <path d="M 45,55 L 80,55 C 85,55 90,60 90,65 L 90,80 C 90,85 85,90 80,90 L 45,90 Z" 
-          fill="url(#fMiddleBarGradient)" opacity="0.95"/>
-    
-    <!-- Subtle highlight on upper edges -->
-    <path d="M 12,12 L 12,108 C 12,112 16,116 20,116 L 33,116 C 37,116 41,112 41,108 L 41,12" 
-          fill="none" stroke="#FFFFFF" stroke-width="2" opacity="0.3" stroke-linecap="round"/>
-    <path d="M 47,12 L 93,12 C 97,12 101,16 101,20 L 101,33" 
-          fill="none" stroke="#FFFFFF" stroke-width="2" opacity="0.3" stroke-linecap="round"/>
-    <path d="M 47,57 L 78,57 C 82,57 86,61 86,65 L 86,78" 
-          fill="none" stroke="#FFFFFF" stroke-width="2" opacity="0.3" stroke-linecap="round"/>
-  </g>
-  
-  <!-- Inner shadow for depth -->
-  <rect x="8" y="8" width="184" height="184" rx="30" ry="30" 
-        fill="none" stroke="#0A3D7D" stroke-width="3" opacity="0.2" filter="url(#innerGlow)"/>
+  <title>Feng logo</title>
+  <desc>Square Feng logo using the file-icon palette without a folded corner.</desc>
+
+  <rect x="18" y="18" width="164" height="164" rx="26" ry="26" fill="#F8EED6"/>
+  <rect x="18" y="18" width="164" height="164" rx="26" ry="26" fill="#E4C57D" opacity="0.22"/>
+  <rect x="18" y="18" width="164" height="164" rx="26" ry="26" fill="none" stroke="#A78549" stroke-width="4"/>
+
+  <path d="M58 44H136V72H88V94H122V122H88V156H58V44Z" fill="#A78549"/>
 </svg>
