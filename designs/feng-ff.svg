@@ -21,14 +21,8 @@
         fill="none" stroke="#A78549" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 
       <g transform="translate(-12 0)">
-        <rect x="68" y="47" width="26" height="104" rx="8" fill="#2F6A4E"/>
-        <path d="M92 59H130C133.314 59 136 61.686 136 65V78C136 81.314 133.314 84 130 84H92Z"
-          fill="#8A2F43"/>
-        <path d="M92 101H121C124.314 101 127 103.686 127 107V120C127 123.314 124.314 126 121 126H92Z"
-          fill="#0A3D7D"/>
-        <path d="M72 51V143" fill="none" stroke="#C9DDCF" stroke-width="3" opacity="0.34" stroke-linecap="round"/>
-        <path d="M96 63H127" fill="none" stroke="#D9B5BD" stroke-width="3" opacity="0.30" stroke-linecap="round"/>
-        <path d="M96 105H118" fill="none" stroke="#D7F4FF" stroke-width="3" opacity="0.24" stroke-linecap="round"/>
+        <path d="M68 61H122V81H90V98H116V118H90V143H68V61Z"
+          fill="#A78549"/>
       </g>
       </g>
     </g>
