@@ -62,6 +62,26 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] usage should not echo the invoked executable path"
         failures=$((failures + 1))
     fi
+    if ! grep -q '^  feng <files...> \[options\]$' "$WORK/help.err"; then
+        echo "FAIL[help] missing direct compile usage line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^  feng <command>  \[options\]$' "$WORK/help.err"; then
+        echo "FAIL[help] missing command usage line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^Compile:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Compile section"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^Project:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Project section"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^Editor:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Editor section"
+        failures=$((failures + 1))
+    fi
     if ! grep -q ' lsp   \[--stdio\]' "$WORK/help.err"; then
         echo "FAIL[help] missing lsp usage line"
         failures=$((failures + 1))

@@ -320,29 +320,24 @@ feng tool check [--target=<bin|lib>] <file> [more files...]
 示例:
 
 ```text
-Feng CLI
-
 Usage:
-  feng <command> [options]
-  feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+  feng <files...> [options]
+  feng <command>  [options]
 
-Project Commands:
-  init      Initialize a project in the current directory
-  build     Build the current project
-  run       Build and run the current project
-  check     Type-check and analyze without producing final artifacts
-  clean     Remove all build artifacts
-  pack      Create a .fb package from the current lib project
+Compile:
+  feng <files...> [--target=<bin|lib>] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]
 
-Dependency Commands:
-  deps      Manage dependencies (add / remove / install)
+Project:
+  feng init  [<name>] [--target=<bin|lib>]
+  feng build [<path>] [--release]
+  feng check [<path>] [--format=<text|json>]
+  feng run   [<path>] [--release] [-- <program-args>...]
+  feng clean [<path>]
+  feng pack  [<path>]
+  feng deps  <add|remove|install> ...
 
-Developer Tools:
-  tool      Compiler debugging and advanced diagnostic tools
-
-Global Options:
-  -h, --help
-  -v, --version
+Editor:
+  feng lsp   [--stdio]
 ```
 
 ## 8 有意不提供的命令

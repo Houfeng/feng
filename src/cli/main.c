@@ -6,6 +6,13 @@
 
 void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "  %s <files...> [options]\n", program);
+    fprintf(stderr, "  %s <command>  [options]\n", program);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Compile:\n");
+    fprintf(stderr, "  %s <files...> [--target=<bin|lib>] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]\n", program);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Project:\n");
     fprintf(stderr, "  %s init  [<name>] [--target=<bin|lib>]\n", program);
     fprintf(stderr, "  %s build [<path>] [--release]\n", program);
     fprintf(stderr, "  %s check [<path>] [--format=<text|json>]\n", program);
@@ -13,8 +20,9 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "  %s clean [<path>]\n", program);
     fprintf(stderr, "  %s pack  [<path>]\n", program);
     fprintf(stderr, "  %s deps  <add|remove|install> ...\n", program);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Editor:\n");
     fprintf(stderr, "  %s lsp   [--stdio]\n", program);
-    fprintf(stderr, "  %s <files...> [--target=bin|lib] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
