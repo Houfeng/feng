@@ -54,6 +54,11 @@ const FengSymbolDeclView *feng_symbol_module_public_decl_at(
     const FengSymbolImportedModule *module,
     size_t index);
 
+size_t feng_symbol_module_decl_count(const FengSymbolImportedModule *module);
+
+const FengSymbolDeclView *feng_symbol_module_decl_at(const FengSymbolImportedModule *module,
+                                                     size_t index);
+
 size_t feng_symbol_module_public_value_count(const FengSymbolImportedModule *module,
                                              FengSlice name);
 
@@ -73,6 +78,11 @@ const FengSymbolDeclView *feng_symbol_decl_public_member_at(const FengSymbolDecl
                                                             FengSlice name,
                                                             size_t index);
 
+size_t feng_symbol_decl_member_count(const FengSymbolDeclView *owner);
+
+const FengSymbolDeclView *feng_symbol_decl_member_at(const FengSymbolDeclView *owner,
+                                                     size_t index);
+
 size_t feng_symbol_module_fit_count(const FengSymbolImportedModule *module);
 const FengSymbolFitView *feng_symbol_module_fit_at(const FengSymbolImportedModule *module,
                                                    size_t index);
@@ -83,6 +93,8 @@ FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, 
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl);
+FengSlice feng_symbol_decl_path(const FengSymbolDeclView *decl);
+FengToken feng_symbol_decl_token(const FengSymbolDeclView *decl);
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl);
 FengMutability feng_symbol_decl_mutability(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl);

@@ -352,6 +352,18 @@ static const FengSymbolDeclView *module_public_decl_at(const FengSymbolImportedM
     return NULL;
 }
 
+static size_t module_decl_count(const FengSymbolImportedModule *module) {
+    return module != NULL && module->module != NULL ? module->module->root_decl.member_count : 0U;
+}
+
+static const FengSymbolDeclView *module_decl_at(const FengSymbolImportedModule *module,
+                                                size_t index) {
+    if (module == NULL || module->module == NULL || index >= module->module->root_decl.member_count) {
+        return NULL;
+    }
+    return module->module->root_decl.members[index];
+}
+
 static size_t decl_count_public_members(const FengSymbolDeclView *owner, FengSlice name) {
     size_t index;
     size_t count = 0U;
@@ -387,6 +399,18 @@ static const FengSymbolDeclView *decl_public_member_at(const FengSymbolDeclView 
         }
     }
     return NULL;
+}
+
+static size_t decl_member_count(const FengSymbolDeclView *owner) {
+    return owner != NULL ? owner->member_count : 0U;
+}
+
+static const FengSymbolDeclView *decl_member_at(const FengSymbolDeclView *owner,
+                                                size_t index) {
+    if (owner == NULL || index >= owner->member_count) {
+        return NULL;
+    }
+    return owner->members[index];
 }
 
 static bool provider_add_graph_internal(FengSymbolProvider *provider,
@@ -803,6 +827,15 @@ const FengSymbolDeclView *feng_symbol_module_public_decl_at(
     return module_public_decl_at(module, index);
 }
 
+size_t feng_symbol_module_decl_count(const FengSymbolImportedModule *module) {
+    return module_decl_count(module);
+}
+
+const FengSymbolDeclView *feng_symbol_module_decl_at(const FengSymbolImportedModule *module,
+                                                     size_t index) {
+    return module_decl_at(module, index);
+}
+
 size_t feng_symbol_module_public_value_count(const FengSymbolImportedModule *module,
                                              FengSlice name) {
     return module_count_public_values(module, name);
@@ -830,6 +863,15 @@ const FengSymbolDeclView *feng_symbol_decl_public_member_at(const FengSymbolDecl
                                                             FengSlice name,
                                                             size_t index) {
     return decl_public_member_at(owner, name, index);
+}
+
+size_t feng_symbol_decl_member_count(const FengSymbolDeclView *owner) {
+    return decl_member_count(owner);
+}
+
+const FengSymbolDeclView *feng_symbol_decl_member_at(const FengSymbolDeclView *owner,
+                                                     size_t index) {
+    return decl_member_at(owner, index);
 }
 
 size_t feng_symbol_module_fit_count(const FengSymbolImportedModule *module) {
@@ -865,6 +907,14 @@ FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl) {
 
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl) {
     return decl != NULL ? slice_from_cstr(decl->doc) : (FengSlice){0};
+}
+
+FengSlice feng_symbol_decl_path(const FengSymbolDeclView *decl) {
+    return decl != NULL ? slice_from_cstr(decl->path) : (FengSlice){0};
+}
+
+FengToken feng_symbol_decl_token(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->token : (FengToken){0};
 }
 
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl) {

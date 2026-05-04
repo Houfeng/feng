@@ -65,6 +65,7 @@ feng lsp [--stdio]
 - 当前服务端对 Feng 源文件提供以下语言能力: diagnostics、hover、completion、definition。
 - diagnostics / hover / completion / definition 统一复用现有 parser / semantic / imported-module 能力; 当前项目不存在本地 workspace `.ft` 时,必须直接回退到源码分析,不得要求用户先手动生成缓存。
 - 若当前项目目录下存在合法 `feng.fm`,LSP 按项目上下文解析整个项目源码并解析依赖包; 若不存在 `feng.fm`,则按单文件模式分析当前文档。
+- 对当前项目内已保存且与磁盘一致的文档,若 `build/obj/symbols/**/*.ft` 可读,`hover` / `definition` / `completion` 可优先消费 workspace cache; 若缓存缺失、命中失败或当前文档存在未保存修改,则回退到源码分析。
 - `hover` 优先展示声明签名与文档注释; 文档注释只识别已绑定到声明的 `/** */`。
 - `definition` 以源码声明位置为主; 当前项目内定义应返回对应源文件位置。
 - `completion` 以当前位置可见的局部名、模块级声明、导入模块公开名和对象成员为范围,不要求依赖额外构建步骤。

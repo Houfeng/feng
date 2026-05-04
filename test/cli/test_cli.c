@@ -483,6 +483,10 @@ static void write_lsp_message(FILE *input, const char *json) {
 }
 
 static char *run_lsp_server_capture(FILE *input) {
+    char input_template[] = "/tmp/feng_lsp_input_XXXXXX";
+    int input_fd;
+    char *input_text;
+    FILE *named_input;
     FILE *output = tmpfile();
     FILE *errors = tmpfile();
     char *captured;
@@ -490,8 +494,19 @@ static char *run_lsp_server_capture(FILE *input) {
     ASSERT(output != NULL);
     ASSERT(errors != NULL);
     ASSERT(fseek(input, 0L, SEEK_SET) == 0);
-    ASSERT(feng_lsp_server_run(input, output, errors) == 0);
+    input_text = read_text_stream(input);
+    input_fd = mkstemp(input_template);
+    ASSERT(input_fd >= 0);
+    named_input = fdopen(input_fd, "wb+");
+    ASSERT(named_input != NULL);
+    ASSERT(fwrite(input_text, 1U, strlen(input_text), named_input) == strlen(input_text));
+    free(input_text);
+    ASSERT(fflush(named_input) == 0);
+    ASSERT(fseek(named_input, 0L, SEEK_SET) == 0);
+    ASSERT(feng_lsp_server_run(named_input, output, errors) == 0);
     captured = read_text_stream(output);
+    fclose(named_input);
+    ASSERT(unlink(input_template) == 0);
     fclose(errors);
     fclose(output);
     return captured;
@@ -1996,6 +2011,182 @@ static void test_lsp_hover_definition_and_completion(void) {
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
     free(source_path);
+}
+
+static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"cache_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kSharedSource =
+        "pu mod test.cli.cachedep;\n"
+        "\n"
+        "/** User from cache. */\n"
+        "pu type User {\n"
+        "    /** Display name. */\n"
+        "    let name: string;\n"
+        "}\n";
+    static const char *kBrokenSharedSource =
+        "pu mod test.cli.cachedep;\n"
+        "\n"
+        "pu type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "pu fn broken(user: User): string {\n";
+    static const char *kMainSource =
+        "mod test.cli.cachemain;\n"
+        "use test.cli.cachedep;\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let mirror: string = user.name;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_cache_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *shared_path;
+    char *main_path;
+    char *main_uri;
+    char *shared_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *hover_type;
+    char *definition_type;
+    char *hover_field;
+    char *completion_field;
+    char *shutdown;
+    char *expected_definition;
+    char *expected_definition_alt = NULL;
+    char *output;
+    char *shared_real_path = NULL;
+    char *shared_real_uri = NULL;
+    FILE *input;
+    unsigned int type_line;
+    unsigned int type_character;
+    unsigned int field_line;
+    unsigned int field_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    shared_path = path_join(src_dir, "shared.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(shared_path, kSharedSource);
+    write_text_file(main_path, kMainSource);
+
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    write_text_file(shared_path, kBrokenSharedSource);
+
+    find_line_character(kMainSource,
+                        "let user: User = User { name: \"copilot\" };",
+                        10U,
+                        &type_line,
+                        &type_character);
+    find_line_character(kMainSource,
+                        "let mirror: string = user.name;",
+                        26U,
+                        &field_line,
+                        &field_character);
+
+    main_uri = file_uri_from_path(main_path);
+    shared_uri = file_uri_from_path(shared_path);
+    shared_real_path = realpath(shared_path, NULL);
+    if (shared_real_path != NULL) {
+        shared_real_uri = file_uri_from_path(shared_real_path);
+    }
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    hover_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                            main_uri,
+                            type_line,
+                            type_character);
+    definition_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                 main_uri,
+                                 type_line,
+                                 type_character);
+    hover_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                             main_uri,
+                             field_line,
+                             field_character);
+    completion_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                  main_uri,
+                                  field_line,
+                                  field_character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    expected_definition = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\"", shared_uri);
+    if (shared_real_uri != NULL && strcmp(shared_real_uri, shared_uri) != 0) {
+        expected_definition_alt = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\"",
+                                             shared_real_uri);
+    }
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_type);
+    write_lsp_message(input, definition_type);
+    write_lsp_message(input, hover_field);
+    write_lsp_message(input, completion_field);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
+    ASSERT(strstr(output, "User from cache.") != NULL);
+    ASSERT(strstr(output, "type User") != NULL);
+    ASSERT(strstr(output, "Display name.") != NULL);
+    ASSERT(strstr(output, "let name: string") != NULL);
+        ASSERT(strstr(output, expected_definition) != NULL ||
+            (expected_definition_alt != NULL && strstr(output, expected_definition_alt) != NULL));
+    ASSERT(strstr(output, "\"id\":5,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
+
+    free(output);
+        free(expected_definition_alt);
+    free(expected_definition);
+    free(shutdown);
+    free(completion_field);
+    free(hover_field);
+    free(definition_type);
+    free(hover_type);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(shared_real_uri);
+    free(shared_real_path);
+    free(shared_uri);
+    free(main_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(main_path);
+    free(shared_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
 }
 
 static void test_manifest_defaults(void) {
@@ -3649,6 +3840,7 @@ int main(void) {
     test_lsp_rejects_unknown_option();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
