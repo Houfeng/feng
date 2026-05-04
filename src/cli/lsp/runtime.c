@@ -670,6 +670,49 @@ static bool json_array_get(FengLspJsonValue array,
     return false;
 }
 
+static bool json_hex_digit(char ch, unsigned int *out) {
+    if (ch >= '0' && ch <= '9') {
+        *out = (unsigned int)(ch - '0');
+        return true;
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        *out = (unsigned int)(ch - 'a') + 10U;
+        return true;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        *out = (unsigned int)(ch - 'A') + 10U;
+        return true;
+    }
+    return false;
+}
+
+/* Encode a Unicode code point as UTF-8 into buf (max 4 bytes). Returns byte count or 0 on error. */
+static size_t json_unicode_to_utf8(unsigned long cp, char buf[4]) {
+    if (cp <= 0x7FUL) {
+        buf[0] = (char)(unsigned char)cp;
+        return 1U;
+    }
+    if (cp <= 0x7FFUL) {
+        buf[0] = (char)(unsigned char)(0xC0U | (cp >> 6U));
+        buf[1] = (char)(unsigned char)(0x80U | (cp & 0x3FU));
+        return 2U;
+    }
+    if (cp <= 0xFFFFUL) {
+        buf[0] = (char)(unsigned char)(0xE0U | (cp >> 12U));
+        buf[1] = (char)(unsigned char)(0x80U | ((cp >> 6U) & 0x3FU));
+        buf[2] = (char)(unsigned char)(0x80U | (cp & 0x3FU));
+        return 3U;
+    }
+    if (cp <= 0x10FFFFUL) {
+        buf[0] = (char)(unsigned char)(0xF0U | (cp >> 18U));
+        buf[1] = (char)(unsigned char)(0x80U | ((cp >> 12U) & 0x3FU));
+        buf[2] = (char)(unsigned char)(0x80U | ((cp >> 6U) & 0x3FU));
+        buf[3] = (char)(unsigned char)(0x80U | (cp & 0x3FU));
+        return 4U;
+    }
+    return 0U;
+}
+
 static char *json_string_dup(FengLspJsonValue value) {
     const char *cursor;
     FengLspString out = {0};
@@ -729,6 +772,65 @@ static char *json_string_dup(FengLspJsonValue value) {
                     return NULL;
                 }
                 break;
+            case 'u': {
+                /* \uXXXX — decode 4 hex digits and encode as UTF-8. */
+                unsigned int d0, d1, d2, d3;
+                unsigned long cp;
+                char utf8[4];
+                size_t utf8_len;
+
+                if (cursor + 4 >= value.value_end) {
+                    string_dispose(&out);
+                    return NULL;
+                }
+                if (!json_hex_digit(cursor[1], &d0) ||
+                    !json_hex_digit(cursor[2], &d1) ||
+                    !json_hex_digit(cursor[3], &d2) ||
+                    !json_hex_digit(cursor[4], &d3)) {
+                    string_dispose(&out);
+                    return NULL;
+                }
+                cp = ((unsigned long)d0 << 12U) |
+                     ((unsigned long)d1 << 8U)  |
+                     ((unsigned long)d2 << 4U)  |
+                      (unsigned long)d3;
+                /* Handle UTF-16 surrogate pairs (\uD800-\uDBFF followed by \uDC00-\uDFFF). */
+                if (cp >= 0xD800UL && cp <= 0xDBFFUL) {
+                    unsigned int e0, e1, e2, e3;
+                    unsigned long low;
+
+                    if (cursor + 10 >= value.value_end ||
+                        cursor[5] != '\\' || cursor[6] != 'u') {
+                        string_dispose(&out);
+                        return NULL;
+                    }
+                    if (!json_hex_digit(cursor[7], &e0) ||
+                        !json_hex_digit(cursor[8], &e1) ||
+                        !json_hex_digit(cursor[9], &e2) ||
+                        !json_hex_digit(cursor[10], &e3)) {
+                        string_dispose(&out);
+                        return NULL;
+                    }
+                    low = ((unsigned long)e0 << 12U) |
+                          ((unsigned long)e1 << 8U)  |
+                          ((unsigned long)e2 << 4U)  |
+                           (unsigned long)e3;
+                    if (low < 0xDC00UL || low > 0xDFFFUL) {
+                        string_dispose(&out);
+                        return NULL;
+                    }
+                    cp = 0x10000UL + ((cp - 0xD800UL) << 10U) + (low - 0xDC00UL);
+                    cursor += 10; /* skip: 4 hex + \u + 4 hex */
+                } else {
+                    cursor += 4; /* skip the 4 hex digits */
+                }
+                utf8_len = json_unicode_to_utf8(cp, utf8);
+                if (utf8_len == 0U || !string_append_bytes(&out, utf8, utf8_len)) {
+                    string_dispose(&out);
+                    return NULL;
+                }
+                break;
+            }
             default:
                 string_dispose(&out);
                 return NULL;

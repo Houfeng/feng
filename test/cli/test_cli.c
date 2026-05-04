@@ -2548,6 +2548,79 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
     free(source_path);
 }
 
+static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
+    /* Regression test: json_string_dup used to return NULL when the JSON text
+       field contained \\uXXXX escape sequences (e.g. produced by Python's
+       json.dumps with ensure_ascii=True for non-ASCII source content like
+       Chinese doc comments).  The server must survive and return valid
+       JSON responses. */
+    char template_path[] = "/tmp/feng_cli_lsp_unicode_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *initialize;
+    char *did_open;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    char *remove_error = NULL;
+
+    /* Source with a Chinese doc comment, encoded as \uXXXX in the JSON text
+       field to simulate a client that escapes non-ASCII characters (e.g.
+       Python json.dumps with ensure_ascii=True).  The string below is what
+       the LSP server actually receives over the wire:
+         backslash-u6d4b backslash-u8bd5 is the Unicode encoding of: 测试 */
+    static const char *kSourceEscaped =
+        "mod test.lsp.unicode;\\n"
+        "/** \\u6d4b\\u8bd5 */\\n"
+        "pu type Tag { pu let name: string; }\\n";
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "tag.ff");
+    /* Write the actual source to disk so the LSP can find it; the on-disk
+       version uses real UTF-8, the in-message version uses \\uXXXX. */
+    write_text_file(source_path,
+                    "mod test.lsp.unicode;\n"
+                    "/** \xe6\xb5\x8b\xe8\xaf\x95 */\n"
+                    "pu type Tag { pu let name: string; }\n");
+
+    uri = file_uri_from_path(source_path);
+
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    /* didOpen text uses \\uXXXX escapes — the server must handle them. */
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          uri, kSourceEscaped);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* Server must not exit early — initialize response and shutdown must be present. */
+    ASSERT(strstr(output, "\"id\":1,\"result\":{\"capabilities\":{") != NULL);
+    ASSERT(strstr(output, "\"id\":9,\"result\":null") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(did_open);
+    free(initialize);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
     static const char *kManifest =
         "[package]\n"
@@ -4379,6 +4452,7 @@ int main(void) {
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();
+    test_lsp_didopen_handles_unicode_escape_in_source();
     test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
