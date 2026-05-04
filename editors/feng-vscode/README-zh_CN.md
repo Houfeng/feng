@@ -1,6 +1,6 @@
 # Feng VS Code Extension
 
-Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、面向源文件的 Feng Language Server 客户端接入、`.fm` 清单文件支持，以及 Feng 专用文件图标支持。
+Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、面向源文件的 Feng Language Server 客户端接入、`.fm` 清单文件支持，以及面向源码、清单、包和符号表文件的 Feng 专用图标支持。
 
 ## 功能一览
 
@@ -8,14 +8,14 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 - 文档格式化：统一缩进、空白和常见语法间距，适合日常编辑时快速整理代码；其中包含复合赋值与位移运算符的空格规范；对 `.fm` 文件会额外按节对齐 `key: "value"` 项。
 - Language Server 客户端：对于 Feng 源文件，扩展会通过已配置的 Feng 可执行文件启动 `feng lsp`，并用 VS Code 标准 Language Client 连接。hover、completion、definition、diagnostics 以及后续语言能力都从当前 CLI 暴露出来的 LSP capability 集合获取。
 - 诊断兼容回退：如果当前 Feng CLI 还没有暴露任何 LSP capability，扩展会临时保留现有的 `check` 诊断链路，避免打开/保存时的基础校验回退。
-- 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会回退到内置 Feng 文件图标。
+- 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会分别回退到 `.feng`/`.ff` 源文件、`.fm` 清单、`.fb` 包文件与 `.ft` 符号表文件对应的内置 Feng 图标。
 
 ## 支持的文件后缀
 
-- `.feng`
-- `.ff`
-- `.fm`
-- `.fi`
+- `.feng`、`.ff`：Feng 源文件
+- `.fm`：Feng 清单文件
+- `.fb`：Feng 包文件
+- `.ft`：Feng 符号表文件
 
 ## 快速开始
 

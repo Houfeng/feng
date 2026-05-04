@@ -1,6 +1,6 @@
 # Feng VS Code Extension
 
-Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, dedicated Feng manifest support for `.fm`, and Feng file icon support.
+Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, dedicated Feng manifest support for `.fm`, and distinct Feng file icons for source, manifest, bundle, and symbol-table files.
 
 ## Features
 
@@ -8,11 +8,14 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
 - Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
 - Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
-- Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
+- Icon support: The extension uses the Feng Logo, and falls back to built-in Feng icons for `.feng`/`.ff` source files, `.fm` manifests, `.fb` bundles, and `.ft` symbol tables when your current file icon theme does not provide a Feng-specific icon.
 
 ## Supported File Extensions
 
-- `.feng`、`.ff`、`.fm`、`.fi`
+- `.feng` and `.ff` for Feng source files
+- `.fm` for Feng manifests
+- `.fb` for Feng bundles
+- `.ft` for Feng symbol tables
 
 ## Quick Start
 

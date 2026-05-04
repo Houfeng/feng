@@ -15,7 +15,7 @@
     "Linters"
   ],
   "scripts": {
-    "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/syntax.test.js"
+    "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/icon.test.js && node ./test/syntax.test.js"
   },
   "activationEvents": [
     "onLanguage:feng",
@@ -35,7 +35,8 @@
     "syntax",
     "ff",
     "fm",
-    "fi"
+    "fb",
+    "ft"
   ],
   "contributes": {
     "languages": [
@@ -47,12 +48,11 @@
         ],
         "extensions": [
           ".feng",
-          ".ff",
-          ".fi"
+          ".ff"
         ],
         "icon": {
-          "light": "./icons/feng-file.svg",
-          "dark": "./icons/feng-file.svg"
+          "light": "./icons/feng-ff.svg",
+          "dark": "./icons/feng-ff.svg"
         },
         "configuration": "./language-configuration.json"
       },
@@ -66,10 +66,38 @@
           ".fm"
         ],
         "icon": {
-          "light": "./icons/feng-file.svg",
-          "dark": "./icons/feng-file.svg"
+          "light": "./icons/feng-fm.svg",
+          "dark": "./icons/feng-fm.svg"
         },
         "configuration": "./manifest-language-configuration.json"
+      },
+      {
+        "id": "feng-bundle",
+        "aliases": [
+          "Feng Bundle",
+          "feng-bundle"
+        ],
+        "extensions": [
+          ".fb"
+        ],
+        "icon": {
+          "light": "./icons/feng-fb.svg",
+          "dark": "./icons/feng-fb.svg"
+        }
+      },
+      {
+        "id": "feng-symbol-table",
+        "aliases": [
+          "Feng Symbol Table",
+          "feng-symbol-table"
+        ],
+        "extensions": [
+          ".ft"
+        ],
+        "icon": {
+          "light": "./icons/feng-ft.svg",
+          "dark": "./icons/feng-ft.svg"
+        }
       }
     ],
     "grammars": [
