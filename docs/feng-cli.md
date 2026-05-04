@@ -127,7 +127,7 @@ feng run [<path>] [--release] [-- <program-args>...]
 
 说明:
 
-- `run` 总是先执行 `feng build`,构建成功后再运行产物,`<path>` 和 `--release` 均透传给 `feng build`。
+- `run` 总是先复用与 `feng build` 相同的项目构建主链; 构建成功后再运行产物,`<path>` 和 `--release` 均透传给该构建阶段。
 - `--` 之后的参数直接透传给目标程序。
 - 若当前项目是 `lib`,应给出明确诊断。
 
@@ -187,7 +187,7 @@ feng pack [<path>]
 
 说明:
 
-- `pack` 总是先以 release 模式构建当前项目及其递归本地 `target: "lib"` 依赖,再对产物打包,不接受 `--release` 选项。
+- `pack` 总是先复用与 `feng build --release` 相同的项目构建主链,完成当前项目及其递归本地 `target: "lib"` 依赖的 release 构建后,再对产物打包,不接受 `--release` 选项。
 - `<path>` 透传给 `feng build`。
 - 若项目的 `target` 不是 `lib`,报错退出。
 

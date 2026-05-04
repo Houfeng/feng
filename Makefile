@@ -33,6 +33,7 @@ TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 	src/cli/project/build.c \
 	src/cli/project/check.c \
 	src/cli/project/compile.c \
+	src/cli/project/run.c \
 	src/cli/project/pack.c \
 	src/cli/deps/manager.c \
 	src/cli/deps/main.c \

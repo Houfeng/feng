@@ -48,6 +48,12 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,
                                            bool release);
 
+bool feng_cli_project_resolve_build_dependencies(const char *program,
+                                                 const FengCliProjectContext *context,
+                                                 bool release,
+                                                 FengCliDepsResolved *out_resolved,
+                                                 FengCliProjectError *out_error);
+
 bool feng_cli_project_prepare_build(const char *program,
                                    const char *path_arg,
                                    bool release,

@@ -2668,6 +2668,112 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
     free(dep_project_dir);
 }
 
+static void test_project_run_release_reuses_build_pipeline(void) {
+    char template_path[] = "/tmp/feng_cli_run_release_flags_XXXXXX";
+    char *workspace_dir;
+    char *dep_project_dir;
+    char *dep_manifest_path;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *root_src_dir;
+    char *root_source_path;
+    char *binary_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_project_dir = path_join(workspace_dir, "dep");
+    dep_manifest_path = path_join(dep_project_dir, "feng.fm");
+    dep_src_dir = path_join(dep_project_dir, "src");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    root_src_dir = path_join(root_project_dir, "src");
+    root_source_path = path_join(root_src_dir, "main.ff");
+    binary_path = path_join(root_project_dir, "build/bin/run_app");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"run_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.rundep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"run_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "run_dep: \"../dep\"\n");
+    write_text_file(root_source_path,
+                    "mod test.cli.runapp;\n"
+                    "use test.cli.rundep;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if dep_value() == 7 {\n"
+                    "  }\n"
+                    "}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    {
+        char *argv[] = { root_project_dir, "--release" };
+        ASSERT(feng_cli_project_run_main("feng", 2, argv) == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(count_occurrences(cc_log_text, "__CMD__") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
+    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    free(saved_cc);
+    free(cc_log_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(binary_path);
+    free(root_source_path);
+    free(root_src_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    free(dep_manifest_path);
+    free(dep_project_dir);
+}
+
 static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(void) {
     char template_path[] = "/tmp/feng_cli_pack_release_flags_XXXXXX";
     char *workspace_dir;
@@ -2866,6 +2972,7 @@ int main(void) {
     test_direct_build_rejects_bad_package_bundle();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
+    test_project_run_release_reuses_build_pipeline();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
     test_project_pack_rejects_release_flag();
     fprintf(stdout, "cli tests passed\n");

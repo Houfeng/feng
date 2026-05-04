@@ -10,7 +10,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
 static void print_usage(const char *program) {
@@ -131,12 +130,11 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    if (!feng_cli_deps_resolve_for_manifest(program,
-                                            context.manifest_path,
-                                            false,
-                                            release,
-                                            &resolved,
-                                            &error)) {
+    if (!feng_cli_project_resolve_build_dependencies(program,
+                                                     &context,
+                                                     release,
+                                                     &resolved,
+                                                     &error)) {
         feng_cli_project_print_error(stderr, &error);
         feng_cli_deps_resolved_dispose(&resolved);
         feng_cli_project_context_dispose(&context);
@@ -144,11 +142,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    rc = feng_cli_project_invoke_direct_compile_with_packages(program,
-                                                              &context,
-                                                              release,
-                                                              resolved.package_count,
-                                                              (const char *const *)resolved.package_paths);
+    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
     feng_cli_deps_resolved_dispose(&resolved);
     if (rc == 0) {
         rc = execute_program(context.binary_path, program_argc, program_argv);

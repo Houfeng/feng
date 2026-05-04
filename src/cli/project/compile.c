@@ -85,6 +85,30 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 NULL);
 }
 
+bool feng_cli_project_resolve_build_dependencies(const char *program,
+                                                 const FengCliProjectContext *context,
+                                                 bool release,
+                                                 FengCliDepsResolved *out_resolved,
+                                                 FengCliProjectError *out_error) {
+    if (context == NULL || out_resolved == NULL) {
+        if (out_error != NULL) {
+            out_error->path = NULL;
+            out_error->message = NULL;
+            out_error->line = 0U;
+        }
+        return false;
+    }
+
+    out_resolved->package_paths = NULL;
+    out_resolved->package_count = 0U;
+    return feng_cli_deps_resolve_for_manifest(program,
+                                              context->manifest_path,
+                                              false,
+                                              release,
+                                              out_resolved,
+                                              out_error);
+}
+
 bool feng_cli_project_prepare_build(const char *program,
                                    const char *path_arg,
                                    bool release,
@@ -107,12 +131,11 @@ bool feng_cli_project_prepare_build(const char *program,
     if (!feng_cli_project_open(path_arg, &context, out_error)) {
         return false;
     }
-    if (!feng_cli_deps_resolve_for_manifest(program,
-                                            context.manifest_path,
-                                            false,
-                                            release,
-                                            out_resolved,
-                                            out_error)) {
+    if (!feng_cli_project_resolve_build_dependencies(program,
+                                                     &context,
+                                                     release,
+                                                     out_resolved,
+                                                     out_error)) {
         feng_cli_project_context_dispose(&context);
         return false;
     }
