@@ -17,6 +17,9 @@ typedef struct FengLexer {
     unsigned int line;
     unsigned int column;
     const char *last_error;
+    const char *pending_doc;
+    size_t pending_doc_length;
+    unsigned int pending_doc_line_breaks;
     int has_peeked;
     FengToken peeked;
 } FengLexer;

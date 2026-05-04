@@ -329,6 +329,7 @@ struct FengTypeMember {
     FengToken token;
     FengTypeMemberKind kind;
     FengVisibility visibility;
+    FengSlice doc_comment;
     FengAnnotation *annotations;
     size_t annotation_count;
     union {
@@ -368,6 +369,7 @@ struct FengDecl {
     FengDeclKind kind;
     FengVisibility visibility;
     bool is_extern;
+    FengSlice doc_comment;
     FengAnnotation *annotations;
     size_t annotation_count;
     union {

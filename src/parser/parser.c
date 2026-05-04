@@ -89,6 +89,17 @@ static bool slice_equals(FengSlice left, FengSlice right) {
     return left.length == right.length && memcmp(left.data, right.data, left.length) == 0;
 }
 
+static FengSlice doc_comment_from_token(const FengToken *token) {
+    FengSlice slice = {0};
+
+    if (token->leading_doc != NULL && token->leading_doc_length > 0U) {
+        slice.data = token->leading_doc;
+        slice.length = token->leading_doc_length;
+    }
+
+    return slice;
+}
+
 static const FengToken *parser_current(const Parser *parser) {
     return &parser->tokens[parser->current];
 }
@@ -583,7 +594,10 @@ static FengCallableSignature parse_callable_signature(Parser *parser,
     return callable;
 }
 
-static FengDecl *new_decl(Parser *parser, FengDeclKind kind, FengToken token) {
+static FengDecl *new_decl(Parser *parser,
+                         FengDeclKind kind,
+                         FengToken token,
+                         FengSlice doc_comment) {
     FengDecl *decl = (FengDecl *)calloc(1U, sizeof(*decl));
 
     if (decl == NULL) {
@@ -593,10 +607,14 @@ static FengDecl *new_decl(Parser *parser, FengDeclKind kind, FengToken token) {
 
     decl->token = token;
     decl->kind = kind;
+    decl->doc_comment = doc_comment;
     return decl;
 }
 
-static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind, FengToken token) {
+static FengTypeMember *new_type_member(Parser *parser,
+                                       FengTypeMemberKind kind,
+                                       FengToken token,
+                                       FengSlice doc_comment) {
     FengTypeMember *member = (FengTypeMember *)calloc(1U, sizeof(*member));
 
     if (member == NULL) {
@@ -606,6 +624,7 @@ static FengTypeMember *new_type_member(Parser *parser, FengTypeMemberKind kind, 
 
     member->token = token;
     member->kind = kind;
+    member->doc_comment = doc_comment;
     return member;
 }
 
@@ -657,12 +676,13 @@ static bool type_ref_is_void_named(const FengTypeRef *type_ref) {
 }
 
 static FengDecl *parse_type_declaration(Parser *parser,
+                                        FengSlice doc_comment,
                                         FengVisibility visibility,
                                         bool is_extern,
                                         FengAnnotation *annotations,
                                         size_t annotation_count) {
     FengToken name_token = parser_current_token(parser);
-    FengDecl *decl = new_decl(parser, FENG_DECL_TYPE, name_token);
+    FengDecl *decl = new_decl(parser, FENG_DECL_TYPE, name_token, doc_comment);
     FengSlice type_name;
 
     if (decl == NULL) {
@@ -712,6 +732,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
         FengAnnotation *member_annotations;
         size_t member_annotation_count = 0U;
         FengVisibility member_visibility;
+        FengSlice member_doc_comment = doc_comment_from_token(parser_current(parser));
         FengTypeMember *member = NULL;
 
         member_annotations = parse_annotations(parser, &member_annotation_count);
@@ -752,7 +773,10 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
 
-            member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD, binding.token);
+            member = new_type_member(parser,
+                                     FENG_TYPE_MEMBER_FIELD,
+                                     binding.token,
+                                     member_doc_comment);
             if (member == NULL) {
                 free_type_ref(binding.type);
                 free_expr(binding.initializer);
@@ -863,7 +887,10 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 }
             }
 
-            member = new_type_member(parser, member_kind, callable.token);
+            member = new_type_member(parser,
+                                     member_kind,
+                                     callable.token,
+                                     member_doc_comment);
             if (member == NULL) {
                 free_parameters(callable.params, callable.param_count);
                 free_type_ref(callable.return_type);
@@ -918,6 +945,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
 static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
     FengToken member_start = parser_current_token(parser);
+    FengSlice doc_comment = doc_comment_from_token(&member_start);
     FengTypeMember *member = NULL;
 
     if (parser_check(parser, FENG_TOKEN_KW_PU) || parser_check(parser, FENG_TOKEN_KW_PR)) {
@@ -948,7 +976,10 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
             free_type_ref(binding.type);
             return NULL;
         }
-        member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD, binding.token);
+        member = new_type_member(parser,
+                     FENG_TYPE_MEMBER_FIELD,
+                     binding.token,
+                     doc_comment);
         if (member == NULL) {
             free_type_ref(binding.type);
             return NULL;
@@ -1003,7 +1034,10 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
             free_block(callable.body);
             return NULL;
         }
-        member = new_type_member(parser, FENG_TYPE_MEMBER_METHOD, callable.token);
+        member = new_type_member(parser,
+                     FENG_TYPE_MEMBER_METHOD,
+                     callable.token,
+                     doc_comment);
         if (member == NULL) {
             free_parameters(callable.params, callable.param_count);
             free_type_ref(callable.return_type);
@@ -1021,6 +1055,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
 }
 
 static FengDecl *parse_spec_declaration(Parser *parser,
+                                        FengSlice doc_comment,
                                         FengVisibility visibility,
                                         bool is_extern,
                                         FengAnnotation *annotations,
@@ -1035,7 +1070,7 @@ static FengDecl *parse_spec_declaration(Parser *parser,
         return NULL;
     }
 
-    decl = new_decl(parser, FENG_DECL_SPEC, name_token);
+    decl = new_decl(parser, FENG_DECL_SPEC, name_token, doc_comment);
     if (decl == NULL) {
         free_annotations(annotations, annotation_count);
         return NULL;
@@ -1139,6 +1174,8 @@ static FengDecl *parse_spec_declaration(Parser *parser,
 }
 
 static FengTypeMember *parse_fit_method_member(Parser *parser) {
+    FengToken doc_token = parser_current_token(parser);
+    FengSlice doc_comment = doc_comment_from_token(&doc_token);
     FengVisibility visibility = parse_visibility(parser);
     FengToken member_start = parser_current_token(parser);
     FengCallableSignature callable;
@@ -1169,7 +1206,10 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     if (parser->error.message != NULL) {
         return NULL;
     }
-    member = new_type_member(parser, FENG_TYPE_MEMBER_METHOD, callable.token);
+    member = new_type_member(parser,
+                             FENG_TYPE_MEMBER_METHOD,
+                             callable.token,
+                             doc_comment);
     if (member == NULL) {
         free_parameters(callable.params, callable.param_count);
         free_type_ref(callable.return_type);
@@ -1182,6 +1222,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
 }
 
 static FengDecl *parse_fit_declaration(Parser *parser,
+                                       FengSlice doc_comment,
                                        FengVisibility visibility,
                                        bool is_extern,
                                        FengAnnotation *annotations,
@@ -1204,7 +1245,7 @@ static FengDecl *parse_fit_declaration(Parser *parser,
         return NULL;
     }
 
-    decl = new_decl(parser, FENG_DECL_FIT, start);
+    decl = new_decl(parser, FENG_DECL_FIT, start, doc_comment);
     if (decl == NULL) {
         return NULL;
     }
@@ -1271,12 +1312,13 @@ static FengDecl *parse_fit_declaration(Parser *parser,
 }
 
 static FengDecl *parse_function_declaration(Parser *parser,
+                                            FengSlice doc_comment,
                                             FengVisibility visibility,
                                             bool is_extern,
                                             FengAnnotation *annotations,
                                             size_t annotation_count) {
     FengToken name_token = parser_current_token(parser);
-    FengDecl *decl = new_decl(parser, FENG_DECL_FUNCTION, name_token);
+    FengDecl *decl = new_decl(parser, FENG_DECL_FUNCTION, name_token, doc_comment);
     FengSlice name;
 
     if (decl == NULL) {
@@ -1310,13 +1352,15 @@ static FengDecl *parse_function_declaration(Parser *parser,
 }
 
 static FengDecl *parse_global_binding(Parser *parser,
-                                      FengVisibility visibility,
-                                      FengMutability mutability,
-                                      FengAnnotation *annotations,
-                                      size_t annotation_count) {
+                      FengSlice doc_comment,
+                      FengVisibility visibility,
+                      FengMutability mutability,
+                      FengAnnotation *annotations,
+                      size_t annotation_count) {
     FengDecl *decl = new_decl(parser,
                               FENG_DECL_GLOBAL_BINDING,
-                              parser_current_token(parser));
+                  parser_current_token(parser),
+                  doc_comment);
 
     if (decl == NULL) {
         free_annotations(annotations, annotation_count);
@@ -1343,6 +1387,7 @@ static FengDecl *parse_global_binding(Parser *parser,
 static FengDecl *parse_declaration(Parser *parser) {
     FengAnnotation *annotations;
     size_t annotation_count = 0U;
+    FengSlice doc_comment = doc_comment_from_token(parser_current(parser));
     FengVisibility visibility;
     bool is_extern = false;
 
@@ -1355,11 +1400,11 @@ static FengDecl *parse_declaration(Parser *parser) {
 
     if (parser_match(parser, FENG_TOKEN_KW_LET)) {
         return parse_global_binding(
-            parser, visibility, FENG_MUTABILITY_LET, annotations, annotation_count);
+            parser, doc_comment, visibility, FENG_MUTABILITY_LET, annotations, annotation_count);
     }
     if (parser_match(parser, FENG_TOKEN_KW_VAR)) {
         return parse_global_binding(
-            parser, visibility, FENG_MUTABILITY_VAR, annotations, annotation_count);
+            parser, doc_comment, visibility, FENG_MUTABILITY_VAR, annotations, annotation_count);
     }
 
     if (parser_match(parser, FENG_TOKEN_KW_EXTERN)) {
@@ -1393,16 +1438,36 @@ static FengDecl *parse_declaration(Parser *parser) {
     }
 
     if (parser_match(parser, FENG_TOKEN_KW_TYPE)) {
-        return parse_type_declaration(parser, visibility, is_extern, annotations, annotation_count);
+        return parse_type_declaration(parser,
+                                      doc_comment,
+                                      visibility,
+                                      is_extern,
+                                      annotations,
+                                      annotation_count);
     }
     if (parser_match(parser, FENG_TOKEN_KW_SPEC)) {
-        return parse_spec_declaration(parser, visibility, is_extern, annotations, annotation_count);
+        return parse_spec_declaration(parser,
+                                      doc_comment,
+                                      visibility,
+                                      is_extern,
+                                      annotations,
+                                      annotation_count);
     }
     if (parser_match(parser, FENG_TOKEN_KW_FIT)) {
-        return parse_fit_declaration(parser, visibility, is_extern, annotations, annotation_count);
+        return parse_fit_declaration(parser,
+                                     doc_comment,
+                                     visibility,
+                                     is_extern,
+                                     annotations,
+                                     annotation_count);
     }
     if (parser_match(parser, FENG_TOKEN_KW_FN)) {
-        return parse_function_declaration(parser, visibility, is_extern, annotations, annotation_count);
+        return parse_function_declaration(parser,
+                                          doc_comment,
+                                          visibility,
+                                          is_extern,
+                                          annotations,
+                                          annotation_count);
     }
 
     free_annotations(annotations, annotation_count);

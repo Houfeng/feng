@@ -109,6 +109,35 @@ static bool is_horizontal_whitespace(char c) {
     return c == ' ' || c == '\t' || c == '\v' || c == '\f';
 }
 
+static void lexer_clear_pending_doc(FengLexer *lexer) {
+    lexer->pending_doc = NULL;
+    lexer->pending_doc_length = 0U;
+    lexer->pending_doc_line_breaks = 0U;
+}
+
+static void lexer_record_doc_comment(FengLexer *lexer, size_t start_offset) {
+    lexer->pending_doc = lexer->source + start_offset;
+    lexer->pending_doc_length = lexer->current - start_offset;
+    lexer->pending_doc_line_breaks = 0U;
+}
+
+static void lexer_note_line_break_after_doc(FengLexer *lexer) {
+    if (lexer->pending_doc == NULL) {
+        return;
+    }
+
+    ++lexer->pending_doc_line_breaks;
+    if (lexer->pending_doc_line_breaks >= 2U) {
+        lexer_clear_pending_doc(lexer);
+    }
+}
+
+static void lexer_attach_pending_doc(FengLexer *lexer, FengToken *token) {
+    token->leading_doc = lexer->pending_doc;
+    token->leading_doc_length = lexer->pending_doc_length;
+    lexer_clear_pending_doc(lexer);
+}
+
 static FengToken make_token(FengLexer *lexer,
                             FengTokenKind kind,
                             size_t start_offset,
@@ -124,7 +153,10 @@ static FengToken make_token(FengLexer *lexer,
     token.line = start_line;
     token.column = start_column;
     token.message = NULL;
+    token.leading_doc = NULL;
+    token.leading_doc_length = 0U;
     token.value.integer = 0;
+    lexer_attach_pending_doc(lexer, &token);
     return token;
 }
 
@@ -205,11 +237,14 @@ static bool skip_whitespace_and_comments(FengLexer *lexer, FengToken *out_error)
         char c = lexer_peek_raw(lexer, 0);
 
         if (is_horizontal_whitespace(c) || c == '\n' || c == '\r') {
-            (void)lexer_advance(lexer);
+            if (lexer_advance(lexer) == '\n') {
+                lexer_note_line_break_after_doc(lexer);
+            }
             continue;
         }
 
         if (c == '/' && lexer_peek_raw(lexer, 1) == '/') {
+            lexer_clear_pending_doc(lexer);
             (void)lexer_advance(lexer);
             (void)lexer_advance(lexer);
 
@@ -229,6 +264,7 @@ static bool skip_whitespace_and_comments(FengLexer *lexer, FengToken *out_error)
             size_t start_offset = lexer->current;
             unsigned int start_line = lexer->line;
             unsigned int start_column = lexer->column;
+            bool is_doc_comment = lexer_peek_raw(lexer, 2) == '*';
             bool found_terminator = false;
 
             (void)lexer_advance(lexer);
@@ -251,6 +287,12 @@ static bool skip_whitespace_and_comments(FengLexer *lexer, FengToken *out_error)
                                         start_column,
                                         "unterminated block comment");
                 return false;
+            }
+
+            if (is_doc_comment) {
+                lexer_record_doc_comment(lexer, start_offset);
+            } else {
+                lexer_clear_pending_doc(lexer);
             }
             continue;
         }
@@ -687,6 +729,7 @@ void feng_lexer_reset(FengLexer *lexer) {
     lexer->line = 1U;
     lexer->column = 1U;
     lexer->last_error = NULL;
+    lexer_clear_pending_doc(lexer);
     lexer->has_peeked = 0;
     lexer->peeked.kind = FENG_TOKEN_EOF;
     lexer->peeked.annotation_kind = FENG_ANNOTATION_NONE;
@@ -696,6 +739,8 @@ void feng_lexer_reset(FengLexer *lexer) {
     lexer->peeked.line = 1U;
     lexer->peeked.column = 1U;
     lexer->peeked.message = NULL;
+    lexer->peeked.leading_doc = NULL;
+    lexer->peeked.leading_doc_length = 0U;
     lexer->peeked.value.integer = 0;
 }
 

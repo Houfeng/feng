@@ -12,6 +12,19 @@
         } \
     } while (0)
 
+static void assert_slice_text(FengSlice slice, const char *expected) {
+    size_t expected_length = expected != NULL ? strlen(expected) : 0U;
+
+    ASSERT(slice.length == expected_length);
+    if (expected == NULL) {
+        ASSERT(slice.data == NULL);
+        return;
+    }
+
+    ASSERT(slice.data != NULL);
+    ASSERT(memcmp(slice.data, expected, expected_length) == 0);
+}
+
 static void test_top_level_declarations(void) {
     const char *source =
         "pu mod libc.math;\n"
@@ -186,6 +199,74 @@ static void test_ast_source_tokens(void) {
     ASSERT(program->declarations[1]->as.type_decl.members[1]->token.line == 10U);
     ASSERT(program->declarations[1]->as.type_decl.members[1]->as.callable.params[0].token.line == 10U);
     ASSERT(program->declarations[1]->as.type_decl.members[1]->as.callable.body->token.line == 10U);
+
+    feng_program_free(program);
+}
+
+static void test_doc_comments_bind_to_declarations_and_members(void) {
+    const char *source =
+        "mod demo.docs;\n"
+        "/** top fn doc */\n"
+        "@bounded\n"
+        "pu fn run() {}\n"
+        "/** type doc */\n"
+        "type User {\n"
+        "    /** field doc */\n"
+        "    @bounded\n"
+        "    pu let id: int;\n"
+        "    /** method doc */\n"
+        "    pu fn info(): int {\n"
+        "        return self.id;\n"
+        "    }\n"
+        "}\n"
+        "spec Named {\n"
+        "    /** spec member doc */\n"
+        "    fn name(): int;\n"
+        "}\n"
+        "fit User {\n"
+        "    /** fit member doc */\n"
+        "    fn extra(): int {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "docs_bind.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 4U);
+
+    assert_slice_text(program->declarations[0]->doc_comment, "/** top fn doc */");
+    assert_slice_text(program->declarations[1]->doc_comment, "/** type doc */");
+    assert_slice_text(program->declarations[1]->as.type_decl.members[0]->doc_comment,
+                      "/** field doc */");
+    assert_slice_text(program->declarations[1]->as.type_decl.members[1]->doc_comment,
+                      "/** method doc */");
+    assert_slice_text(program->declarations[2]->as.spec_decl.as.object.members[0]->doc_comment,
+                      "/** spec member doc */");
+    assert_slice_text(program->declarations[3]->as.fit_decl.members[0]->doc_comment,
+                      "/** fit member doc */");
+
+    feng_program_free(program);
+}
+
+static void test_doc_comments_require_immediate_declaration(void) {
+    const char *source =
+        "mod demo.docs;\n"
+        "/** blank line breaks */\n"
+        "\n"
+        "fn first() {}\n"
+        "/** normal comment breaks */\n"
+        "// separator\n"
+        "fn second() {}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "docs_invalid_bind.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    assert_slice_text(program->declarations[0]->doc_comment, NULL);
+    assert_slice_text(program->declarations[1]->doc_comment, NULL);
 
     feng_program_free(program);
 }
@@ -773,6 +854,8 @@ int main(void) {
     test_block_yield_omits_trailing_semicolon();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
+    test_doc_comments_bind_to_declarations_and_members();
+    test_doc_comments_require_immediate_declaration();
     test_parse_error();
     test_parse_error_after_annotation_semicolon();
     test_parse_error_top_level_fn_missing_body();

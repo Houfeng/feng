@@ -19,6 +19,19 @@ static void assert_lexeme(const FengToken *token, const char *expected) {
     ASSERT(memcmp(token->lexeme, expected, expected_length) == 0);
 }
 
+static void assert_leading_doc(const FengToken *token, const char *expected) {
+    size_t expected_length = expected != NULL ? strlen(expected) : 0U;
+
+    ASSERT(token->leading_doc_length == expected_length);
+    if (expected == NULL) {
+        ASSERT(token->leading_doc == NULL);
+        return;
+    }
+
+    ASSERT(token->leading_doc != NULL);
+    ASSERT(memcmp(token->leading_doc, expected, expected_length) == 0);
+}
+
 static FengToken next_token(FengLexer *lexer, FengTokenKind kind) {
     FengToken token = feng_lexer_next(lexer);
 
@@ -286,6 +299,59 @@ static void test_comments_crlf_and_custom_annotations(void) {
     token = next_token(&lexer, FENG_TOKEN_EOF);
 }
 
+static void test_doc_comment_attaches_to_next_token(void) {
+    const char *source =
+        "/** doc for run */\n"
+        "@bounded\n"
+        "pu fn run() {}\n";
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "doc_comments.f");
+
+    token = next_token(&lexer, FENG_TOKEN_ANNOTATION);
+    assert_leading_doc(&token, "/** doc for run */");
+    token = next_token(&lexer, FENG_TOKEN_KW_PU);
+    assert_leading_doc(&token, NULL);
+    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "run");
+    token = next_token(&lexer, FENG_TOKEN_LPAREN);
+    token = next_token(&lexer, FENG_TOKEN_RPAREN);
+    token = next_token(&lexer, FENG_TOKEN_LBRACE);
+    token = next_token(&lexer, FENG_TOKEN_RBRACE);
+    token = next_token(&lexer, FENG_TOKEN_EOF);
+}
+
+static void test_doc_comment_binding_breaks_on_blank_line_and_normal_comment(void) {
+    const char *source =
+        "/** lost by blank line */\n"
+        "\n"
+        "let a: int;\n"
+        "/** lost by normal comment */\n"
+        "// separator\n"
+        "let b: int;\n";
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "doc_breaks.f");
+
+    token = next_token(&lexer, FENG_TOKEN_KW_LET);
+    assert_leading_doc(&token, NULL);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    token = next_token(&lexer, FENG_TOKEN_COLON);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    token = next_token(&lexer, FENG_TOKEN_SEMICOLON);
+
+    token = next_token(&lexer, FENG_TOKEN_KW_LET);
+    assert_leading_doc(&token, NULL);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    token = next_token(&lexer, FENG_TOKEN_COLON);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    token = next_token(&lexer, FENG_TOKEN_SEMICOLON);
+    token = next_token(&lexer, FENG_TOKEN_EOF);
+}
+
 static void test_error_tokens(void) {
     FengLexer lexer;
     FengToken token;
@@ -451,6 +517,8 @@ int main(void) {
     test_basic_module_tokens();
     test_literals_and_arrow();
     test_comments_crlf_and_custom_annotations();
+    test_doc_comment_attaches_to_next_token();
+    test_doc_comment_binding_breaks_on_blank_line_and_normal_comment();
     test_error_tokens();
     test_bitwise_tokens();
     test_compound_assignment_tokens();
