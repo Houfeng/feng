@@ -209,19 +209,24 @@ async function run() {
         createDiagnosticController,
         filterEntriesForPath,
         findProjectManifestPath,
-        getWorkspaceExecutablePath,
         hasAnyLspCapability,
         isCheckableFengDocument,
         formatDocumentSource,
         resolveExecutablePath
     } = extension.__test__;
 
-    assert.strictEqual(getWorkspaceExecutablePath('/workspace/demo'), path.join('/workspace/demo', 'build', 'bin', 'feng'));
-    assert.strictEqual(getWorkspaceExecutablePath(null), null);
     assert.strictEqual(resolveExecutablePath('./build/bin/feng', '/workspace/demo'), path.join('/workspace/demo', './build/bin/feng'));
     assert.strictEqual(resolveExecutablePath('/usr/local/bin/feng', '/workspace/demo'), '/usr/local/bin/feng');
+    assert.strictEqual(resolveExecutablePath('feng', '/workspace/demo', false), 'feng');
     assert.deepStrictEqual(createServerOptions('./build/bin/feng', '/workspace/demo'), {
         command: path.join('/workspace/demo', './build/bin/feng'),
+        args: ['lsp'],
+        options: {
+            cwd: '/workspace/demo'
+        }
+    });
+    assert.deepStrictEqual(createServerOptions('feng', '/workspace/demo', false), {
+        command: 'feng',
         args: ['lsp'],
         options: {
             cwd: '/workspace/demo'
@@ -470,7 +475,7 @@ async function run() {
         try {
             await extensionWithWorkspaceExecutable.activate({ subscriptions: [] });
             assert.deepStrictEqual(mockClient.recorder.constructorArgs.serverOptions, {
-                command: workspaceExecutable,
+                command: 'feng',
                 args: ['lsp'],
                 options: {
                     cwd: tempRoot

@@ -37,25 +37,12 @@ function getPrimaryWorkspaceRoot(vscodeApi = vscode) {
     return folders[0].uri.fsPath;
 }
 
-function getWorkspaceExecutablePath(workspaceRoot) {
-    if (typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
-        return null;
-    }
-
-    return path.join(workspaceRoot, 'build', 'bin', 'feng');
-}
-
 function resolveExecutablePath(executablePath, workspaceRoot, hasExplicitSetting = true) {
-    const workspaceExecutablePath = getWorkspaceExecutablePath(workspaceRoot);
-
     if (typeof executablePath !== 'string' || executablePath.length === 0) {
-        if (!hasExplicitSetting && workspaceExecutablePath != null && isExistingFile(workspaceExecutablePath)) {
-            return workspaceExecutablePath;
-        }
         return 'feng';
     }
-    if (!hasExplicitSetting && executablePath === 'feng' && workspaceExecutablePath != null && isExistingFile(workspaceExecutablePath)) {
-        return workspaceExecutablePath;
+    if (!hasExplicitSetting && executablePath === 'feng') {
+        return 'feng';
     }
     if (path.isAbsolute(executablePath) || typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
         return executablePath;
@@ -390,7 +377,6 @@ module.exports = {
         getFormattingDocumentSelector,
         getLanguageServiceDocumentSelector,
         getPrimaryWorkspaceRoot,
-        getWorkspaceExecutablePath,
         hasAnyLspCapability,
         isCheckableFengDocument,
         registerLegacyDiagnostics,

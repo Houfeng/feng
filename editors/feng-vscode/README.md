@@ -37,7 +37,7 @@ If the `feng` executable is not available in your system `PATH`, you can configu
 
 This path can be either an absolute path or a path relative to the first workspace root.
 
-When `feng.executablePath` keeps its default value, the extension first tries `./build/bin/feng` under the first workspace root before falling back to `feng` from `PATH`.
+When `feng.executablePath` keeps its default value, the extension runs `feng` directly from your system `PATH`.
 
 ## Formatting Behavior
 
@@ -61,7 +61,7 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 ## Language Service
 
 - Feng source files are connected through the standard VS Code Language Client by launching `feng lsp`.
-- The default executable name is `feng`.
+- The default executable name is `feng`, resolved through your system `PATH`.
 - If your CLI is not in the default lookup path, set `feng.executablePath` to the correct executable location.
 - The extension keeps the built-in formatter and TextMate grammars; only language-service features move behind LSP.
 - If the installed CLI currently reports an empty LSP capability set, the extension temporarily preserves the previous open/save diagnostics path by running `feng check --format json <file>` for project files and `feng tool check <file>` for standalone files.

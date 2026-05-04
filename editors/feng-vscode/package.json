@@ -118,7 +118,7 @@
         "feng.executablePath": {
           "type": "string",
           "default": "feng",
-          "description": "Path to the Feng executable used to launch `feng lsp`. Use an absolute path or a path relative to the first workspace root (e.g. ./build/bin/feng)."
+          "description": "Path to the Feng executable used to launch `feng lsp`. By default the extension runs `feng` from PATH. You can also use an absolute path or a path relative to the first workspace root (e.g. ./build/bin/feng)."
         }
       }
     }

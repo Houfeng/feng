@@ -37,7 +37,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 
 这个路径既可以是绝对路径，也可以是相对于第一个工作区根目录的路径。
 
-当 `feng.executablePath` 保持默认值时，扩展会先尝试第一个工作区根目录下的 `./build/bin/feng`，找不到时才回退到 `PATH` 中的 `feng`。
+当 `feng.executablePath` 保持默认值时，扩展会直接使用系统 `PATH` 中的 `feng`。
 
 ## 格式化说明
 
@@ -61,7 +61,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 ## Language Service 说明
 
 - Feng 源文件通过标准 VS Code Language Client 启动 `feng lsp`。
-- 默认执行程序名为 `feng`。
+- 默认执行程序名为 `feng`，按系统 `PATH` 查找。
 - 如果你的 CLI 不在默认路径中，请通过 `feng.executablePath` 指定可执行文件位置。
 - 内置 formatter 与 TextMate grammar 保持不变；只有语言服务能力改走 LSP。
 - 如果当前安装的 CLI 还返回空的 LSP capability 集合，扩展会临时保留旧的诊断实现：项目文件走 `feng check --format json <file>`，独立文件走 `feng tool check <file>`。
