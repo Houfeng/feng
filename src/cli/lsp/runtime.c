@@ -1833,6 +1833,12 @@ static size_t expr_start(const FengExpr *expr) {
     if (expr->kind == FENG_EXPR_OBJECT_LITERAL && expr->as.object_literal.target != NULL) {
         return expr->as.object_literal.target->token.offset;
     }
+    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL) {
+        return expr_start(expr->as.member.object);
+    }
+    if (expr->kind == FENG_EXPR_CALL && expr->as.call.callee != NULL) {
+        return expr_start(expr->as.call.callee);
+    }
     return expr->token.offset;
 }
 
@@ -3465,6 +3471,37 @@ static const FengDecl *owner_decl_from_type_fact(const FengLspAnalysisSession *s
     return NULL;
 }
 
+/* Resolve the owner type decl from a local binding.  When the binding has an
+ * explicit type annotation, resolve via the type ref.  When the type is
+ * inferred (binding->type == NULL), fall back to the semantic type fact
+ * recorded for the binding itself (keyed by the FengBinding pointer). */
+static const FengDecl *owner_decl_from_binding(const FengLspAnalysisSession *session,
+                                               const FengProgram *program,
+                                               const FengBinding *binding) {
+    const FengSemanticTypeFact *fact;
+
+    if (binding == NULL) {
+        return NULL;
+    }
+    if (binding->type != NULL) {
+        return resolve_named_type_ref(session, program, binding->type);
+    }
+    if (session->analysis == NULL) {
+        return NULL;
+    }
+    fact = feng_semantic_lookup_type_fact(session->analysis, binding);
+    if (fact == NULL) {
+        return NULL;
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+        return fact->type_decl;
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return resolve_named_type_ref(session, program, fact->type_ref);
+    }
+    return NULL;
+}
+
 static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysisSession *session,
                                                            const FengProgram *program,
                                                            const FengExpr *object,
@@ -3493,7 +3530,7 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
                 return resolve_named_type_ref(session, program, local->parameter->type);
             }
             if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
-                return resolve_named_type_ref(session, program, local->binding->type);
+                return owner_decl_from_binding(session, program, local->binding);
             }
             if (local->kind == FENG_LSP_LOCAL_SELF) {
                 return local->self_owner_decl;
@@ -4343,7 +4380,9 @@ static char *normalize_doc_comment(FengSlice raw) {
     return out.data;
 }
 
-static char *hover_text_for_target(const FengLspResolvedTarget *target) {
+static char *hover_text_for_target(const FengLspAnalysisSession *session,
+                                   const FengProgram *program,
+                                   const FengLspResolvedTarget *target) {
     FengLspString signature = {0};
     char *doc = NULL;
     char *result;
@@ -4379,11 +4418,30 @@ static char *hover_text_for_target(const FengLspResolvedTarget *target) {
                                     target->binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") ||
                 !string_append_bytes(&signature,
                                      target->binding->name.data,
-                                     target->binding->name.length) ||
-                !string_append_cstr(&signature, ": ") ||
-                !type_ref_to_string(&signature, target->binding->type)) {
+                                     target->binding->name.length)) {
                 string_dispose(&signature);
                 return NULL;
+            }
+            if (target->binding->type != NULL) {
+                if (!string_append_cstr(&signature, ": ") ||
+                    !type_ref_to_string(&signature, target->binding->type)) {
+                    string_dispose(&signature);
+                    return NULL;
+                }
+            } else {
+                /* Inferred type — resolve via the semantic type fact recorded
+                 * for the binding itself (keyed by FengBinding*). */
+                const FengDecl *inferred = owner_decl_from_binding(session, program, target->binding);
+
+                if (inferred != NULL) {
+                    FengSlice type_name = decl_name(inferred);
+
+                    if (!string_append_cstr(&signature, ": ") ||
+                        !string_append_bytes(&signature, type_name.data, type_name.length)) {
+                        string_dispose(&signature);
+                        return NULL;
+                    }
+                }
             }
             break;
         case FENG_LSP_RESOLVED_SELF:
@@ -7628,7 +7686,7 @@ static bool handle_hover_request(FengLspRuntime *runtime,
     if (build_analysis_session(runtime, document, &session)) {
         program = find_program(&session, document->path);
         if (program != NULL && resolve_target_at(&session, program, offset, &target)) {
-            hover_text = hover_text_for_target(&target);
+            hover_text = hover_text_for_target(&session, program, &target);
             ok = hover_text != NULL &&
                  string_append_cstr(&result, "{\"contents\":{\"kind\":\"plaintext\",\"value\":") &&
                  string_append_json_string(&result, hover_text) &&
