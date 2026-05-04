@@ -2489,6 +2489,191 @@ static void test_deps_remove_updates_manifest(void) {
     free(project_dir);
 }
 
+static void test_deps_install_populates_cache_from_registry(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *manifest_path;
+    char *bundle_path;
+    char *cache_path;
+    char *manifest_text;
+    char *saved_home = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    manifest_path = path_join(project_dir, "feng.fm");
+    bundle_path = path_join(packages_dir, "remote_dep-1.0.0.fb");
+    cache_path = path_join(workspace_dir, ".feng/cache/remote_dep-1.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(packages_dir);
+    write_manifest_only_bundle_or_die(bundle_path,
+                                      "[package]\n"
+                                      "name: \"remote_dep\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    {
+        char *argv[] = { "install", project_dir };
+        ASSERT(feng_cli_deps_main("feng", 2, argv) == 0);
+    }
+
+    ASSERT(path_exists(cache_path));
+    manifest_text = read_text_file(manifest_path);
+    ASSERT(strstr(manifest_text, "remote_dep: \"1.0.0\"") != NULL);
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+    free(saved_home);
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(bundle_path);
+    free(manifest_path);
+    free(packages_dir);
+    free(registry_dir);
+    free(project_dir);
+}
+
+static void test_deps_install_force_refreshes_cached_bundle(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_force_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *manifest_path;
+    char *registry_bundle_path;
+    char *cache_dir;
+    char *cache_path;
+    char *saved_home = NULL;
+    char *remove_error = NULL;
+    FengZipWriter writer = {0};
+    FengZipReader reader = {0};
+    char *zip_error = NULL;
+    void *marker_bytes = NULL;
+    size_t marker_size = 0U;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    manifest_path = path_join(project_dir, "feng.fm");
+    registry_bundle_path = path_join(packages_dir, "remote_dep-1.0.0.fb");
+    cache_dir = path_join(workspace_dir, ".feng/cache");
+    cache_path = path_join(cache_dir, "remote_dep-1.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(packages_dir);
+    mkdir_p(cache_dir);
+    write_manifest_only_bundle_or_die(cache_path,
+                                      "[package]\n"
+                                      "name: \"remote_dep\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    assert_zip_ok(feng_zip_writer_open(registry_bundle_path, &writer, &zip_error), &zip_error);
+    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
+                                            "feng.fm",
+                                            "[package]\n"
+                                            "name: \"remote_dep\"\n"
+                                            "version: \"1.0.0\"\n"
+                                            "arch: \"macos-arm64\"\n"
+                                            "abi: \"feng\"\n",
+                                            strlen("[package]\n"
+                                                   "name: \"remote_dep\"\n"
+                                                   "version: \"1.0.0\"\n"
+                                                   "arch: \"macos-arm64\"\n"
+                                                   "abi: \"feng\"\n"),
+                                            FENG_ZIP_COMPRESSION_DEFLATE,
+                                            &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
+                                            "marker.txt",
+                                            "fresh-cache",
+                                            strlen("fresh-cache"),
+                                            FENG_ZIP_COMPRESSION_DEFLATE,
+                                            &zip_error),
+                  &zip_error);
+    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
+    feng_zip_writer_dispose(&writer);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    {
+        char *argv[] = { "install", "--force", project_dir };
+        ASSERT(feng_cli_deps_main("feng", 3, argv) == 0);
+    }
+
+    ASSERT(feng_zip_reader_open(cache_path, &reader, &zip_error));
+    ASSERT(feng_zip_reader_read(&reader, "marker.txt", &marker_bytes, &marker_size, &zip_error));
+    ASSERT(marker_size == strlen("fresh-cache"));
+    ASSERT(memcmp(marker_bytes, "fresh-cache", marker_size) == 0);
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+    free(saved_home);
+    feng_zip_free(marker_bytes);
+    feng_zip_reader_dispose(&reader);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(cache_dir);
+    free(registry_bundle_path);
+    free(manifest_path);
+    free(packages_dir);
+    free(registry_dir);
+    free(project_dir);
+}
+
 static void test_project_build_default_uses_debug_friendly_flags(void) {
     char template_path[] = "/tmp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
@@ -2955,6 +3140,8 @@ int main(void) {
     test_deps_add_local_rejects_name_mismatch_before_write();
     test_deps_add_local_rejects_non_lib_target_before_write();
     test_deps_remove_updates_manifest();
+    test_deps_install_populates_cache_from_registry();
+    test_deps_install_force_refreshes_cached_bundle();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();
     test_init_rejects_space_separated_target_value();

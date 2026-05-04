@@ -13,7 +13,7 @@
 
 - [x] **第四阶段**：支持外部包 + 本地源码混编。打通显式 `.fb` 输入下的 `mod/.ft` 解析、跨包 `use` 消解与 `lib` 链接，让本地源码可以引用外部 `.fb`，同时保持当前本地源码路径不回退。依赖图解析、`registry`、`cache` 与 `feng deps` 改入第五阶段集中处理。
 
-- [ ] **第五阶段**：建立包管理机制。围绕 `feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存、`feng deps add/remove/install` 与 `feng build` 的依赖图展平规则完善构建工具；具体协议以 `docs/feng-deps.md` 与 `docs/feng-build.md` 为准。
+- [x] **第五阶段**：建立包管理机制。围绕 `feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存、`feng deps add/remove/install` 与 `feng build` 的依赖图展平规则完善构建工具；具体协议以 `docs/feng-deps.md` 与 `docs/feng-build.md` 为准。
 
 - [ ] **第六阶段**：细化 C ABI 兼容和互操作。把 `clib` 选择、`extern fn`、`@fixed`、调用约定、头文件生成、`string` 和数组桥接、异常不得越过 ABI 边界、C 侧长期持有对象的 retain/release 协议做成完整实现。这个阶段之前，不建议主动扩大 ABI 兼容集合。
 
