@@ -4,13 +4,20 @@
 #include "cli/cli.h"
 #include "cli/tool/tool.h"
 
+#ifndef FENG_CLI_VERSION
+#define FENG_CLI_VERSION "dev"
+#endif
+
+static void feng_cli_print_version(const char *program, FILE *stream) {
+    fprintf(stream, "%s %s\n", program, FENG_CLI_VERSION);
+}
+
 void feng_cli_print_usage(const char *program) {
+    int compile_indent = (int)(2U + strlen(program) + strlen(" <files...> "));
+
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s <files...> [options]\n", program);
     fprintf(stderr, "  %s <command>  [options]\n", program);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Compile:\n");
-    fprintf(stderr, "  %s <files...> [--target=<bin|lib>] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "\n");
     fprintf(stderr, "Project:\n");
     fprintf(stderr, "  %s init  [<name>] [--target=<bin|lib>]\n", program);
@@ -21,8 +28,19 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "  %s pack  [<path>]\n", program);
     fprintf(stderr, "  %s deps  <add|remove|install> ...\n", program);
     fprintf(stderr, "\n");
-    fprintf(stderr, "Editor:\n");
-    fprintf(stderr, "  %s lsp   [--stdio]\n", program);
+    fprintf(stderr, "Compile:\n");
+    fprintf(stderr, "  %s <files...> [--target=<bin|lib>] \n", program);
+    fprintf(stderr, "%*s[--out=<dir>] \n", compile_indent, "");
+    fprintf(stderr, "%*s[--name=<artifact>] \n", compile_indent, "");
+    fprintf(stderr, "%*s[--release] \n", compile_indent, "");
+    fprintf(stderr, "%*s[--keep-ir]\n", compile_indent, "");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Global options:\n");
+    fprintf(stderr, "  -h, --help      Display this message.\n");
+    fprintf(stderr, "  -v, --version   Display version information.\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Editor:  \n");
+    fprintf(stderr, "  %s lsp [--stdio]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
@@ -93,6 +111,10 @@ int main(int argc, char **argv) {
 
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
         feng_cli_print_usage(program);
+        return 0;
+    }
+    if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-v") == 0) {
+        feng_cli_print_version(program, stdout);
         return 0;
     }
 

@@ -70,20 +70,76 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing command usage line"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^Compile:$' "$WORK/help.err"; then
-        echo "FAIL[help] missing Compile section"
-        failures=$((failures + 1))
-    fi
     if ! grep -q '^Project:$' "$WORK/help.err"; then
         echo "FAIL[help] missing Project section"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^Editor:$' "$WORK/help.err"; then
+    if ! grep -Eq '^Compile:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Compile section"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^  feng <files...> \[--target=<bin\|lib>\][[:space:]]*$' "$WORK/help.err"; then
+        echo "FAIL[help] missing wrapped compile header line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^[[:space:]]+\[--out=<dir>\][[:space:]]*$' "$WORK/help.err"; then
+        echo "FAIL[help] missing wrapped --out line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^[[:space:]]+\[--name=<artifact>\][[:space:]]*$' "$WORK/help.err"; then
+        echo "FAIL[help] missing wrapped --name line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^[[:space:]]+\[--release\][[:space:]]*$' "$WORK/help.err"; then
+        echo "FAIL[help] missing wrapped --release line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^[[:space:]]+\[--keep-ir\]$' "$WORK/help.err"; then
+        echo "FAIL[help] missing wrapped --keep-ir line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^Global options:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Global options section"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^  -h, --help      Display this message\.$' "$WORK/help.err"; then
+        echo "FAIL[help] missing --help description line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '^  -v, --version   Display version information\.$' "$WORK/help.err"; then
+        echo "FAIL[help] missing --version description line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^Editor:[[:space:]]*$' "$WORK/help.err"; then
         echo "FAIL[help] missing Editor section"
         failures=$((failures + 1))
     fi
-    if ! grep -q ' lsp   \[--stdio\]' "$WORK/help.err"; then
+    if ! grep -q '^  feng lsp \[--stdio\]$' "$WORK/help.err"; then
         echo "FAIL[help] missing lsp usage line"
+        failures=$((failures + 1))
+    fi
+
+    project_line=$(grep -n '^Project:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    compile_line=$(grep -n '^Compile:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    global_line=$(grep -n '^Global options:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    editor_line=$(grep -n '^Editor:[[:space:]]*$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    if [[ -z "$project_line" || -z "$compile_line" || -z "$global_line" || -z "$editor_line" ]] \
+        || (( project_line >= compile_line )) \
+        || (( compile_line >= global_line )) \
+        || (( global_line >= editor_line )); then
+        echo "FAIL[help] usage sections are out of order"
+        failures=$((failures + 1))
+    fi
+fi
+
+# 0.0 version output should be available as a documented global option
+if expect_ok "version" "$FENG" --version; then
+    if ! grep -Eq '^feng .+$' "$WORK/version.out"; then
+        echo "FAIL[version] unexpected version output"
+        failures=$((failures + 1))
+    fi
+    if [[ -s "$WORK/version.err" ]]; then
+        echo "FAIL[version] version command should not write stderr"
         failures=$((failures + 1))
     fi
 fi

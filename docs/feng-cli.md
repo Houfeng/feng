@@ -94,7 +94,7 @@ feng lsp [--stdio]
 所有顶层命令支持以下全局选项:
 
 - `-h`, `--help`: 显示帮助,可用于 `feng` 或任意子命令。
-- `-v`, `--version`: 显示 CLI 版本和编译器版本。
+- `-v`, `--version`: 显示版本信息。
 
 ## 4 常用项目命令
 
@@ -324,9 +324,6 @@ Usage:
   feng <files...> [options]
   feng <command>  [options]
 
-Compile:
-  feng <files...> [--target=<bin|lib>] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]
-
 Project:
   feng init  [<name>] [--target=<bin|lib>]
   feng build [<path>] [--release]
@@ -336,8 +333,19 @@ Project:
   feng pack  [<path>]
   feng deps  <add|remove|install> ...
 
+Compile:
+  feng <files...> [--target=<bin|lib>]
+                  [--out=<dir>]
+                  [--name=<artifact>]
+                  [--release]
+                  [--keep-ir]
+
+Global options:
+  -h, --help      Display this message.
+  -v, --version   Display version information.
+
 Editor:
-  feng lsp   [--stdio]
+  feng lsp [--stdio]
 ```
 
 ## 8 有意不提供的命令
