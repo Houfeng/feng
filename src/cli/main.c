@@ -5,7 +5,7 @@
 #include "cli/tool/tool.h"
 
 #ifndef FENG_CLI_VERSION
-#define FENG_CLI_VERSION "dev"
+#define FENG_CLI_VERSION "0.1.0"
 #endif
 
 static void feng_cli_print_version(const char *program, FILE *stream) {
