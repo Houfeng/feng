@@ -29,6 +29,7 @@ TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
+	src/cli/lsp/server.c src/cli/lsp/main.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/project/build.c \
 	src/cli/project/check.c \

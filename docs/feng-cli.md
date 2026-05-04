@@ -29,6 +29,7 @@ feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名
   clean      清理所有构建产物
   pack       为 lib 项目构建并打包为 .fb
   deps       管理项目依赖（add / remove / install 为二级子命令）
+  lsp        启动 Feng Language Server（stdio）
   tool       编译器调试与高级诊断子命令集合
 
 选项:
@@ -39,9 +40,30 @@ feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名
 其中:
 
 - `init`、`build`、`run`、`check`、`clean`、`pack`、`deps` 面向普通项目开发。
+- `lsp` 面向 IDE / 编辑器集成,当前通过 stdio 提供 Language Server 入口。
 - `tool` 面向编译器开发过程中的调试,以及高级用户对编译细节的诊断。
 
-## 2.1 --out 说明
+## 2.1 `feng lsp`
+
+用途: 在 stdio 上传输 LSP/JSON-RPC 消息,启动 Feng Language Server。
+
+用法:
+
+```text
+feng lsp [--stdio]
+```
+
+选项:
+
+- `--stdio`: 显式声明使用 stdio 传输。当前实现默认即为 stdio,保留该选项用于编辑器与脚本配置显式化。
+
+说明:
+
+- `lsp` 不参与项目构建、打包与运行职责。
+- 当前首版仅提供 stdio 传输,不支持 socket / TCP 等其他传输方式。
+- 除 `--stdio` 之外不接受其他位置参数或命令选项;出现多余参数时应报错退出。
+
+## 2.2 --out 说明
 
 - `--out` 指定输出路径，需要是一个目录，默认 `./build`
 - `build/ir` 中间产物（目前就编译后的 C 源文件），也可放入 `build/ir/c` 中。
@@ -50,7 +72,7 @@ feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名
 - `build/lib` 存放库文件
 - `build/pkg` 存放包文件
 
-## 2.2 顶层直编补充选项
+## 2.3 顶层直编补充选项
 
 - `--name=<产物名>`: 指定本次编译的产物基名。当前 `bin` 目标会落到 `<out>/bin/<name>`；未来 `lib`/`pkg` 目标也复用同一命名语义，而不是再引入只针对可执行文件的选项。
 - `--keep-ir`: 固定保留中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查；未指定时，构建开始前会先清理旧的 `ir/c` 产物，前端 / 语义 / codegen 失败不会留下陈旧 C 文件，只有 host C 编译阶段失败时才保留本次生成的 C 代码用于排查；成功构建后仍会把已变空的 `<out>/ir/c` 与 `<out>/ir` 一并清理掉。

@@ -62,6 +62,54 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] usage should not echo the invoked executable path"
         failures=$((failures + 1))
     fi
+    if ! grep -q ' lsp   \[--stdio\]' "$WORK/help.err"; then
+        echo "FAIL[help] missing lsp usage line"
+        failures=$((failures + 1))
+    fi
+fi
+
+# 0.1 lsp help exposes stdio contract
+if expect_ok "lsp_help" "$FENG" lsp --help; then
+    if ! grep -q '^  feng lsp \[--stdio\]$' "$WORK/lsp_help.err"; then
+        echo "FAIL[lsp_help] missing lsp help usage line"
+        failures=$((failures + 1))
+    fi
+fi
+
+# 0.2 lsp stdio skeleton handles initialize/shutdown/exit
+lsp_initialize='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+lsp_shutdown='{"jsonrpc":"2.0","id":2,"method":"shutdown"}'
+lsp_exit='{"jsonrpc":"2.0","method":"exit"}'
+lsp_input="$WORK/lsp_input.bin"
+{
+    printf 'Content-Length: %s\r\n\r\n%s' "${#lsp_initialize}" "$lsp_initialize"
+    printf 'Content-Length: %s\r\n\r\n%s' "${#lsp_shutdown}" "$lsp_shutdown"
+    printf 'Content-Length: %s\r\n\r\n%s' "${#lsp_exit}" "$lsp_exit"
+} >"$lsp_input"
+if expect_ok "lsp_stdio" bash -lc "cat '$lsp_input' | '$FENG' lsp --stdio"; then
+    if ! grep -q '"id":1' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing initialize response id"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '"capabilities":{}' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing initialize capabilities payload"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '"id":2' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing shutdown response id"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '"result":null' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing shutdown null result"
+        failures=$((failures + 1))
+    fi
+fi
+
+# 0.3 lsp rejects unknown options
+expect_fail "lsp_bad_arg" "$FENG" lsp --bogus || true
+if ! grep -q 'unknown option: --bogus' "$WORK/lsp_bad_arg.err"; then
+    echo "FAIL[lsp_bad_arg] missing unknown-option diagnostic"
+    failures=$((failures + 1))
 fi
 
 # 1. happy path: full pipeline produces a runnable binary

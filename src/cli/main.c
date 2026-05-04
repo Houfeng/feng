@@ -13,6 +13,7 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "  %s clean [<path>]\n", program);
     fprintf(stderr, "  %s pack  [<path>]\n", program);
     fprintf(stderr, "  %s deps  <add|remove|install> ...\n", program);
+    fprintf(stderr, "  %s lsp   [--stdio]\n", program);
     fprintf(stderr, "  %s <files...> [--target=bin|lib] [--out=<dir>] [--name=<artifact>] [--release] [--keep-ir]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
@@ -66,6 +67,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "deps") == 0) {
         return feng_cli_deps_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "lsp") == 0) {
+        return feng_cli_lsp_main(program, rest_argc, rest_argv);
     }
 
     if (strcmp(cmd, "compile") == 0

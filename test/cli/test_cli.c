@@ -357,6 +357,27 @@ static int run_init_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
+static int run_lsp_quiet_stderr(int argc, char **argv) {
+    int saved_stderr;
+    int null_fd;
+    int rc;
+
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    null_fd = open("/dev/null", O_WRONLY);
+    ASSERT(null_fd >= 0);
+    ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+    close(null_fd);
+
+    rc = feng_cli_lsp_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    return rc;
+}
+
 static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     char template_path[] = "/tmp/feng_cli_direct_ir_XXXXXX";
     char *workspace_dir;
@@ -1498,6 +1519,18 @@ static void test_init_rejects_non_empty_directory(void) {
     free(src_dir);
     free(manifest_path);
     free(existing_path);
+}
+
+static void test_lsp_help_returns_success(void) {
+    char *argv[] = { "--help" };
+
+    ASSERT(run_lsp_quiet_stderr(1, argv) == 0);
+}
+
+static void test_lsp_rejects_unknown_option(void) {
+    char *argv[] = { "--bogus" };
+
+    ASSERT(run_lsp_quiet_stderr(1, argv) != 0);
 }
 
 static void test_manifest_defaults(void) {
@@ -3147,6 +3180,8 @@ int main(void) {
     test_init_rejects_space_separated_target_value();
     test_init_prefixes_keyword_package_name();
     test_init_rejects_non_empty_directory();
+    test_lsp_help_returns_success();
+    test_lsp_rejects_unknown_option();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();

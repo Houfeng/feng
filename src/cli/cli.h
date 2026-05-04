@@ -24,6 +24,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv);
 int feng_cli_project_clean_main(const char *program, int argc, char **argv);
 int feng_cli_project_pack_main(const char *program, int argc, char **argv);
 int feng_cli_deps_main(const char *program, int argc, char **argv);
+int feng_cli_lsp_main(const char *program, int argc, char **argv);
 
 int feng_cli_legacy_compile_main(const char *program, int argc, char **argv);
 
