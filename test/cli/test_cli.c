@@ -2015,6 +2015,97 @@ static void test_lsp_hover_definition_and_completion(void) {
     free(source_path);
 }
 
+static void assert_lsp_completion_contains_name(const char *source,
+                                                const char *needle,
+                                                size_t char_offset) {
+    char template_path[] = "/tmp/feng_cli_lsp_completion_incomplete_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int line;
+    unsigned int character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, source);
+
+    find_line_character(source, needle, char_offset, &line, &character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(source);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                uri,
+                                line,
+                                character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+static void test_lsp_member_completion_survives_incomplete_member_access(void) {
+    static const char *kDotSource =
+        "mod test.lsp.completiondot;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let label: string = user.;\n"
+        "}\n";
+    static const char *kPrefixSource =
+        "mod test.lsp.completionprefix;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let label: string = user.n;\n"
+        "}\n";
+
+    assert_lsp_completion_contains_name(kDotSource, "user.;", 5U);
+    assert_lsp_completion_contains_name(kPrefixSource, "user.n;", 6U);
+}
+
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
     static const char *kSource =
         "mod test.lsp.rename;\n"
@@ -2299,6 +2390,140 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     free(prepare_rename_decl);
     free(references_decl);
     free(definition_decl);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+static void test_lsp_rename_accepts_identifier_end_position(void) {
+    static const char *kSource =
+        "mod test.lsp.renameend;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let mirror: string = user.name;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_rename_end_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *prepare_local_end;
+    char *rename_local_end;
+    char *prepare_use_end;
+    char *prepare_field_end;
+    char *shutdown;
+    char *output;
+    char *expected_local_prepare;
+    char *expected_use_prepare;
+    char *expected_field_prepare;
+    FILE *input;
+    unsigned int local_line;
+    unsigned int local_character;
+    unsigned int local_end_line;
+    unsigned int local_end_character;
+    unsigned int use_line;
+    unsigned int use_character;
+    unsigned int use_end_line;
+    unsigned int use_end_character;
+    unsigned int field_line;
+    unsigned int field_character;
+    unsigned int field_end_line;
+    unsigned int field_end_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource, "let user:", 4U, &local_line, &local_character);
+    find_line_character(kSource, "let user:", 8U, &local_end_line, &local_end_character);
+    find_line_character(kSource, "user.name", 0U, &use_line, &use_character);
+    find_line_character(kSource, "user.name", 4U, &use_end_line, &use_end_character);
+    find_line_character(kSource, "user.name", 5U, &field_line, &field_character);
+    find_line_character(kSource, "user.name", 9U, &field_end_line, &field_end_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    prepare_local_end = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   uri,
+                                   local_end_line,
+                                   local_end_character);
+    rename_local_end = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"newName\":\"account\"}}",
+                                  uri,
+                                  local_end_line,
+                                  local_end_character);
+    prepare_use_end = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                 uri,
+                                 use_end_line,
+                                 use_end_character);
+    prepare_field_end = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   uri,
+                                   field_end_line,
+                                   field_end_character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    expected_local_prepare = dup_printf("\"id\":2,\"result\":{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{\"line\":%u,\"character\":%u}},\"placeholder\":\"user\"",
+                                        local_line,
+                                        local_character,
+                                        local_end_line,
+                                        local_end_character);
+    expected_use_prepare = dup_printf("\"id\":4,\"result\":{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{\"line\":%u,\"character\":%u}},\"placeholder\":\"user\"",
+                                      use_line,
+                                      use_character,
+                                      use_end_line,
+                                      use_end_character);
+    expected_field_prepare = dup_printf("\"id\":5,\"result\":{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{\"line\":%u,\"character\":%u}},\"placeholder\":\"name\"",
+                                        field_line,
+                                        field_character,
+                                        field_end_line,
+                                        field_end_character);
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, prepare_local_end);
+    write_lsp_message(input, rename_local_end);
+    write_lsp_message(input, prepare_use_end);
+    write_lsp_message(input, prepare_field_end);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, expected_local_prepare) != NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":{\"changes\":{") != NULL);
+    ASSERT(count_occurrences(output, "\"newText\":\"account\"") == 2);
+    ASSERT(strstr(output, expected_use_prepare) != NULL);
+    ASSERT(strstr(output, expected_field_prepare) != NULL);
+
+    free(output);
+    free(expected_field_prepare);
+    free(expected_use_prepare);
+    free(expected_local_prepare);
+    free(shutdown);
+    free(prepare_field_end);
+    free(prepare_use_end);
+    free(rename_local_end);
+    free(prepare_local_end);
     free(did_open);
     free(initialize);
     free(escaped_text);
@@ -4448,8 +4673,10 @@ int main(void) {
     test_lsp_rejects_unknown_option();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
+    test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();
     test_lsp_didopen_handles_unicode_escape_in_source();
