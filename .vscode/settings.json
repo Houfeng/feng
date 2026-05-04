@@ -1,4 +1,5 @@
 {
+  "feng.executablePath": "./build/bin/feng",
   "cSpell.words": [
     "cdecl",
     "codegen",

@@ -236,6 +236,9 @@ async function run() {
     assert.strictEqual(hasAnyLspCapability({ hoverProvider: true }), true);
     assert.strictEqual(buildLspCapabilityWarning().includes('no language capabilities'), true);
     assert.strictEqual(buildLspStartupWarning(new Error('boom')).includes('boom'), true);
+    assert.strictEqual(buildLspStartupWarning('spawn feng ENOENT').includes('spawn feng ENOENT'), true);
+    assert.strictEqual(buildLspStartupWarning(null).includes('unknown error'), true);
+    assert.strictEqual(buildLspStartupWarning(undefined).includes('unknown error'), true);
 
     assert.strictEqual(isCheckableFengDocument(createDocument('/tmp/manifest.fm', 'feng-manifest')), false);
 

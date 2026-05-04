@@ -310,9 +310,17 @@ function registerLegacyDiagnostics(context,
 }
 
 function buildLspStartupWarning(error) {
-    const message = error != null && typeof error.message === 'string'
-        ? error.message
-        : 'unknown error';
+    let message;
+
+    if (error == null) {
+        message = 'unknown error';
+    } else if (typeof error === 'string') {
+        message = error || 'unknown error';
+    } else if (typeof error.message === 'string') {
+        message = error.message || 'unknown error';
+    } else {
+        message = String(error) || 'unknown error';
+    }
 
     return `Feng LSP startup failed, falling back to legacy diagnostics: ${message}`;
 }
