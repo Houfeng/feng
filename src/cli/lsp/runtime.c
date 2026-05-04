@@ -85,6 +85,13 @@ typedef struct FengLspAnalysisSession {
     size_t source_count;
     char **bundle_paths;
     size_t bundle_count;
+    /* Owned copies of source file paths for project sessions. The sources[]
+     * array borrows path pointers from the project context, which is disposed
+     * before the session is used. We steal source_paths from the context (set
+     * context.source_paths = NULL before dispose) so they outlive the context.
+     * session_dispose() frees these strings and the array. */
+    char **owned_source_paths;
+    size_t owned_source_path_count;
     char *manifest_path;
     bool is_project;
     int exit_code;
@@ -1203,10 +1210,17 @@ static bool diagnostics_append(FengLspDiagnosticCollector *collector,
 }
 
 static void session_dispose(FengLspAnalysisSession *session) {
+    size_t i;
     diagnostics_dispose(&session->diagnostics);
     feng_cli_frontend_bundle_paths_dispose(session->bundle_paths, session->bundle_count);
     feng_semantic_analysis_free(session->analysis);
     feng_cli_free_loaded_sources(session->sources, session->source_count);
+    if (session->owned_source_paths != NULL) {
+        for (i = 0U; i < session->owned_source_path_count; ++i) {
+            free(session->owned_source_paths[i]);
+        }
+        free(session->owned_source_paths);
+    }
     free(session->manifest_path);
     memset(session, 0, sizeof(*session));
 }
@@ -1491,6 +1505,15 @@ static bool build_project_session(const FengLspRuntime *runtime,
                                                              &outputs);
     free(overlays);
     feng_cli_deps_resolved_dispose(&resolved);
+    /* session->sources[i].path borrows pointers from context.source_paths.
+     * Steal the source_paths array before disposing the context so those
+     * pointers remain valid for the lifetime of the session. session_dispose()
+     * will free them via owned_source_paths. Clear source_count too so
+     * feng_cli_project_context_dispose does not iterate a NULL array. */
+    session->owned_source_paths = context.source_paths;
+    session->owned_source_path_count = context.source_count;
+    context.source_paths = NULL;
+    context.source_count = 0U;
     feng_cli_project_context_dispose(&context);
     feng_cli_project_error_dispose(&error);
     return true;
@@ -1799,6 +1822,19 @@ static size_t stmt_end(const FengStmt *stmt);
 static size_t block_end(const FengBlock *block);
 static size_t member_end(const FengTypeMember *member);
 static size_t decl_end(const FengDecl *decl);
+
+/* Returns the byte offset of the first character of expr. For most expressions
+ * this is expr->token.offset, but OBJECT_LITERAL (whose token is '{') actually
+ * begins at the type-name target expression that precedes it. */
+static size_t expr_start(const FengExpr *expr) {
+    if (expr == NULL) {
+        return 0U;
+    }
+    if (expr->kind == FENG_EXPR_OBJECT_LITERAL && expr->as.object_literal.target != NULL) {
+        return expr->as.object_literal.target->token.offset;
+    }
+    return expr->token.offset;
+}
 
 static size_t type_ref_end(const FengTypeRef *type_ref) {
     if (type_ref == NULL) {
@@ -3869,7 +3905,7 @@ static bool find_type_ref_hit(const FengDecl *decl,
 static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
     size_t index;
 
-    if (expr == NULL || offset < expr->token.offset || offset > expr_end(expr)) {
+    if (expr == NULL || offset < expr_start(expr) || offset > expr_end(expr)) {
         return NULL;
     }
     switch (expr->kind) {
@@ -4787,7 +4823,7 @@ static bool resolve_callable_target(const FengResolvedCallable *callable,
 static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
     size_t index;
 
-    if (expr == NULL || offset < expr->token.offset || offset > expr_end(expr)) {
+    if (expr == NULL || offset < expr_start(expr) || offset > expr_end(expr)) {
         return NULL;
     }
     if (expr->kind == FENG_EXPR_CALL && expr->as.call.callee != NULL &&
