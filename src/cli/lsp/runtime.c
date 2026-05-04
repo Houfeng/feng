@@ -143,6 +143,18 @@ typedef struct FengLspCacheQueryContext {
     const FengSymbolImportedModule *current_module;
 } FengLspCacheQueryContext;
 
+typedef struct FengLspReferenceEntry {
+    const char *path;
+    size_t start_offset;
+    size_t end_offset;
+} FengLspReferenceEntry;
+
+typedef struct FengLspReferenceList {
+    FengLspReferenceEntry *items;
+    size_t count;
+    size_t capacity;
+} FengLspReferenceList;
+
 struct FengLspRuntime {
     FengLspDocument *documents;
     size_t document_count;
@@ -1601,6 +1613,15 @@ static bool json_u32(FengLspJsonValue value, unsigned int *out_number) {
         return false;
     }
     *out_number = (unsigned int)parsed;
+    return true;
+}
+
+static bool json_bool(FengLspJsonValue value, bool *out_value) {
+    if (value.type != FENG_LSP_JSON_BOOL || out_value == NULL) {
+        return false;
+    }
+
+    *out_value = (size_t)(value.end - value.start) == 4U;
     return true;
 }
 
@@ -3975,6 +3996,31 @@ static size_t offset_from_position(const char *text,
     return offset;
 }
 
+static void position_from_offset(const char *text,
+                                 size_t offset,
+                                 unsigned int *out_line,
+                                 unsigned int *out_character) {
+    unsigned int line = 0U;
+    unsigned int character = 0U;
+    size_t index = 0U;
+
+    while (text[index] != '\0' && index < offset) {
+        if (text[index] == '\n') {
+            ++line;
+            character = 0U;
+        } else {
+            ++character;
+        }
+        ++index;
+    }
+    if (out_line != NULL) {
+        *out_line = line;
+    }
+    if (out_character != NULL) {
+        *out_character = character;
+    }
+}
+
 static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_ref) {
     size_t index;
 
@@ -4426,6 +4472,166 @@ static bool location_json(FengLspString *json, const char *path, FengToken token
     return true;
 }
 
+static bool range_json_offsets(FengLspString *json,
+                               const char *text,
+                               size_t start_offset,
+                               size_t end_offset) {
+    unsigned int start_line;
+    unsigned int start_character;
+    unsigned int end_line;
+    unsigned int end_character;
+
+    if (json == NULL || text == NULL) {
+        return false;
+    }
+    position_from_offset(text, start_offset, &start_line, &start_character);
+    position_from_offset(text, end_offset, &end_line, &end_character);
+    return string_append_cstr(json, "{\"start\":{\"line\":") &&
+           string_append_format(json, "%u", start_line) &&
+           string_append_cstr(json, ",\"character\":") &&
+           string_append_format(json, "%u", start_character) &&
+           string_append_cstr(json, "},\"end\":{\"line\":") &&
+           string_append_format(json, "%u", end_line) &&
+           string_append_cstr(json, ",\"character\":") &&
+           string_append_format(json, "%u", end_character) &&
+           string_append_cstr(json, "}}");
+}
+
+static bool location_json_offsets(FengLspString *json,
+                                  const char *path,
+                                  const char *text,
+                                  size_t start_offset,
+                                  size_t end_offset) {
+    char *uri;
+
+    if (path == NULL || text == NULL) {
+        return string_append_cstr(json, "null");
+    }
+    uri = path_to_file_uri(path);
+    if (uri == NULL) {
+        return false;
+    }
+    if (!string_append_cstr(json, "{\"uri\":") ||
+        !string_append_json_string(json, uri) ||
+        !string_append_cstr(json, ",\"range\":") ||
+        !range_json_offsets(json, text, start_offset, end_offset) ||
+        !string_append_cstr(json, "}")) {
+        free(uri);
+        return false;
+    }
+    free(uri);
+    return true;
+}
+
+static void reference_list_dispose(FengLspReferenceList *references) {
+    if (references == NULL) {
+        return;
+    }
+    free(references->items);
+    references->items = NULL;
+    references->count = 0U;
+    references->capacity = 0U;
+}
+
+static bool reference_list_contains(const FengLspReferenceList *references,
+                                    const char *path,
+                                    size_t start_offset,
+                                    size_t end_offset) {
+    size_t index;
+
+    if (references == NULL || path == NULL) {
+        return false;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+
+        if (strcmp(entry->path, path) == 0 &&
+            entry->start_offset == start_offset &&
+            entry->end_offset == end_offset) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool reference_list_push(FengLspReferenceList *references,
+                                const char *path,
+                                size_t start_offset,
+                                size_t end_offset) {
+    FengLspReferenceEntry entry;
+
+    if (references == NULL || path == NULL || end_offset < start_offset) {
+        return false;
+    }
+    if (reference_list_contains(references, path, start_offset, end_offset)) {
+        return true;
+    }
+    entry.path = path;
+    entry.start_offset = start_offset;
+    entry.end_offset = end_offset;
+    return append_raw((void **)&references->items,
+                      &references->count,
+                      &references->capacity,
+                      sizeof(entry),
+                      &entry);
+}
+
+static bool slice_offsets_in_source(const FengCliLoadedSource *source,
+                                    FengSlice slice,
+                                    size_t *out_start_offset,
+                                    size_t *out_end_offset) {
+    const char *source_end;
+    const char *slice_end;
+
+    if (source == NULL || source->source == NULL || slice.data == NULL || slice.length == 0U) {
+        return false;
+    }
+    source_end = source->source + source->source_length;
+    slice_end = slice.data + slice.length;
+    if (slice.data < source->source || slice_end > source_end) {
+        return false;
+    }
+    if (out_start_offset != NULL) {
+        *out_start_offset = (size_t)(slice.data - source->source);
+    }
+    if (out_end_offset != NULL) {
+        *out_end_offset = (size_t)(slice_end - source->source);
+    }
+    return true;
+}
+
+static bool reference_list_push_slice(FengLspReferenceList *references,
+                                      const FengCliLoadedSource *source,
+                                      FengSlice slice) {
+    size_t start_offset;
+    size_t end_offset;
+
+    if (!slice_offsets_in_source(source, slice, &start_offset, &end_offset)) {
+        return true;
+    }
+    return reference_list_push(references, source->path, start_offset, end_offset);
+}
+
+static const FengLspReferenceEntry *reference_list_find_offset(const FengLspReferenceList *references,
+                                                               const char *path,
+                                                               size_t offset) {
+    size_t index;
+
+    if (references == NULL || path == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+
+        if (strcmp(entry->path, path) == 0 &&
+            offset >= entry->start_offset &&
+            offset < entry->end_offset) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
 static bool resolve_callable_target(const FengResolvedCallable *callable,
                                     FengLspResolvedTarget *target) {
     memset(target, 0, sizeof(*target));
@@ -4774,6 +4980,13 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
     return NULL;
 }
 
+static bool resolve_object_field_target_decl(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengDecl *decl,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target);
+
 static bool resolve_target_at(const FengLspAnalysisSession *session,
                               const FengProgram *program,
                               size_t offset,
@@ -4810,12 +5023,1742 @@ static bool resolve_target_at(const FengLspAnalysisSession *session,
             return true;
         }
     }
+    if (resolve_object_field_target_decl(session,
+                                         program,
+                                         enclosing_decl,
+                                         offset,
+                                         &locals,
+                                         target)) {
+        local_list_dispose(&locals);
+        return true;
+    }
     expr = find_expr_hit_in_decl(enclosing_decl, offset);
     if (expr != NULL) {
         (void)resolve_expr_target(session, program, expr, &locals, target);
     }
     local_list_dispose(&locals);
     return target->kind != FENG_LSP_RESOLVED_NONE;
+}
+
+static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
+                                   const FengLspResolvedTarget *rhs) {
+    if (lhs == NULL || rhs == NULL || lhs->kind != rhs->kind) {
+        return false;
+    }
+    switch (lhs->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            return lhs->decl == rhs->decl;
+        case FENG_LSP_RESOLVED_MEMBER:
+            return lhs->member == rhs->member;
+        case FENG_LSP_RESOLVED_PARAM:
+            return lhs->parameter == rhs->parameter;
+        case FENG_LSP_RESOLVED_BINDING:
+            return lhs->binding == rhs->binding;
+        case FENG_LSP_RESOLVED_SELF:
+            return lhs->self_owner_decl == rhs->self_owner_decl;
+        case FENG_LSP_RESOLVED_NONE:
+            return true;
+    }
+    return false;
+}
+
+static bool resolved_target_supports_references(const FengLspResolvedTarget *target) {
+    if (target == NULL) {
+        return false;
+    }
+    switch (target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            return target->decl != NULL && target->decl->kind != FENG_DECL_FIT;
+        case FENG_LSP_RESOLVED_MEMBER:
+            return target->member != NULL;
+        case FENG_LSP_RESOLVED_PARAM:
+            return target->parameter != NULL;
+        case FENG_LSP_RESOLVED_BINDING:
+            return target->binding != NULL;
+        case FENG_LSP_RESOLVED_NONE:
+        case FENG_LSP_RESOLVED_SELF:
+            return false;
+    }
+    return false;
+}
+
+static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
+                                       const FengLspResolvedTarget *target) {
+    const FengProgram *owner_program = NULL;
+
+    if (!resolved_target_supports_references(target)) {
+        return false;
+    }
+    switch (target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            if (target->decl == NULL) {
+                return false;
+            }
+            if (target->decl->kind != FENG_DECL_GLOBAL_BINDING &&
+                target->decl->kind != FENG_DECL_TYPE &&
+                target->decl->kind != FENG_DECL_SPEC &&
+                target->decl->kind != FENG_DECL_FUNCTION) {
+                return false;
+            }
+            (void)find_decl_module(session, target->decl, &owner_program);
+            return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+        case FENG_LSP_RESOLVED_MEMBER:
+            if (target->member == NULL) {
+                return false;
+            }
+            if (target->member->kind != FENG_TYPE_MEMBER_FIELD &&
+                target->member->kind != FENG_TYPE_MEMBER_METHOD) {
+                return false;
+            }
+            (void)find_decl_module(session, target->decl, &owner_program);
+            return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+        case FENG_LSP_RESOLVED_PARAM:
+        case FENG_LSP_RESOLVED_BINDING:
+            return true;
+        case FENG_LSP_RESOLVED_NONE:
+        case FENG_LSP_RESOLVED_SELF:
+            return false;
+    }
+    return false;
+}
+
+static bool identifier_name_is_valid(const char *name) {
+    size_t length;
+    size_t index;
+
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+    if (!(name[0] == '_' || isalpha((unsigned char)name[0]))) {
+        return false;
+    }
+    length = strlen(name);
+    for (index = 1U; index < length; ++index) {
+        if (!(name[index] == '_' || isalnum((unsigned char)name[index]))) {
+            return false;
+        }
+    }
+    if (feng_lookup_keyword(name, length, NULL) || feng_is_reserved_word(name, length)) {
+        return false;
+    }
+    if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0) {
+        return false;
+    }
+    return true;
+}
+
+static FengSlice member_name_slice(const FengTypeMember *member) {
+    if (member == NULL) {
+        return (FengSlice){0};
+    }
+    return member->kind == FENG_TYPE_MEMBER_FIELD
+        ? member->as.field.name
+        : member->as.callable.name;
+}
+
+static FengSlice call_callee_name_slice(const FengExpr *callee) {
+    if (callee == NULL) {
+        return (FengSlice){0};
+    }
+    if (callee->kind == FENG_EXPR_IDENTIFIER) {
+        return callee->as.identifier;
+    }
+    if (callee->kind == FENG_EXPR_MEMBER) {
+        return callee->as.member.member;
+    }
+    return (FengSlice){0};
+}
+
+static bool add_reference_if_match(FengLspReferenceList *references,
+                                   const FengCliLoadedSource *source,
+                                   FengSlice slice,
+                                   const FengLspResolvedTarget *expected,
+                                   const FengLspResolvedTarget *candidate) {
+    if (!resolved_targets_equal(expected, candidate)) {
+        return true;
+    }
+    return reference_list_push_slice(references, source, slice);
+}
+
+static bool resolve_expr_reference_target(const FengLspAnalysisSession *session,
+                                          const FengProgram *program,
+                                          const FengDecl *owner_decl,
+                                          const FengTypeMember *owner_member,
+                                          const FengExpr *expr,
+                                          FengLspResolvedTarget *target) {
+    FengLspLocalList locals = {0};
+    bool ok;
+
+    memset(target, 0, sizeof(*target));
+    if (expr == NULL) {
+        return false;
+    }
+    ok = collect_visible_locals(owner_decl, owner_member, expr->token.offset, &locals);
+    if (!ok) {
+        local_list_dispose(&locals);
+        return false;
+    }
+    (void)resolve_expr_target(session, program, expr, &locals, target);
+    local_list_dispose(&locals);
+    return target->kind != FENG_LSP_RESOLVED_NONE;
+}
+
+static bool resolve_object_field_target_expr(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengExpr *expr,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (expr == NULL || offset < expr->token.offset || offset > expr_end(expr)) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (resolve_object_field_target_expr(session,
+                                                     program,
+                                                     expr->as.array_literal.items[index],
+                                                     offset,
+                                                     locals,
+                                                     target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_EXPR_OBJECT_LITERAL: {
+            FengLspResolvedTarget owner_target = {0};
+
+            if (resolve_object_field_target_expr(session,
+                                                 program,
+                                                 expr->as.object_literal.target,
+                                                 offset,
+                                                 locals,
+                                                 target)) {
+                return true;
+            }
+            (void)resolve_expr_target(session,
+                                      program,
+                                      expr->as.object_literal.target,
+                                      locals,
+                                      &owner_target);
+            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                if (offset_in_token(expr->as.object_literal.fields[index].token, offset) &&
+                    owner_target.kind == FENG_LSP_RESOLVED_DECL) {
+                    target->kind = FENG_LSP_RESOLVED_MEMBER;
+                    target->decl = owner_target.decl;
+                    target->member = find_member_by_name(owner_target.decl,
+                                                         expr->as.object_literal.fields[index].name);
+                    return target->member != NULL;
+                }
+                if (resolve_object_field_target_expr(session,
+                                                     program,
+                                                     expr->as.object_literal.fields[index].value,
+                                                     offset,
+                                                     locals,
+                                                     target)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case FENG_EXPR_CALL:
+            if (resolve_object_field_target_expr(session,
+                                                 program,
+                                                 expr->as.call.callee,
+                                                 offset,
+                                                 locals,
+                                                 target)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                if (resolve_object_field_target_expr(session,
+                                                     program,
+                                                     expr->as.call.args[index],
+                                                     offset,
+                                                     locals,
+                                                     target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_EXPR_MEMBER:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.member.object,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_INDEX:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.index.object,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.index.index,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_UNARY:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.unary.operand,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_BINARY:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.binary.left,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.binary.right,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_LAMBDA:
+            if (expr->as.lambda.is_block_body) {
+                size_t statement_index;
+
+                for (statement_index = 0U;
+                     expr->as.lambda.body_block != NULL &&
+                     statement_index < expr->as.lambda.body_block->statement_count;
+                     ++statement_index) {
+                    const FengStmt *statement = expr->as.lambda.body_block->statements[statement_index];
+
+                    if (statement != NULL && offset >= statement->token.offset && offset <= stmt_end(statement)) {
+                        break;
+                    }
+                }
+                return false;
+            }
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.lambda.body,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_CAST:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.cast.value,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_IF:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.if_expr.condition,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_MATCH:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.match_expr.target,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return false;
+    }
+    return false;
+}
+
+static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengStmt *stmt,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target);
+
+static bool resolve_object_field_target_block(const FengLspAnalysisSession *session,
+                                              const FengProgram *program,
+                                              const FengBlock *block,
+                                              size_t offset,
+                                              const FengLspLocalList *locals,
+                                              FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (block == NULL || offset < block->token.offset || offset > block_end(block)) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        if (resolve_object_field_target_stmt(session,
+                                             program,
+                                             block->statements[index],
+                                             offset,
+                                             locals,
+                                             target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengStmt *stmt,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (stmt == NULL || offset < stmt->token.offset || offset > stmt_end(stmt)) {
+        return false;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.block,
+                                                     offset,
+                                                     locals,
+                                                     target);
+        case FENG_STMT_BINDING:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.binding.initializer,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_ASSIGN:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.assign.target,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.assign.value,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_EXPR:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.expr,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_IF:
+            for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
+                if (resolve_object_field_target_expr(session,
+                                                     program,
+                                                     stmt->as.if_stmt.clauses[index].condition,
+                                                     offset,
+                                                     locals,
+                                                     target) ||
+                    resolve_object_field_target_block(session,
+                                                      program,
+                                                      stmt->as.if_stmt.clauses[index].block,
+                                                      offset,
+                                                      locals,
+                                                      target)) {
+                    return true;
+                }
+            }
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.if_stmt.else_block,
+                                                     offset,
+                                                     locals,
+                                                     target);
+        case FENG_STMT_MATCH:
+            if (resolve_object_field_target_expr(session,
+                                                 program,
+                                                 stmt->as.match_stmt.target,
+                                                 offset,
+                                                 locals,
+                                                 target)) {
+                return true;
+            }
+            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
+                if (resolve_object_field_target_block(session,
+                                                      program,
+                                                      stmt->as.match_stmt.branches[index].body,
+                                                      offset,
+                                                      locals,
+                                                      target)) {
+                    return true;
+                }
+            }
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.match_stmt.else_block,
+                                                     offset,
+                                                     locals,
+                                                     target);
+        case FENG_STMT_WHILE:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.while_stmt.condition,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_block(session,
+                                                    program,
+                                                    stmt->as.while_stmt.body,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                return resolve_object_field_target_expr(session,
+                                                        program,
+                                                        stmt->as.for_stmt.iter_expr,
+                                                        offset,
+                                                        locals,
+                                                        target) ||
+                       resolve_object_field_target_block(session,
+                                                        program,
+                                                        stmt->as.for_stmt.body,
+                                                        offset,
+                                                        locals,
+                                                        target);
+            }
+            return resolve_object_field_target_stmt(session,
+                                                    program,
+                                                    stmt->as.for_stmt.init,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.for_stmt.condition,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_stmt(session,
+                                                    program,
+                                                    stmt->as.for_stmt.update,
+                                                    offset,
+                                                    locals,
+                                                    target) ||
+                   resolve_object_field_target_block(session,
+                                                    program,
+                                                    stmt->as.for_stmt.body,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_TRY:
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.try_stmt.try_block,
+                                                     offset,
+                                                     locals,
+                                                     target) ||
+                   resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.try_stmt.catch_block,
+                                                     offset,
+                                                     locals,
+                                                     target) ||
+                   resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.try_stmt.finally_block,
+                                                     offset,
+                                                     locals,
+                                                     target);
+        case FENG_STMT_RETURN:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.return_value,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_THROW:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    stmt->as.throw_value,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return false;
+    }
+    return false;
+}
+
+static bool resolve_object_field_target_decl(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengDecl *decl,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (decl == NULL || offset < decl->token.offset || offset > decl_end(decl)) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    decl->as.binding.initializer,
+                                                    offset,
+                                                    locals,
+                                                    target);
+        case FENG_DECL_FUNCTION:
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     decl->as.function_decl.body,
+                                                     offset,
+                                                     locals,
+                                                     target);
+        case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+                const FengTypeMember *member = decl->as.type_decl.members[index];
+
+                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (resolve_object_field_target_expr(session,
+                                                         program,
+                                                         member->as.field.initializer,
+                                                         offset,
+                                                         locals,
+                                                         target)) {
+                        return true;
+                    }
+                } else if (resolve_object_field_target_block(session,
+                                                             program,
+                                                             member->as.callable.body,
+                                                             offset,
+                                                             locals,
+                                                             target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_DECL_SPEC:
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
+                    const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
+
+                    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                        if (resolve_object_field_target_expr(session,
+                                                             program,
+                                                             member->as.field.initializer,
+                                                             offset,
+                                                             locals,
+                                                             target)) {
+                            return true;
+                        }
+                    } else if (resolve_object_field_target_block(session,
+                                                                 program,
+                                                                 member->as.callable.body,
+                                                                 offset,
+                                                                 locals,
+                                                                 target)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        case FENG_DECL_FIT:
+            for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
+                const FengTypeMember *member = decl->as.fit_decl.members[index];
+
+                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (resolve_object_field_target_expr(session,
+                                                         program,
+                                                         member->as.field.initializer,
+                                                         offset,
+                                                         locals,
+                                                         target)) {
+                        return true;
+                    }
+                } else if (resolve_object_field_target_block(session,
+                                                             program,
+                                                             member->as.callable.body,
+                                                             offset,
+                                                             locals,
+                                                             target)) {
+                    return true;
+                }
+            }
+            return false;
+    }
+    return false;
+}
+
+static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
+                                           const FengProgram *program,
+                                           const FengCliLoadedSource *source,
+                                           const FengTypeRef *type_ref,
+                                           const FengLspResolvedTarget *target,
+                                           FengLspReferenceList *references);
+
+static bool collect_references_in_expr(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengCliLoadedSource *source,
+                                       const FengDecl *owner_decl,
+                                       const FengTypeMember *owner_member,
+                                       const FengExpr *expr,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references);
+
+static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengCliLoadedSource *source,
+                                       const FengDecl *owner_decl,
+                                       const FengTypeMember *owner_member,
+                                       const FengStmt *stmt,
+                                       bool include_declaration,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references);
+
+static bool collect_references_in_block(const FengLspAnalysisSession *session,
+                                        const FengProgram *program,
+                                        const FengCliLoadedSource *source,
+                                        const FengDecl *owner_decl,
+                                        const FengTypeMember *owner_member,
+                                        const FengBlock *block,
+                                        bool include_declaration,
+                                        const FengLspResolvedTarget *target,
+                                        FengLspReferenceList *references) {
+    size_t index;
+
+    if (block == NULL) {
+        return true;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        if (!collect_references_in_stmt(session,
+                                        program,
+                                        source,
+                                        owner_decl,
+                                        owner_member,
+                                        block->statements[index],
+                                        include_declaration,
+                                        target,
+                                        references)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool collect_references_in_expr(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengCliLoadedSource *source,
+                                       const FengDecl *owner_decl,
+                                       const FengTypeMember *owner_member,
+                                       const FengExpr *expr,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references) {
+    size_t index;
+
+    if (expr == NULL) {
+        return true;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_MEMBER: {
+            FengLspResolvedTarget candidate = {0};
+
+            if (resolve_expr_reference_target(session,
+                                             program,
+                                             owner_decl,
+                                             owner_member,
+                                             expr,
+                                             &candidate)) {
+                FengSlice slice = expr->kind == FENG_EXPR_IDENTIFIER
+                    ? expr->as.identifier
+                    : expr->as.member.member;
+
+                if (!add_reference_if_match(references, source, slice, target, &candidate)) {
+                    return false;
+                }
+            }
+            if (expr->kind == FENG_EXPR_MEMBER) {
+                return collect_references_in_expr(session,
+                                                  program,
+                                                  source,
+                                                  owner_decl,
+                                                  owner_member,
+                                                  expr->as.member.object,
+                                                  target,
+                                                  references);
+            }
+            return true;
+        }
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (!collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                expr->as.array_literal.items[index],
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_OBJECT_LITERAL:
+        {
+            FengLspResolvedTarget owner_target = {0};
+
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            expr->as.object_literal.target,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            (void)resolve_expr_reference_target(session,
+                                               program,
+                                               owner_decl,
+                                               owner_member,
+                                               expr->as.object_literal.target,
+                                               &owner_target);
+            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                if (owner_target.kind == FENG_LSP_RESOLVED_DECL) {
+                    FengLspResolvedTarget field_target = {
+                        .kind = FENG_LSP_RESOLVED_MEMBER,
+                        .decl = owner_target.decl,
+                        .member = find_member_by_name(owner_target.decl,
+                                                     expr->as.object_literal.fields[index].name)
+                    };
+
+                    if (field_target.member != NULL &&
+                        !add_reference_if_match(references,
+                                                source,
+                                                expr->as.object_literal.fields[index].name,
+                                                target,
+                                                &field_target)) {
+                        return false;
+                    }
+                }
+                if (!collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                expr->as.object_literal.fields[index].value,
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case FENG_EXPR_CALL: {
+            FengLspResolvedTarget candidate = {0};
+
+            if (resolve_callable_target(&expr->as.call.resolved_callable, &candidate)) {
+                if (!add_reference_if_match(references,
+                                            source,
+                                            call_callee_name_slice(expr->as.call.callee),
+                                            target,
+                                            &candidate)) {
+                    return false;
+                }
+                if (expr->as.call.callee != NULL && expr->as.call.callee->kind == FENG_EXPR_MEMBER &&
+                    !collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                expr->as.call.callee->as.member.object,
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            } else if (!collect_references_in_expr(session,
+                                                   program,
+                                                   source,
+                                                   owner_decl,
+                                                   owner_member,
+                                                   expr->as.call.callee,
+                                                   target,
+                                                   references)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                if (!collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                expr->as.call.args[index],
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case FENG_EXPR_INDEX:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.index.object,
+                                              target,
+                                              references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.index.index,
+                                              target,
+                                              references);
+        case FENG_EXPR_UNARY:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.unary.operand,
+                                              target,
+                                              references);
+        case FENG_EXPR_BINARY:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.binary.left,
+                                              target,
+                                              references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.binary.right,
+                                              target,
+                                              references);
+        case FENG_EXPR_LAMBDA:
+            if (expr->as.lambda.is_block_body) {
+                return collect_references_in_block(session,
+                                                   program,
+                                                   source,
+                                                   owner_decl,
+                                                   owner_member,
+                                                   expr->as.lambda.body_block,
+                                                   false,
+                                                   target,
+                                                   references);
+            }
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.lambda.body,
+                                              target,
+                                              references);
+        case FENG_EXPR_CAST:
+            return collect_references_in_type_ref(session,
+                                                  program,
+                                                  source,
+                                                  expr->as.cast.type,
+                                                  target,
+                                                  references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.cast.value,
+                                              target,
+                                              references);
+        case FENG_EXPR_IF:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.if_expr.condition,
+                                              target,
+                                              references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.if_expr.then_block,
+                                              false,
+                                              target,
+                                              references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.if_expr.else_block,
+                                              false,
+                                              target,
+                                              references);
+        case FENG_EXPR_MATCH:
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            expr->as.match_expr.target,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                if (!collect_references_in_block(session,
+                                                 program,
+                                                 source,
+                                                 owner_decl,
+                                                 owner_member,
+                                                 expr->as.match_expr.branches[index].body,
+                                                 false,
+                                                 target,
+                                                 references)) {
+                    return false;
+                }
+            }
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               expr->as.match_expr.else_block,
+                                               false,
+                                               target,
+                                               references);
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+    }
+    return true;
+}
+
+static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
+                                           const FengProgram *program,
+                                           const FengCliLoadedSource *source,
+                                           const FengTypeRef *type_ref,
+                                           const FengLspResolvedTarget *target,
+                                           FengLspReferenceList *references) {
+    if (type_ref == NULL) {
+        return true;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED) {
+        FengLspResolvedTarget candidate = {0};
+
+        candidate.kind = FENG_LSP_RESOLVED_DECL;
+        candidate.decl = resolve_named_type_ref(session, program, type_ref);
+        if (candidate.decl != NULL &&
+            !add_reference_if_match(references,
+                                    source,
+                                    type_ref->as.named.segments[type_ref->as.named.segment_count - 1U],
+                                    target,
+                                    &candidate)) {
+            return false;
+        }
+        return true;
+    }
+    return collect_references_in_type_ref(session,
+                                          program,
+                                          source,
+                                          type_ref->as.inner,
+                                          target,
+                                          references);
+}
+
+static bool collect_param_declarations(const FengCliLoadedSource *source,
+                                       const FengParameter *params,
+                                       size_t param_count,
+                                       bool include_declaration,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references) {
+    size_t index;
+
+    if (!include_declaration || target == NULL || target->kind != FENG_LSP_RESOLVED_PARAM) {
+        return true;
+    }
+    for (index = 0U; index < param_count; ++index) {
+        if (target->parameter == &params[index] &&
+            !reference_list_push_slice(references, source, params[index].name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengCliLoadedSource *source,
+                                       const FengDecl *owner_decl,
+                                       const FengTypeMember *owner_member,
+                                       const FengStmt *stmt,
+                                       bool include_declaration,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references) {
+    size_t index;
+
+    if (stmt == NULL) {
+        return true;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               stmt->as.block,
+                                               include_declaration,
+                                               target,
+                                               references);
+        case FENG_STMT_BINDING:
+            if (include_declaration && target != NULL &&
+                target->kind == FENG_LSP_RESOLVED_BINDING &&
+                target->binding == &stmt->as.binding &&
+                !reference_list_push_slice(references, source, stmt->as.binding.name)) {
+                return false;
+            }
+            return collect_references_in_type_ref(session,
+                                                  program,
+                                                  source,
+                                                  stmt->as.binding.type,
+                                                  target,
+                                                  references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.binding.initializer,
+                                              target,
+                                              references);
+        case FENG_STMT_ASSIGN:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.assign.target,
+                                              target,
+                                              references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.assign.value,
+                                              target,
+                                              references);
+        case FENG_STMT_EXPR:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.expr,
+                                              target,
+                                              references);
+        case FENG_STMT_IF:
+            for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
+                if (!collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                stmt->as.if_stmt.clauses[index].condition,
+                                                target,
+                                                references) ||
+                    !collect_references_in_block(session,
+                                                 program,
+                                                 source,
+                                                 owner_decl,
+                                                 owner_member,
+                                                 stmt->as.if_stmt.clauses[index].block,
+                                                 include_declaration,
+                                                 target,
+                                                 references)) {
+                    return false;
+                }
+            }
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               stmt->as.if_stmt.else_block,
+                                               include_declaration,
+                                               target,
+                                               references);
+        case FENG_STMT_MATCH:
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            stmt->as.match_stmt.target,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
+                if (!collect_references_in_block(session,
+                                                 program,
+                                                 source,
+                                                 owner_decl,
+                                                 owner_member,
+                                                 stmt->as.match_stmt.branches[index].body,
+                                                 include_declaration,
+                                                 target,
+                                                 references)) {
+                    return false;
+                }
+            }
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               stmt->as.match_stmt.else_block,
+                                               include_declaration,
+                                               target,
+                                               references);
+        case FENG_STMT_WHILE:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.while_stmt.condition,
+                                              target,
+                                              references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.while_stmt.body,
+                                              include_declaration,
+                                              target,
+                                              references);
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                if (include_declaration && target != NULL &&
+                    target->kind == FENG_LSP_RESOLVED_BINDING &&
+                    target->binding == &stmt->as.for_stmt.iter_binding &&
+                    !reference_list_push_slice(references, source, stmt->as.for_stmt.iter_binding.name)) {
+                    return false;
+                }
+                return collect_references_in_type_ref(session,
+                                                      program,
+                                                      source,
+                                                      stmt->as.for_stmt.iter_binding.type,
+                                                      target,
+                                                      references) &&
+                       collect_references_in_expr(session,
+                                                  program,
+                                                  source,
+                                                  owner_decl,
+                                                  owner_member,
+                                                  stmt->as.for_stmt.iter_expr,
+                                                  target,
+                                                  references) &&
+                       collect_references_in_block(session,
+                                                  program,
+                                                  source,
+                                                  owner_decl,
+                                                  owner_member,
+                                                  stmt->as.for_stmt.body,
+                                                  include_declaration,
+                                                  target,
+                                                  references);
+            }
+            return collect_references_in_stmt(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.for_stmt.init,
+                                              include_declaration,
+                                              target,
+                                              references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.for_stmt.condition,
+                                              target,
+                                              references) &&
+                   collect_references_in_stmt(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.for_stmt.update,
+                                              include_declaration,
+                                              target,
+                                              references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.for_stmt.body,
+                                              include_declaration,
+                                              target,
+                                              references);
+        case FENG_STMT_TRY:
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               stmt->as.try_stmt.try_block,
+                                               include_declaration,
+                                               target,
+                                               references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.try_stmt.catch_block,
+                                              include_declaration,
+                                              target,
+                                              references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.try_stmt.finally_block,
+                                              include_declaration,
+                                              target,
+                                              references);
+        case FENG_STMT_RETURN:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.return_value,
+                                              target,
+                                              references);
+        case FENG_STMT_THROW:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              stmt->as.throw_value,
+                                              target,
+                                              references);
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+    return true;
+}
+
+static bool collect_references_in_member(const FengLspAnalysisSession *session,
+                                         const FengProgram *program,
+                                         const FengCliLoadedSource *source,
+                                         const FengDecl *owner_decl,
+                                         const FengTypeMember *member,
+                                         bool include_declaration,
+                                         const FengLspResolvedTarget *target,
+                                         FengLspReferenceList *references) {
+    if (member == NULL) {
+        return true;
+    }
+    if (include_declaration && target != NULL &&
+        target->kind == FENG_LSP_RESOLVED_MEMBER &&
+        target->member == member &&
+        !reference_list_push_slice(references, source, member_name_slice(member))) {
+        return false;
+    }
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        return collect_references_in_type_ref(session,
+                                              program,
+                                              source,
+                                              member->as.field.type,
+                                              target,
+                                              references) &&
+               collect_references_in_expr(session,
+                                          program,
+                                          source,
+                                          owner_decl,
+                                          member,
+                                          member->as.field.initializer,
+                                          target,
+                                          references);
+    }
+    return collect_param_declarations(source,
+                                      member->as.callable.params,
+                                      member->as.callable.param_count,
+                                      include_declaration,
+                                      target,
+                                      references) &&
+           collect_references_in_type_ref(session,
+                                          program,
+                                          source,
+                                          member->as.callable.return_type,
+                                          target,
+                                          references) &&
+           collect_references_in_block(session,
+                                       program,
+                                       source,
+                                       owner_decl,
+                                       member,
+                                       member->as.callable.body,
+                                       include_declaration,
+                                       target,
+                                       references);
+}
+
+static bool collect_references_in_decl(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengCliLoadedSource *source,
+                                       const FengDecl *decl,
+                                       bool include_declaration,
+                                       const FengLspResolvedTarget *target,
+                                       FengLspReferenceList *references) {
+    size_t index;
+
+    if (decl == NULL) {
+        return true;
+    }
+    if (include_declaration && target != NULL &&
+        target->kind == FENG_LSP_RESOLVED_DECL &&
+        target->decl == decl &&
+        decl->kind != FENG_DECL_FIT &&
+        !reference_list_push_slice(references, source, decl_name(decl))) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return collect_references_in_type_ref(session,
+                                                  program,
+                                                  source,
+                                                  decl->as.binding.type,
+                                                  target,
+                                                  references) &&
+                   collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              decl,
+                                              NULL,
+                                              decl->as.binding.initializer,
+                                              target,
+                                              references);
+        case FENG_DECL_FUNCTION:
+            return collect_param_declarations(source,
+                                              decl->as.function_decl.params,
+                                              decl->as.function_decl.param_count,
+                                              include_declaration,
+                                              target,
+                                              references) &&
+                   collect_references_in_type_ref(session,
+                                                  program,
+                                                  source,
+                                                  decl->as.function_decl.return_type,
+                                                  target,
+                                                  references) &&
+                   collect_references_in_block(session,
+                                              program,
+                                              source,
+                                              decl,
+                                              NULL,
+                                              decl->as.function_decl.body,
+                                              include_declaration,
+                                              target,
+                                              references);
+        case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                if (!collect_references_in_type_ref(session,
+                                                    program,
+                                                    source,
+                                                    decl->as.type_decl.declared_specs[index],
+                                                    target,
+                                                    references)) {
+                    return false;
+                }
+            }
+            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+                if (!collect_references_in_member(session,
+                                                  program,
+                                                  source,
+                                                  decl,
+                                                  decl->as.type_decl.members[index],
+                                                  include_declaration,
+                                                  target,
+                                                  references)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_DECL_SPEC:
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (!collect_references_in_type_ref(session,
+                                                    program,
+                                                    source,
+                                                    decl->as.spec_decl.parent_specs[index],
+                                                    target,
+                                                    references)) {
+                    return false;
+                }
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
+                    if (!collect_references_in_member(session,
+                                                      program,
+                                                      source,
+                                                      decl,
+                                                      decl->as.spec_decl.as.object.members[index],
+                                                      include_declaration,
+                                                      target,
+                                                      references)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        case FENG_DECL_FIT:
+            if (!collect_references_in_type_ref(session,
+                                                program,
+                                                source,
+                                                decl->as.fit_decl.target,
+                                                target,
+                                                references)) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                if (!collect_references_in_type_ref(session,
+                                                    program,
+                                                    source,
+                                                    decl->as.fit_decl.specs[index],
+                                                    target,
+                                                    references)) {
+                    return false;
+                }
+            }
+            for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
+                if (!collect_references_in_member(session,
+                                                  program,
+                                                  source,
+                                                  decl,
+                                                  decl->as.fit_decl.members[index],
+                                                  include_declaration,
+                                                  target,
+                                                  references)) {
+                    return false;
+                }
+            }
+            return true;
+    }
+    return true;
+}
+
+static bool collect_references(const FengLspAnalysisSession *session,
+                               bool include_declaration,
+                               const FengLspResolvedTarget *target,
+                               FengLspReferenceList *references) {
+    size_t index;
+
+    if (session == NULL || references == NULL || !resolved_target_supports_references(target)) {
+        return false;
+    }
+    for (index = 0U; index < session->source_count; ++index) {
+        const FengCliLoadedSource *source = &session->sources[index];
+        const FengProgram *program = source->program;
+        size_t decl_index;
+
+        if (program == NULL) {
+            continue;
+        }
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            if (!collect_references_in_decl(session,
+                                            program,
+                                            source,
+                                            program->declarations[decl_index],
+                                            include_declaration,
+                                            target,
+                                            references)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static const FengCliLoadedSource *find_reference_source(const FengLspAnalysisSession *session,
+                                                        const FengLspReferenceEntry *entry) {
+    return session != NULL && entry != NULL ? find_source(session, entry->path) : NULL;
+}
+
+static char *dup_reference_text(const FengCliLoadedSource *source,
+                                const FengLspReferenceEntry *entry) {
+    if (source == NULL || entry == NULL ||
+        entry->end_offset <= entry->start_offset ||
+        entry->end_offset > source->source_length) {
+        return NULL;
+    }
+    return dup_range(source->source + entry->start_offset,
+                     source->source + entry->end_offset);
+}
+
+static bool append_reference_location(FengLspString *json,
+                                      bool *first,
+                                      const FengCliLoadedSource *source,
+                                      const FengLspReferenceEntry *entry) {
+    if (!*first && !string_append_cstr(json, ",")) {
+        return false;
+    }
+    *first = false;
+    return location_json_offsets(json,
+                                 source->path,
+                                 source->source,
+                                 entry->start_offset,
+                                 entry->end_offset);
+}
+
+static bool build_references_json(const FengLspAnalysisSession *session,
+                                  const FengLspReferenceList *references,
+                                  FengLspString *json) {
+    bool first = true;
+    size_t index;
+
+    if (session == NULL || references == NULL || json == NULL ||
+        !string_append_cstr(json, "[")) {
+        return false;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+        const FengCliLoadedSource *source = find_reference_source(session, entry);
+
+        if (source == NULL) {
+            continue;
+        }
+        if (!append_reference_location(json, &first, source, entry)) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "]");
+}
+
+static bool build_prepare_rename_json(const FengCliLoadedSource *source,
+                                      const FengLspReferenceEntry *entry,
+                                      FengLspString *json) {
+    char *placeholder;
+    bool ok;
+
+    if (source == NULL || entry == NULL) {
+        return false;
+    }
+    placeholder = dup_reference_text(source, entry);
+    if (placeholder == NULL) {
+        return false;
+    }
+    ok = string_append_cstr(json, "{\"range\":") &&
+         range_json_offsets(json, source->source, entry->start_offset, entry->end_offset) &&
+         string_append_cstr(json, ",\"placeholder\":") &&
+         string_append_json_string(json, placeholder) &&
+         string_append_cstr(json, "}");
+    free(placeholder);
+    return ok;
+}
+
+static bool build_rename_json(const FengLspAnalysisSession *session,
+                              const FengLspReferenceList *references,
+                              const char *new_name,
+                              FengLspString *json) {
+    bool first_path = true;
+    size_t index;
+
+    if (session == NULL || references == NULL || new_name == NULL || json == NULL ||
+        !string_append_cstr(json, "{\"changes\":{")) {
+        return false;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+        const FengCliLoadedSource *source;
+        char *uri;
+        bool first_edit = true;
+        size_t edit_index;
+        size_t seen_index;
+
+        for (seen_index = 0U; seen_index < index; ++seen_index) {
+            if (strcmp(references->items[seen_index].path, entry->path) == 0) {
+                break;
+            }
+        }
+        if (seen_index != index) {
+            continue;
+        }
+        source = find_reference_source(session, entry);
+        if (source == NULL) {
+            continue;
+        }
+        uri = path_to_file_uri(entry->path);
+        if (uri == NULL) {
+            return false;
+        }
+        if (!first_path && !string_append_cstr(json, ",")) {
+            free(uri);
+            return false;
+        }
+        first_path = false;
+        if (!string_append_json_string(json, uri) || !string_append_cstr(json, ":[")) {
+            free(uri);
+            return false;
+        }
+        free(uri);
+        for (edit_index = index; edit_index < references->count; ++edit_index) {
+            const FengLspReferenceEntry *edit = &references->items[edit_index];
+
+            if (strcmp(edit->path, entry->path) != 0) {
+                continue;
+            }
+            if (!first_edit && !string_append_cstr(json, ",")) {
+                return false;
+            }
+            first_edit = false;
+            if (!string_append_cstr(json, "{\"range\":") ||
+                !range_json_offsets(json,
+                                    source->source,
+                                    edit->start_offset,
+                                    edit->end_offset) ||
+                !string_append_cstr(json, ",\"newText\":") ||
+                !string_append_json_string(json, new_name) ||
+                !string_append_cstr(json, "}")) {
+                return false;
+            }
+        }
+        if (!string_append_cstr(json, "]")) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "}}");
 }
 
 static bool find_symbol_decl_token_hit_member(const FengLspCacheQueryContext *context,
@@ -5942,6 +7885,229 @@ static bool handle_completion_request(FengLspRuntime *runtime,
     return ok;
 }
 
+static bool handle_references_request(FengLspRuntime *runtime,
+                                      FILE *output,
+                                      FengLspJsonValue id,
+                                      FengLspJsonValue params) {
+    FengLspJsonValue text_document = {0};
+    FengLspJsonValue uri_value = {0};
+    FengLspJsonValue position = {0};
+    FengLspJsonValue line_value = {0};
+    FengLspJsonValue char_value = {0};
+    FengLspJsonValue context = {0};
+    FengLspJsonValue include_decl_value = {0};
+    char *uri;
+    unsigned int line;
+    unsigned int character;
+    bool include_declaration = false;
+    FengLspDocument *document;
+    FengLspAnalysisSession session = {0};
+    const FengProgram *program;
+    FengLspResolvedTarget target = {0};
+    FengLspReferenceList references = {0};
+    FengLspString json = {0};
+    bool ok;
+    size_t offset;
+
+    if (!json_object_get(params, "textDocument", &text_document) ||
+        !json_object_get(text_document, "uri", &uri_value) ||
+        !json_object_get(params, "position", &position) ||
+        !json_object_get(position, "line", &line_value) ||
+        !json_object_get(position, "character", &char_value)) {
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    if (json_object_get(params, "context", &context) &&
+        json_object_get(context, "includeDeclaration", &include_decl_value) &&
+        !json_bool(include_decl_value, &include_declaration)) {
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    uri = json_string_dup(uri_value);
+    if (uri == NULL || !json_u32(line_value, &line) || !json_u32(char_value, &character)) {
+        free(uri);
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    document = find_document(runtime, uri);
+    if (document == NULL) {
+        free(uri);
+        return send_json_response(output, id, "[]");
+    }
+    offset = offset_from_position(document->text, line, character);
+    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+        free(uri);
+        session_dispose(&session);
+        return send_json_response(output, id, "[]");
+    }
+    program = find_program(&session, document->path);
+    if (program == NULL || !resolve_target_at(&session, program, offset, &target) ||
+        !collect_references(&session, include_declaration, &target, &references) ||
+        !build_references_json(&session, &references, &json)) {
+        free(uri);
+        reference_list_dispose(&references);
+        session_dispose(&session);
+        string_dispose(&json);
+        return send_json_response(output, id, "[]");
+    }
+    free(uri);
+    reference_list_dispose(&references);
+    session_dispose(&session);
+    ok = send_json_response(output, id, json.data);
+    string_dispose(&json);
+    return ok;
+}
+
+static bool handle_prepare_rename_request(FengLspRuntime *runtime,
+                                          FILE *output,
+                                          FengLspJsonValue id,
+                                          FengLspJsonValue params) {
+    FengLspJsonValue text_document = {0};
+    FengLspJsonValue uri_value = {0};
+    FengLspJsonValue position = {0};
+    FengLspJsonValue line_value = {0};
+    FengLspJsonValue char_value = {0};
+    char *uri;
+    unsigned int line;
+    unsigned int character;
+    FengLspDocument *document;
+    FengLspAnalysisSession session = {0};
+    const FengProgram *program;
+    FengLspResolvedTarget target = {0};
+    FengLspReferenceList references = {0};
+    const FengLspReferenceEntry *entry;
+    const FengCliLoadedSource *source;
+    FengLspString json = {0};
+    bool ok;
+    size_t offset;
+
+    if (!json_object_get(params, "textDocument", &text_document) ||
+        !json_object_get(text_document, "uri", &uri_value) ||
+        !json_object_get(params, "position", &position) ||
+        !json_object_get(position, "line", &line_value) ||
+        !json_object_get(position, "character", &char_value)) {
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    uri = json_string_dup(uri_value);
+    if (uri == NULL || !json_u32(line_value, &line) || !json_u32(char_value, &character)) {
+        free(uri);
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    document = find_document(runtime, uri);
+    if (document == NULL) {
+        free(uri);
+        return send_json_response(output, id, "null");
+    }
+    offset = offset_from_position(document->text, line, character);
+    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+        free(uri);
+        session_dispose(&session);
+        return send_json_response(output, id, "null");
+    }
+    program = find_program(&session, document->path);
+    if (program == NULL ||
+        !resolve_target_at(&session, program, offset, &target) ||
+        !resolved_target_can_rename(&session, &target) ||
+        !collect_references(&session, true, &target, &references)) {
+        free(uri);
+        reference_list_dispose(&references);
+        session_dispose(&session);
+        return send_json_response(output, id, "null");
+    }
+    entry = reference_list_find_offset(&references, document->path, offset);
+    source = find_reference_source(&session, entry);
+    if (entry == NULL || source == NULL || !build_prepare_rename_json(source, entry, &json)) {
+        free(uri);
+        reference_list_dispose(&references);
+        session_dispose(&session);
+        string_dispose(&json);
+        return send_json_response(output, id, "null");
+    }
+    free(uri);
+    reference_list_dispose(&references);
+    session_dispose(&session);
+    ok = send_json_response(output, id, json.data);
+    string_dispose(&json);
+    return ok;
+}
+
+static bool handle_rename_request(FengLspRuntime *runtime,
+                                  FILE *output,
+                                  FengLspJsonValue id,
+                                  FengLspJsonValue params) {
+    FengLspJsonValue text_document = {0};
+    FengLspJsonValue uri_value = {0};
+    FengLspJsonValue position = {0};
+    FengLspJsonValue line_value = {0};
+    FengLspJsonValue char_value = {0};
+    FengLspJsonValue new_name_value = {0};
+    char *uri;
+    char *new_name;
+    unsigned int line;
+    unsigned int character;
+    FengLspDocument *document;
+    FengLspAnalysisSession session = {0};
+    const FengProgram *program;
+    FengLspResolvedTarget target = {0};
+    FengLspReferenceList references = {0};
+    FengLspString json = {0};
+    bool ok;
+    size_t offset;
+
+    if (!json_object_get(params, "textDocument", &text_document) ||
+        !json_object_get(text_document, "uri", &uri_value) ||
+        !json_object_get(params, "position", &position) ||
+        !json_object_get(position, "line", &line_value) ||
+        !json_object_get(position, "character", &char_value) ||
+        !json_object_get(params, "newName", &new_name_value)) {
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    uri = json_string_dup(uri_value);
+    new_name = json_string_dup(new_name_value);
+    if (uri == NULL || new_name == NULL ||
+        !json_u32(line_value, &line) || !json_u32(char_value, &character)) {
+        free(new_name);
+        free(uri);
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    if (!identifier_name_is_valid(new_name)) {
+        free(new_name);
+        free(uri);
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    document = find_document(runtime, uri);
+    if (document == NULL) {
+        free(new_name);
+        free(uri);
+        return send_json_response(output, id, "null");
+    }
+    offset = offset_from_position(document->text, line, character);
+    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+        free(new_name);
+        free(uri);
+        session_dispose(&session);
+        return send_json_response(output, id, "null");
+    }
+    program = find_program(&session, document->path);
+    if (program == NULL ||
+        !resolve_target_at(&session, program, offset, &target) ||
+        !resolved_target_can_rename(&session, &target) ||
+        !collect_references(&session, true, &target, &references) ||
+        reference_list_find_offset(&references, document->path, offset) == NULL ||
+        !build_rename_json(&session, &references, new_name, &json)) {
+        free(new_name);
+        free(uri);
+        reference_list_dispose(&references);
+        session_dispose(&session);
+        string_dispose(&json);
+        return send_json_response(output, id, "null");
+    }
+    free(new_name);
+    free(uri);
+    reference_list_dispose(&references);
+    session_dispose(&session);
+    ok = send_json_response(output, id, json.data);
+    string_dispose(&json);
+    return ok;
+}
+
 
 FengLspRuntime *feng_lsp_runtime_create(void) {
     return (FengLspRuntime *)calloc(1U, sizeof(FengLspRuntime));
@@ -5965,7 +8131,7 @@ void feng_lsp_runtime_free(FengLspRuntime *runtime) {
 static bool handle_initialize(FILE *output, FengLspJsonValue id) {
     return send_json_response(output,
                               id,
-                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
+                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"triggerCharacters\":[\".\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
 }
 
 bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
@@ -6084,6 +8250,15 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
                             : send_error_response(output, null_id, -32600, "Invalid Request");
     } else if (strcmp(message.method, "textDocument/definition") == 0) {
         ok = message.has_id ? handle_definition_request(runtime, output, message.id, message.params)
+                            : send_error_response(output, null_id, -32600, "Invalid Request");
+    } else if (strcmp(message.method, "textDocument/references") == 0) {
+        ok = message.has_id ? handle_references_request(runtime, output, message.id, message.params)
+                            : send_error_response(output, null_id, -32600, "Invalid Request");
+    } else if (strcmp(message.method, "textDocument/prepareRename") == 0) {
+        ok = message.has_id ? handle_prepare_rename_request(runtime, output, message.id, message.params)
+                            : send_error_response(output, null_id, -32600, "Invalid Request");
+    } else if (strcmp(message.method, "textDocument/rename") == 0) {
+        ok = message.has_id ? handle_rename_request(runtime, output, message.id, message.params)
                             : send_error_response(output, null_id, -32600, "Invalid Request");
     } else if (strcmp(message.method, "textDocument/completion") == 0) {
         ok = message.has_id ? handle_completion_request(runtime, output, message.id, message.params)

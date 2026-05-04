@@ -7,8 +7,22 @@ const { formatFengSource, formatFengManifestSource } = require('./formatter');
 
 let client;
 
-function getExecutablePath() {
-    return vscode.workspace.getConfiguration('feng').get('executablePath', 'feng');
+function getExecutablePathConfig(vscodeApi = vscode) {
+    const config = vscodeApi.workspace.getConfiguration('feng');
+    const executablePath = config.get('executablePath', 'feng');
+    const inspected = typeof config.inspect === 'function'
+        ? config.inspect('executablePath')
+        : null;
+    const hasExplicitSetting = inspected != null && (
+        inspected.workspaceFolderValue !== undefined ||
+        inspected.workspaceValue !== undefined ||
+        inspected.globalValue !== undefined
+    );
+
+    return {
+        executablePath,
+        hasExplicitSetting
+    };
 }
 
 function getPrimaryWorkspaceRoot(vscodeApi = vscode) {
@@ -23,9 +37,25 @@ function getPrimaryWorkspaceRoot(vscodeApi = vscode) {
     return folders[0].uri.fsPath;
 }
 
-function resolveExecutablePath(executablePath, workspaceRoot) {
+function getWorkspaceExecutablePath(workspaceRoot) {
+    if (typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
+        return null;
+    }
+
+    return path.join(workspaceRoot, 'build', 'bin', 'feng');
+}
+
+function resolveExecutablePath(executablePath, workspaceRoot, hasExplicitSetting = true) {
+    const workspaceExecutablePath = getWorkspaceExecutablePath(workspaceRoot);
+
     if (typeof executablePath !== 'string' || executablePath.length === 0) {
+        if (!hasExplicitSetting && workspaceExecutablePath != null && isExistingFile(workspaceExecutablePath)) {
+            return workspaceExecutablePath;
+        }
         return 'feng';
+    }
+    if (!hasExplicitSetting && executablePath === 'feng' && workspaceExecutablePath != null && isExistingFile(workspaceExecutablePath)) {
+        return workspaceExecutablePath;
     }
     if (path.isAbsolute(executablePath) || typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
         return executablePath;
@@ -49,9 +79,9 @@ function getFormattingDocumentSelector() {
     ];
 }
 
-function createServerOptions(executablePath, workspaceRoot) {
+function createServerOptions(executablePath, workspaceRoot, hasExplicitSetting = true) {
     const serverOptions = {
-        command: resolveExecutablePath(executablePath, workspaceRoot),
+        command: resolveExecutablePath(executablePath, workspaceRoot, hasExplicitSetting),
         args: ['lsp']
     };
 
@@ -67,13 +97,13 @@ function loadLanguageClientModule() {
     return require('vscode-languageclient/node');
 }
 
-function createLanguageClient({ executablePath, workspaceRoot, languageClientModule }) {
+function createLanguageClient({ executablePath, workspaceRoot, hasExplicitSetting, languageClientModule }) {
     const moduleRef = languageClientModule || loadLanguageClientModule();
 
     return new moduleRef.LanguageClient(
         'feng-language-server',
         'Feng Language Server',
-        createServerOptions(executablePath, workspaceRoot),
+        createServerOptions(executablePath, workspaceRoot, hasExplicitSetting),
         {
             documentSelector: getLanguageServiceDocumentSelector()
         }
@@ -133,7 +163,12 @@ function filterEntriesForPath(entries, filePath) {
 
 function runCheck(filePath) {
     return new Promise((resolve) => {
-        const execPath = getExecutablePath();
+        const executablePathConfig = getExecutablePathConfig(vscode);
+        const execPath = resolveExecutablePath(
+            executablePathConfig.executablePath,
+            getPrimaryWorkspaceRoot(vscode),
+            executablePathConfig.hasExplicitSetting
+        );
         const proc = cp.spawn(execPath, buildCheckCommand(filePath), {
             stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -295,14 +330,20 @@ function buildLspStartupWarning(error) {
     return `Feng LSP startup failed, falling back to legacy diagnostics: ${message}`;
 }
 
+function buildLspCapabilityWarning() {
+    return 'Feng LSP reported no language capabilities, falling back to legacy diagnostics. Check that the extension is launching a current Feng executable.';
+}
+
 async function activate(context) {
     const workspaceRoot = getPrimaryWorkspaceRoot(vscode);
+    const executablePathConfig = getExecutablePathConfig(vscode);
 
     registerFormatter(context, vscode);
     try {
         client = createLanguageClient({
-            executablePath: getExecutablePath(),
+            executablePath: executablePathConfig.executablePath,
             workspaceRoot,
+            hasExplicitSetting: executablePathConfig.hasExplicitSetting,
             languageClientModule: loadLanguageClientModule()
         });
         await client.start();
@@ -316,6 +357,9 @@ async function activate(context) {
     }
 
     if (!hasAnyLspCapability(client.initializeResult != null ? client.initializeResult.capabilities : null)) {
+        if (vscode.window != null && typeof vscode.window.showWarningMessage === 'function') {
+            void vscode.window.showWarningMessage(buildLspCapabilityWarning());
+        }
         registerLegacyDiagnostics(context, vscode, runCheck);
     }
 }
@@ -334,6 +378,7 @@ module.exports = {
     activate,
     deactivate,
     __test__: {
+        buildLspCapabilityWarning,
         buildLspStartupWarning,
         buildCheckCommand,
         createLanguageClient,
@@ -345,6 +390,7 @@ module.exports = {
         getFormattingDocumentSelector,
         getLanguageServiceDocumentSelector,
         getPrimaryWorkspaceRoot,
+        getWorkspaceExecutablePath,
         hasAnyLspCapability,
         isCheckableFengDocument,
         registerLegacyDiagnostics,

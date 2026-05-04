@@ -7,6 +7,9 @@ type User {
   let name: string;
   let age: i32;
 
+  /**
+   * 测试
+   */
   fn say(msg: string): void {
     puts(msg);
   }

@@ -202,18 +202,22 @@ function createCollectionRecorder() {
 async function run() {
     const extension = loadExtensionModule();
     const {
+        buildLspCapabilityWarning,
         buildLspStartupWarning,
         buildCheckCommand,
         createServerOptions,
         createDiagnosticController,
         filterEntriesForPath,
         findProjectManifestPath,
+        getWorkspaceExecutablePath,
         hasAnyLspCapability,
         isCheckableFengDocument,
         formatDocumentSource,
         resolveExecutablePath
     } = extension.__test__;
 
+    assert.strictEqual(getWorkspaceExecutablePath('/workspace/demo'), path.join('/workspace/demo', 'build', 'bin', 'feng'));
+    assert.strictEqual(getWorkspaceExecutablePath(null), null);
     assert.strictEqual(resolveExecutablePath('./build/bin/feng', '/workspace/demo'), path.join('/workspace/demo', './build/bin/feng'));
     assert.strictEqual(resolveExecutablePath('/usr/local/bin/feng', '/workspace/demo'), '/usr/local/bin/feng');
     assert.deepStrictEqual(createServerOptions('./build/bin/feng', '/workspace/demo'), {
@@ -225,6 +229,7 @@ async function run() {
     });
     assert.strictEqual(hasAnyLspCapability({}), false);
     assert.strictEqual(hasAnyLspCapability({ hoverProvider: true }), true);
+    assert.strictEqual(buildLspCapabilityWarning().includes('no language capabilities'), true);
     assert.strictEqual(buildLspStartupWarning(new Error('boom')).includes('boom'), true);
 
     assert.strictEqual(isCheckableFengDocument(createDocument('/tmp/manifest.fm', 'feng-manifest')), false);
@@ -439,6 +444,46 @@ async function run() {
     }
 
     {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'feng-vscode-exec-'));
+        const buildBinDir = path.join(tempRoot, 'build', 'bin');
+        const workspaceExecutable = path.join(buildBinDir, 'feng');
+        const { mockVscode } = createMockVscode({
+            workspaceRoot: tempRoot
+        });
+        const mockClient = createMockLanguageClientModule({
+            initializeResult: {
+                capabilities: {
+                    hoverProvider: true
+                }
+            }
+        });
+        const loaded = loadExtensionModule({
+            mockVscode,
+            mockLanguageClientModule: mockClient.module,
+            keepPatchedLoad: true
+        });
+        const extensionWithWorkspaceExecutable = loaded.extension;
+
+        fs.mkdirSync(buildBinDir, { recursive: true });
+        fs.writeFileSync(workspaceExecutable, '#!/bin/sh\nexit 0\n');
+
+        try {
+            await extensionWithWorkspaceExecutable.activate({ subscriptions: [] });
+            assert.deepStrictEqual(mockClient.recorder.constructorArgs.serverOptions, {
+                command: workspaceExecutable,
+                args: ['lsp'],
+                options: {
+                    cwd: tempRoot
+                }
+            });
+        } finally {
+            await extensionWithWorkspaceExecutable.deactivate();
+            loaded.restore();
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    }
+
+    {
         const { mockVscode, recorder } = createMockVscode({
             workspaceRoot: '/workspace/demo',
             executablePath: 'feng'
@@ -458,7 +503,8 @@ async function run() {
         try {
             await extensionWithFallback.activate({ subscriptions: [] });
             assert.strictEqual(recorder.diagnosticCollections.length, 1);
-            assert.strictEqual(recorder.warningMessages.length, 0);
+            assert.strictEqual(recorder.warningMessages.length, 1);
+            assert.strictEqual(recorder.warningMessages[0].includes('no language capabilities'), true);
         } finally {
             loaded.restore();
         }

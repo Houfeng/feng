@@ -1988,6 +1988,8 @@ static void test_lsp_hover_definition_and_completion(void) {
 
     ASSERT(strstr(output, "\"hoverProvider\":true") != NULL);
     ASSERT(strstr(output, "\"definitionProvider\":true") != NULL);
+    ASSERT(strstr(output, "\"referencesProvider\":true") != NULL);
+    ASSERT(strstr(output, "\"renameProvider\":{\"prepareProvider\":true}") != NULL);
     ASSERT(strstr(output, "\"completionProvider\"") != NULL);
     ASSERT(strstr(output, "Formats a user label.") != NULL);
     ASSERT(strstr(output, "fn format(user: User): string") != NULL);
@@ -2004,6 +2006,150 @@ static void test_lsp_hover_definition_and_completion(void) {
     free(hover_field);
     free(definition_fn);
     free(hover_fn);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
+    static const char *kSource =
+        "mod test.lsp.rename;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let mirror: string = user.name;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_member_rename_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *definition_field;
+    char *references_field;
+    char *prepare_rename_field;
+    char *rename_field;
+    char *shutdown;
+    char *output;
+    char *expected_definition;
+    char *expected_decl_ref;
+    char *expected_use_ref;
+    char *expected_prepare;
+    FILE *input;
+    unsigned int field_line;
+    unsigned int field_character;
+    unsigned int decl_line;
+    unsigned int decl_character;
+    unsigned int use_line;
+    unsigned int use_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource,
+                        "let user: User = User { name: \"copilot\" };",
+                        24U,
+                        &field_line,
+                        &field_character);
+    find_line_character(kSource,
+                        "let name: string;",
+                        4U,
+                        &decl_line,
+                        &decl_character);
+    find_line_character(kSource,
+                        "let mirror: string = user.name;",
+                        26U,
+                        &use_line,
+                        &use_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    definition_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                  uri,
+                                  field_line,
+                                  field_character);
+    references_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+                                  uri,
+                                  field_line,
+                                  field_character);
+    prepare_rename_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                      uri,
+                                      field_line,
+                                      field_character);
+    rename_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"newName\":\"displayName\"}}",
+                              uri,
+                              field_line,
+                              field_character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    expected_definition = dup_printf("\"id\":2,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                     uri,
+                                     decl_line,
+                                     decl_character);
+    expected_decl_ref = dup_printf("\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                   uri,
+                                   decl_line,
+                                   decl_character);
+    expected_use_ref = dup_printf("\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                  uri,
+                                  use_line,
+                                  use_character);
+    expected_prepare = dup_printf("\"id\":4,\"result\":{\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                  field_line,
+                                  field_character);
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, definition_field);
+    write_lsp_message(input, references_field);
+    write_lsp_message(input, prepare_rename_field);
+    write_lsp_message(input, rename_field);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"referencesProvider\":true") != NULL);
+    ASSERT(strstr(output, "\"renameProvider\":{\"prepareProvider\":true}") != NULL);
+    ASSERT(strstr(output, expected_definition) != NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":[") != NULL);
+    ASSERT(strstr(output, expected_decl_ref) != NULL);
+    ASSERT(strstr(output, expected_use_ref) != NULL);
+    ASSERT(strstr(output, expected_prepare) != NULL);
+    ASSERT(strstr(output, "\"placeholder\":\"name\"") != NULL);
+    ASSERT(strstr(output, "\"id\":5,\"result\":{\"changes\":{") != NULL);
+    ASSERT(count_occurrences(output, "\"newText\":\"displayName\"") == 3);
+    ASSERT(strstr(output, uri) != NULL);
+
+    free(output);
+    free(expected_prepare);
+    free(expected_use_ref);
+    free(expected_decl_ref);
+    free(expected_definition);
+    free(shutdown);
+    free(rename_field);
+    free(prepare_rename_field);
+    free(references_field);
+    free(definition_field);
     free(did_open);
     free(initialize);
     free(escaped_text);
@@ -3840,6 +3986,7 @@ int main(void) {
     test_lsp_rejects_unknown_option();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();

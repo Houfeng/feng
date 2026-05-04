@@ -6,7 +6,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 
 - Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
-- Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
+- Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, references, rename, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
 - Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
 - Icon support: The extension uses the Feng Logo, and falls back to built-in Feng icons for `.feng`/`.ff` source files, `.fm` manifests, `.fb` bundles, and `.ft` symbol tables when your current file icon theme does not provide a Feng-specific icon.
 
@@ -36,6 +36,8 @@ If the `feng` executable is not available in your system `PATH`, you can configu
 ```
 
 This path can be either an absolute path or a path relative to the first workspace root.
+
+When `feng.executablePath` keeps its default value, the extension first tries `./build/bin/feng` under the first workspace root before falling back to `feng` from `PATH`.
 
 ## Formatting Behavior
 

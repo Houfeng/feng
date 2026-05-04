@@ -27,7 +27,7 @@
 - [x] 4：补齐文档注释在源码路径上的词法 / 语法承载，见第 7.4 章。
 - [x] 5：补齐 `.ft` 文档注释载荷与缓存消费，见第 7.5 章。
 - [x] 6：将 VS Code 扩展切换为 LSP Client，见第 7.6、9 章。
-- [x] 7：补齐 LSP 服务端查询能力与协议级回归用例，覆盖 diagnostics / hover / definition / completion，见第 7.2、9、10 章。
+- [x] 7：补齐 LSP 服务端查询能力与协议级回归用例，覆盖 diagnostics / hover / definition / completion / references / rename，见第 7.2、9、10 章。
 
 ## 2. 已确认决策
 
@@ -332,7 +332,7 @@ parser 只保留这种有效文档注释，并把它绑定到对应声明。
 
 - 新增 `feng lsp` 路由
 - 新增 LSP 服务端框架
-- 复用现有前端 / semantic 做 diagnostics / hover / definition / completion
+- 复用现有前端 / semantic 做 diagnostics / hover / definition / completion / references / rename
 - 支持“无本地 `.ft`”时直接源码分析
 
 ### Phase C：文档注释落地
@@ -347,6 +347,7 @@ parser 只保留这种有效文档注释，并把它绑定到对应声明。
 - `.ft` 读取路径支持文档注释与声明 span
 - workspace cache 命中时，项目内源文件判定必须基于规范化绝对路径，避免 `/tmp` 与 `/private/tmp` 这类等价路径把缓存误判为 miss
 - LSP 在缓存命中时返回与源码分析一致的 hover / definition / completion 结果
+- references / rename 统一基于当前工作区源码分析构建结果,不依赖 workspace cache 命中
 
 ### Phase E：后续性能优化
 
