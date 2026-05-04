@@ -171,6 +171,7 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
 
     free(decl->abi_library);
+    free(decl->doc);
     free(decl->name);
     free(decl->path);
     feng_symbol_internal_type_free(decl->value_type);
@@ -353,6 +354,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     *clone = *decl;
     clone->owner = owner;
     clone->abi_library = feng_symbol_internal_dup_cstr(decl->abi_library);
+    clone->doc = feng_symbol_internal_dup_cstr(decl->doc);
     clone->name = feng_symbol_internal_dup_cstr(decl->name);
     clone->path = feng_symbol_internal_dup_cstr(decl->path);
     clone->value_type = feng_symbol_internal_type_clone(decl->value_type, out_error);
@@ -363,6 +365,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->members = NULL;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
+        (decl->doc != NULL && clone->doc == NULL) ||
         (decl->name != NULL && clone->name == NULL) ||
         (decl->path != NULL && clone->path == NULL) ||
         (decl->value_type != NULL && clone->value_type == NULL) ||
@@ -550,9 +553,11 @@ FengSymbolModuleGraph *feng_symbol_internal_module_clone(const FengSymbolModuleG
     clone->root_decl.has_doc = module->root_decl.has_doc;
     clone->root_decl.calling_convention = module->root_decl.calling_convention;
     clone->root_decl.token = module->root_decl.token;
+    clone->root_decl.doc = feng_symbol_internal_dup_cstr(module->root_decl.doc);
     clone->root_decl.name = feng_symbol_internal_dup_cstr(module->root_decl.name);
     clone->root_decl.path = feng_symbol_internal_dup_cstr(module->root_decl.path);
-    if ((module->root_decl.name != NULL && clone->root_decl.name == NULL) ||
+    if ((module->root_decl.doc != NULL && clone->root_decl.doc == NULL) ||
+        (module->root_decl.name != NULL && clone->root_decl.name == NULL) ||
         (module->root_decl.path != NULL && clone->root_decl.path == NULL) ||
         !append_decl_clone_pair(&pairs,
                                 &pair_count,

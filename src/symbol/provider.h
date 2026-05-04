@@ -82,6 +82,7 @@ FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, 
 
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl);
+FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl);
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl);
 FengMutability feng_symbol_decl_mutability(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl);

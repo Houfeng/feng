@@ -144,6 +144,12 @@ typedef struct FengSymbolFtRelRecord {
     uint32_t owner_symbol_id;
 } FengSymbolFtRelRecord;
 
+typedef struct FengSymbolFtDocRecord {
+    uint32_t id;
+    uint32_t symbol_id;
+    uint32_t doc_str_id;
+} FengSymbolFtDocRecord;
+
 typedef struct FengSymbolFtAttrRecord {
     uint32_t symbol_id;
     uint16_t kind;

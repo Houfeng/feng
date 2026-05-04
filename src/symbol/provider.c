@@ -863,6 +863,10 @@ FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl) {
     return decl != NULL ? slice_from_cstr(decl->name) : (FengSlice){0};
 }
 
+FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl) {
+    return decl != NULL ? slice_from_cstr(decl->doc) : (FengSlice){0};
+}
+
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->visibility : FENG_VISIBILITY_PRIVATE;
 }

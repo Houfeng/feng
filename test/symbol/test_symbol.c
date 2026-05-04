@@ -121,6 +121,7 @@ static void export_public_source_or_die(const char *path,
     FengSymbolExportOptions options = {0};
 
     options.public_root = public_root;
+    options.emit_docs = true;
     if (!feng_symbol_export_analysis(analysis, &options, &error)) {
         fprintf(stderr,
                 "symbol export failed: %s\n",
@@ -277,6 +278,72 @@ static void test_roundtrip_public_module(void) {
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
     feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_roundtrip_public_module_docs(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.docs;\n"
+        "/**\n"
+        " * Adds two integers.\n"
+        " * Keeps Feng doc newlines.\n"
+        " */\n"
+        "pu fn add(a: int, b: int): int { return a + b; }\n"
+        "/** User record */\n"
+        "pu type User {\n"
+        "    /** Stable identifier */\n"
+        "    pu let id: int;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die("docs_roundtrip.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    FengSymbolExportOptions options = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *add_decl = NULL;
+    const FengSymbolDeclView *user_decl = NULL;
+    const FengSymbolDeclView *id_decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    options.public_root = public_root;
+    options.emit_docs = true;
+    ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("docs");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    add_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("add"));
+    ASSERT(add_decl != NULL);
+    ASSERT(slice_equals_cstr(feng_symbol_decl_doc(add_decl),
+                             "Adds two integers.\nKeeps Feng doc newlines."));
+
+    user_decl = feng_symbol_module_find_public_type(module, slice_from_cstr("User"));
+    ASSERT(user_decl != NULL);
+    ASSERT(slice_equals_cstr(feng_symbol_decl_doc(user_decl), "User record"));
+
+    id_decl = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("id"));
+    ASSERT(id_decl != NULL);
+    ASSERT(slice_equals_cstr(feng_symbol_decl_doc(id_decl), "Stable identifier"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
     (void)remove_dir_recursive(tmp_dir);
     free(tmp_dir);
 }
@@ -560,6 +627,7 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
 
 int main(void) {
     test_roundtrip_public_module();
+    test_roundtrip_public_module_docs();
     test_private_module_skipped();
     test_reader_rejects_bad_magic();
     test_provider_loads_bundle_public_module();

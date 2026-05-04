@@ -36,6 +36,8 @@ typedef struct WriterContext {
     size_t sym_count;
     FengSymbolFtRelRecord *rels;
     size_t rel_count;
+    FengSymbolFtDocRecord *docs;
+    size_t doc_count;
     FengSymbolFtAttrRecord *attrs;
     size_t attr_count;
     FengSymbolFtSpanRecord *spans;
@@ -141,6 +143,7 @@ static void writer_context_dispose(WriterContext *ctx) {
     free(ctx->sigs);
     free(ctx->syms);
     free(ctx->rels);
+    free(ctx->docs);
     free(ctx->attrs);
     free(ctx->spans);
     free(ctx->decl_ids);
@@ -465,10 +468,41 @@ static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     if (decl->bounded_decl) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_BOUNDED_DECL;
     }
-    if (decl->has_doc) {
+    if (decl->has_doc && decl->doc != NULL && decl->doc[0] != '\0') {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_HAS_DOC;
     }
     return flags;
+}
+
+static uint32_t writer_emit_doc(WriterContext *ctx,
+                                const FengSymbolDeclView *decl,
+                                uint32_t symbol_id,
+                                const char *path,
+                                FengToken token,
+                                FengSymbolError *out_error) {
+    FengSymbolFtDocRecord record;
+
+    if (decl == NULL || !decl->has_doc || decl->doc == NULL || decl->doc[0] == '\0') {
+        return 0U;
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.id = (uint32_t)(ctx->doc_count + 1U);
+    record.symbol_id = symbol_id;
+    record.doc_str_id = writer_intern_string(ctx, decl->doc, path, token, out_error);
+    if (record.doc_str_id == 0U) {
+        return 0U;
+    }
+    if (!append_record((void **)&ctx->docs,
+                       &ctx->doc_count,
+                       sizeof(record),
+                       &record,
+                       path,
+                       token,
+                       out_error)) {
+        return 0U;
+    }
+    return record.id;
 }
 
 static bool writer_emit_decl_attrs(WriterContext *ctx,
@@ -642,6 +676,10 @@ static bool writer_collect_decl(WriterContext *ctx,
         case FENG_SYMBOL_DECL_KIND_TYPE:
         default:
             break;
+    }
+    record.doc_ref = writer_emit_doc(ctx, decl, symbol_id, path, decl->token, out_error);
+    if (decl->has_doc && decl->doc != NULL && decl->doc[0] != '\0' && record.doc_ref == 0U) {
+        return false;
     }
     if (!append_record((void **)&ctx->syms,
                        &ctx->sym_count,
@@ -858,10 +896,11 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     Buffer sigs = {0};
     Buffer prms = {0};
     Buffer rels = {0};
+    Buffer docs = {0};
     Buffer attrs = {0};
     Buffer spans = {0};
     Buffer payload = {0};
-    FengSymbolFtSectionEntry sections[8];
+    FengSymbolFtSectionEntry sections[9];
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
@@ -882,6 +921,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         !build_fixed_section(&sigs, ctx.sigs, ctx.sig_count, sizeof(*ctx.sigs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&prms, ctx.params, ctx.param_count, sizeof(*ctx.params), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&rels, ctx.rels, ctx.rel_count, sizeof(*ctx.rels), path, module->root_decl.token, out_error) ||
+        !build_fixed_section(&docs, ctx.docs, ctx.doc_count, sizeof(*ctx.docs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&attrs, ctx.attrs, ctx.attr_count, sizeof(*ctx.attrs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&spans, ctx.spans, ctx.span_count, sizeof(*ctx.spans), path, module->root_decl.token, out_error)) {
         goto cleanup;
@@ -919,9 +959,11 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         } \
     } while (0)
 
-    header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE + (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
-                                                                    (6U + (ctx.attr_count > 0U ? 1U : 0U) +
-                                                                     (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
+    header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE +
+                            (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
+                                       (6U + (ctx.doc_count > 0U ? 1U : 0U) +
+                                        (ctx.attr_count > 0U ? 1U : 0U) +
+                                        (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
     APPEND_SECTION(FENG_SYMBOL_FT_SEC_STRS,
                    FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_SORTED,
                    (uint32_t)ctx.string_count,
@@ -952,6 +994,14 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                    (uint32_t)ctx.rel_count,
                    (uint32_t)sizeof(FengSymbolFtRelRecord),
                    &rels);
+    if (ctx.doc_count > 0U) {
+        header.flags |= FENG_SYMBOL_FT_FLAG_HAS_DOCS;
+        APPEND_SECTION(FENG_SYMBOL_FT_SEC_DOCS,
+                       FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY | FENG_SYMBOL_FT_SEC_FLAG_IGNORABLE,
+                       (uint32_t)ctx.doc_count,
+                       (uint32_t)sizeof(FengSymbolFtDocRecord),
+                       &docs);
+    }
     if (ctx.attr_count > 0U) {
         header.flags |= FENG_SYMBOL_FT_FLAG_HAS_ATTRS;
         APPEND_SECTION(FENG_SYMBOL_FT_SEC_ATTRS,
@@ -1008,6 +1058,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     buffer_free(&sigs);
     buffer_free(&prms);
     buffer_free(&rels);
+    buffer_free(&docs);
     buffer_free(&attrs);
     buffer_free(&spans);
     buffer_free(&payload);

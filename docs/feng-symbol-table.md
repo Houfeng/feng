@@ -643,6 +643,20 @@ RELS
 
 `DOCS` 保存“符号 ID -> 文档字符串 ID”的映射。
 
+建议 `DOCS` 使用固定记录结构:
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `u32` | 文档记录 ID |
+| `symbol_id` | `u32` | 所属符号 ID |
+| `doc_str_id` | `u32` | 文档正文字符串 ID |
+
+约束:
+
+- `SYMS.doc_ref` 指向 `DOCS.id`。
+- `DOCS.symbol_id` 必须回指对应的 `SYMS.id`。
+- `DOCS.doc_str_id` 指向 `STRS.id`。
+
 文档注释采集规则保持一致:
 
 - 只有单个紧邻声明的 `/** */` 块才是文档注释。

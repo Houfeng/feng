@@ -15,6 +15,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *sigs_section;
     const FengSymbolFtSectionEntry *prms_section;
     const FengSymbolFtSectionEntry *rels_section;
+    const FengSymbolFtSectionEntry *docs_section;
     const FengSymbolFtSectionEntry *attrs_section;
     const FengSymbolFtSectionEntry *spns_section;
     char **strings;
@@ -24,6 +25,7 @@ typedef struct ReadContext {
     FengSymbolDeclView **decls;
     size_t decl_count;
     uint32_t *decl_symbol_ids;
+    uint32_t *decl_doc_refs;
     FengSymbolModuleGraph *module;
     uint32_t module_full_name_str;
 } ReadContext;
@@ -69,6 +71,7 @@ static void read_context_dispose(ReadContext *ctx) {
     free(ctx->types);
     free(ctx->decls);
     free(ctx->decl_symbol_ids);
+    free(ctx->decl_doc_refs);
     memset(ctx, 0, sizeof(*ctx));
 }
 
@@ -174,6 +177,7 @@ static bool load_required_sections(ReadContext *ctx,
     ctx->sigs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SIGS);
     ctx->prms_section = find_section(ctx, FENG_SYMBOL_FT_SEC_PRMS);
     ctx->rels_section = find_section(ctx, FENG_SYMBOL_FT_SEC_RELS);
+    ctx->docs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_DOCS);
     ctx->attrs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_ATTRS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
@@ -183,6 +187,12 @@ static bool load_required_sections(ReadContext *ctx,
                                               path,
                                               (FengToken){0},
                                               "symbol table missing required core sections");
+    }
+    if ((ctx->header.flags & FENG_SYMBOL_FT_FLAG_HAS_DOCS) != 0U && ctx->docs_section == NULL) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "symbol table declares docs payload but omits DOCS section");
     }
     return true;
 }
@@ -433,7 +443,9 @@ static bool parse_symbols(ReadContext *ctx,
 
     ctx->decls = (FengSymbolDeclView **)calloc(count, sizeof(*ctx->decls));
     ctx->decl_symbol_ids = (uint32_t *)calloc(count, sizeof(*ctx->decl_symbol_ids));
-    if ((count > 0U && ctx->decls == NULL) || (count > 0U && ctx->decl_symbol_ids == NULL)) {
+    ctx->decl_doc_refs = (uint32_t *)calloc(count, sizeof(*ctx->decl_doc_refs));
+    if ((count > 0U && ctx->decls == NULL) || (count > 0U && ctx->decl_symbol_ids == NULL) ||
+        (count > 0U && ctx->decl_doc_refs == NULL)) {
         return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory allocating symbol table views");
     }
     ctx->decl_count = count;
@@ -448,6 +460,7 @@ static bool parse_symbols(ReadContext *ctx,
         uint32_t type_ref = read_u32_le(record + 0x10);
         uint32_t sig_ref = read_u32_le(record + 0x14);
         uint32_t extra_ref = read_u32_le(record + 0x18);
+        uint32_t doc_ref = read_u32_le(record + 0x1C);
 
         if (decl == NULL) {
             return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory allocating declaration view");
@@ -533,6 +546,7 @@ static bool parse_symbols(ReadContext *ctx,
         }
         ctx->decls[symbol_index] = decl;
         ctx->decl_symbol_ids[symbol_index] = id;
+        ctx->decl_doc_refs[symbol_index] = doc_ref;
         if (id == ctx->header.root_symbol_id) {
             ctx->module = (FengSymbolModuleGraph *)calloc(1U, sizeof(*ctx->module));
             if (ctx->module == NULL) {
@@ -561,6 +575,99 @@ static FengSymbolDeclView *decl_by_symbol_id(const ReadContext *ctx, uint32_t sy
         }
     }
     return NULL;
+}
+
+static bool parse_docs(ReadContext *ctx,
+                       const char *path,
+                       FengSymbolError *out_error) {
+    const unsigned char *base;
+    uint32_t count;
+    size_t decl_index;
+
+    if (ctx->docs_section == NULL) {
+        for (decl_index = 0U; decl_index < ctx->decl_count; ++decl_index) {
+            if (ctx->decl_doc_refs[decl_index] != 0U ||
+                (ctx->decls[decl_index] != NULL && ctx->decls[decl_index]->has_doc)) {
+                return feng_symbol_internal_set_error(out_error,
+                                                      path,
+                                                      (FengToken){0},
+                                                      "symbol table declaration marked with docs but DOCS payload is missing");
+            }
+        }
+        return true;
+    }
+
+    if (!validate_range(ctx,
+                        read_u64_le((const unsigned char *)ctx->docs_section + 0x08),
+                        read_u64_le((const unsigned char *)ctx->docs_section + 0x10),
+                        path,
+                        out_error)) {
+        return false;
+    }
+
+    base = ctx->data + read_u64_le((const unsigned char *)ctx->docs_section + 0x08);
+    count = read_u32_le((const unsigned char *)ctx->docs_section + 0x04);
+
+    for (decl_index = 0U; decl_index < ctx->decl_count; ++decl_index) {
+        FengSymbolDeclView *decl = ctx->decls[decl_index];
+        uint32_t doc_ref = ctx->decl_doc_refs[decl_index];
+        size_t doc_index;
+        const unsigned char *matched = NULL;
+        const char *doc_text;
+
+        if ((decl->has_doc && doc_ref == 0U) || (!decl->has_doc && doc_ref != 0U)) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "symbol table doc flag/reference mismatch for symbol %u",
+                                                  ctx->decl_symbol_ids[decl_index]);
+        }
+        if (doc_ref == 0U) {
+            continue;
+        }
+
+        for (doc_index = 0U; doc_index < count; ++doc_index) {
+            const unsigned char *record = base + doc_index * sizeof(FengSymbolFtDocRecord);
+            if (read_u32_le(record + 0x00) == doc_ref) {
+                matched = record;
+                break;
+            }
+        }
+        if (matched == NULL) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "doc record %u is missing",
+                                                  doc_ref);
+        }
+        if (read_u32_le(matched + 0x04) != ctx->decl_symbol_ids[decl_index]) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "doc record %u points at the wrong symbol",
+                                                  doc_ref);
+        }
+
+        doc_text = string_at(ctx, read_u32_le(matched + 0x08));
+        if (doc_text == NULL) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "doc record %u refers to a missing string",
+                                                  doc_ref);
+        }
+        decl->doc = feng_symbol_internal_dup_cstr(doc_text);
+        if (decl->doc == NULL) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "out of memory loading doc payload for symbol %u",
+                                                  ctx->decl_symbol_ids[decl_index]);
+        }
+        decl->has_doc = true;
+    }
+
+    return true;
 }
 
 static bool attach_decl_hierarchy(ReadContext *ctx,
@@ -767,6 +874,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !load_required_sections(&ctx, source_name, out_error) ||
         !parse_strings(&ctx, source_name, out_error) ||
         !parse_symbols(&ctx, source_name, out_error) ||
+        !parse_docs(&ctx, source_name, out_error) ||
         !attach_decl_hierarchy(&ctx, source_name, out_error) ||
         !parse_module_segments(&ctx, source_name, out_error) ||
         !parse_attrs(&ctx, source_name, out_error) ||

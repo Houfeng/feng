@@ -22,6 +22,10 @@ static bool visibility_is_public(FengVisibility visibility) {
     return visibility == FENG_VISIBILITY_PUBLIC;
 }
 
+static bool is_horizontal_doc_space(char c) {
+    return c == ' ' || c == '\t' || c == '\v' || c == '\f';
+}
+
 static bool annotation_kind_is_calling_convention(FengAnnotationKind kind) {
     return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL ||
            kind == FENG_ANNOTATION_FASTCALL;
@@ -391,6 +395,147 @@ static FengSymbolDeclView *new_decl(FengSymbolDeclKind kind,
         return NULL;
     }
     return decl;
+}
+
+typedef struct DocLineSpan {
+    const char *start;
+    size_t length;
+} DocLineSpan;
+
+static bool normalize_doc_comment(FengSlice raw,
+                                  char **out_text,
+                                  const char *path,
+                                  FengToken token,
+                                  FengSymbolError *out_error) {
+    const char *body_start;
+    const char *body_end;
+    const char *cursor;
+    DocLineSpan *lines = NULL;
+    size_t line_count = 0U;
+    size_t first_line = 0U;
+    size_t last_line;
+    size_t total_length = 0U;
+    size_t index;
+    char *normalized;
+    size_t output_cursor = 0U;
+
+    *out_text = NULL;
+    if (raw.data == NULL || raw.length == 0U) {
+        return true;
+    }
+    if (raw.length < 5U || memcmp(raw.data, "/**", 3U) != 0 ||
+        memcmp(raw.data + raw.length - 2U, "*/", 2U) != 0) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              token,
+                                              "malformed doc comment slice in symbol export");
+    }
+
+    body_start = raw.data + 3U;
+    body_end = raw.data + raw.length - 2U;
+    cursor = body_start;
+    while (cursor < body_end) {
+        const char *line_start = cursor;
+        const char *line_end;
+        DocLineSpan *grown;
+
+        while (cursor < body_end && *cursor != '\n' && *cursor != '\r') {
+            ++cursor;
+        }
+        line_end = cursor;
+        if (cursor < body_end) {
+            if (*cursor == '\r') {
+                ++cursor;
+                if (cursor < body_end && *cursor == '\n') {
+                    ++cursor;
+                }
+            } else {
+                ++cursor;
+            }
+        }
+
+        while (line_start < line_end && is_horizontal_doc_space(*line_start)) {
+            ++line_start;
+        }
+        if (line_start < line_end && *line_start == '*') {
+            ++line_start;
+            if (line_start < line_end && (*line_start == ' ' || *line_start == '\t')) {
+                ++line_start;
+            }
+        }
+        while (line_end > line_start && is_horizontal_doc_space(*(line_end - 1))) {
+            --line_end;
+        }
+
+        grown = (DocLineSpan *)realloc(lines, (line_count + 1U) * sizeof(*lines));
+        if (grown == NULL) {
+            free(lines);
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  token,
+                                                  "out of memory normalizing doc comment");
+        }
+        lines = grown;
+        lines[line_count].start = line_start;
+        lines[line_count].length = (size_t)(line_end - line_start);
+        ++line_count;
+    }
+
+    while (first_line < line_count && lines[first_line].length == 0U) {
+        ++first_line;
+    }
+    last_line = line_count;
+    while (last_line > first_line && lines[last_line - 1U].length == 0U) {
+        --last_line;
+    }
+    if (first_line == last_line) {
+        free(lines);
+        return true;
+    }
+
+    for (index = first_line; index < last_line; ++index) {
+        total_length += lines[index].length;
+        if (index + 1U < last_line) {
+            ++total_length;
+        }
+    }
+    normalized = (char *)malloc(total_length + 1U);
+    if (normalized == NULL) {
+        free(lines);
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              token,
+                                              "out of memory allocating normalized doc comment");
+    }
+
+    for (index = first_line; index < last_line; ++index) {
+        if (lines[index].length > 0U) {
+            memcpy(normalized + output_cursor, lines[index].start, lines[index].length);
+            output_cursor += lines[index].length;
+        }
+        if (index + 1U < last_line) {
+            normalized[output_cursor++] = '\n';
+        }
+    }
+    normalized[output_cursor] = '\0';
+    free(lines);
+    *out_text = normalized;
+    return true;
+}
+
+static bool apply_decl_doc_comment(FengSymbolDeclView *decl,
+                                   FengSlice raw_doc,
+                                   const char *path,
+                                   FengToken token,
+                                   FengSymbolError *out_error) {
+    char *normalized = NULL;
+
+    if (!normalize_doc_comment(raw_doc, &normalized, path, token, out_error)) {
+        return false;
+    }
+    decl->doc = normalized;
+    decl->has_doc = normalized != NULL;
+    return true;
 }
 
 static const FengSemanticModule *find_decl_owner_module(const FengSemanticAnalysis *analysis,
@@ -1277,6 +1422,11 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
             if (decl == NULL) {
                 return NULL;
             }
+            if (!apply_decl_doc_comment(decl, member->doc_comment, path, member->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             decl->value_type = build_site_type(ctx->analysis,
                                                member,
                                                member->as.field.type,
@@ -1318,6 +1468,11 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                        member->token,
                                        out_error);
             if (decl == NULL) {
+                return NULL;
+            }
+            if (!apply_decl_doc_comment(decl, member->doc_comment, path, member->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
                 return NULL;
             }
             decl->return_type = build_callable_return_type(ctx->analysis,
@@ -1391,6 +1546,11 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             if (decl == NULL) {
                 return NULL;
             }
+            if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             decl->value_type = build_site_type(ctx->analysis,
                                                &source_decl->as.binding,
                                                source_decl->as.binding.type,
@@ -1421,6 +1581,11 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                        source_decl->token,
                                        out_error);
             if (decl == NULL) {
+                return NULL;
+            }
+            if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
                 return NULL;
             }
             if (!fill_declared_specs(decl,
@@ -1474,6 +1639,11 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                        source_decl->token,
                                        out_error);
             if (decl == NULL) {
+                return NULL;
+            }
+            if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
                 return NULL;
             }
             if (!fill_declared_specs(decl,
@@ -1558,6 +1728,11 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             if (decl == NULL) {
                 return NULL;
             }
+            if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             decl->fit_target = build_type_from_type_ref(source_decl->as.fit_decl.target,
                                                         path,
                                                         source_decl->token,
@@ -1615,6 +1790,11 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                        source_decl->token,
                                        out_error);
             if (decl == NULL) {
+                return NULL;
+            }
+            if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
                 return NULL;
             }
             decl->is_extern = source_decl->is_extern;

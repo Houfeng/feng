@@ -60,6 +60,7 @@ struct FengSymbolDeclView {
     bool has_doc;
     FengAnnotationKind calling_convention;
     char *abi_library;
+    char *doc;
     char *name;
     char *path;
     FengToken token;
