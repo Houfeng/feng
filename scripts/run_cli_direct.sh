@@ -91,8 +91,16 @@ if expect_ok "lsp_stdio" bash -lc "cat '$lsp_input' | '$FENG' lsp --stdio"; then
         echo "FAIL[lsp_stdio] missing initialize response id"
         failures=$((failures + 1))
     fi
-    if ! grep -q '"capabilities":{}' "$WORK/lsp_stdio.out"; then
-        echo "FAIL[lsp_stdio] missing initialize capabilities payload"
+    if ! grep -q '"hoverProvider":true' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing hover capability"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '"definitionProvider":true' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing definition capability"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q '"completionProvider":{"triggerCharacters":\["\."\]}' "$WORK/lsp_stdio.out"; then
+        echo "FAIL[lsp_stdio] missing completion capability"
         failures=$((failures + 1))
     fi
     if ! grep -q '"id":2' "$WORK/lsp_stdio.out"; then

@@ -61,6 +61,13 @@ feng lsp [--stdio]
 
 - `lsp` 不参与项目构建、打包与运行职责。
 - 当前首版仅提供 stdio 传输,不支持 socket / TCP 等其他传输方式。
+- 当前服务端通过全量文本同步维护已打开文档状态,并在源码分析路径上支持 `textDocument/didOpen`、`didChange`、`didSave`、`didClose`。
+- 当前服务端对 Feng 源文件提供以下语言能力: diagnostics、hover、completion、definition。
+- diagnostics / hover / completion / definition 统一复用现有 parser / semantic / imported-module 能力; 当前项目不存在本地 workspace `.ft` 时,必须直接回退到源码分析,不得要求用户先手动生成缓存。
+- 若当前项目目录下存在合法 `feng.fm`,LSP 按项目上下文解析整个项目源码并解析依赖包; 若不存在 `feng.fm`,则按单文件模式分析当前文档。
+- `hover` 优先展示声明签名与文档注释; 文档注释只识别已绑定到声明的 `/** */`。
+- `definition` 以源码声明位置为主; 当前项目内定义应返回对应源文件位置。
+- `completion` 以当前位置可见的局部名、模块级声明、导入模块公开名和对象成员为范围,不要求依赖额外构建步骤。
 - 除 `--stdio` 之外不接受其他位置参数或命令选项;出现多余参数时应报错退出。
 
 ## 2.2 --out 说明

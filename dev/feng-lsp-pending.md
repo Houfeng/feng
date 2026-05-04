@@ -27,6 +27,7 @@
 - [x] 4：补齐文档注释在源码路径上的词法 / 语法承载，见第 7.4 章。
 - [x] 5：补齐 `.ft` 文档注释载荷与缓存消费，见第 7.5 章。
 - [x] 6：将 VS Code 扩展切换为 LSP Client，见第 7.6、9 章。
+- [x] 7：补齐 LSP 服务端查询能力与协议级回归用例，覆盖 diagnostics / hover / definition / completion，见第 7.2、9、10 章。
 
 ## 2. 已确认决策
 
@@ -330,7 +331,7 @@ parser 只保留这种有效文档注释，并把它绑定到对应声明。
 
 - 新增 `feng lsp` 路由
 - 新增 LSP 服务端框架
-- 复用现有前端 / semantic 做 diagnostics / hover / definition
+- 复用现有前端 / semantic 做 diagnostics / hover / definition / completion
 - 支持“无本地 `.ft`”时直接源码分析
 
 ### Phase C：文档注释落地

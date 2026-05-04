@@ -14,6 +14,7 @@
 #include "cli/cli.h"
 #include "cli/deps/manager.h"
 #include "cli/frontend.h"
+#include "cli/lsp/server.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
 #include "symbol/ft_internal.h"
@@ -406,6 +407,120 @@ static int run_lsp_quiet_stderr(int argc, char **argv) {
     ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
     close(saved_stderr);
     return rc;
+}
+
+static char *read_text_stream(FILE *file) {
+    long length;
+    char *content;
+    size_t read_size;
+
+    ASSERT(fseek(file, 0L, SEEK_END) == 0);
+    length = ftell(file);
+    ASSERT(length >= 0L);
+    ASSERT(fseek(file, 0L, SEEK_SET) == 0);
+    content = (char *)malloc((size_t)length + 1U);
+    ASSERT(content != NULL);
+    read_size = fread(content, 1U, (size_t)length, file);
+    ASSERT(read_size == (size_t)length);
+    content[length] = '\0';
+    return content;
+}
+
+static char *json_escape_text(const char *text) {
+    size_t index;
+    size_t extra = 0U;
+    char *escaped;
+    size_t cursor = 0U;
+
+    for (index = 0U; text[index] != '\0'; ++index) {
+        switch (text[index]) {
+            case '\\':
+            case '"':
+            case '\n':
+            case '\r':
+            case '\t':
+                extra += 1U;
+                break;
+            default:
+                break;
+        }
+    }
+    escaped = (char *)malloc(index + extra + 1U);
+    ASSERT(escaped != NULL);
+    for (index = 0U; text[index] != '\0'; ++index) {
+        switch (text[index]) {
+            case '\\':
+                escaped[cursor++] = '\\';
+                escaped[cursor++] = '\\';
+                break;
+            case '"':
+                escaped[cursor++] = '\\';
+                escaped[cursor++] = '"';
+                break;
+            case '\n':
+                escaped[cursor++] = '\\';
+                escaped[cursor++] = 'n';
+                break;
+            case '\r':
+                escaped[cursor++] = '\\';
+                escaped[cursor++] = 'r';
+                break;
+            case '\t':
+                escaped[cursor++] = '\\';
+                escaped[cursor++] = 't';
+                break;
+            default:
+                escaped[cursor++] = text[index];
+                break;
+        }
+    }
+    escaped[cursor] = '\0';
+    return escaped;
+}
+
+static void write_lsp_message(FILE *input, const char *json) {
+    ASSERT(fprintf(input, "Content-Length: %zu\r\n\r\n%s", strlen(json), json) >= 0);
+}
+
+static char *run_lsp_server_capture(FILE *input) {
+    FILE *output = tmpfile();
+    FILE *errors = tmpfile();
+    char *captured;
+
+    ASSERT(output != NULL);
+    ASSERT(errors != NULL);
+    ASSERT(fseek(input, 0L, SEEK_SET) == 0);
+    ASSERT(feng_lsp_server_run(input, output, errors) == 0);
+    captured = read_text_stream(output);
+    fclose(errors);
+    fclose(output);
+    return captured;
+}
+
+static char *file_uri_from_path(const char *path) {
+    return dup_printf("file://%s", path);
+}
+
+static void find_line_character(const char *text,
+                                const char *needle,
+                                size_t char_offset,
+                                unsigned int *line,
+                                unsigned int *character) {
+    const char *cursor = strstr(text, needle);
+    const char *scan;
+
+    ASSERT(cursor != NULL);
+    cursor += char_offset;
+    *line = 0U;
+    *character = 0U;
+    for (scan = text; scan < cursor; ++scan) {
+        if (*scan == '\n') {
+            *line += 1U;
+            *character = 0U;
+        } else {
+            *character += 1U;
+        }
+    }
 }
 
 static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
@@ -1682,6 +1797,205 @@ static void test_lsp_rejects_unknown_option(void) {
     char *argv[] = { "--bogus" };
 
     ASSERT(run_lsp_quiet_stderr(1, argv) != 0);
+}
+
+static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
+    static const char *kBadSource =
+        "mod test.lsp;\n"
+        "fn main(args: string[]) {\n"
+        "    let value: string = ;\n"
+        "}\n";
+    static const char *kGoodSource =
+        "mod test.lsp;\n"
+        "fn main(args: string[]) {\n"
+        "    let value: string = \"ok\";\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_diag_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *bad_text;
+    char *good_text;
+    char *initialize;
+    char *did_open;
+    char *did_change;
+    char *did_close;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kGoodSource);
+
+    uri = file_uri_from_path(source_path);
+    bad_text = json_escape_text(kBadSource);
+    good_text = json_escape_text(kGoodSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          bad_text);
+    did_change = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},\"contentChanges\":[{\"text\":\"%s\"}]}}",
+                            uri,
+                            good_text);
+    did_close = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+                           uri);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, did_change);
+    write_lsp_message(input, did_close);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(count_occurrences(output, "\"method\":\"textDocument/publishDiagnostics\"") == 3);
+    ASSERT(strstr(output, "\"diagnostics\":[{") != NULL);
+    ASSERT(count_occurrences(output, "\"diagnostics\":[]") >= 2);
+
+    free(output);
+    free(shutdown);
+    free(did_close);
+    free(did_change);
+    free(did_open);
+    free(initialize);
+    free(good_text);
+    free(bad_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+static void test_lsp_hover_definition_and_completion(void) {
+    static const char *kSource =
+        "mod test.lsp;\n"
+        "\n"
+        "/** User record. */\n"
+        "type User {\n"
+        "    /** Display name. */\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "/** Formats a user label. */\n"
+        "fn format(user: User): string {\n"
+        "    return user.name;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let label: string = format(user);\n"
+        "    let mirror: string = user.name;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_query_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *hover_fn;
+    char *definition_fn;
+    char *hover_field;
+    char *completion_field;
+    char *shutdown;
+    char *output;
+    char *expected_definition;
+    FILE *input;
+    unsigned int fn_line;
+    unsigned int fn_character;
+    unsigned int field_line;
+    unsigned int field_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource,
+                        "let label: string = format(user);",
+                        20U,
+                        &fn_line,
+                        &fn_character);
+    find_line_character(kSource,
+                        "let mirror: string = user.name;",
+                        26U,
+                        &field_line,
+                        &field_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    hover_fn = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                          uri,
+                          fn_line,
+                          fn_character);
+    definition_fn = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                               uri,
+                               fn_line,
+                               fn_character);
+    hover_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                             uri,
+                             field_line,
+                             field_character);
+    completion_field = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                  uri,
+                                  field_line,
+                                  field_character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    expected_definition = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":9",
+                                     uri);
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_fn);
+    write_lsp_message(input, definition_fn);
+    write_lsp_message(input, hover_field);
+    write_lsp_message(input, completion_field);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"hoverProvider\":true") != NULL);
+    ASSERT(strstr(output, "\"definitionProvider\":true") != NULL);
+    ASSERT(strstr(output, "\"completionProvider\"") != NULL);
+    ASSERT(strstr(output, "Formats a user label.") != NULL);
+    ASSERT(strstr(output, "fn format(user: User): string") != NULL);
+    ASSERT(strstr(output, "Display name.") != NULL);
+    ASSERT(strstr(output, "let name: string") != NULL);
+    ASSERT(strstr(output, expected_definition) != NULL);
+    ASSERT(strstr(output, "\"id\":5,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
+
+    free(output);
+    free(expected_definition);
+    free(shutdown);
+    free(completion_field);
+    free(hover_field);
+    free(definition_fn);
+    free(hover_fn);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
 }
 
 static void test_manifest_defaults(void) {
@@ -3333,6 +3647,8 @@ int main(void) {
     test_init_rejects_non_empty_directory();
     test_lsp_help_returns_success();
     test_lsp_rejects_unknown_option();
+    test_lsp_publish_diagnostics_for_open_change_and_close();
+    test_lsp_hover_definition_and_completion();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
