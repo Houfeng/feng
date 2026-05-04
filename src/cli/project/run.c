@@ -134,6 +134,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     if (!feng_cli_deps_resolve_for_manifest(program,
                                             context.manifest_path,
                                             false,
+                                            release,
                                             &resolved,
                                             &error)) {
         feng_cli_project_print_error(stderr, &error);

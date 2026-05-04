@@ -31,7 +31,7 @@ bool feng_cli_legacy_compile_parse(const char *program,
 typedef struct FengCliDirectOptions {
     FengCompileTarget target;     /* P4: only BIN supported. */
     const char *out_dir;          /* required: <out>/ir/c, <out>/bin */
-    bool release;                 /* P4: parsed but reported as not-yet-implemented */
+    bool release;                 /* Selects release-vs-debug build mode. */
     bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
     int input_count;

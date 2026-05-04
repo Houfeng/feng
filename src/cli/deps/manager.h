@@ -26,9 +26,15 @@ bool feng_cli_deps_install_for_manifest(const char *program,
                                         bool force_remote,
                                         FengCliProjectError *out_error);
 
+bool feng_cli_deps_validate_local_dependency(const char *owner_manifest_path,
+                                             const char *dependency_name,
+                                             const char *dependency_value,
+                                             FengCliProjectError *out_error);
+
 bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         const char *manifest_path,
                                         bool force_remote,
+                                        bool release,
                                         FengCliDepsResolved *out_resolved,
                                         FengCliProjectError *out_error);
 

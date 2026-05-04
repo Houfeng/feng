@@ -36,6 +36,7 @@ typedef struct ResolveState {
     const char *program;
     bool force_remote;
     bool materialize_local_projects;
+    bool release;
     char *cache_root;
     char *global_registry;
     bool global_registry_loaded;
@@ -986,6 +987,82 @@ static bool resolve_dependency_target(const char *owner_manifest_path,
                       "local dependency path must point to a regular file or directory");
 }
 
+bool feng_cli_deps_validate_local_dependency(const char *owner_manifest_path,
+                                             const char *dependency_name,
+                                             const char *dependency_value,
+                                             FengCliProjectError *out_error) {
+    FengCliProjectManifestDependency dependency = {
+        .name = (char *)dependency_name,
+        .value = (char *)dependency_value,
+        .line = 0U,
+        .is_local_path = true,
+    };
+    char *child_manifest_path = NULL;
+    char *child_bundle_path = NULL;
+
+    if (!resolve_dependency_target(owner_manifest_path,
+                                   &dependency,
+                                   &child_manifest_path,
+                                   &child_bundle_path,
+                                   out_error)) {
+        return false;
+    }
+
+    if (child_bundle_path != NULL) {
+        FengCliProjectManifest bundle_manifest = {0};
+
+        if (!read_bundle_manifest(child_bundle_path, &bundle_manifest, out_error)) {
+            free(child_bundle_path);
+            return false;
+        }
+        free(child_bundle_path);
+        if (strcmp(bundle_manifest.name, dependency_name) != 0) {
+            bool ok = set_errorf(out_error,
+                                 owner_manifest_path,
+                                 0U,
+                                 "local dependency name mismatch: expected %s but found %s",
+                                 dependency_name,
+                                 bundle_manifest.name);
+            feng_cli_project_manifest_dispose(&bundle_manifest);
+            return ok;
+        }
+        feng_cli_project_manifest_dispose(&bundle_manifest);
+        return true;
+    }
+
+    if (child_manifest_path != NULL) {
+        FengCliProjectManifest child_manifest = {0};
+
+        if (!read_project_manifest_from_disk(child_manifest_path, &child_manifest, out_error)) {
+            free(child_manifest_path);
+            return false;
+        }
+        free(child_manifest_path);
+        if (strcmp(child_manifest.name, dependency_name) != 0) {
+            bool ok = set_errorf(out_error,
+                                 owner_manifest_path,
+                                 0U,
+                                 "local dependency name mismatch: expected %s but found %s",
+                                 dependency_name,
+                                 child_manifest.name);
+            feng_cli_project_manifest_dispose(&child_manifest);
+            return ok;
+        }
+        if (child_manifest.target != FENG_COMPILE_TARGET_LIB) {
+            bool ok = set_errorf(out_error,
+                                 owner_manifest_path,
+                                 0U,
+                                 "local dependency project must use target: \"lib\"");
+            feng_cli_project_manifest_dispose(&child_manifest);
+            return ok;
+        }
+        feng_cli_project_manifest_dispose(&child_manifest);
+        return true;
+    }
+
+    return true;
+}
+
 bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
                                                  const FengCliProjectManifest *manifest,
                                                  FengCliProjectManifestDependency **out_dependencies,
@@ -1102,6 +1179,7 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
 
 static bool build_local_project_bundle(const char *program,
                                        const char *manifest_path,
+                                       bool release,
                                        const FengCliDepsResolved *dependencies,
                                        char **out_bundle_path,
                                        FengCliProjectError *error) {
@@ -1128,7 +1206,7 @@ static bool build_local_project_bundle(const char *program,
 
     rc = feng_cli_project_invoke_direct_compile_with_packages(program,
                                                               &context,
-                                                              false,
+                                                              release,
                                                               dependencies->package_count,
                                                               (const char *const *)dependencies->package_paths);
     if (rc != 0) {
@@ -1333,6 +1411,7 @@ static bool resolve_project_dependencies(ResolveState *state,
                     if (state->materialize_local_projects &&
                         !build_local_project_bundle(state->program,
                                                     child_manifest_path,
+                                                    state->release,
                                                     &state->nodes[child_slot].subtree,
                                                     &state->nodes[child_slot].bundle_path,
                                                     error)) {
@@ -1531,6 +1610,7 @@ static bool resolve_root_manifest(const char *program,
                                   const char *manifest_path,
                                   bool force_remote,
                                   bool materialize_local_projects,
+                                  bool release,
                                   FengCliDepsResolved *out_resolved,
                                   FengCliProjectError *out_error) {
     ResolveState state;
@@ -1541,6 +1621,7 @@ static bool resolve_root_manifest(const char *program,
     state.program = program;
     state.force_remote = force_remote;
     state.materialize_local_projects = materialize_local_projects;
+    state.release = release;
 
     if (!read_project_manifest_from_disk(manifest_path, &manifest, out_error)) {
         return false;
@@ -1564,6 +1645,7 @@ bool feng_cli_deps_install_for_manifest(const char *program,
                                     manifest_path,
                                     force_remote,
                                     false,
+                                    false,
                                     &resolved,
                                     out_error);
 
@@ -1574,6 +1656,7 @@ bool feng_cli_deps_install_for_manifest(const char *program,
 bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         const char *manifest_path,
                                         bool force_remote,
+                         bool release,
                                         FengCliDepsResolved *out_resolved,
                                         FengCliProjectError *out_error) {
     out_resolved->package_paths = NULL;
@@ -1582,6 +1665,7 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                  manifest_path,
                                  force_remote,
                                  true,
+                     release,
                                  out_resolved,
                                  out_error);
 }

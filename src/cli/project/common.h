@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include "cli/deps/manager.h"
 #include "cli/project/manifest.h"
 
 typedef struct FengCliProjectContext {
@@ -46,5 +47,17 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
 int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,
                                            bool release);
+
+bool feng_cli_project_prepare_build(const char *program,
+                                   const char *path_arg,
+                                   bool release,
+                                   FengCliProjectContext *out_context,
+                                   FengCliDepsResolved *out_resolved,
+                                   FengCliProjectError *out_error);
+
+int feng_cli_project_compile_prepared(const char *program,
+                                      const FengCliProjectContext *context,
+                                      const FengCliDepsResolved *resolved,
+                                      bool release);
 
 #endif /* FENG_CLI_PROJECT_COMMON_H */

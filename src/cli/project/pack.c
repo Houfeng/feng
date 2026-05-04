@@ -12,18 +12,16 @@
 
 static void print_usage(const char *program) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s pack [<path>] [--release]\n", program);
+    fprintf(stderr, "  %s pack [<path>]\n", program);
 }
 
 static bool parse_args(const char *program,
                        int argc,
                        char **argv,
-                       const char **out_path,
-                       bool *out_release) {
+                       const char **out_path) {
     int index;
 
     *out_path = NULL;
-    *out_release = false;
 
     for (index = 0; index < argc; ++index) {
         const char *arg = argv[index];
@@ -31,10 +29,6 @@ static bool parse_args(const char *program,
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             print_usage(program);
             return false;
-        }
-        if (strcmp(arg, "--release") == 0) {
-            *out_release = true;
-            continue;
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
@@ -79,7 +73,7 @@ static char *dup_printf(const char *fmt, ...) {
 
 int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     const char *path_arg = NULL;
-    bool release = false;
+    const bool release = true;
     FengCliProjectContext context = {0};
     FengCliProjectError project_error = {0};
     FengCliDepsResolved resolved = {0};
@@ -91,10 +85,15 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     char *error_message = NULL;
     int rc = 1;
 
-    if (!parse_args(program, argc, argv, &path_arg, &release)) {
+    if (!parse_args(program, argc, argv, &path_arg)) {
         return 1;
     }
-    if (!feng_cli_project_open(path_arg, &context, &project_error)) {
+    if (!feng_cli_project_prepare_build(program,
+                                        path_arg,
+                                        release,
+                                        &context,
+                                        &resolved,
+                                        &project_error)) {
         feng_cli_project_print_error(stderr, &project_error);
         feng_cli_project_error_dispose(&project_error);
         return 1;
@@ -105,20 +104,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
                 program);
         goto done;
     }
-    if (!feng_cli_deps_resolve_for_manifest(program,
-                                            context.manifest_path,
-                                            false,
-                                            &resolved,
-                                            &project_error)) {
-        feng_cli_project_print_error(stderr, &project_error);
-        rc = 1;
-        goto done;
-    }
-    rc = feng_cli_project_invoke_direct_compile_with_packages(program,
-                                                              &context,
-                                                              release,
-                                                              resolved.package_count,
-                                                              (const char *const *)resolved.package_paths);
+    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
     if (rc != 0) {
         goto done;
     }

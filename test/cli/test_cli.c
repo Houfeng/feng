@@ -16,6 +16,7 @@
 #include "cli/frontend.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
+#include "symbol/ft_internal.h"
 #include "symbol/imported_module.h"
 
 #define ASSERT(expr) \
@@ -107,6 +108,11 @@ static void write_text_file(const char *path, const char *content) {
     fclose(file);
 }
 
+static void write_executable_text_file(const char *path, const char *content) {
+    write_text_file(path, content);
+    ASSERT(chmod(path, 0775) == 0);
+}
+
 static int path_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
@@ -144,6 +150,36 @@ static char *read_text_file(const char *path) {
     content[length] = '\0';
     fclose(file);
     return content;
+}
+
+static int count_occurrences(const char *text, const char *needle) {
+    int count = 0;
+    size_t needle_len = strlen(needle);
+    const char *cursor = text;
+
+    ASSERT(needle_len > 0U);
+    while ((cursor = strstr(cursor, needle)) != NULL) {
+        count += 1;
+        cursor += needle_len;
+    }
+    return count;
+}
+
+static char *create_logging_cc_wrapper(const char *dir, const char *log_path) {
+    char *script_path = path_join(dir, "fake-cc.sh");
+    char *script_text = dup_printf("#!/bin/sh\n"
+                                   "printf '__CMD__\\n' >> \"%s\"\n"
+                                   "for arg in \"$@\"; do\n"
+                                   "  printf '%%s\\n' \"$arg\" >> \"%s\"\n"
+                                   "done\n"
+                                   "exec cc \"$@\"\n",
+                                   log_path,
+                                   log_path);
+
+    ASSERT(script_text != NULL);
+    write_executable_text_file(script_path, script_text);
+    free(script_text);
+    return script_path;
 }
 
 static char *make_out_option(const char *out_dir) {
@@ -1728,7 +1764,7 @@ static void test_deps_resolve_installs_remote_transitive_dependencies(void) {
     }
     ASSERT(setenv("HOME", workspace_dir, 1) == 0);
 
-    ASSERT(feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, &resolved, &error));
+    ASSERT(feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error));
     ASSERT(resolved.package_count == 2U);
     ASSERT((path_ends_with(resolved.package_paths[0], "/.feng/cache/dep_a-1.0.0.fb") &&
             path_ends_with(resolved.package_paths[1], "/.feng/cache/dep_b-1.0.0.fb")) ||
@@ -1803,7 +1839,7 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
                     "[dependencies]\n"
                     "local_dep: \"../local_dep\"\n");
 
-    ASSERT(feng_cli_deps_resolve_for_manifest("feng", project_manifest_path, false, &resolved, &error));
+    ASSERT(feng_cli_deps_resolve_for_manifest("feng", project_manifest_path, false, false, &resolved, &error));
     ASSERT(resolved.package_count == 1U);
     resolved_expected_bundle_path = realpath(expected_bundle_path, NULL);
     ASSERT(resolved_expected_bundle_path != NULL);
@@ -1821,6 +1857,333 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
     free(dep_src_dir);
     free(dep_dir);
     free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_deps_resolve_requires_registry_for_remote_dependency(void) {
+    char template_path[] = "/tmp/feng_cli_deps_no_registry_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *saved_home = NULL;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+
+    mkdir_p(project_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(!feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "configured registry") != NULL);
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(saved_home);
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(manifest_path);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_deps_resolve_uses_global_registry_config(void) {
+    char template_path[] = "/tmp/feng_cli_deps_global_registry_XXXXXX";
+    char *workspace_dir;
+    char *feng_dir;
+    char *config_path;
+    char *registry_dir;
+    char *packages_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *bundle_path;
+    char *saved_home = NULL;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    feng_dir = path_join(workspace_dir, ".feng");
+    config_path = path_join(feng_dir, "config.fm");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+    bundle_path = path_join(packages_dir, "remote_dep-1.0.0.fb");
+
+    mkdir_p(feng_dir);
+    mkdir_p(packages_dir);
+    mkdir_p(project_dir);
+    write_text_file(config_path,
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+    write_manifest_only_bundle_or_die(bundle_path,
+                                      "[package]\n"
+                                      "name: \"remote_dep\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error));
+    ASSERT(resolved.package_count == 1U);
+    ASSERT(path_exists(resolved.package_paths[0]));
+    ASSERT(path_ends_with(resolved.package_paths[0], "/.feng/cache/remote_dep-1.0.0.fb"));
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(saved_home);
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(manifest_path);
+    free(project_dir);
+    free(packages_dir);
+    free(registry_dir);
+    free(config_path);
+    free(feng_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_deps_resolve_reports_transitive_version_conflict(void) {
+    char template_path[] = "/tmp/feng_cli_deps_conflict_XXXXXX";
+    char *workspace_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *common_v1_path;
+    char *common_v2_path;
+    char *dep_a_path;
+    char *dep_b_path;
+    char *saved_home = NULL;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+    common_v1_path = path_join(packages_dir, "common-1.0.0.fb");
+    common_v2_path = path_join(packages_dir, "common-2.0.0.fb");
+    dep_a_path = path_join(packages_dir, "dep_a-1.0.0.fb");
+    dep_b_path = path_join(packages_dir, "dep_b-1.0.0.fb");
+
+    mkdir_p(packages_dir);
+    mkdir_p(project_dir);
+    write_manifest_only_bundle_or_die(common_v1_path,
+                                      "[package]\n"
+                                      "name: \"common\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    write_manifest_only_bundle_or_die(common_v2_path,
+                                      "[package]\n"
+                                      "name: \"common\"\n"
+                                      "version: \"2.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    write_manifest_only_bundle_or_die(dep_a_path,
+                                      "[package]\n"
+                                      "name: \"dep_a\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n"
+                                      "\n"
+                                      "[dependencies]\n"
+                                      "common: \"1.0.0\"\n");
+    write_manifest_only_bundle_or_die(dep_b_path,
+                                      "[package]\n"
+                                      "name: \"dep_b\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n"
+                                      "\n"
+                                      "[dependencies]\n"
+                                      "common: \"2.0.0\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "dep_a: \"1.0.0\"\n"
+                    "dep_b: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(!feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "dependency version conflict") != NULL);
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(saved_home);
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_b_path);
+    free(dep_a_path);
+    free(common_v2_path);
+    free(common_v1_path);
+    free(manifest_path);
+    free(project_dir);
+    free(packages_dir);
+    free(registry_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_deps_resolve_reports_local_dependency_cycle(void) {
+    char template_path[] = "/tmp/feng_cli_deps_cycle_XXXXXX";
+    char *workspace_dir;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *dep_a_dir;
+    char *dep_a_manifest_path;
+    char *dep_a_src_dir;
+    char *dep_a_source_path;
+    char *dep_b_dir;
+    char *dep_b_manifest_path;
+    char *dep_b_src_dir;
+    char *dep_b_source_path;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    dep_a_dir = path_join(workspace_dir, "dep_a");
+    dep_a_manifest_path = path_join(dep_a_dir, "feng.fm");
+    dep_a_src_dir = path_join(dep_a_dir, "src");
+    dep_a_source_path = path_join(dep_a_src_dir, "lib.ff");
+    dep_b_dir = path_join(workspace_dir, "dep_b");
+    dep_b_manifest_path = path_join(dep_b_dir, "feng.fm");
+    dep_b_src_dir = path_join(dep_b_dir, "src");
+    dep_b_source_path = path_join(dep_b_src_dir, "lib.ff");
+
+    mkdir_p(root_project_dir);
+    mkdir_p(dep_a_src_dir);
+    mkdir_p(dep_b_src_dir);
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "dep_a: \"../dep_a\"\n");
+    write_text_file(dep_a_manifest_path,
+                    "[package]\n"
+                    "name: \"dep_a\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "dep_b: \"../dep_b\"\n");
+    write_text_file(dep_b_manifest_path,
+                    "[package]\n"
+                    "name: \"dep_b\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "dep_a: \"../dep_a\"\n");
+    write_text_file(dep_a_source_path,
+                    "pu mod test.cli.cyclea;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+    write_text_file(dep_b_source_path,
+                    "pu mod test.cli.cycleb;\n"
+                    "pu fn value(): int {\n"
+                    "  return 2;\n"
+                    "}\n");
+
+    ASSERT(!feng_cli_deps_resolve_for_manifest("feng", root_manifest_path, false, false, &resolved, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "cycle") != NULL);
+
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_b_source_path);
+    free(dep_b_src_dir);
+    free(dep_b_manifest_path);
+    free(dep_b_dir);
+    free(dep_a_source_path);
+    free(dep_a_src_dir);
+    free(dep_a_manifest_path);
+    free(dep_a_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
     feng_cli_project_error_dispose(&error);
 }
 
@@ -1896,6 +2259,194 @@ static void test_deps_add_remote_updates_manifest_and_cache(void) {
     free(project_dir);
 }
 
+static void test_deps_add_local_validates_then_writes_manifest(void) {
+    char template_path[] = "/tmp/feng_cli_deps_add_local_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *dep_dir;
+    char *dep_src_dir;
+    char *project_manifest_path;
+    char *dep_manifest_path;
+    char *dep_source_path;
+    char *dep_bundle_path;
+    char *manifest_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    dep_dir = path_join(workspace_dir, "dep");
+    dep_src_dir = path_join(dep_dir, "src");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    dep_manifest_path = path_join(dep_dir, "feng.fm");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    dep_bundle_path = path_join(dep_dir, "build/local_dep-0.1.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(dep_src_dir);
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.addlocal;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+
+    {
+        char *argv[] = { "add", "local_dep", "../dep", project_dir };
+        ASSERT(feng_cli_deps_main("feng", 4, argv) == 0);
+    }
+
+    manifest_text = read_text_file(project_manifest_path);
+    ASSERT(strstr(manifest_text, "[dependencies]\nlocal_dep: \"../dep\"") != NULL);
+    ASSERT(!path_exists(dep_bundle_path));
+
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_bundle_path);
+    free(dep_source_path);
+    free(dep_manifest_path);
+    free(project_manifest_path);
+    free(dep_src_dir);
+    free(dep_dir);
+    free(project_dir);
+}
+
+static void test_deps_add_local_rejects_name_mismatch_before_write(void) {
+    char template_path[] = "/tmp/feng_cli_deps_add_local_name_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *dep_dir;
+    char *dep_src_dir;
+    char *project_manifest_path;
+    char *dep_manifest_path;
+    char *dep_source_path;
+    char *manifest_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    dep_dir = path_join(workspace_dir, "dep");
+    dep_src_dir = path_join(dep_dir, "src");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    dep_manifest_path = path_join(dep_dir, "feng.fm");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+
+    mkdir_p(project_dir);
+    mkdir_p(dep_src_dir);
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"other_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.addlocalname;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+
+    {
+        char *argv[] = { "add", "local_dep", "../dep", project_dir };
+        ASSERT(feng_cli_deps_main("feng", 4, argv) != 0);
+    }
+
+    manifest_text = read_text_file(project_manifest_path);
+    ASSERT(strstr(manifest_text, "[dependencies]") == NULL);
+
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_source_path);
+    free(dep_manifest_path);
+    free(project_manifest_path);
+    free(dep_src_dir);
+    free(dep_dir);
+    free(project_dir);
+}
+
+static void test_deps_add_local_rejects_non_lib_target_before_write(void) {
+    char template_path[] = "/tmp/feng_cli_deps_add_local_target_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *dep_dir;
+    char *dep_src_dir;
+    char *project_manifest_path;
+    char *dep_manifest_path;
+    char *dep_source_path;
+    char *manifest_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    dep_dir = path_join(workspace_dir, "dep");
+    dep_src_dir = path_join(dep_dir, "src");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    dep_manifest_path = path_join(dep_dir, "feng.fm");
+    dep_source_path = path_join(dep_src_dir, "main.ff");
+
+    mkdir_p(project_dir);
+    mkdir_p(dep_src_dir);
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "mod test.cli.addlocaltarget;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        char *argv[] = { "add", "local_dep", "../dep", project_dir };
+        ASSERT(feng_cli_deps_main("feng", 4, argv) != 0);
+    }
+
+    manifest_text = read_text_file(project_manifest_path);
+    ASSERT(strstr(manifest_text, "[dependencies]") == NULL);
+
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_source_path);
+    free(dep_manifest_path);
+    free(project_manifest_path);
+    free(dep_src_dir);
+    free(dep_dir);
+    free(project_dir);
+}
+
 static void test_deps_remove_updates_manifest(void) {
     char template_path[] = "/tmp/feng_cli_deps_remove_XXXXXX";
     char *workspace_dir;
@@ -1938,6 +2489,347 @@ static void test_deps_remove_updates_manifest(void) {
     free(project_dir);
 }
 
+static void test_project_build_default_uses_debug_friendly_flags(void) {
+    char template_path[] = "/tmp/feng_cli_build_debug_flags_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *binary_path;
+    char *cc_log_text;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+    binary_path = path_join(project_dir, "build/bin/app");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_path,
+                    "mod test.cli.debugflags;\n"
+                    "fn main(args: string[]) {}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(count_occurrences(cc_log_text, "__CMD__") >= 1);
+    ASSERT(count_occurrences(cc_log_text, "-O0") >= 1);
+    ASSERT(count_occurrences(cc_log_text, "-g") >= 1);
+    ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") == 0);
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    free(saved_cc);
+    free(cc_log_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(binary_path);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
+static void test_project_build_release_propagates_to_local_dependencies(void) {
+    char template_path[] = "/tmp/feng_cli_build_release_flags_XXXXXX";
+    char *workspace_dir;
+    char *dep_project_dir;
+    char *dep_manifest_path;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *root_src_dir;
+    char *root_source_path;
+    char *binary_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_project_dir = path_join(workspace_dir, "dep");
+    dep_manifest_path = path_join(dep_project_dir, "feng.fm");
+    dep_src_dir = path_join(dep_project_dir, "src");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    root_src_dir = path_join(root_project_dir, "src");
+    root_source_path = path_join(root_src_dir, "main.ff");
+    binary_path = path_join(root_project_dir, "build/bin/release_app");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"release_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.releasedep;\n"
+                    "pu fn dep_value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"release_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "release_dep: \"../dep\"\n");
+    write_text_file(root_source_path,
+                    "mod test.cli.releaseapp;\n"
+                    "use test.cli.releasedep;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if dep_value() == 7 {\n"
+                    "  }\n"
+                    "}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    {
+        char *argv[] = { root_project_dir, "--release" };
+        ASSERT(feng_cli_project_build_main("feng", 2, argv) == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(count_occurrences(cc_log_text, "__CMD__") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
+    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    free(saved_cc);
+    free(cc_log_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(binary_path);
+    free(root_source_path);
+    free(root_src_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    free(dep_manifest_path);
+    free(dep_project_dir);
+}
+
+static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(void) {
+    char template_path[] = "/tmp/feng_cli_pack_release_flags_XXXXXX";
+    char *workspace_dir;
+    char *dep_project_dir;
+    char *dep_manifest_path;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *root_src_dir;
+    char *root_source_path;
+    char *bundle_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+    FengZipReader reader = {0};
+    char *zip_error = NULL;
+    void *ft_bytes = NULL;
+    size_t ft_size = 0U;
+    FengSymbolFtHeader header;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    dep_project_dir = path_join(workspace_dir, "dep");
+    dep_manifest_path = path_join(dep_project_dir, "feng.fm");
+    dep_src_dir = path_join(dep_project_dir, "src");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    root_src_dir = path_join(root_project_dir, "src");
+    root_source_path = path_join(root_src_dir, "lib.ff");
+    bundle_path = path_join(root_project_dir, "build/rootlib-0.1.0.fb");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "pu mod local.dep;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"rootlib\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_dep: \"../dep\"\n");
+    write_text_file(root_source_path,
+                    "pu mod test.cli.packroot;\n"
+                    "pu fn root_value(): int {\n"
+                    "  return 2;\n"
+                    "}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    {
+        char *argv[] = { root_project_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(bundle_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(count_occurrences(cc_log_text, "__CMD__") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
+    ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
+    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+
+    ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
+    ASSERT(feng_zip_reader_read(&reader,
+                                "mod/test/cli/packroot.ft",
+                                &ft_bytes,
+                                &ft_size,
+                                &zip_error));
+    ASSERT(ft_size >= sizeof(FengSymbolFtHeader));
+    memcpy(&header, ft_bytes, sizeof(header));
+    ASSERT(header.profile == FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC);
+    ASSERT((header.flags & FENG_SYMBOL_FT_FLAG_HAS_SPANS) == 0U);
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    free(saved_cc);
+    free(cc_log_text);
+    feng_zip_free(ft_bytes);
+    feng_zip_reader_dispose(&reader);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(bundle_path);
+    free(root_source_path);
+    free(root_src_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    free(dep_manifest_path);
+    free(dep_project_dir);
+}
+
+static void test_project_pack_rejects_release_flag(void) {
+    char template_path[] = "/tmp/feng_cli_pack_no_release_flag_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *remove_error = NULL;
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "lib.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"packlib\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_path,
+                    "pu mod test.cli.packnorelease;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+
+    {
+        char *argv[] = { project_dir, "--release" };
+        ASSERT(feng_cli_project_pack_main("feng", 2, argv) != 0);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 int main(void) {
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
@@ -1946,9 +2838,16 @@ int main(void) {
     test_manifest_requires_target();
     test_bundle_manifest_allows_dependencies_without_target();
     test_bundle_manifest_rejects_local_path_dependency();
+    test_deps_resolve_requires_registry_for_remote_dependency();
+    test_deps_resolve_uses_global_registry_config();
     test_deps_resolve_installs_remote_transitive_dependencies();
     test_deps_resolve_builds_local_library_dependency();
+    test_deps_resolve_reports_transitive_version_conflict();
+    test_deps_resolve_reports_local_dependency_cycle();
     test_deps_add_remote_updates_manifest_and_cache();
+    test_deps_add_local_validates_then_writes_manifest();
+    test_deps_add_local_rejects_name_mismatch_before_write();
+    test_deps_add_local_rejects_non_lib_target_before_write();
     test_deps_remove_updates_manifest();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();
@@ -1965,6 +2864,10 @@ int main(void) {
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_frontend_outputs_absolute_bundle_paths();
     test_direct_build_rejects_bad_package_bundle();
+    test_project_build_default_uses_debug_friendly_flags();
+    test_project_build_release_propagates_to_local_dependencies();
+    test_project_pack_uses_release_build_and_public_ft_excludes_spans();
+    test_project_pack_rejects_release_flag();
     fprintf(stdout, "cli tests passed\n");
     return 0;
 }

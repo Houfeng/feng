@@ -213,11 +213,6 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    if (opts.release) {
-        fprintf(stderr,
-                "warning: --release is parsed but not yet implemented; building debug-equivalent output.\n");
-    }
-
     /* Materialise the output layout up front. */
     char *ir_dir = path_join(opts.out_dir, "ir/c");
     char *artifact_dir = path_join(opts.out_dir,
@@ -528,6 +523,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         .program_count = prog_count,
         .bundle_paths = (const char *const *)bundle_paths,
         .bundle_count = bundle_count,
+        .release = opts.release,
         .keep_intermediate = opts.keep_intermediate,
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);

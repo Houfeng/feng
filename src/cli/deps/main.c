@@ -176,6 +176,7 @@ static int deps_add_main(const char *program, int argc, char **argv) {
     const char *name;
     const char *value;
     const char *path_arg = NULL;
+    bool local_value;
     char *manifest_path = NULL;
     char *original_source = NULL;
     char *write_error = NULL;
@@ -190,11 +191,17 @@ static int deps_add_main(const char *program, int argc, char **argv) {
     }
     name = argv[0];
     value = argv[1];
+    local_value = is_local_value(value);
     if (argc == 3) {
         path_arg = argv[2];
     }
 
     if (!load_project_manifest(path_arg, &manifest_path, &original_source, &manifest, &error)) {
+        feng_cli_project_print_error(stderr, &error);
+        goto done;
+    }
+    if (local_value &&
+        !feng_cli_deps_validate_local_dependency(manifest_path, name, value, &error)) {
         feng_cli_project_print_error(stderr, &error);
         goto done;
     }
@@ -206,7 +213,7 @@ static int deps_add_main(const char *program, int argc, char **argv) {
         fprintf(stderr, "%s\n", write_error != NULL ? write_error : "failed to write manifest");
         goto done;
     }
-    if (!feng_cli_deps_install_for_manifest(program, manifest_path, false, &error)) {
+    if (!local_value && !feng_cli_deps_install_for_manifest(program, manifest_path, false, &error)) {
         (void)rollback_manifest(manifest_path, original_source);
         feng_cli_project_print_error(stderr, &error);
         goto done;

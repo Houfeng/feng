@@ -1042,6 +1042,19 @@ static int spawn_and_wait(char *const argv[]) {
     return -1;
 }
 
+static bool argv_push_mode_flags(ArgVec *av, bool release) {
+    if (!argv_push(av, release ? "-O2" : "-O0")) {
+        return false;
+    }
+    if (!release && !argv_push(av, "-g")) {
+        return false;
+    }
+    if (release && !argv_push(av, "-DNDEBUG")) {
+        return false;
+    }
+    return true;
+}
+
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
@@ -1154,7 +1167,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         if (!argv_push(&av, cc)) { ok = false; }
         if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
-        if (ok && !argv_push(&av, "-O2")) { ok = false; }
+        if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
@@ -1200,7 +1213,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         } else {
             if (!argv_push(&av, cc)) { ok = false; }
             if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
-            if (ok && !argv_push(&av, "-O2")) { ok = false; }
+            if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
             if (ok && !argv_push(&av, "-pedantic")) { ok = false; }

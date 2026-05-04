@@ -24,7 +24,7 @@ feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
 - `--target <目标>`: 编译目标,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定
 - `--out <输出路径>`: 指定输出文件路径; 该参数必须显式指定,编译器不假定默认输出位置
-- `--release`: 使用发布模式编译;项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
+- `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
 
@@ -116,7 +116,7 @@ extern fn ssl_connect(fd: int): int;
 7. 若本地项目依赖图出现循环,构建工具立即报错
 8. 依赖图锁定后,构建工具将其展平成一组确定的 `.fb` 路径列表,作为后续 `--pkg` 参数输入给编译器
 
-`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng run` 与 `feng pack` 在执行前总是先执行 `feng build`; 其中 `feng pack` 固定使用 `feng build --release`。
+`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; `feng pack` 固定使用 release 模式完成同样的递归构建与打包。
 
 ### 3.3 模块名冲突预检
 

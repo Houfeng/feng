@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
 static char *dup_printf(const char *fmt, const char *value) {
@@ -82,4 +83,51 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 release,
                                                                 0U,
                                                                 NULL);
+}
+
+bool feng_cli_project_prepare_build(const char *program,
+                                   const char *path_arg,
+                                   bool release,
+                                   FengCliProjectContext *out_context,
+                                   FengCliDepsResolved *out_resolved,
+                                   FengCliProjectError *out_error) {
+    FengCliProjectContext context = {0};
+
+    if (out_context == NULL || out_resolved == NULL) {
+        if (out_error != NULL) {
+            out_error->path = NULL;
+            out_error->message = NULL;
+            out_error->line = 0U;
+        }
+        return false;
+    }
+
+    out_resolved->package_paths = NULL;
+    out_resolved->package_count = 0U;
+    if (!feng_cli_project_open(path_arg, &context, out_error)) {
+        return false;
+    }
+    if (!feng_cli_deps_resolve_for_manifest(program,
+                                            context.manifest_path,
+                                            false,
+                                            release,
+                                            out_resolved,
+                                            out_error)) {
+        feng_cli_project_context_dispose(&context);
+        return false;
+    }
+
+    *out_context = context;
+    return true;
+}
+
+int feng_cli_project_compile_prepared(const char *program,
+                                      const FengCliProjectContext *context,
+                                      const FengCliDepsResolved *resolved,
+                                      bool release) {
+    return feng_cli_project_invoke_direct_compile_with_packages(program,
+                                                                context,
+                                                                release,
+                                                                resolved->package_count,
+                                                                (const char *const *)resolved->package_paths);
 }

@@ -102,12 +102,13 @@ feng build [<path>] [--release]
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
-- `--release`: 以发布模式构建,透传给编译器。
+- `--release`: 以发布模式构建,透传给当前项目编译器,并同样用于递归构建本地 `target: "lib"` 依赖。
 
 说明:
 
 - `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置,不接受编译器级别的细粒度选项。
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
+- 未指定 `--release` 时使用调试友好的构建模式; 指定 `--release` 时改用发布优化模式。
 
 ### 4.3 `feng run`
 
@@ -122,7 +123,7 @@ feng run [<path>] [--release] [-- <program-args>...]
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
-- `--release`: 以发布模式构建,透传给编译器。
+- `--release`: 以发布模式构建,透传给当前项目编译器,并同样用于递归构建本地 `target: "lib"` 依赖。
 
 说明:
 
@@ -186,7 +187,7 @@ feng pack [<path>]
 
 说明:
 
-- `pack` 总是先执行 `feng build --release`,再对产物打包,不接受 `--release` 选项。
+- `pack` 总是先以 release 模式构建当前项目及其递归本地 `target: "lib"` 依赖,再对产物打包,不接受 `--release` 选项。
 - `<path>` 透传给 `feng build`。
 - 若项目的 `target` 不是 `lib`,报错退出。
 

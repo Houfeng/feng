@@ -60,27 +60,17 @@ int feng_cli_project_build_main(const char *program, int argc, char **argv) {
     if (!parse_args(program, argc, argv, &path_arg, &release)) {
         return 1;
     }
-    if (!feng_cli_project_open(path_arg, &context, &error)) {
+    if (!feng_cli_project_prepare_build(program,
+                                        path_arg,
+                                        release,
+                                        &context,
+                                        &resolved,
+                                        &error)) {
         feng_cli_project_print_error(stderr, &error);
         feng_cli_project_error_dispose(&error);
         return 1;
     }
-    if (!feng_cli_deps_resolve_for_manifest(program,
-                                            context.manifest_path,
-                                            false,
-                                            &resolved,
-                                            &error)) {
-        feng_cli_project_print_error(stderr, &error);
-        feng_cli_deps_resolved_dispose(&resolved);
-        feng_cli_project_context_dispose(&context);
-        feng_cli_project_error_dispose(&error);
-        return 1;
-    }
-    rc = feng_cli_project_invoke_direct_compile_with_packages(program,
-                                                              &context,
-                                                              release,
-                                                              resolved.package_count,
-                                                              (const char *const *)resolved.package_paths);
+    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
     feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&context);
     return rc;
