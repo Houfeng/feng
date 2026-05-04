@@ -1278,7 +1278,11 @@ static bool build_standalone_session(const FengLspRuntime *runtime,
     paths[0] = document->path;
     input.path_count = 1;
     input.paths = paths;
-    input.target = FENG_COMPILE_TARGET_BIN;
+    /* Use LIB target for standalone analysis: LSP operates on individual files
+       that may not have fn main (e.g. library modules). BIN target would
+       produce spurious "missing main" errors with NULL paths that crash
+       feng_cli_find_loaded_source. */
+    input.target = FENG_COMPILE_TARGET_LIB;
 
     callbacks.on_parse_error = on_parse_error_collect;
     callbacks.on_semantic_error = on_semantic_error_collect;
@@ -7460,6 +7464,31 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "null");
     }
     offset = offset_from_position(document->text, line, character);
+    /* Prefer analysis path: reads live AST for up-to-date doc comments and
+       signatures, works even when exit_code != 0 (best-effort). */
+    if (build_analysis_session(runtime, document, &session)) {
+        program = find_program(&session, document->path);
+        if (program != NULL && resolve_target_at(&session, program, offset, &target)) {
+            hover_text = hover_text_for_target(&target);
+            ok = hover_text != NULL &&
+                 string_append_cstr(&result, "{\"contents\":{\"kind\":\"plaintext\",\"value\":") &&
+                 string_append_json_string(&result, hover_text) &&
+                 string_append_cstr(&result, "}}");
+            free(hover_text);
+            free(uri);
+            session_dispose(&session);
+            if (!ok) {
+                string_dispose(&result);
+                return send_json_response(output, id, "null");
+            }
+            ok = send_json_response(output, id, result.data);
+            string_dispose(&result);
+            return ok;
+        }
+    }
+    session_dispose(&session);
+    /* Fallback to symbol cache (e.g., symbols from dependency packages or when
+       analysis cannot resolve — uses pre-built .ft symbol tables). */
     if (build_cache_query_context(document, &cache) && resolve_symbol_target_at(&cache, offset, &cache_target)) {
         hover_text = hover_text_for_cache_target(&cache_target);
         ok = hover_text != NULL &&
@@ -7478,37 +7507,8 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         return ok;
     }
     cache_query_context_dispose(&cache);
-    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    program = find_program(&session, document->path);
-    if (program == NULL) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    if (!resolve_target_at(&session, program, offset, &target)) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    hover_text = hover_text_for_target(&target);
-    ok = hover_text != NULL &&
-         string_append_cstr(&result, "{\"contents\":{\"kind\":\"plaintext\",\"value\":") &&
-         string_append_json_string(&result, hover_text) &&
-         string_append_cstr(&result, "}}");
-    free(hover_text);
     free(uri);
-    session_dispose(&session);
-    if (!ok) {
-        string_dispose(&result);
-        return send_json_response(output, id, "null");
-    }
-    ok = send_json_response(output, id, result.data);
-    string_dispose(&result);
-    return ok;
+    return send_json_response(output, id, "null");
 }
 
 static bool handle_definition_request(FengLspRuntime *runtime,
@@ -7552,6 +7552,54 @@ static bool handle_definition_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "null");
     }
     offset = offset_from_position(document->text, line, character);
+    /* Prefer analysis path: uses live AST for accurate token positions and
+       works even when exit_code != 0 (best-effort for files with errors). */
+    if (build_analysis_session(runtime, document, &session)) {
+        program = find_program(&session, document->path);
+        if (program != NULL && resolve_target_at(&session, program, offset, &target)) {
+            switch (target.kind) {
+                case FENG_LSP_RESOLVED_DECL:
+                    (void)find_decl_module(&session, target.decl, &target_program);
+                    ok = location_json(&result,
+                                       target_program != NULL ? target_program->path : NULL,
+                                       target.decl->token);
+                    break;
+                case FENG_LSP_RESOLVED_MEMBER:
+                    (void)find_decl_module(&session, target.decl, &target_program);
+                    ok = location_json(&result,
+                                       target_program != NULL ? target_program->path : NULL,
+                                       target.member->token);
+                    break;
+                case FENG_LSP_RESOLVED_PARAM:
+                    ok = location_json(&result, program->path, target.parameter->token);
+                    break;
+                case FENG_LSP_RESOLVED_BINDING:
+                    ok = location_json(&result, program->path, target.binding->token);
+                    break;
+                case FENG_LSP_RESOLVED_SELF:
+                    (void)find_decl_module(&session, target.self_owner_decl, &target_program);
+                    ok = location_json(&result,
+                                       target_program != NULL ? target_program->path : NULL,
+                                       target.self_owner_decl->token);
+                    break;
+                default:
+                    ok = string_append_cstr(&result, "null");
+                    break;
+            }
+            free(uri);
+            session_dispose(&session);
+            if (!ok) {
+                string_dispose(&result);
+                return send_json_response(output, id, "null");
+            }
+            ok = send_json_response(output, id, result.data);
+            string_dispose(&result);
+            return ok;
+        }
+    }
+    session_dispose(&session);
+    /* Fallback to symbol cache (e.g., symbols from dependency packages or when
+       analysis cannot resolve — uses pre-built .ft symbol tables). */
     if (build_cache_query_context(document, &cache) && resolve_symbol_target_at(&cache, offset, &cache_target)) {
         switch (cache_target.kind) {
             case FENG_LSP_RESOLVED_DECL: {
@@ -7590,56 +7638,8 @@ static bool handle_definition_request(FengLspRuntime *runtime,
         return ok;
     }
     cache_query_context_dispose(&cache);
-    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    program = find_program(&session, document->path);
-    if (program == NULL) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    if (!resolve_target_at(&session, program, offset, &target)) {
-        free(uri);
-        session_dispose(&session);
-        return send_json_response(output, id, "null");
-    }
-    switch (target.kind) {
-        case FENG_LSP_RESOLVED_DECL:
-            (void)find_decl_module(&session, target.decl, &target_program);
-            ok = location_json(&result, target_program != NULL ? target_program->path : NULL, target.decl->token);
-            break;
-        case FENG_LSP_RESOLVED_MEMBER:
-            (void)find_decl_module(&session, target.decl, &target_program);
-            ok = location_json(&result, target_program != NULL ? target_program->path : NULL, target.member->token);
-            break;
-        case FENG_LSP_RESOLVED_PARAM:
-            ok = location_json(&result, program->path, target.parameter->token);
-            break;
-        case FENG_LSP_RESOLVED_BINDING:
-            ok = location_json(&result, program->path, target.binding->token);
-            break;
-        case FENG_LSP_RESOLVED_SELF:
-            (void)find_decl_module(&session, target.self_owner_decl, &target_program);
-            ok = location_json(&result,
-                               target_program != NULL ? target_program->path : NULL,
-                               target.self_owner_decl->token);
-            break;
-        default:
-            ok = string_append_cstr(&result, "null");
-            break;
-    }
     free(uri);
-    session_dispose(&session);
-    if (!ok) {
-        string_dispose(&result);
-        return send_json_response(output, id, "null");
-    }
-    ok = send_json_response(output, id, result.data);
-    string_dispose(&result);
-    return ok;
+    return send_json_response(output, id, "null");
 }
 
 static bool append_completion_item(FengLspString *json,
@@ -8067,7 +8067,7 @@ static bool handle_references_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "[]");
     }
     offset = offset_from_position(document->text, line, character);
-    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+    if (!build_analysis_session(runtime, document, &session)) {
         free(uri);
         session_dispose(&session);
         return send_json_response(output, id, "[]");
@@ -8131,7 +8131,7 @@ static bool handle_prepare_rename_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "null");
     }
     offset = offset_from_position(document->text, line, character);
-    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+    if (!build_analysis_session(runtime, document, &session)) {
         free(uri);
         session_dispose(&session);
         return send_json_response(output, id, "null");
@@ -8214,7 +8214,7 @@ static bool handle_rename_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "null");
     }
     offset = offset_from_position(document->text, line, character);
-    if (!build_analysis_session(runtime, document, &session) || session.exit_code != 0) {
+    if (!build_analysis_session(runtime, document, &session)) {
         free(new_name);
         free(uri);
         session_dispose(&session);

@@ -255,6 +255,9 @@ const FengCliLoadedSource *feng_cli_find_loaded_source(const FengCliLoadedSource
                                                        const char *path) {
     size_t index;
 
+    if (path == NULL) {
+        return NULL;
+    }
     for (index = 0U; index < source_count; ++index) {
         if (sources[index].path != NULL && strcmp(sources[index].path, path) == 0) {
             return &sources[index];

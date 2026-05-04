@@ -2308,6 +2308,246 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     free(source_path);
 }
 
+/* Verify that definition/references/rename return results even when the file
+   has a semantic error, as long as the target symbol is resolvable.  The key
+   fix was removing the `exit_code != 0` guard that used to return null
+   immediately — now the handlers try to resolve before giving up.
+   In this test the cursor is at the declaration site of `helper`.  Even though
+   there is a type-mismatch semantic error elsewhere in the file, cursoring at
+   the declaration itself (where LSP can resolve FENG_LSP_RESOLVED_DECL from the
+   declaration token) must still succeed. */
+static void test_lsp_definition_references_rename_with_broken_code(void) {
+    static const char *kSource =
+        "mod test.lsp.broken;\n"
+        "\n"
+        "fn helper(x: int): int {\n"
+        "    return x + 1;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    helper(1);\n"
+        "    helper(2);\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_broken_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *definition_req;
+    char *references_req;
+    char *prepare_rename_req;
+    char *rename_req;
+    char *shutdown;
+    char *output;
+    char *expected_definition;
+    char *expected_decl_loc;
+    char *expected_first_call_loc;
+    char *expected_second_call_loc;
+    FILE *input;
+    unsigned int decl_line;
+    unsigned int decl_character;
+    unsigned int first_call_line;
+    unsigned int first_call_character;
+    unsigned int second_call_line;
+    unsigned int second_call_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource,
+                        "fn helper(x: int): int {",
+                        3U,
+                        &decl_line,
+                        &decl_character);
+    find_line_character(kSource,
+                        "    helper(1);",
+                        4U,
+                        &first_call_line,
+                        &first_call_character);
+    find_line_character(kSource,
+                        "    helper(2);",
+                        4U,
+                        &second_call_line,
+                        &second_call_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    /* Cursor at the declaration site — definition must resolve even if
+       the file is later changed to have unsaved semantic errors. */
+    definition_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                uri,
+                                decl_line,
+                                decl_character + 2U);
+    references_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+                                uri,
+                                decl_line,
+                                decl_character + 2U);
+    prepare_rename_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                    uri,
+                                    decl_line,
+                                    decl_character + 2U);
+    rename_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"newName\":\"fixed\"}}",
+                            uri,
+                            decl_line,
+                            decl_character + 2U);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    expected_definition = dup_printf("\"id\":2,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                     uri,
+                                     decl_line,
+                                     decl_character);
+    expected_decl_loc = dup_printf("\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                   uri,
+                                   decl_line,
+                                   decl_character);
+    expected_first_call_loc = dup_printf("\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                         uri,
+                                         first_call_line,
+                                         first_call_character);
+    expected_second_call_loc = dup_printf("\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                          uri,
+                                          second_call_line,
+                                          second_call_character);
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, definition_req);
+    write_lsp_message(input, references_req);
+    write_lsp_message(input, prepare_rename_req);
+    write_lsp_message(input, rename_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* Definition must resolve to the declaration site. */
+    ASSERT(strstr(output, expected_definition) != NULL);
+    /* References must include all three locations. */
+    ASSERT(strstr(output, "\"id\":3,\"result\":[") != NULL);
+    ASSERT(strstr(output, expected_decl_loc) != NULL);
+    ASSERT(strstr(output, expected_first_call_loc) != NULL);
+    ASSERT(strstr(output, expected_second_call_loc) != NULL);
+    /* Rename must succeed. */
+    ASSERT(strstr(output, "\"id\":5,\"result\":{\"changes\":{") != NULL);
+    ASSERT(count_occurrences(output, "\"newText\":\"fixed\"") == 3);
+
+    free(output);
+    free(expected_second_call_loc);
+    free(expected_first_call_loc);
+    free(expected_decl_loc);
+    free(expected_definition);
+    free(shutdown);
+    free(rename_req);
+    free(prepare_rename_req);
+    free(references_req);
+    free(definition_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+static void test_lsp_no_crash_on_library_file_without_main(void) {
+    /* Regression test: opening a file with no fn main in standalone mode used to
+       cause a SIGSEGV because the BIN-target semantic analysis generated a
+       "missing main" error with a NULL path, which was then passed to strcmp
+       inside feng_cli_find_loaded_source.  The server must survive and return
+       valid JSON responses for all requests. */
+    static const char *kSource =
+        "mod test.lsp.libonly;\n"
+        "\n"
+        "/** A counter type with no main function. */\n"
+        "pu type Counter {\n"
+        "    /** The count field. */\n"
+        "    pu let count: int;\n"
+        "    /** Returns double the count. */\n"
+        "    pu fn double(): int {\n"
+        "        return self.count * 2;\n"
+        "    }\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_libonly_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *hover_req;
+    char *shutdown;
+    char *output;
+    unsigned int field_line;
+    unsigned int field_character;
+    char *remove_error = NULL;
+    FILE *input;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "counter.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource, "    pu let count: int;", 11U,
+                        &field_line, &field_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          uri, escaped_text);
+    hover_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\","
+                           "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                           "\"position\":{\"line\":%u,\"character\":%u}}}",
+                           uri, field_line, field_character + 7U);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* Server must not crash — initialize response must be present. */
+    ASSERT(strstr(output, "\"id\":1,\"result\":{\"capabilities\":{") != NULL);
+    /* Hover must return a valid JSON response (result may be null or a value). */
+    ASSERT(strstr(output, "\"id\":2,\"result\":") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(hover_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
     static const char *kManifest =
         "[package]\n"
@@ -4137,6 +4377,8 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
+    test_lsp_definition_references_rename_with_broken_code();
+    test_lsp_no_crash_on_library_file_without_main();
     test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();

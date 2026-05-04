@@ -1,8 +1,14 @@
 mod feng.examples;
 
+/**
+ * Prints a message to the console.
+ */
 @cdecl("libc")
 extern fn puts(msg: string): int;
 
+/**
+ * The main function.
+ */
 fn main(args: string[]) {
   puts("hello, examples");
 }
