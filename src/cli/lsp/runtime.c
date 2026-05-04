@@ -162,6 +162,7 @@ struct FengLspRuntime {
     bool shutdown_requested;
     bool should_exit;
     int exit_code;
+    FILE *errors; /* diagnostics log; set at the start of each handle_payload call */
 };
 
 static bool append_raw(void **items,
@@ -1116,6 +1117,11 @@ static bool upsert_document(FengLspRuntime *runtime,
                         &runtime->document_capacity,
                         sizeof(created),
                         &created)) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors,
+                        "lsp: out of memory storing document '%s'\n",
+                        uri != NULL ? uri : "(null)");
+            }
             free(created.uri);
             free(created.path);
             free(created.text);
@@ -1126,6 +1132,11 @@ static bool upsert_document(FengLspRuntime *runtime,
 
     free(document->text);
     document->text = dup_cstr(text != NULL ? text : "");
+    if (document->text == NULL && runtime->errors != NULL) {
+        fprintf(runtime->errors,
+                "lsp: out of memory updating document text for '%s'\n",
+                uri != NULL ? uri : "(null)");
+    }
     return document->text != NULL;
 }
 
@@ -1687,9 +1698,19 @@ static bool refresh_diagnostics(FengLspRuntime *runtime,
         return true;
     }
     if (!build_analysis_session(runtime, document, &session)) {
+        if (runtime->errors != NULL) {
+            fprintf(runtime->errors,
+                    "lsp: refresh_diagnostics: failed to build analysis session for '%s'\n",
+                    uri != NULL ? uri : "(null)");
+        }
         return false;
     }
     ok = publish_session_diagnostics(runtime, document, output, &session);
+    if (!ok && runtime->errors != NULL) {
+        fprintf(runtime->errors,
+                "lsp: refresh_diagnostics: failed to publish diagnostics for '%s'\n",
+                uri != NULL ? uri : "(null)");
+    }
     session_dispose(&session);
     return ok;
 }
@@ -7580,6 +7601,9 @@ static bool handle_hover_request(FengLspRuntime *runtime,
             free(uri);
             session_dispose(&session);
             if (!ok) {
+                if (runtime->errors != NULL) {
+                    fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building response\n");
+                }
                 string_dispose(&result);
                 return send_json_response(output, id, "null");
             }
@@ -7601,6 +7625,9 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         cache_query_context_dispose(&cache);
         free(uri);
         if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building cache response\n");
+            }
             string_dispose(&result);
             return send_json_response(output, id, "null");
         }
@@ -7691,6 +7718,9 @@ static bool handle_definition_request(FengLspRuntime *runtime,
             free(uri);
             session_dispose(&session);
             if (!ok) {
+                if (runtime->errors != NULL) {
+                    fprintf(runtime->errors, "lsp: textDocument/definition: out of memory building response\n");
+                }
                 string_dispose(&result);
                 return send_json_response(output, id, "null");
             }
@@ -7732,6 +7762,9 @@ static bool handle_definition_request(FengLspRuntime *runtime,
         cache_query_context_dispose(&cache);
         free(uri);
         if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/definition: out of memory building cache response\n");
+            }
             string_dispose(&result);
             return send_json_response(output, id, "null");
         }
@@ -8114,6 +8147,9 @@ static bool handle_completion_request(FengLspRuntime *runtime,
     free(uri);
     session_dispose(&session);
     if (!ok) {
+        if (runtime->errors != NULL) {
+            fprintf(runtime->errors, "lsp: textDocument/completion: out of memory building response\n");
+        }
         string_dispose(&json);
         return send_json_response(output, id, "[]");
     }
@@ -8170,6 +8206,9 @@ static bool handle_references_request(FengLspRuntime *runtime,
     }
     offset = offset_from_position(document->text, line, character);
     if (!build_analysis_session(runtime, document, &session)) {
+        if (runtime->errors != NULL) {
+            fprintf(runtime->errors, "lsp: textDocument/references: out of memory building analysis session\n");
+        }
         free(uri);
         session_dispose(&session);
         return send_json_response(output, id, "[]");
@@ -8234,6 +8273,9 @@ static bool handle_prepare_rename_request(FengLspRuntime *runtime,
     }
     offset = offset_from_position(document->text, line, character);
     if (!build_analysis_session(runtime, document, &session)) {
+        if (runtime->errors != NULL) {
+            fprintf(runtime->errors, "lsp: textDocument/prepareRename: out of memory building analysis session\n");
+        }
         free(uri);
         session_dispose(&session);
         return send_json_response(output, id, "null");
@@ -8251,6 +8293,11 @@ static bool handle_prepare_rename_request(FengLspRuntime *runtime,
     entry = reference_list_find_offset(&references, document->path, offset);
     source = find_reference_source(&session, entry);
     if (entry == NULL || source == NULL || !build_prepare_rename_json(source, entry, &json)) {
+        if (runtime->errors != NULL && (entry == NULL || source == NULL)) {
+            /* entry==NULL: target not found at offset; not an error, just no rename candidate */
+        } else if (runtime->errors != NULL) {
+            fprintf(runtime->errors, "lsp: textDocument/prepareRename: out of memory building response\n");
+        }
         free(uri);
         reference_list_dispose(&references);
         session_dispose(&session);
@@ -8317,6 +8364,9 @@ static bool handle_rename_request(FengLspRuntime *runtime,
     }
     offset = offset_from_position(document->text, line, character);
     if (!build_analysis_session(runtime, document, &session)) {
+        if (runtime->errors != NULL) {
+            fprintf(runtime->errors, "lsp: textDocument/rename: out of memory building analysis session\n");
+        }
         free(new_name);
         free(uri);
         session_dispose(&session);
@@ -8378,6 +8428,8 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
                                      FILE *errors) {
     FengLspMessage message = {0};
     FengLspParseStatus status = parse_jsonrpc_message(payload, payload_length, &message);
+
+    runtime->errors = errors;
     static const char kNullJson[] = "null";
     FengLspJsonValue null_id = {
         .type = FENG_LSP_JSON_NULL,
@@ -8419,12 +8471,21 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
         if (!json_object_get(message.params, "textDocument", &text_document) ||
             !json_object_get(text_document, "uri", &uri_value) ||
             !json_object_get(text_document, "text", &text_value)) {
-            ok = false;
+            fprintf(errors, "lsp: textDocument/didOpen: missing required params\n");
+            /* Malformed notification from client — log and continue; do not kill server */
         } else {
             uri = json_string_dup(uri_value);
             text = json_string_dup(text_value);
-            ok = uri != NULL && text != NULL && upsert_document(runtime, uri, text) &&
-                 refresh_diagnostics(runtime, output, uri);
+            if (uri == NULL) {
+                fprintf(errors, "lsp: textDocument/didOpen: failed to decode URI\n");
+            } else if (text == NULL) {
+                fprintf(errors, "lsp: textDocument/didOpen: failed to decode text for '%s'\n", uri);
+            } else if (!upsert_document(runtime, uri, text)) {
+                /* upsert_document already logged the OOM; document not tracked but server continues */
+                fprintf(errors, "lsp: textDocument/didOpen: document not tracked: '%s'\n", uri);
+            } else {
+                ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
+            }
             free(uri);
             free(text);
         }
@@ -8442,12 +8503,21 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
             !json_object_get(message.params, "contentChanges", &changes) ||
             !json_array_get(changes, 0U, &first_change) ||
             !json_object_get(first_change, "text", &text_value)) {
-            ok = false;
+            fprintf(errors, "lsp: textDocument/didChange: missing required params\n");
+            /* Malformed notification from client — log and continue; do not kill server */
         } else {
             uri = json_string_dup(uri_value);
             text = json_string_dup(text_value);
-            ok = uri != NULL && text != NULL && upsert_document(runtime, uri, text) &&
-                 refresh_diagnostics(runtime, output, uri);
+            if (uri == NULL) {
+                fprintf(errors, "lsp: textDocument/didChange: failed to decode URI\n");
+            } else if (text == NULL) {
+                fprintf(errors, "lsp: textDocument/didChange: failed to decode text for '%s'\n", uri);
+            } else if (!upsert_document(runtime, uri, text)) {
+                /* upsert_document already logged the OOM; document not tracked but server continues */
+                fprintf(errors, "lsp: textDocument/didChange: document not tracked: '%s'\n", uri);
+            } else {
+                ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
+            }
             free(uri);
             free(text);
         }
@@ -8458,10 +8528,15 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
 
         if (!json_object_get(message.params, "textDocument", &text_document) ||
             !json_object_get(text_document, "uri", &uri_value)) {
-            ok = false;
+            fprintf(errors, "lsp: textDocument/didSave: missing required params\n");
+            /* Malformed notification from client — log and continue; do not kill server */
         } else {
             uri = json_string_dup(uri_value);
-            ok = uri != NULL && refresh_diagnostics(runtime, output, uri);
+            if (uri == NULL) {
+                fprintf(errors, "lsp: textDocument/didSave: failed to decode URI\n");
+            } else {
+                ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
+            }
             free(uri);
         }
     } else if (strcmp(message.method, "textDocument/didClose") == 0) {
@@ -8472,13 +8547,22 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
 
         if (!json_object_get(message.params, "textDocument", &text_document) ||
             !json_object_get(text_document, "uri", &uri_value)) {
-            ok = false;
+            fprintf(errors, "lsp: textDocument/didClose: missing required params\n");
+            /* Malformed notification from client — log and continue; do not kill server */
         } else {
             uri = json_string_dup(uri_value);
-            document = uri != NULL ? find_document(runtime, uri) : NULL;
-            ok = uri != NULL && (document == NULL || publish_empty_diagnostics(output, document));
-            if (ok) {
-                remove_document(runtime, uri);
+            if (uri == NULL) {
+                fprintf(errors, "lsp: textDocument/didClose: failed to decode URI\n");
+            } else {
+                document = find_document(runtime, uri);
+                ok = document == NULL || publish_empty_diagnostics(output, document);
+                if (!ok) {
+                    fprintf(errors,
+                            "lsp: textDocument/didClose: failed to clear diagnostics for '%s'\n",
+                            uri);
+                } else {
+                    remove_document(runtime, uri);
+                }
             }
             free(uri);
         }
