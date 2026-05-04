@@ -4980,6 +4980,125 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
     return NULL;
 }
 
+static bool find_local_binding_at_in_block(const char *source_text,
+                                           const FengBlock *block,
+                                           size_t offset,
+                                           FengLspResolvedTarget *target);
+
+static bool find_local_binding_at_in_stmt(const char *source_text,
+                                          const FengStmt *stmt,
+                                          size_t offset,
+                                          FengLspResolvedTarget *target) {
+    size_t name_start;
+    size_t index;
+
+    if (stmt == NULL) {
+        return false;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BINDING:
+            if (stmt->as.binding.name.data != NULL) {
+                name_start = (size_t)(stmt->as.binding.name.data - source_text);
+                if (offset >= name_start && offset < name_start + stmt->as.binding.name.length) {
+                    target->kind = FENG_LSP_RESOLVED_BINDING;
+                    target->binding = &stmt->as.binding;
+                    return true;
+                }
+            }
+            return false;
+        case FENG_STMT_BLOCK:
+            return find_local_binding_at_in_block(source_text, stmt->as.block, offset, target);
+        case FENG_STMT_IF:
+            for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
+                if (find_local_binding_at_in_block(source_text,
+                                                   stmt->as.if_stmt.clauses[index].block,
+                                                   offset,
+                                                   target)) {
+                    return true;
+                }
+            }
+            return find_local_binding_at_in_block(source_text,
+                                                  stmt->as.if_stmt.else_block,
+                                                  offset,
+                                                  target);
+        case FENG_STMT_MATCH:
+            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
+                if (find_local_binding_at_in_block(source_text,
+                                                   stmt->as.match_stmt.branches[index].body,
+                                                   offset,
+                                                   target)) {
+                    return true;
+                }
+            }
+            return find_local_binding_at_in_block(source_text,
+                                                  stmt->as.match_stmt.else_block,
+                                                  offset,
+                                                  target);
+        case FENG_STMT_WHILE:
+            return find_local_binding_at_in_block(source_text,
+                                                  stmt->as.while_stmt.body,
+                                                  offset,
+                                                  target);
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                if (stmt->as.for_stmt.iter_binding.name.data != NULL) {
+                    name_start = (size_t)(stmt->as.for_stmt.iter_binding.name.data - source_text);
+                    if (offset >= name_start &&
+                        offset < name_start + stmt->as.for_stmt.iter_binding.name.length) {
+                        target->kind = FENG_LSP_RESOLVED_BINDING;
+                        target->binding = &stmt->as.for_stmt.iter_binding;
+                        return true;
+                    }
+                }
+                return find_local_binding_at_in_block(source_text,
+                                                      stmt->as.for_stmt.body,
+                                                      offset,
+                                                      target);
+            }
+            return (stmt->as.for_stmt.init != NULL &&
+                    find_local_binding_at_in_stmt(source_text,
+                                                  stmt->as.for_stmt.init,
+                                                  offset,
+                                                  target)) ||
+                   find_local_binding_at_in_block(source_text,
+                                                  stmt->as.for_stmt.body,
+                                                  offset,
+                                                  target);
+        case FENG_STMT_TRY:
+            return find_local_binding_at_in_block(source_text,
+                                                  stmt->as.try_stmt.try_block,
+                                                  offset,
+                                                  target) ||
+                   find_local_binding_at_in_block(source_text,
+                                                  stmt->as.try_stmt.catch_block,
+                                                  offset,
+                                                  target) ||
+                   find_local_binding_at_in_block(source_text,
+                                                  stmt->as.try_stmt.finally_block,
+                                                  offset,
+                                                  target);
+        default:
+            return false;
+    }
+}
+
+static bool find_local_binding_at_in_block(const char *source_text,
+                                           const FengBlock *block,
+                                           size_t offset,
+                                           FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (block == NULL) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        if (find_local_binding_at_in_stmt(source_text, block->statements[index], offset, target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool resolve_object_field_target_decl(const FengLspAnalysisSession *session,
                                              const FengProgram *program,
                                              const FengDecl *decl,
@@ -5035,6 +5154,20 @@ static bool resolve_target_at(const FengLspAnalysisSession *session,
     expr = find_expr_hit_in_decl(enclosing_decl, offset);
     if (expr != NULL) {
         (void)resolve_expr_target(session, program, expr, &locals, target);
+    }
+    if (target->kind == FENG_LSP_RESOLVED_NONE) {
+        /* Cursor may be on a local binding name (declaration site, not a use-expr). */
+        const FengCliLoadedSource *current_source = find_source(session, program->path);
+        const FengBlock *body = NULL;
+
+        if (enclosing_member != NULL && enclosing_member->kind != FENG_TYPE_MEMBER_FIELD) {
+            body = enclosing_member->as.callable.body;
+        } else if (enclosing_decl->kind == FENG_DECL_FUNCTION) {
+            body = enclosing_decl->as.function_decl.body;
+        }
+        if (current_source != NULL && body != NULL) {
+            (void)find_local_binding_at_in_block(current_source->source, body, offset, target);
+        }
     }
     local_list_dispose(&locals);
     return target->kind != FENG_LSP_RESOLVED_NONE;
