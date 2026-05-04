@@ -2319,8 +2319,9 @@ static bool collect_block_locals(const FengBlock *block,
                                  FengLspLocalList *locals) {
     size_t index;
 
+    /* Out-of-range is a no-op: locals simply aren't visible at the cursor. */
     if (block == NULL || offset < block->token.offset || offset > block_end(block)) {
-        return false;
+        return true;
     }
     for (index = 0U; index < block->statement_count; ++index) {
         const FengStmt *stmt = block->statements[index];
@@ -2349,8 +2350,9 @@ static bool collect_stmt_locals(const FengStmt *stmt,
                                 FengLspLocalList *locals) {
     size_t index;
 
+    /* Out-of-range is a no-op: locals simply aren't visible at the cursor. */
     if (stmt == NULL || offset < stmt->token.offset || offset > stmt_end(stmt)) {
-        return false;
+        return true;
     }
     switch (stmt->kind) {
         case FENG_STMT_BLOCK:
