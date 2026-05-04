@@ -1,12 +1,13 @@
 # Feng VS Code Extension
 
-Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、基于 Feng CLI 的诊断信息、`.fm` 清单文件支持，以及 Feng 专用文件图标支持。
+Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、面向源文件的 Feng Language Server 客户端接入、`.fm` 清单文件支持，以及 Feng 专用文件图标支持。
 
 ## 功能一览
 
 - 语法高亮：覆盖 Feng 常见关键字、字符串、注释、赋值与复合运算符，以及基础语法结构，并为 `.fm` 文件提供节标题与 `#` 注释高亮。
 - 文档格式化：统一缩进、空白和常见语法间距，适合日常编辑时快速整理代码；其中包含复合赋值与位移运算符的空格规范；对 `.fm` 文件会额外按节对齐 `key: "value"` 项。
-- 诊断信息：如果本机安装了 Feng CLI，扩展会优先做项目感知诊断。若当前源文件属于某个 Feng 项目，扩展会定位最近的 `feng.fm` 并执行项目级 `feng check`；若文件不属于项目，则回退到 `feng tool check`。打开或保存文件时会自动显示检查结果。
+- Language Server 客户端：对于 Feng 源文件，扩展会通过已配置的 Feng 可执行文件启动 `feng lsp`，并用 VS Code 标准 Language Client 连接。hover、completion、definition、diagnostics 以及后续语言能力都从当前 CLI 暴露出来的 LSP capability 集合获取。
+- 诊断兼容回退：如果当前 Feng CLI 还没有暴露任何 LSP capability，扩展会临时保留现有的 `check` 诊断链路，避免打开/保存时的基础校验回退。
 - 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会回退到内置 Feng 文件图标。
 
 ## 支持的文件后缀
@@ -21,7 +22,8 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 1. 在 VS Code 扩展市场安装 Feng Language。
 2. 打开任意 Feng 源文件，扩展会自动启用语法高亮。
 3. 需要整理代码时，执行 VS Code 的“格式化文档”。
-4. 如果你已经安装 Feng CLI，打开或保存 Feng 源文件时会自动看到诊断信息；属于 Feng 项目的文件会使用项目级 `feng check`。
+4. 如果你已经安装 Feng CLI，扩展会在打开 Feng 源文件时自动启动 `feng lsp`，语言能力由该 CLI 版本实际暴露的 LSP capability 决定。
+5. 如果当前 CLI 版本仍返回空的 capability 集合，扩展会暂时继续使用旧的 `check` 链路提供打开/保存诊断，直到服务端能力补齐。
 
 ## 可选配置
 
@@ -33,7 +35,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 }
 ```
 
-这个路径既可以是绝对路径，也可以是相对于工作区根目录的路径。
+这个路径既可以是绝对路径，也可以是相对于第一个工作区根目录的路径。
 
 ## 格式化说明
 
@@ -54,9 +56,10 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 - 规范 `#` 注释前缀空格
 - 按节对齐 `key: "value"`，让值起始列保持一致
 
-## 诊断说明
+## Language Service 说明
 
-- 诊断能力优先依赖 Feng CLI 的 `check` 子命令；对于不属于任何 Feng 项目的独立源文件，会回退到 `feng tool check`。
+- Feng 源文件通过标准 VS Code Language Client 启动 `feng lsp`。
 - 默认执行程序名为 `feng`。
 - 如果你的 CLI 不在默认路径中，请通过 `feng.executablePath` 指定可执行文件位置。
-- `.fm` 清单文件不会触发 `feng check` 诊断。
+- 内置 formatter 与 TextMate grammar 保持不变；只有语言服务能力改走 LSP。
+- 如果当前安装的 CLI 还返回空的 LSP capability 集合，扩展会临时保留旧的诊断实现：项目文件走 `feng check --format json <file>`，独立文件走 `feng tool check <file>`。

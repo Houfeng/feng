@@ -1,7 +1,7 @@
 {
   "name": "feng-language",
   "displayName": "Feng Language",
-  "description": "Syntax highlighting and document formatting support for the Feng language.",
+  "description": "Syntax highlighting, document formatting, and LSP client integration for the Feng language.",
   "icon": "./icons/feng-logo.png",
   "version": "0.1.5",
   "publisher": "houfeng",
@@ -17,7 +17,14 @@
   "scripts": {
     "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/syntax.test.js"
   },
+  "activationEvents": [
+    "onLanguage:feng",
+    "onLanguage:feng-manifest"
+  ],
   "main": "./extension.js",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "keywords": [
     "feng",
     "language",
@@ -83,7 +90,7 @@
         "feng.executablePath": {
           "type": "string",
           "default": "feng",
-          "description": "Path to the Feng executable. Use an absolute path or a path relative to the workspace root (e.g. ./build/bin/feng)."
+          "description": "Path to the Feng executable used to launch `feng lsp`. Use an absolute path or a path relative to the first workspace root (e.g. ./build/bin/feng)."
         }
       }
     }

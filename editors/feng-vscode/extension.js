@@ -5,8 +5,83 @@ const path = require('path');
 
 const { formatFengSource, formatFengManifestSource } = require('./formatter');
 
+let client;
+
 function getExecutablePath() {
     return vscode.workspace.getConfiguration('feng').get('executablePath', 'feng');
+}
+
+function getPrimaryWorkspaceRoot(vscodeApi = vscode) {
+    const folders = vscodeApi.workspace.workspaceFolders;
+
+    if (!Array.isArray(folders) || folders.length === 0) {
+        return null;
+    }
+    if (folders[0] == null || folders[0].uri == null || typeof folders[0].uri.fsPath !== 'string') {
+        return null;
+    }
+    return folders[0].uri.fsPath;
+}
+
+function resolveExecutablePath(executablePath, workspaceRoot) {
+    if (typeof executablePath !== 'string' || executablePath.length === 0) {
+        return 'feng';
+    }
+    if (path.isAbsolute(executablePath) || typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
+        return executablePath;
+    }
+    return path.join(workspaceRoot, executablePath);
+}
+
+function getLanguageServiceDocumentSelector() {
+    return [
+        { language: 'feng', scheme: 'file' },
+        { language: 'feng', scheme: 'untitled' }
+    ];
+}
+
+function getFormattingDocumentSelector() {
+    return [
+        { language: 'feng', scheme: 'file' },
+        { language: 'feng', scheme: 'untitled' },
+        { language: 'feng-manifest', scheme: 'file' },
+        { language: 'feng-manifest', scheme: 'untitled' }
+    ];
+}
+
+function createServerOptions(executablePath, workspaceRoot) {
+    const serverOptions = {
+        command: resolveExecutablePath(executablePath, workspaceRoot),
+        args: ['lsp']
+    };
+
+    if (typeof workspaceRoot === 'string' && workspaceRoot.length > 0) {
+        serverOptions.options = {
+            cwd: workspaceRoot
+        };
+    }
+    return serverOptions;
+}
+
+function loadLanguageClientModule() {
+    return require('vscode-languageclient/node');
+}
+
+function createLanguageClient({ executablePath, workspaceRoot, languageClientModule }) {
+    const moduleRef = languageClientModule || loadLanguageClientModule();
+
+    return new moduleRef.LanguageClient(
+        'feng-language-server',
+        'Feng Language Server',
+        createServerOptions(executablePath, workspaceRoot),
+        {
+            documentSelector: getLanguageServiceDocumentSelector()
+        }
+    );
+}
+
+function hasAnyLspCapability(capabilities) {
+    return capabilities != null && Object.keys(capabilities).length > 0;
 }
 
 function isExistingFile(filePath) {
@@ -111,6 +186,30 @@ function formatDocumentSource(document, options) {
     return formatFengSource(source, options);
 }
 
+function registerFormatter(context, vscodeApi = vscode) {
+    const formatter = {
+        provideDocumentFormattingEdits(document, options) {
+            const source = document.getText();
+            const formatted = formatDocumentSource(document, options);
+
+            if (formatted === source) {
+                return [];
+            }
+
+            return [
+                vscodeApi.TextEdit.replace(
+                    new vscodeApi.Range(document.positionAt(0), document.positionAt(source.length)),
+                    formatted
+                )
+            ];
+        }
+    };
+
+    context.subscriptions.push(
+        vscodeApi.languages.registerDocumentFormattingEditProvider(getFormattingDocumentSelector(), formatter)
+    );
+}
+
 function createDiagnosticController({ collection, runCheckEntries }) {
     const generationByUri = new Map();
 
@@ -164,66 +263,92 @@ function createDiagnosticController({ collection, runCheckEntries }) {
     };
 }
 
-function activate(context) {
-    const collection = vscode.languages.createDiagnosticCollection('feng');
+function registerLegacyDiagnostics(context,
+                                   vscodeApi = vscode,
+                                   runCheckEntries = runCheck) {
+    const collection = vscodeApi.languages.createDiagnosticCollection('feng');
     context.subscriptions.push(collection);
     const diagnostics = createDiagnosticController({
         collection,
-        runCheckEntries: runCheck
+        runCheckEntries
     });
 
-    const selector = [
-        { language: 'feng', scheme: 'file' },
-        { language: 'feng', scheme: 'untitled' },
-        { language: 'feng-manifest', scheme: 'file' },
-        { language: 'feng-manifest', scheme: 'untitled' }
-    ];
-
-    const formatter = {
-        provideDocumentFormattingEdits(document, options) {
-            const source = document.getText();
-            const formatted = formatDocumentSource(document, options);
-
-            if (formatted === source) {
-                return [];
-            }
-
-            return [
-                vscode.TextEdit.replace(
-                    new vscode.Range(document.positionAt(0), document.positionAt(source.length)),
-                    formatted
-                )
-            ];
-        }
-    };
-
     context.subscriptions.push(
-        vscode.languages.registerDocumentFormattingEditProvider(selector, formatter),
-        vscode.workspace.onDidOpenTextDocument(diagnostics.checkDocument),
-        vscode.workspace.onDidChangeTextDocument(event => {
+        vscodeApi.workspace.onDidOpenTextDocument(diagnostics.checkDocument),
+        vscodeApi.workspace.onDidChangeTextDocument(event => {
             diagnostics.clearDocument(event.document);
         }),
-        vscode.workspace.onDidSaveTextDocument(diagnostics.checkDocument),
-        vscode.workspace.onDidCloseTextDocument(diagnostics.closeDocument)
+        vscodeApi.workspace.onDidSaveTextDocument(diagnostics.checkDocument),
+        vscodeApi.workspace.onDidCloseTextDocument(diagnostics.closeDocument)
     );
 
-    // 对已打开的文档立即做一次检查
-    vscode.workspace.textDocuments.forEach(diagnostics.checkDocument);
+    vscodeApi.workspace.textDocuments.forEach(document => {
+        void diagnostics.checkDocument(document);
+    });
+}
+
+function buildLspStartupWarning(error) {
+    const message = error != null && typeof error.message === 'string'
+        ? error.message
+        : 'unknown error';
+
+    return `Feng LSP startup failed, falling back to legacy diagnostics: ${message}`;
+}
+
+async function activate(context) {
+    const workspaceRoot = getPrimaryWorkspaceRoot(vscode);
+
+    registerFormatter(context, vscode);
+    try {
+        client = createLanguageClient({
+            executablePath: getExecutablePath(),
+            workspaceRoot,
+            languageClientModule: loadLanguageClientModule()
+        });
+        await client.start();
+    } catch (error) {
+        client = undefined;
+        if (vscode.window != null && typeof vscode.window.showWarningMessage === 'function') {
+            void vscode.window.showWarningMessage(buildLspStartupWarning(error));
+        }
+        registerLegacyDiagnostics(context, vscode, runCheck);
+        return;
+    }
+
+    if (!hasAnyLspCapability(client.initializeResult != null ? client.initializeResult.capabilities : null)) {
+        registerLegacyDiagnostics(context, vscode, runCheck);
+    }
 }
 
 function deactivate() {
+    if (client === undefined) {
+        return undefined;
+    }
+
+    const activeClient = client;
+    client = undefined;
+    return activeClient.stop();
 }
 
 module.exports = {
     activate,
     deactivate,
     __test__: {
+        buildLspStartupWarning,
         buildCheckCommand,
+        createLanguageClient,
         createDiagnosticController,
+        createServerOptions,
         entriesToDiagnostics,
         filterEntriesForPath,
         findProjectManifestPath,
+        getFormattingDocumentSelector,
+        getLanguageServiceDocumentSelector,
+        getPrimaryWorkspaceRoot,
+        hasAnyLspCapability,
         isCheckableFengDocument,
+        registerLegacyDiagnostics,
+        resolveExecutablePath,
         sameFilePath,
         formatDocumentSource
     }

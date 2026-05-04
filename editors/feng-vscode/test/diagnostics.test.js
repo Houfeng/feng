@@ -4,8 +4,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-function loadExtensionModule() {
-    const originalLoad = Module._load;
+function createDisposable() {
+    return {
+        dispose() {
+        }
+    };
+}
+
+function createMockVscode(options = {}) {
+    const recorder = {
+        diagnosticCollections: [],
+        formattingProviders: [],
+        warningMessages: []
+    };
+    const workspaceRoot = options.workspaceRoot || null;
+    const executablePath = options.executablePath;
+    const textDocuments = options.textDocuments || [];
     const mockVscode = {
         Range: class Range {
             constructor(start, end) {
@@ -19,6 +33,11 @@ function loadExtensionModule() {
                 this.character = character;
             }
         },
+        TextEdit: {
+            replace(range, newText) {
+                return { range, newText };
+            }
+        },
         Diagnostic: class Diagnostic {
             constructor(range, message, severity) {
                 this.range = range;
@@ -30,16 +49,94 @@ function loadExtensionModule() {
             Error: 0,
             Information: 1
         },
+        languages: {
+            createDiagnosticCollection(name) {
+                const collection = createCollectionRecorder();
+
+                collection.name = name;
+                recorder.diagnosticCollections.push(collection);
+                return collection;
+            },
+            registerDocumentFormattingEditProvider(selector, provider) {
+                recorder.formattingProviders.push({ selector, provider });
+                return createDisposable();
+            }
+        },
         workspace: {
+            workspaceFolders: workspaceRoot == null
+                ? []
+                : [{ uri: { fsPath: workspaceRoot } }],
+            textDocuments,
             getConfiguration() {
                 return {
                     get(_key, defaultValue) {
-                        return defaultValue;
+                        return executablePath !== undefined ? executablePath : defaultValue;
                     }
                 };
+            },
+            onDidOpenTextDocument() {
+                return createDisposable();
+            },
+            onDidChangeTextDocument() {
+                return createDisposable();
+            },
+            onDidSaveTextDocument() {
+                return createDisposable();
+            },
+            onDidCloseTextDocument() {
+                return createDisposable();
+            }
+        },
+        window: {
+            showWarningMessage(message) {
+                recorder.warningMessages.push(message);
+                return Promise.resolve(undefined);
             }
         }
     };
+
+    return { mockVscode, recorder };
+}
+
+function createMockLanguageClientModule(options = {}) {
+    const recorder = {
+        constructorArgs: null,
+        startCalls: 0,
+        stopCalls: 0
+    };
+
+    class MockLanguageClient {
+        constructor(id, name, serverOptions, clientOptions) {
+            recorder.constructorArgs = { id, name, serverOptions, clientOptions };
+            this.initializeResult = options.initializeResult;
+        }
+
+        async start() {
+            recorder.startCalls += 1;
+            if (options.startError) {
+                throw options.startError;
+            }
+        }
+
+        stop() {
+            recorder.stopCalls += 1;
+            return Promise.resolve();
+        }
+    }
+
+    return {
+        module: {
+            LanguageClient: MockLanguageClient
+        },
+        recorder
+    };
+}
+
+function loadExtensionModule(options = {}) {
+    const originalLoad = Module._load;
+    const mockVscode = options.mockVscode || createMockVscode().mockVscode;
+    const mockLanguageClientModule = options.mockLanguageClientModule;
+    let loaded;
 
     const extensionPath = require.resolve('../extension');
     delete require.cache[extensionPath];
@@ -48,13 +145,30 @@ function loadExtensionModule() {
         if (request === 'vscode') {
             return mockVscode;
         }
+        if (request === 'vscode-languageclient/node' && mockLanguageClientModule) {
+            return mockLanguageClientModule;
+        }
         return originalLoad.call(this, request, parent, isMain);
     };
 
     try {
-        return require(extensionPath);
+        const extension = require(extensionPath);
+
+        if (options.keepPatchedLoad) {
+            loaded = {
+                extension,
+                restore() {
+                    Module._load = originalLoad;
+                }
+            };
+            return loaded;
+        }
+        loaded = extension;
+        return loaded;
     } finally {
-        Module._load = originalLoad;
+        if (!options.keepPatchedLoad) {
+            Module._load = originalLoad;
+        }
     }
 }
 
@@ -88,13 +202,30 @@ function createCollectionRecorder() {
 async function run() {
     const extension = loadExtensionModule();
     const {
+        buildLspStartupWarning,
         buildCheckCommand,
+        createServerOptions,
         createDiagnosticController,
         filterEntriesForPath,
         findProjectManifestPath,
+        hasAnyLspCapability,
         isCheckableFengDocument,
-        formatDocumentSource
+        formatDocumentSource,
+        resolveExecutablePath
     } = extension.__test__;
+
+    assert.strictEqual(resolveExecutablePath('./build/bin/feng', '/workspace/demo'), path.join('/workspace/demo', './build/bin/feng'));
+    assert.strictEqual(resolveExecutablePath('/usr/local/bin/feng', '/workspace/demo'), '/usr/local/bin/feng');
+    assert.deepStrictEqual(createServerOptions('./build/bin/feng', '/workspace/demo'), {
+        command: path.join('/workspace/demo', './build/bin/feng'),
+        args: ['lsp'],
+        options: {
+            cwd: '/workspace/demo'
+        }
+    });
+    assert.strictEqual(hasAnyLspCapability({}), false);
+    assert.strictEqual(hasAnyLspCapability({ hoverProvider: true }), true);
+    assert.strictEqual(buildLspStartupWarning(new Error('boom')).includes('boom'), true);
 
     assert.strictEqual(isCheckableFengDocument(createDocument('/tmp/manifest.fm', 'feng-manifest')), false);
 
@@ -259,6 +390,103 @@ async function run() {
             'saving should publish fresh diagnostics again'
         );
         assert.strictEqual(collection.operations[1].diagnostics[0].message, 'save error');
+    }
+
+    {
+        const { mockVscode, recorder } = createMockVscode({
+            workspaceRoot: '/workspace/demo',
+            executablePath: './build/bin/feng'
+        });
+        const mockClient = createMockLanguageClientModule({
+            initializeResult: {
+                capabilities: {
+                    hoverProvider: true
+                }
+            }
+        });
+        const loaded = loadExtensionModule({
+            mockVscode,
+            mockLanguageClientModule: mockClient.module,
+            keepPatchedLoad: true
+        });
+        const extensionWithLsp = loaded.extension;
+        const context = { subscriptions: [] };
+
+        try {
+            await extensionWithLsp.activate(context);
+            assert.strictEqual(mockClient.recorder.startCalls, 1);
+            assert.strictEqual(mockClient.recorder.constructorArgs.id, 'feng-language-server');
+            assert.strictEqual(mockClient.recorder.constructorArgs.name, 'Feng Language Server');
+            assert.deepStrictEqual(mockClient.recorder.constructorArgs.clientOptions.documentSelector, [
+                { language: 'feng', scheme: 'file' },
+                { language: 'feng', scheme: 'untitled' }
+            ]);
+            assert.deepStrictEqual(mockClient.recorder.constructorArgs.serverOptions, {
+                command: path.join('/workspace/demo', './build/bin/feng'),
+                args: ['lsp'],
+                options: {
+                    cwd: '/workspace/demo'
+                }
+            });
+            assert.strictEqual(recorder.formattingProviders.length, 1);
+            assert.strictEqual(recorder.diagnosticCollections.length, 0);
+
+            await extensionWithLsp.deactivate();
+            assert.strictEqual(mockClient.recorder.stopCalls, 1);
+        } finally {
+            loaded.restore();
+        }
+    }
+
+    {
+        const { mockVscode, recorder } = createMockVscode({
+            workspaceRoot: '/workspace/demo',
+            executablePath: 'feng'
+        });
+        const mockClient = createMockLanguageClientModule({
+            initializeResult: {
+                capabilities: {}
+            }
+        });
+        const loaded = loadExtensionModule({
+            mockVscode,
+            mockLanguageClientModule: mockClient.module,
+            keepPatchedLoad: true
+        });
+        const extensionWithFallback = loaded.extension;
+
+        try {
+            await extensionWithFallback.activate({ subscriptions: [] });
+            assert.strictEqual(recorder.diagnosticCollections.length, 1);
+            assert.strictEqual(recorder.warningMessages.length, 0);
+        } finally {
+            loaded.restore();
+        }
+    }
+
+    {
+        const { mockVscode, recorder } = createMockVscode({
+            workspaceRoot: '/workspace/demo',
+            executablePath: 'feng'
+        });
+        const mockClient = createMockLanguageClientModule({
+            startError: new Error('spawn failed')
+        });
+        const loaded = loadExtensionModule({
+            mockVscode,
+            mockLanguageClientModule: mockClient.module,
+            keepPatchedLoad: true
+        });
+        const extensionWithStartupError = loaded.extension;
+
+        try {
+            await extensionWithStartupError.activate({ subscriptions: [] });
+            assert.strictEqual(recorder.diagnosticCollections.length, 1);
+            assert.strictEqual(recorder.warningMessages.length, 1);
+            assert.strictEqual(recorder.warningMessages[0].includes('spawn failed'), true);
+        } finally {
+            loaded.restore();
+        }
     }
 
     console.log('diagnostics tests passed');

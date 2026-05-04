@@ -1,12 +1,13 @@
 # Feng VS Code Extension
 
-Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, diagnostics powered by the Feng CLI, dedicated Feng manifest support for `.fm`, and Feng file icon support.
+Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, dedicated Feng manifest support for `.fm`, and Feng file icon support.
 
 ## Features
 
 - Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
-- Diagnostics: If the Feng CLI is available on your machine, the extension prefers project-aware diagnostics. When a source file belongs to a Feng project, it resolves the nearest `feng.fm` and runs project-level `feng check`; standalone files fall back to `feng tool check`. Diagnostics are shown automatically when a file is opened or saved, and are cleared as soon as you start editing.
+- Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
+- Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
 - Icon support: The extension uses the Feng Logo, and falls back to the built-in Feng file icon when your current file icon theme does not provide a Feng-specific icon.
 
 ## Supported File Extensions
@@ -18,7 +19,8 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 1. Install Feng Language from the VS Code Marketplace.
 2. Open any Feng source file and syntax highlighting will be enabled automatically.
 3. When you want to clean up code, run VS Code's Format Document command.
-4. If you already have the Feng CLI installed, diagnostics will appear automatically for Feng source files when they are opened, disappear while you edit, and reappear after you save. Files inside a Feng project are checked with project-level `feng check`.
+4. If you already have the Feng CLI installed, the extension will start `feng lsp` automatically for Feng source files. Language features are then provided by the LSP capabilities exposed by that CLI build.
+5. If your current CLI build still exposes an empty LSP capability set, the extension will temporarily keep open/save diagnostics through the legacy `check` path until the server side is filled in.
 
 ## Optional Configuration
 
@@ -30,7 +32,7 @@ If the `feng` executable is not available in your system `PATH`, you can configu
 }
 ```
 
-This path can be either an absolute path or a path relative to the workspace root.
+This path can be either an absolute path or a path relative to the first workspace root.
 
 ## Formatting Behavior
 
@@ -51,10 +53,10 @@ For `.fm` manifest files, the formatter additionally:
 
 Its goal is to provide a stable and predictable formatting experience for daily use. It does not currently reflow complex expressions across lines or perform multi-line alignment.
 
-## Diagnostics
+## Language Service
 
-- Diagnostics prefer the Feng CLI `check` subcommand for files inside a Feng project, and fall back to `feng tool check` for standalone files.
+- Feng source files are connected through the standard VS Code Language Client by launching `feng lsp`.
 - The default executable name is `feng`.
 - If your CLI is not in the default lookup path, set `feng.executablePath` to the correct executable location.
-- Diagnostics are triggered when a Feng source file is opened and when it is saved.
-- As soon as the document changes, the extension clears existing diagnostics for that file to avoid showing stale red underlines.
+- The extension keeps the built-in formatter and TextMate grammars; only language-service features move behind LSP.
+- If the installed CLI currently reports an empty LSP capability set, the extension temporarily preserves the previous open/save diagnostics path by running `feng check --format json <file>` for project files and `feng tool check <file>` for standalone files.
