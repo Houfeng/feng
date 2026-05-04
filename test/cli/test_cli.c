@@ -2101,9 +2101,21 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
         "    let user: User = User { name: \"copilot\" };\n"
         "    let label: string = user.n;\n"
         "}\n";
+    static const char *kInferredSource =
+        "mod test.lsp.completioninferred;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let user = User { name: \"copilot\" };\n"
+        "    let label: string = user.;\n"
+        "}\n";
 
     assert_lsp_completion_contains_name(kDotSource, "user.;", 5U);
     assert_lsp_completion_contains_name(kPrefixSource, "user.n;", 6U);
+    assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
 }
 
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {

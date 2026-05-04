@@ -3660,10 +3660,69 @@ static const FengDecl *owner_decl_from_type_fact(const FengLspAnalysisSession *s
     return NULL;
 }
 
+static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSession *session,
+                                                     const FengProgram *program,
+                                                     const FengExpr *expr) {
+    size_t index;
+
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_IDENTIFIER) {
+        return resolve_type_name(session, program, expr->as.identifier);
+    }
+    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL &&
+        expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+        const FengSemanticModule *alias_module = find_alias_module(session,
+                                                                   program,
+                                                                   expr->as.member.object->as.identifier);
+        if (alias_module != NULL) {
+            const FengDecl *decl = find_module_decl_by_name(alias_module,
+                                                            expr->as.member.member,
+                                                            false,
+                                                            true,
+                                                            true);
+            if (decl != NULL) {
+                return decl;
+            }
+        }
+        for (index = 0U; index < program->use_count; ++index) {
+            const FengUseDecl *use_decl = &program->uses[index];
+
+            if (use_decl->has_alias && slice_equals(use_decl->alias, expr->as.member.object->as.identifier)) {
+                const FengDecl *decl = find_loaded_module_decl_by_name(session,
+                                                                      use_decl->segments,
+                                                                      use_decl->segment_count,
+                                                                      expr->as.member.member,
+                                                                      false,
+                                                                      true,
+                                                                      true);
+                if (decl != NULL) {
+                    return decl;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static const FengDecl *owner_decl_from_initializer_expr(const FengLspAnalysisSession *session,
+                                                        const FengProgram *program,
+                                                        const FengExpr *expr) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_OBJECT_LITERAL) {
+        return resolve_type_constructor_expr(session, program, expr->as.object_literal.target);
+    }
+    return owner_decl_from_type_fact(session, program, expr);
+}
+
 /* Resolve the owner type decl from a local binding.  When the binding has an
  * explicit type annotation, resolve via the type ref.  When the type is
- * inferred (binding->type == NULL), fall back to the semantic type fact
- * recorded for the binding itself (keyed by the FengBinding pointer). */
+ * inferred (binding->type == NULL), prefer the semantic type fact recorded for
+ * the binding itself and fall back to syntactic object-literal constructors for
+ * edit-time completion paths where semantic analysis is unavailable. */
 static const FengDecl *owner_decl_from_binding(const FengLspAnalysisSession *session,
                                                const FengProgram *program,
                                                const FengBinding *binding) {
@@ -3675,20 +3734,18 @@ static const FengDecl *owner_decl_from_binding(const FengLspAnalysisSession *ses
     if (binding->type != NULL) {
         return resolve_named_type_ref(session, program, binding->type);
     }
-    if (session->analysis == NULL) {
-        return NULL;
+    if (session->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(session->analysis, binding);
+        if (fact != NULL) {
+            if (fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+                return fact->type_decl;
+            }
+            if (fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                return resolve_named_type_ref(session, program, fact->type_ref);
+            }
+        }
     }
-    fact = feng_semantic_lookup_type_fact(session->analysis, binding);
-    if (fact == NULL) {
-        return NULL;
-    }
-    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
-        return fact->type_decl;
-    }
-    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
-        return resolve_named_type_ref(session, program, fact->type_ref);
-    }
-    return NULL;
+    return owner_decl_from_initializer_expr(session, program, binding->initializer);
 }
 
 static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysisSession *session,

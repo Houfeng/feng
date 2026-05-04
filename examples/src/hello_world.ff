@@ -19,6 +19,6 @@ fn hello_world_example(args: string[]): void {
   let user = User {
     name: "Houfeng",
     age: 18
-  }; 
+  };
   user.say("Hello World: " + user.name);
 }
