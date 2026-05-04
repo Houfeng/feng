@@ -10,6 +10,12 @@
 
 typedef struct FengSymbolImportedModuleCache FengSymbolImportedModuleCache;
 
+typedef struct FengCliFrontendSourceOverlay {
+    const char *path;
+    const char *source;
+    size_t source_length;
+} FengCliFrontendSourceOverlay;
+
 /*
  * Shared frontend pipeline used by `feng tool semantic`, `feng tool check`,
  * and (Phase 2 P4) the top-level direct compile mode.
@@ -85,5 +91,11 @@ void feng_cli_frontend_bundle_paths_dispose(char **bundle_paths,
 int feng_cli_frontend_run(const FengCliFrontendInput *input,
                           const FengCliFrontendCallbacks *callbacks,
                           const FengCliFrontendOutputs *outputs);
+
+int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
+                                        const FengCliFrontendSourceOverlay *overlays,
+                                        size_t overlay_count,
+                                        const FengCliFrontendCallbacks *callbacks,
+                                        const FengCliFrontendOutputs *outputs);
 
 #endif /* FENG_CLI_FRONTEND_H */

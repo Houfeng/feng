@@ -9,6 +9,71 @@
 #include "symbol/imported_module.h"
 #include "symbol/provider.h"
 
+static char *dup_source_bytes(const char *source, size_t source_length) {
+    char *copy;
+
+    if (source == NULL) {
+        return NULL;
+    }
+    copy = (char *)malloc(source_length + 1U);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, source, source_length);
+    copy[source_length] = '\0';
+    return copy;
+}
+
+static const FengCliFrontendSourceOverlay *find_source_overlay(
+    const FengCliFrontendSourceOverlay *overlays,
+    size_t overlay_count,
+    const char *path) {
+    size_t index;
+
+    for (index = 0U; index < overlay_count; ++index) {
+        if (strcmp(overlays[index].path, path) == 0) {
+            return &overlays[index];
+        }
+    }
+    return NULL;
+}
+
+static int validate_source_overlays(const FengCliFrontendSourceOverlay *overlays,
+                                    size_t overlay_count) {
+    size_t index;
+
+    if (overlay_count == 0U) {
+        return 0;
+    }
+    if (overlays == NULL) {
+        fprintf(stderr, "frontend: source overlays are missing\n");
+        return 1;
+    }
+
+    for (index = 0U; index < overlay_count; ++index) {
+        size_t other_index;
+
+        if (overlays[index].path == NULL || overlays[index].path[0] == '\0') {
+            fprintf(stderr, "frontend: source overlay path must not be empty\n");
+            return 1;
+        }
+        if (overlays[index].source == NULL) {
+            fprintf(stderr, "frontend: source overlay text is missing for %s\n",
+                    overlays[index].path);
+            return 1;
+        }
+        for (other_index = index + 1U; other_index < overlay_count; ++other_index) {
+            if (strcmp(overlays[index].path, overlays[other_index].path) == 0) {
+                fprintf(stderr, "frontend: duplicate source overlay path: %s\n",
+                        overlays[index].path);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 void feng_cli_frontend_bundle_paths_dispose(char **bundle_paths,
                                             size_t bundle_count) {
     size_t index;
@@ -23,6 +88,8 @@ void feng_cli_frontend_bundle_paths_dispose(char **bundle_paths,
 }
 
 static int load_and_parse(const FengCliFrontendInput *input,
+                          const FengCliFrontendSourceOverlay *overlays,
+                          size_t overlay_count,
                           FengCliLoadedSource *sources,
                           const FengProgram **programs,
                           const FengCliFrontendCallbacks *callbacks) {
@@ -30,13 +97,30 @@ static int load_and_parse(const FengCliFrontendInput *input,
 
     for (path_index = 0; path_index < input->path_count; ++path_index) {
         FengParseError error;
+        const FengCliFrontendSourceOverlay *overlay = NULL;
 
         sources[path_index].path = input->paths[path_index];
-        sources[path_index].source = feng_cli_read_entire_file(input->paths[path_index],
-                                                               &sources[path_index].source_length);
+        if (overlay_count > 0U) {
+            overlay = find_source_overlay(overlays,
+                                          overlay_count,
+                                          input->paths[path_index]);
+        }
+        if (overlay != NULL) {
+            sources[path_index].source_length = overlay->source_length;
+            sources[path_index].source = dup_source_bytes(overlay->source,
+                                                          overlay->source_length);
+        } else {
+            sources[path_index].source = feng_cli_read_entire_file(input->paths[path_index],
+                                                                   &sources[path_index].source_length);
+        }
         if (sources[path_index].source == NULL) {
-            fprintf(stderr, "failed to read %s: %s\n",
-                    input->paths[path_index], strerror(errno));
+            if (overlay != NULL) {
+                fprintf(stderr, "frontend: failed to copy source overlay for %s\n",
+                        input->paths[path_index]);
+            } else {
+                fprintf(stderr, "failed to read %s: %s\n",
+                        input->paths[path_index], strerror(errno));
+            }
             return 1;
         }
 
@@ -140,6 +224,14 @@ static int load_package_sources(const FengCliFrontendInput *input,
 int feng_cli_frontend_run(const FengCliFrontendInput *input,
                           const FengCliFrontendCallbacks *callbacks,
                           const FengCliFrontendOutputs *outputs) {
+    return feng_cli_frontend_run_with_overlays(input, NULL, 0U, callbacks, outputs);
+}
+
+int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
+                                        const FengCliFrontendSourceOverlay *overlays,
+                                        size_t overlay_count,
+                                        const FengCliFrontendCallbacks *callbacks,
+                                        const FengCliFrontendOutputs *outputs) {
     FengCliLoadedSource *sources = NULL;
     const FengProgram **programs = NULL;
     FengSymbolProvider *provider = NULL;
@@ -157,6 +249,9 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
         fprintf(stderr, "frontend: no input files\n");
         return 1;
     }
+    if (validate_source_overlays(overlays, overlay_count) != 0) {
+        return 1;
+    }
 
     sources = (FengCliLoadedSource *)calloc((size_t)input->path_count, sizeof(*sources));
     programs = (const FengProgram **)calloc((size_t)input->path_count, sizeof(*programs));
@@ -167,7 +262,7 @@ int feng_cli_frontend_run(const FengCliFrontendInput *input,
         return 1;
     }
 
-    exit_code = load_and_parse(input, sources, programs, callbacks);
+    exit_code = load_and_parse(input, overlays, overlay_count, sources, programs, callbacks);
     if (exit_code != 0) {
         goto cleanup;
     }

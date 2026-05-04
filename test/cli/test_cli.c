@@ -357,6 +357,36 @@ static int run_init_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
+static int run_frontend_with_overlays_quiet_stderr(
+    const FengCliFrontendInput *input,
+    const FengCliFrontendSourceOverlay *overlays,
+    size_t overlay_count,
+    const FengCliFrontendCallbacks *callbacks,
+    const FengCliFrontendOutputs *outputs) {
+    int saved_stderr;
+    int null_fd;
+    int rc;
+
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    null_fd = open("/dev/null", O_WRONLY);
+    ASSERT(null_fd >= 0);
+    ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+    close(null_fd);
+
+    rc = feng_cli_frontend_run_with_overlays(input,
+                                             overlays,
+                                             overlay_count,
+                                             callbacks,
+                                             outputs);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    return rc;
+}
+
 static int run_lsp_quiet_stderr(int argc, char **argv) {
     int saved_stderr;
     int null_fd;
@@ -1238,6 +1268,127 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
     free(dep_source_path);
     free(main_src_dir);
     free(dep_src_dir);
+}
+
+static void test_frontend_source_overlay_replaces_disk_source(void) {
+    char template_path[] = "/tmp/feng_cli_frontend_overlay_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *main_source_path;
+    char *remove_error = NULL;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCliLoadedSource *sources = NULL;
+    size_t source_count = 0U;
+
+    static const char *kOverlaySource =
+        "mod overlay.demo;\n"
+        "fn main(args: string[]) {}\n";
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    main_source_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(main_source_path,
+                    "mod overlay.demo;\n"
+                    "fn main( {}\n");
+
+    {
+        char *paths[] = { main_source_path };
+        FengCliFrontendInput input = {
+            .path_count = 1,
+            .paths = paths,
+            .target = FENG_COMPILE_TARGET_BIN,
+            .package_path_count = 0,
+            .package_paths = NULL,
+        };
+        FengCliFrontendSourceOverlay overlays[] = {
+            {
+                .path = main_source_path,
+                .source = kOverlaySource,
+                .source_length = strlen(kOverlaySource),
+            },
+        };
+        FengCliFrontendOutputs outputs = {
+            .out_analysis = &analysis,
+            .out_sources = &sources,
+            .out_source_count = &source_count,
+        };
+
+        ASSERT(feng_cli_frontend_run_with_overlays(&input,
+                                                   overlays,
+                                                   1U,
+                                                   NULL,
+                                                   &outputs) == 0);
+    }
+
+    ASSERT(analysis != NULL);
+    ASSERT(source_count == 1U);
+    ASSERT(sources != NULL);
+    ASSERT(strcmp(sources[0].source, kOverlaySource) == 0);
+
+    feng_semantic_analysis_free(analysis);
+    feng_cli_free_loaded_sources(sources, source_count);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(main_source_path);
+    free(src_dir);
+}
+
+static void test_frontend_source_overlay_rejects_duplicate_paths(void) {
+    char template_path[] = "/tmp/feng_cli_frontend_overlay_dup_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *main_source_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    main_source_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(main_source_path,
+                    "mod overlay.demo;\n"
+                    "fn main(args: string[]) {}\n");
+
+    {
+        static const char *kOverlaySource =
+            "mod overlay.demo;\n"
+            "fn main(args: string[]) {}\n";
+        char *paths[] = { main_source_path };
+        FengCliFrontendInput input = {
+            .path_count = 1,
+            .paths = paths,
+            .target = FENG_COMPILE_TARGET_BIN,
+            .package_path_count = 0,
+            .package_paths = NULL,
+        };
+        FengCliFrontendSourceOverlay overlays[] = {
+            {
+                .path = main_source_path,
+                .source = kOverlaySource,
+                .source_length = strlen(kOverlaySource),
+            },
+            {
+                .path = main_source_path,
+                .source = kOverlaySource,
+                .source_length = strlen(kOverlaySource),
+            },
+        };
+
+        ASSERT(run_frontend_with_overlays_quiet_stderr(&input,
+                                                       overlays,
+                                                       2U,
+                                                       NULL,
+                                                       NULL) != 0);
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(main_source_path);
+    free(src_dir);
 }
 
 static void test_direct_build_rejects_bad_package_bundle(void) {
@@ -3191,6 +3342,8 @@ int main(void) {
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_frontend_outputs_absolute_bundle_paths();
+    test_frontend_source_overlay_replaces_disk_source();
+    test_frontend_source_overlay_rejects_duplicate_paths();
     test_direct_build_rejects_bad_package_bundle();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
