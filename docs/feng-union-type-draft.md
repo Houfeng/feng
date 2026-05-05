@@ -134,7 +134,7 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 - object-form `spec` 允许在抽象契约层直接访问成员；
 - union-form 必须先缩小到确定类型，再按该具体类型继续访问。
 
-### 3.6 union-form 的基础收窄语法采用 `is`
+### 3.6 union-form 的基础收窄语法采用 `is`，显式转换独立于 `is`
 
 本次讨论已确认：为了对 union-form 做成员判别与类型收窄，需要引入 `is` 语法。
 
@@ -159,6 +159,8 @@ if v is int {
 - 当先前分支已经排除了若干 member，且剩余 member 集合可唯一确定时，后续 `else` 分支也应自动收窄到该唯一剩余类型。
 - 在短路逻辑表达式中，左侧 `is` 所得到的收窄结果应继续作用到右侧表达式。
 - `is` 收窄既可服务于编译期已知情形，也可服务于运行时基于 `tag` 的判别情形。
+- `v is FooSpec` 不承担“判断当前 concrete member 是否满足 `FooSpec` 并自动转换”的职责；它只用于判断当前 active member 是否就是 `FooSpec`。
+- 若当前已收窄到某个具体类型，且当前可见契约闭包可证明该具体类型满足某个 object-form `spec`，则允许通过显式转换把该值转换到目标 `spec` 视角；该能力与 `is` 收窄分离。
 
 例如：
 
@@ -169,6 +171,16 @@ if v is UserType && v == userType {
 ```
 
 上例中，`v == userType` 合法，是因为左侧 `v is UserType` 已经先把 `v` 收窄为 `UserType`；该收窄结果会沿短路求值顺序继续传递到右侧子表达式。
+
+若需要把已收窄到具体类型的值转成其所满足的 object-form `spec`，应显式写出转换，而不是通过 `is` 隐式完成。例如：
+
+```feng
+if v is UserType {
+  let named = (Named)v;
+}
+```
+
+上例中，`v is UserType` 只负责把 `v` 收窄为 `UserType`；后续 `(Named)v` 是否成立，取决于当前可见契约闭包中 `UserType` 是否满足 `Named`。若不满足，则该显式转换应报错。
 
 ### 3.7 union-form 的成员允许包含基础类型、用户定义类型与其他 `spec`
 
@@ -389,6 +401,8 @@ spec Display: Named | string;
   - 重叠 member 的最终歧义判定不在 union-form 声明点完成，而应在当前可见契约闭包固定后，于值进入 union-form 的具体站点执行；
   - `==` / `!=` 也必须先收窄到确定 member；
   - 未收窄时禁止成员访问；
+  - 已收窄到具体类型后，若当前可见契约闭包可证明其满足某个 object-form `spec`，则允许显式转换到该 `spec`；
+  - `is` 只负责对 union-form 当前 active member 做判别与收窄，不负责基于满足关系做自动转换；
   - 可编译期收窄时优先编译期收窄；
   - 运行时收窄时，分支内后续访问按确定 member 直接发码。
 
@@ -430,6 +444,8 @@ spec Display: Named | string;
 - 运行时收窄的基本成本应收敛为一次 `tag` 判别，而不是每次成员访问重复判别。
 - 在短路逻辑表达式中，左侧 `is` 的收窄结果应继续作用到右侧子表达式。
 - `else` 分支在剩余 member 可唯一确定时，应自动收窄为该唯一剩余类型。
+- `is` 只判断当前 active member 是否为目标 member，不承担“满足某个 object-form spec 即自动转换”的语义。
+- 已收窄到具体类型后，若当前可见契约闭包能证明其满足某个 object-form `spec`，则应通过显式转换进入该 `spec` 视角。
 - 仍待明确：
   - 是否引入 union member 解构。
   - 除 `if ... is ...` 之外，是否还需要与 `match` 集成的专门语法。
