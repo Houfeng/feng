@@ -3581,7 +3581,8 @@ static void test_deps_resolve_requires_registry_for_remote_dependency(void) {
 
     ASSERT(!feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error));
     ASSERT(error.message != NULL);
-    ASSERT(strstr(error.message, "configured registry") != NULL);
+    ASSERT(strstr(error.message, "remote_dep@1.0.0") != NULL);
+    ASSERT(strstr(error.message, "no configured registry available") != NULL);
 
     if (saved_home != NULL) {
         ASSERT(setenv("HOME", saved_home, 1) == 0);
@@ -4251,6 +4252,149 @@ static void test_deps_install_populates_cache_from_registry(void) {
     free(project_dir);
 }
 
+static void test_deps_install_reports_download_failure_with_reason(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_missing_bundle_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *manifest_path;
+    char *source_path;
+    char *cache_path;
+    char *saved_home = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    manifest_path = path_join(project_dir, "feng.fm");
+    source_path = path_join(packages_dir, "remote_dep-1.0.0.fb");
+    cache_path = path_join(workspace_dir, ".feng/cache/remote_dep-1.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(packages_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(!feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "remote_dep@1.0.0") != NULL);
+    ASSERT(strstr(error.message, "registry/packages/remote_dep-1.0.0.fb") != NULL);
+    ASSERT(strstr(error.message, "No such file or directory") != NULL);
+    ASSERT(!path_exists(cache_path));
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(source_path);
+    free(manifest_path);
+    free(packages_dir);
+    free(registry_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_invalid_bundle_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *manifest_path;
+    char *bundle_path;
+    char *cache_path;
+    char *saved_home = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    manifest_path = path_join(project_dir, "feng.fm");
+    bundle_path = path_join(packages_dir, "remote_dep-1.0.0.fb");
+    cache_path = path_join(workspace_dir, ".feng/cache/remote_dep-1.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(packages_dir);
+    write_manifest_only_bundle_or_die(bundle_path,
+                                      "[package]\n"
+                                      "name: \"other_dep\"\n"
+                                      "version: \"1.0.0\"\n"
+                                      "arch: \"macos-arm64\"\n"
+                                      "abi: \"feng\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(!feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "remote_dep@1.0.0") != NULL);
+    ASSERT(strstr(error.message, "invalid package bundle") != NULL);
+    ASSERT(strstr(error.message, "dependency name mismatch") != NULL);
+    ASSERT(strstr(error.message, "other_dep") != NULL);
+    ASSERT(!path_exists(cache_path));
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(bundle_path);
+    free(manifest_path);
+    free(packages_dir);
+    free(registry_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
 static void test_deps_install_force_refreshes_cached_bundle(void) {
     char template_path[] = "/tmp/feng_cli_deps_install_force_XXXXXX";
     char *workspace_dir;
@@ -4828,6 +4972,8 @@ int main(void) {
     test_deps_add_local_rejects_non_lib_target_before_write();
     test_deps_remove_updates_manifest();
     test_deps_install_populates_cache_from_registry();
+    test_deps_install_reports_download_failure_with_reason();
+    test_deps_install_rejects_invalid_downloaded_bundle();
     test_deps_install_force_refreshes_cached_bundle();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();

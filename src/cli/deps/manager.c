@@ -84,6 +84,24 @@ static char *dup_printf(const char *fmt, ...) {
     return out;
 }
 
+static void trim_trailing_ascii_whitespace(char *text) {
+    size_t length;
+
+    if (text == NULL) {
+        return;
+    }
+    length = strlen(text);
+    while (length > 0U) {
+        char ch = text[length - 1U];
+
+        if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
+            break;
+        }
+        text[length - 1U] = '\0';
+        length -= 1U;
+    }
+}
+
 static bool set_errorf(FengCliProjectError *error,
                        const char *path,
                        unsigned int line,
@@ -120,6 +138,56 @@ static bool set_errorf(FengCliProjectError *error,
     va_end(args_copy);
     error->message = message;
     return false;
+}
+
+static bool set_remote_install_errorf(FengCliProjectError *error,
+                                      const char *path,
+                                      unsigned int line,
+                                      const char *name,
+                                      const char *version,
+                                      const char *fmt,
+                                      ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *reason;
+    bool ok;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          path,
+                          line,
+                          "failed to install %s@%s: unknown error",
+                          name,
+                          version);
+    }
+
+    reason = (char *)malloc((size_t)needed + 1U);
+    if (reason == NULL) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          path,
+                          line,
+                          "failed to install %s@%s: out of memory",
+                          name,
+                          version);
+    }
+    vsnprintf(reason, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    ok = set_errorf(error,
+                    path,
+                    line,
+                    "failed to install %s@%s: %s",
+                    name,
+                    version,
+                    reason);
+    free(reason);
+    return ok;
 }
 
 static bool path_is_absolute(const char *path) {
@@ -715,28 +783,144 @@ static bool read_bundle_manifest(const char *bundle_path,
 
 static bool download_with_curl(const char *url,
                                const char *dest_path,
-                               FengCliProjectError *error) {
+                               char **out_reason) {
+    int pipe_fds[2] = {-1, -1};
     pid_t child;
     int status = 0;
+    char buffer[512];
+    char *stderr_text = NULL;
+    size_t stderr_length = 0U;
+    ssize_t read_size;
+    int read_errno = 0;
+
+    *out_reason = NULL;
+
+    if (pipe(pipe_fds) != 0) {
+        *out_reason = dup_printf("failed to create curl stderr pipe: %s", strerror(errno));
+        return false;
+    }
 
     child = fork();
     if (child < 0) {
-        return set_errorf(error, url, 0U, "failed to fork curl: %s", strerror(errno));
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        *out_reason = dup_printf("failed to fork curl: %s", strerror(errno));
+        return false;
     }
     if (child == 0) {
+        close(pipe_fds[0]);
+        if (dup2(pipe_fds[1], STDERR_FILENO) < 0) {
+            _exit(127);
+        }
+        close(pipe_fds[1]);
         execlp("curl", "curl", "-fsSL", "-o", dest_path, url, (char *)NULL);
         _exit(127);
     }
+    close(pipe_fds[1]);
+
+    while ((read_size = read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
+        char *resized = (char *)realloc(stderr_text, stderr_length + (size_t)read_size + 1U);
+
+        if (resized == NULL) {
+            free(stderr_text);
+            stderr_text = NULL;
+            stderr_length = 0U;
+            read_errno = ENOMEM;
+            break;
+        }
+        stderr_text = resized;
+        memcpy(stderr_text + stderr_length, buffer, (size_t)read_size);
+        stderr_length += (size_t)read_size;
+        stderr_text[stderr_length] = '\0';
+    }
+    if (read_size < 0) {
+        read_errno = errno;
+    }
+    close(pipe_fds[0]);
+
     if (waitpid(child, &status, 0) < 0) {
-        return set_errorf(error, url, 0U, "failed to wait for curl: %s", strerror(errno));
+        free(stderr_text);
+        *out_reason = dup_printf("failed to wait for curl: %s", strerror(errno));
+        return false;
+    }
+    if (read_errno != 0) {
+        free(stderr_text);
+        *out_reason = dup_printf("failed to read curl stderr: %s",
+                                 read_errno == ENOMEM ? "out of memory" : strerror(read_errno));
+        return false;
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return set_errorf(error,
-                          url,
-                          0U,
-                          "failed to download remote package from %s",
-                          url);
+        if (stderr_text != NULL) {
+            trim_trailing_ascii_whitespace(stderr_text);
+        }
+        if (stderr_text != NULL && stderr_text[0] != '\0') {
+            *out_reason = stderr_text;
+            return false;
+        }
+        free(stderr_text);
+        if (!WIFEXITED(status)) {
+            *out_reason = dup_cstr("curl terminated unexpectedly");
+            return false;
+        }
+        if (WEXITSTATUS(status) == 127) {
+            *out_reason = dup_cstr("curl is not available");
+            return false;
+        }
+        *out_reason = dup_printf("curl exited with status %d", WEXITSTATUS(status));
+        return false;
     }
+    free(stderr_text);
+    return true;
+}
+
+static bool validate_remote_bundle(const char *bundle_path,
+                                   const char *origin_path,
+                                   unsigned int origin_line,
+                                   const char *name,
+                                   const char *version,
+                                   const char *source_label,
+                                   FengCliProjectError *error) {
+    FengCliProjectManifest bundle_manifest = {0};
+    FengCliProjectError bundle_error = {0};
+
+    if (!read_bundle_manifest(bundle_path, &bundle_manifest, &bundle_error)) {
+        bool ok = set_remote_install_errorf(error,
+                                            origin_path,
+                                            origin_line,
+                                            name,
+                                            version,
+                                            "invalid package bundle from %s: %s",
+                                            source_label,
+                                            bundle_error.message != NULL ? bundle_error.message
+                                                                         : "unknown error");
+        feng_cli_project_error_dispose(&bundle_error);
+        return ok;
+    }
+    if (strcmp(bundle_manifest.name, name) != 0) {
+        bool ok = set_remote_install_errorf(error,
+                                            origin_path,
+                                            origin_line,
+                                            name,
+                                            version,
+                                            "invalid package bundle from %s: dependency name mismatch, found %s",
+                                            source_label,
+                                            bundle_manifest.name);
+        feng_cli_project_manifest_dispose(&bundle_manifest);
+        return ok;
+    }
+    if (strcmp(bundle_manifest.version, version) != 0) {
+        bool ok = set_remote_install_errorf(error,
+                                            origin_path,
+                                            origin_line,
+                                            name,
+                                            version,
+                                            "invalid package bundle from %s: dependency version mismatch, found %s",
+                                            source_label,
+                                            bundle_manifest.version);
+        feng_cli_project_manifest_dispose(&bundle_manifest);
+        return ok;
+    }
+    feng_cli_project_manifest_dispose(&bundle_manifest);
     return true;
 }
 
@@ -744,12 +928,13 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                                         const char *registry,
                                         const char *name,
                                         const char *version,
+                                        const char *origin_path,
+                                        unsigned int origin_line,
                                         char **out_bundle_path,
                                         FengCliProjectError *error) {
     char *cache_root;
     char *bundle_name;
     char *bundle_path;
-    FengCliProjectManifest bundle_manifest = {0};
 
     if (!get_cache_root(state, error, &cache_root)) {
         return false;
@@ -768,33 +953,31 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
     }
 
     if (!state->force_remote && access(bundle_path, F_OK) == 0) {
-        if (!read_bundle_manifest(bundle_path, &bundle_manifest, error)) {
+        if (validate_remote_bundle(bundle_path,
+                                   origin_path,
+                                   origin_line,
+                                   name,
+                                   version,
+                                   bundle_path,
+                                   error)) {
+            *out_bundle_path = bundle_path;
+            return true;
+        }
+        if (registry == NULL) {
             free(bundle_path);
             return false;
         }
-        if (strcmp(bundle_manifest.name, name) != 0 || strcmp(bundle_manifest.version, version) != 0) {
-            feng_cli_project_manifest_dispose(&bundle_manifest);
-            free(bundle_path);
-            return set_errorf(error,
-                              cache_root,
-                              0U,
-                              "cached bundle metadata does not match %s@%s",
-                              name,
-                              version);
-        }
-        feng_cli_project_manifest_dispose(&bundle_manifest);
-        *out_bundle_path = bundle_path;
-        return true;
+        feng_cli_project_error_dispose(error);
     }
 
     if (registry == NULL) {
         free(bundle_path);
-        return set_errorf(error,
-                          cache_root,
-                          0U,
-                          "remote dependency %s@%s requires a configured registry",
-                          name,
-                          version);
+        return set_remote_install_errorf(error,
+                                         origin_path,
+                                         origin_line,
+                                         name,
+                                         version,
+                                         "no configured registry available");
     }
 
     {
@@ -823,18 +1006,30 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                                    registry[strlen(registry) - 1U] == '/' ? "" : "/",
                                    name,
                                    version);
+            char *download_reason = NULL;
+
             if (url == NULL) {
                 unlink(temp_path);
                 free(temp_path);
                 free(bundle_path);
                 return set_errorf(error, registry, 0U, "out of memory");
             }
-            if (!download_with_curl(url, temp_path, error)) {
+            if (!download_with_curl(url, temp_path, &download_reason)) {
+                bool ok = set_remote_install_errorf(error,
+                                                    origin_path,
+                                                    origin_line,
+                                                    name,
+                                                    version,
+                                                    "from %s: %s",
+                                                    url,
+                                                    download_reason != NULL ? download_reason
+                                                                            : "download failed");
+                free(download_reason);
                 free(url);
                 unlink(temp_path);
                 free(temp_path);
                 free(bundle_path);
-                return false;
+                return ok;
             }
             free(url);
         } else {
@@ -859,12 +1054,28 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                 free(bundle_path);
                 return set_errorf(error, registry, 0U, "out of memory");
             }
-            if (!copy_file(source_path, temp_path, error)) {
-                free(source_path);
-                unlink(temp_path);
-                free(temp_path);
-                free(bundle_path);
-                return false;
+            {
+                FengCliProjectError copy_error = {0};
+
+                if (!copy_file(source_path, temp_path, &copy_error)) {
+                    bool ok = set_remote_install_errorf(error,
+                                                        origin_path,
+                                                        origin_line,
+                                                        name,
+                                                        version,
+                                                        "from %s: %s",
+                                                        source_path,
+                                                        copy_error.message != NULL
+                                                            ? copy_error.message
+                                                            : "download failed");
+                    feng_cli_project_error_dispose(&copy_error);
+                    free(source_path);
+                    unlink(temp_path);
+                    free(temp_path);
+                    free(bundle_path);
+                    return ok;
+                }
+                feng_cli_project_error_dispose(&copy_error);
             }
             free(source_path);
         }
@@ -882,23 +1093,17 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
         free(temp_path);
     }
 
-    if (!read_bundle_manifest(bundle_path, &bundle_manifest, error)) {
+    if (!validate_remote_bundle(bundle_path,
+                                origin_path,
+                                origin_line,
+                                name,
+                                version,
+                                bundle_path,
+                                error)) {
         unlink(bundle_path);
         free(bundle_path);
         return false;
     }
-    if (strcmp(bundle_manifest.name, name) != 0 || strcmp(bundle_manifest.version, version) != 0) {
-        feng_cli_project_manifest_dispose(&bundle_manifest);
-        unlink(bundle_path);
-        free(bundle_path);
-        return set_errorf(error,
-                          bundle_path,
-                          0U,
-                          "downloaded bundle metadata does not match %s@%s",
-                          name,
-                          version);
-    }
-    feng_cli_project_manifest_dispose(&bundle_manifest);
     *out_bundle_path = bundle_path;
     return true;
 }
@@ -1435,6 +1640,8 @@ static bool resolve_project_dependencies(ResolveState *state,
                                              project_registry,
                                              dependency->name,
                                              dependency->value,
+                                             manifest_path,
+                                             dependency->line,
                                              &child_bundle_path,
                                              error)) {
                 free(project_registry);
@@ -1571,6 +1778,8 @@ static bool resolve_bundle_node(ResolveState *state,
                                          registry,
                                          dependency->name,
                                          dependency->value,
+                                         bundle_path,
+                                         dependency->line,
                                          &child_bundle_path,
                                          error)) {
             feng_cli_project_manifest_dispose(&manifest);
