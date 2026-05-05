@@ -2015,9 +2015,11 @@ static void test_lsp_hover_definition_and_completion(void) {
     free(source_path);
 }
 
-static void assert_lsp_completion_contains_name(const char *source,
-                                                const char *needle,
-                                                size_t char_offset) {
+static void assert_lsp_completion_contains_labels(const char *source,
+                                                  const char *needle,
+                                                  size_t char_offset,
+                                                  const char **labels,
+                                                  size_t label_count) {
     char template_path[] = "/tmp/feng_cli_lsp_completion_incomplete_XXXXXX";
     char *workspace_dir;
     char *source_path;
@@ -2031,6 +2033,7 @@ static void assert_lsp_completion_contains_name(const char *source,
     FILE *input;
     unsigned int line;
     unsigned int character;
+    size_t index;
     char *remove_error = NULL;
 
     workspace_dir = mkdtemp(template_path);
@@ -2064,7 +2067,12 @@ static void assert_lsp_completion_contains_name(const char *source,
     fclose(input);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
-    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
+    for (index = 0U; index < label_count; ++index) {
+        char *expected = dup_printf("\"label\":\"%s\"", labels[index]);
+
+        ASSERT(strstr(output, expected) != NULL);
+        free(expected);
+    }
 
     free(output);
     free(shutdown);
@@ -2076,6 +2084,14 @@ static void assert_lsp_completion_contains_name(const char *source,
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
     free(source_path);
+}
+
+static void assert_lsp_completion_contains_name(const char *source,
+                                                const char *needle,
+                                                size_t char_offset) {
+    const char *labels[] = {"name"};
+
+    assert_lsp_completion_contains_labels(source, needle, char_offset, labels, 1U);
 }
 
 static void test_lsp_member_completion_survives_incomplete_member_access(void) {
@@ -2116,6 +2132,86 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kDotSource, "user.;", 5U);
     assert_lsp_completion_contains_name(kPrefixSource, "user.n;", 6U);
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
+}
+
+static void test_lsp_completion_uses_source_scoped_edit_context(void) {
+    static const char *kMemberBeforeNextStmt =
+        "mod test.lsp.completioneditmember;\n"
+        "\n"
+        "extern fn puts(msg: string): int;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "    let age: i32;\n"
+        "\n"
+        "    fn say(msg: string): void {\n"
+        "        puts(msg);\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "fn hello_world_example(args: string[]): void {\n"
+        "    let user = User {\n"
+        "        name: \"Houfeng\",\n"
+        "        age: 18\n"
+        "    };\n"
+        "    user.\n"
+        "    user.say(\"Hello World: \" + user.name);\n"
+        "}\n";
+    static const char *kScopeBeforeClose =
+        "mod test.lsp.completioneditscope;\n"
+        "\n"
+        "extern fn puts(msg: string): int;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "    let age: i32;\n"
+        "\n"
+        "    fn say(msg: string): void {\n"
+        "        puts(msg);\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "fn hello_world_example(args: string[]): void {\n"
+        "    let user = User {\n"
+        "        name: \"Houfeng\",\n"
+        "        age: 18\n"
+        "    };\n"
+        "    user.say(\"Hello World: \" + user.name);\n"
+        "    \n"
+        "}\n";
+    static const char *kScopePrefixBeforeNextStmt =
+        "mod test.lsp.completioneditprefix;\n"
+        "\n"
+        "extern fn puts(msg: string): int;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fn hello_world_example(args: string[]): void {\n"
+        "    let user = User { name: \"Houfeng\" };\n"
+        "    us\n"
+        "    user.say(\"Hello World\");\n"
+        "}\n";
+    const char *member_labels[] = {"name", "age", "say"};
+    const char *scope_labels[] = {"args", "user", "puts", "User", "hello_world_example"};
+    const char *prefix_labels[] = {"user", "User", "puts", "hello_world_example"};
+
+    assert_lsp_completion_contains_labels(kMemberBeforeNextStmt,
+                                          "user.\n    user.say",
+                                          5U,
+                                          member_labels,
+                                          sizeof(member_labels) / sizeof(member_labels[0]));
+    assert_lsp_completion_contains_labels(kScopeBeforeClose,
+                                          "    \n}\n",
+                                          4U,
+                                          scope_labels,
+                                          sizeof(scope_labels) / sizeof(scope_labels[0]));
+    assert_lsp_completion_contains_labels(kScopePrefixBeforeNextStmt,
+                                          "us\n    user.say",
+                                          2U,
+                                          prefix_labels,
+                                          sizeof(prefix_labels) / sizeof(prefix_labels[0]));
 }
 
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
@@ -4686,6 +4782,7 @@ int main(void) {
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
     test_lsp_member_completion_survives_incomplete_member_access();
+    test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_rename_accepts_identifier_end_position();
