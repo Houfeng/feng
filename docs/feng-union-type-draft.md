@@ -157,7 +157,18 @@ if v is int {
 - `v is Type` 用于测试 union-form 当前 active member 是否为 `Type`。
 - 当条件成立时，对应分支内的 `v` 必须收窄为该 `Type`。
 - 当先前分支已经排除了若干 member，且剩余 member 集合可唯一确定时，后续 `else` 分支也应自动收窄到该唯一剩余类型。
+- 在短路逻辑表达式中，左侧 `is` 所得到的收窄结果应继续作用到右侧表达式。
 - `is` 收窄既可服务于编译期已知情形，也可服务于运行时基于 `tag` 的判别情形。
+
+例如：
+
+```feng
+if v is UserType && v == userType {
+  // 在 `&&` 右侧以及该分支内部，v 都按 UserType 视角处理
+}
+```
+
+上例中，`v == userType` 合法，是因为左侧 `v is UserType` 已经先把 `v` 收窄为 `UserType`；该收窄结果会沿短路求值顺序继续传递到右侧子表达式。
 
 ### 3.7 union-form 的成员允许包含基础类型、用户定义类型与其他 `spec`
 
@@ -172,13 +183,15 @@ if v is int {
 
 同时，`void` 当前应继续仅用于无返回值语义的位置，例如函数与方法的返回值声明；不应进入 union-form 的值类型成员集合。
 
-### 3.8 若 member 本身是 union-form，可在编译期拍平
+### 3.8 若 member 本身是 union-form，可在编译期拍平、去重并保持声明顺序
 
-本次讨论已确认：若某个 union-form 的 member 解析后本身又是 union-form，则应在编译期将其拍平到当前 union-form 的 member 集合中。
+本次讨论已确认：若某个 union-form 的 member 解析后本身又是 union-form，则应在编译期将其拍平到当前 union-form 的 member 集合中；拍平后应去重，并保持声明顺序。
 
 这条规则的含义是：
 
 - 拍平是编译期语义归一化行为，而不是新的运行时结构。
+- 归一化成员集合中，相同 member 只保留第一次出现的那一项。
+- 归一化成员集合的顺序以声明顺序为准；后续重复出现的 member 会被忽略，而不会改变首次出现的位置。
 - 运行时不需要保留“union 里面再包一层 union”的层级。
 - 后续的成员匹配、收窄、相等性与 codegen，都应基于拍平后的成员集合来定义。
 
@@ -193,6 +206,20 @@ spec B: A | UserType;
 
 ```feng
 spec B: int | string | UserType;
+```
+
+若存在重复项，则同样按“保留首次出现、去除后续重复项”来理解。例如：
+
+```feng
+spec C: int | string;
+spec D: string | UserType;
+spec E: C | D | int;
+```
+
+在语义层可按如下方式归一化理解：
+
+```feng
+spec E: int | string | UserType;
 ```
 
 ### 3.9 union-form 默认零值先取归一化后的第一个 member
@@ -219,7 +246,19 @@ spec Display: Named | string;
 
 则 `Display` 的默认零值先按归一化后的第一个 member `Named` 的默认零值来理解，也就是 active variant 为 `Named`，payload 为该 `spec` 的默认 witness。
 
-### 3.10 运行时顶层分类的抽象完备性
+### 3.10 union-form 的 `==` / `!=` 也必须先收窄
+
+本次讨论已确认：union-form 上的 `==` / `!=` 运算也必须先收窄到确定 member，未收窄时不允许直接比较。
+
+这条规则的直接含义是：
+
+- 当值仍处于 union-form 视角时，不允许直接对其执行 `==` 或 `!=`。
+- 只有在控制流中已经把值收窄到确定 member 后，才允许继续比较。
+- 收窄后的比较语义直接复用该 member 自身既有的相等性规则，而不是为 union-form 另行定义一套“跨 member 比较”规则。
+
+因此，union-form 不存在“未收窄时先比较 active variant，再比较 payload”的统一比较入口；比较行为总是在收窄后按具体类型规则发生。
+
+### 3.11 运行时顶层分类的抽象完备性
 
 本次讨论已确认：
 
@@ -344,16 +383,18 @@ spec Display: Named | string;
   - 相等性规则；
   - narrowing / pattern matching 的收窄规则。
 - union-form 还需要保证：
-  - 若 member 解析后本身是 union-form，则在编译期拍平为归一化成员集合；
+  - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
+  - 重叠 member 的最终歧义判定不在 union-form 声明点完成，而应在当前可见契约闭包固定后，于值进入 union-form 的具体站点执行；
+  - `==` / `!=` 也必须先收窄到确定 member；
   - 未收窄时禁止成员访问；
   - 可编译期收窄时优先编译期收窄；
   - 运行时收窄时，分支内后续访问按确定 member 直接发码。
 
 ## 7 当前尚未拍板的问题
 
-以下问题在本次讨论中尚未最终定稿，不应在主规范中直接写成既定规则。
+以下小节用于汇总 union-form 当前仍需跟踪的设计点。标明“仍待明确”的内容属于尚未最终定稿的问题；已写明“当前阶段无剩余未决项”的小节表示该主题已在本轮讨论中收口。
 
 ### 7.1 union-form 的成员合法集合
 
@@ -363,7 +404,7 @@ spec Display: Named | string;
 - 允许用户定义类型作为 union member。
 - 允许其他 `spec` 作为 union member。
 - 不允许 `void` 进入 union-form。
-- 若某个 member 解析后本身是 union-form，则应在编译期拍平。
+- 若某个 member 解析后本身是 union-form，则应在编译期拍平、去重并保持声明顺序。
 
 当前阶段无剩余未决项。
 
@@ -371,11 +412,13 @@ spec Display: Named | string;
 
 ### 7.2 union-form 的相等性
 
-仍待明确：
+当前讨论已确认：
 
-- 相等性是否先比较 active variant，再比较对应值。
-- 若两个值属于不同 member，是否必定不等。
-- 若 member 自身是引用语义类型，是比较身份还是比较值，需与其原类型规则对齐。
+- union-form 的 `==` / `!=` 必须先收窄到确定 member。
+- 未收窄时不允许直接比较。
+- 收窄后的比较直接复用该 member 自身既有的相等性规则。
+
+当前阶段无剩余未决项。
 
 ### 7.3 union-form 的 narrowing / 模式匹配
 
@@ -385,6 +428,7 @@ spec Display: Named | string;
 - union-form 的成员访问必须先收窄到确定 member。
 - 可编译期完成的收窄应优先在编译期完成。
 - 运行时收窄的基本成本应收敛为一次 `tag` 判别，而不是每次成员访问重复判别。
+- 在短路逻辑表达式中，左侧 `is` 的收窄结果应继续作用到右侧子表达式。
 - `else` 分支在剩余 member 可唯一确定时，应自动收窄为该唯一剩余类型。
 - 仍待明确：
   - 是否引入 union member 解构。
@@ -401,6 +445,18 @@ spec Display: Named | string;
 
 - 这属于 union-form 的核心实现问题；
 - 但它不构成引入第四类顶层运行时结构的理由。
+
+### 7.5 重叠 member 的歧义判定与 active variant 选择
+
+当前讨论已确认：
+
+- 由于契约关系可能在后续声明中补全，且包内孤儿契约也会影响当前可见语义，重叠 member 的最终歧义判定不适合在 union-form 声明点完成。
+- 相关判定应延后到当前可见契约闭包固定后，并在值进入 union-form 的具体站点执行。
+
+仍待明确：
+
+- 当某个进入站点上有多个 member 同时匹配时，是否直接报歧义错误。
+- 或是否按归一化后的声明顺序选择 active variant。
 
 ## 8 若后续采纳，需要更新的主规范
 
