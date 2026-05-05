@@ -9119,6 +9119,7 @@ static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
     FengCliProjectContext context = {0};
     char *doc_resolved = NULL;
     FengSlice seen[64];
+    char *seen_storage[64] = {0};
     size_t seen_count = 0U;
     size_t i;
     bool ok = true;
@@ -9194,7 +9195,17 @@ static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
                         }
                         if (!already_seen) {
                             if (seen_count < 64U) {
-                                seen[seen_count++] = next_seg;
+                                char *owned_seg = dup_range(next_seg.data,
+                                                            next_seg.data + next_seg.length);
+
+                                if (owned_seg == NULL) {
+                                    ok = false;
+                                    break;
+                                }
+                                seen_storage[seen_count] = owned_seg;
+                                seen[seen_count].data = owned_seg;
+                                seen[seen_count].length = next_seg.length;
+                                ++seen_count;
                             }
                             ok = append_completion_item(json, first, next_seg, "module", 9);
                         }
@@ -9208,6 +9219,9 @@ static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
 
     free(doc_resolved);
     feng_cli_project_context_dispose(&context);
+    for (i = 0U; i < seen_count; ++i) {
+        free(seen_storage[i]);
+    }
     return ok;
 }
 

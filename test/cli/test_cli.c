@@ -5511,6 +5511,131 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
     free(remove_error);
 }
 
+/* Tests the edit-time project-scan fallback used for incomplete `use` paths.
+ * Before the fix, deduplication stored slices into freed file buffers, so
+ * `use foo.` could return duplicate `bar` entries when several modules shared
+ * the `foo.bar.*` prefix. */
+static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"usepath_scan_dedup_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kASource =
+        "pu mod foo.bar.a;\n"
+        "\n"
+        "pu fn alpha(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    static const char *kBSource =
+        "pu mod foo.bar.b;\n"
+        "\n"
+        "pu fn beta(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    static const char *kCSource =
+        "pu mod foo.bar.c;\n"
+        "\n"
+        "pu fn gamma(): int {\n"
+        "    return 3;\n"
+        "}\n";
+    static const char *kMainSource =
+        "mod foo.bar.current;\n"
+        "use foo.\n";
+    char template_path[] = "/tmp/feng_lsp_usepath_scan_dedup_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *a_path;
+    char *b_path;
+    char *c_path;
+    char *main_path;
+    char *main_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int comp_line;
+    unsigned int comp_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    a_path = path_join(src_dir, "a.ff");
+    b_path = path_join(src_dir, "b.ff");
+    c_path = path_join(src_dir, "c.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(a_path, kASource);
+    write_text_file(b_path, kBSource);
+    write_text_file(c_path, kCSource);
+    write_text_file(main_path, kMainSource);
+
+    find_line_character(kMainSource, "use foo.", 8U, &comp_line, &comp_char);
+
+    main_uri = file_uri_from_path(main_path);
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                "\"method\":\"textDocument/completion\","
+                                "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                main_uri,
+                                comp_line,
+                                comp_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(output, "\"label\":\"bar\"") != NULL);
+    ASSERT(count_substring(output, "\"label\":\"bar\"") == 1U);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(main_uri);
+    free(main_path);
+    free(c_path);
+    free(b_path);
+    free(a_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Tests that after a `use` statement imports a module, the exported types and
  * functions from that module appear as completion candidates in identifier
  * position inside the importing file's function bodies.  This exercises the
@@ -5792,6 +5917,7 @@ int main(void) {
     test_lsp_hover_and_definition_local_var_rhs();
     test_lsp_use_path_completion();
     test_lsp_use_path_completion_deduplicates_segments();
+    test_lsp_use_path_completion_deduplicates_segments_in_project_scan();
     test_lsp_imported_type_completion_after_use();
     test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
