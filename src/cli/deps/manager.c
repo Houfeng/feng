@@ -190,6 +190,54 @@ static bool set_remote_install_errorf(FengCliProjectError *error,
     return ok;
 }
 
+static bool set_remote_install_internal_errorf(FengCliProjectError *error,
+                                               const char *name,
+                                               const char *version,
+                                               const char *fmt,
+                                               ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *reason;
+    bool ok;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          NULL,
+                          0U,
+                          "failed to install %s@%s: unknown error",
+                          name,
+                          version);
+    }
+
+    reason = (char *)malloc((size_t)needed + 1U);
+    if (reason == NULL) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          NULL,
+                          0U,
+                          "failed to install %s@%s: out of memory",
+                          name,
+                          version);
+    }
+    vsnprintf(reason, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    ok = set_errorf(error,
+                    NULL,
+                    0U,
+                    "failed to install %s@%s: %s",
+                    name,
+                    version,
+                    reason);
+    free(reason);
+    return ok;
+}
+
 static bool path_is_absolute(const char *path) {
     return path != NULL && path[0] == '/';
 }
@@ -262,10 +310,9 @@ static bool mkdir_p(const char *path, FengCliProjectError *error) {
             if (mkdir(mutable_path, 0775) != 0 && errno != EEXIST) {
                 free(mutable_path);
                 return set_errorf(error,
-                                  path,
+                                  NULL,
                                   0U,
-                                  "failed to create directory %s: %s",
-                                  path,
+                                  "failed to create directory: %s",
                                   strerror(errno));
             }
             mutable_path[index] = '/';
@@ -274,10 +321,9 @@ static bool mkdir_p(const char *path, FengCliProjectError *error) {
     if (mkdir(mutable_path, 0775) != 0 && errno != EEXIST) {
         free(mutable_path);
         return set_errorf(error,
-                          path,
+                          NULL,
                           0U,
-                          "failed to create directory %s: %s",
-                          path,
+                          "failed to create directory: %s",
                           strerror(errno));
     }
     free(mutable_path);
@@ -940,16 +986,23 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
         return false;
     }
     if (!mkdir_p(cache_root, error)) {
-        return false;
+        bool ok = set_remote_install_internal_errorf(error,
+                                                     name,
+                                                     version,
+                                                     "%s",
+                                                     error->message != NULL
+                                                         ? error->message
+                                                         : "failed to prepare cache directory");
+        return ok;
     }
     bundle_name = dup_printf("%s-%s.fb", name, version);
     if (bundle_name == NULL) {
-        return set_errorf(error, cache_root, 0U, "out of memory");
+        return set_remote_install_internal_errorf(error, name, version, "out of memory");
     }
     bundle_path = path_join(cache_root, bundle_name);
     free(bundle_name);
     if (bundle_path == NULL) {
-        return set_errorf(error, cache_root, 0U, "out of memory");
+        return set_remote_install_internal_errorf(error, name, version, "out of memory");
     }
 
     if (!state->force_remote && access(bundle_path, F_OK) == 0) {
@@ -958,7 +1011,7 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                                    origin_line,
                                    name,
                                    version,
-                                   bundle_path,
+                                   "cached bundle",
                                    error)) {
             *out_bundle_path = bundle_path;
             return true;
@@ -986,17 +1039,17 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
 
         if (temp_path == NULL) {
             free(bundle_path);
-            return set_errorf(error, cache_root, 0U, "out of memory");
+            return set_remote_install_internal_errorf(error, name, version, "out of memory");
         }
         temp_fd = mkstemp(temp_path);
         if (temp_fd < 0) {
             free(temp_path);
             free(bundle_path);
-            return set_errorf(error,
-                              bundle_path,
-                              0U,
-                              "failed to create temporary cache file: %s",
-                              strerror(errno));
+            return set_remote_install_internal_errorf(error,
+                                                      name,
+                                                      version,
+                                                      "failed to create temporary cache file: %s",
+                                                      strerror(errno));
         }
         close(temp_fd);
 
@@ -1012,7 +1065,7 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                 unlink(temp_path);
                 free(temp_path);
                 free(bundle_path);
-                return set_errorf(error, registry, 0U, "out of memory");
+                return set_remote_install_internal_errorf(error, name, version, "out of memory");
             }
             if (!download_with_curl(url, temp_path, &download_reason)) {
                 bool ok = set_remote_install_errorf(error,
@@ -1043,7 +1096,7 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                 unlink(temp_path);
                 free(temp_path);
                 free(bundle_path);
-                return set_errorf(error, registry, 0U, "out of memory");
+                return set_remote_install_internal_errorf(error, name, version, "out of memory");
             }
             source_path = path_join(packages_dir, source_name);
             free(source_name);
@@ -1052,7 +1105,7 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                 unlink(temp_path);
                 free(temp_path);
                 free(bundle_path);
-                return set_errorf(error, registry, 0U, "out of memory");
+                return set_remote_install_internal_errorf(error, name, version, "out of memory");
             }
             {
                 FengCliProjectError copy_error = {0};
@@ -1084,11 +1137,11 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
             unlink(temp_path);
             free(temp_path);
             free(bundle_path);
-            return set_errorf(error,
-                              bundle_path,
-                              0U,
-                              "failed to publish cached bundle: %s",
-                              strerror(errno));
+            return set_remote_install_internal_errorf(error,
+                                                      name,
+                                                      version,
+                                                      "failed to publish cached bundle: %s",
+                                                      strerror(errno));
         }
         free(temp_path);
     }
@@ -1098,7 +1151,7 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                                 origin_line,
                                 name,
                                 version,
-                                bundle_path,
+                                "downloaded bundle",
                                 error)) {
         unlink(bundle_path);
         free(bundle_path);

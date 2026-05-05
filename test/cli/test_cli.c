@@ -409,6 +409,33 @@ static int run_lsp_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
+static char *read_text_stream(FILE *file);
+
+static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
+    int saved_stderr;
+    FILE *errors = tmpfile();
+    int rc;
+    char *captured;
+
+    ASSERT(errors != NULL);
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
+
+    rc = feng_cli_deps_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    captured = read_text_stream(errors);
+    fclose(errors);
+    if (out_rc != NULL) {
+        *out_rc = rc;
+    }
+    return captured;
+}
+
 static char *read_text_stream(FILE *file) {
     long length;
     char *content;
@@ -4395,6 +4422,69 @@ static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
     feng_cli_project_error_dispose(&error);
 }
 
+static void test_deps_install_hides_cache_dir_prefix_in_error_output(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_cache_prefix_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *feng_path;
+    char *saved_home = NULL;
+    char *stderr_text;
+    char *remove_error = NULL;
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+    feng_path = path_join(workspace_dir, ".feng");
+
+    mkdir_p(project_dir);
+    write_text_file(feng_path, "not-a-directory\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "remote_dep: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    {
+        char *argv[] = { "install", project_dir };
+        stderr_text = run_deps_capture_stderr(2, argv, &rc);
+    }
+
+    ASSERT(rc != 0);
+    ASSERT(strstr(stderr_text, "failed to install remote_dep@1.0.0") != NULL);
+    ASSERT(strstr(stderr_text, ".feng/cache:") == NULL);
+    ASSERT(strstr(stderr_text, "/.feng/cache") == NULL);
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    free(stderr_text);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(feng_path);
+    free(manifest_path);
+    free(project_dir);
+}
+
 static void test_deps_install_force_refreshes_cached_bundle(void) {
     char template_path[] = "/tmp/feng_cli_deps_install_force_XXXXXX";
     char *workspace_dir;
@@ -4974,6 +5064,7 @@ int main(void) {
     test_deps_install_populates_cache_from_registry();
     test_deps_install_reports_download_failure_with_reason();
     test_deps_install_rejects_invalid_downloaded_bundle();
+    test_deps_install_hides_cache_dir_prefix_in_error_output();
     test_deps_install_force_refreshes_cached_bundle();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();
