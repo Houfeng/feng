@@ -23,6 +23,13 @@ function assertLanguageIcon(id, expectedExtensions, expectedIconPath) {
 }
 
 const extensionRoot = path.join(__dirname, '..');
+const commands = packageJson.contributes && Array.isArray(packageJson.contributes.commands)
+    ? packageJson.contributes.commands
+    : [];
+const restartCommand = commands.find(command => command.command === 'feng.restartLanguageServer');
+const fengDefaults = packageJson.contributes && packageJson.contributes.configurationDefaults
+    ? packageJson.contributes.configurationDefaults['[feng]']
+    : null;
 
 assertLanguageIcon('feng', ['.feng', '.ff'], './icons/feng-ff.svg');
 assertLanguageIcon('feng-manifest', ['.fm'], './icons/feng-fm.svg');
@@ -37,5 +44,11 @@ for (const iconPath of [
 ]) {
     assert(fs.existsSync(path.join(extensionRoot, iconPath)), `expected icon asset ${iconPath}`);
 }
+
+assert(restartCommand, 'expected Feng language server restart command contribution');
+assert.strictEqual(restartCommand.title, 'Feng: Restart Language Server');
+assert(fengDefaults, 'expected Feng language configuration defaults');
+assert.strictEqual(fengDefaults['editor.quickSuggestions'].other, true);
+assert.strictEqual(fengDefaults['editor.suggestOnTriggerCharacters'], true);
 
 console.log('icon metadata tests passed');

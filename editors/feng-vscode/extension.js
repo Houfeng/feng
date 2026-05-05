@@ -5,7 +5,9 @@ const path = require('path');
 
 const { formatFengSource, formatFengManifestSource } = require('./formatter');
 
-let client;
+const RESTART_LANGUAGE_SERVER_COMMAND = 'feng.restartLanguageServer';
+
+let languageServerController;
 
 function getExecutablePathConfig(vscodeApi = vscode) {
     const config = vscodeApi.workspace.getConfiguration('feng');
@@ -95,6 +97,68 @@ function createLanguageClient({ executablePath, workspaceRoot, hasExplicitSettin
             documentSelector: getLanguageServiceDocumentSelector()
         }
     );
+}
+
+function disposeDisposable(disposable) {
+    if (disposable != null && typeof disposable.dispose === 'function') {
+        disposable.dispose();
+    }
+}
+
+function createCompositeDisposable(disposables) {
+    return {
+        dispose() {
+            while (disposables.length > 0) {
+                disposeDisposable(disposables.pop());
+            }
+        }
+    };
+}
+
+function updateLanguageServerStatusBar(statusBarItem, state) {
+    if (statusBarItem == null) {
+        return;
+    }
+
+    statusBarItem.command = RESTART_LANGUAGE_SERVER_COMMAND;
+    if (state === 'starting') {
+        statusBarItem.text = '$(sync~spin) Feng LSP';
+        statusBarItem.tooltip = 'Starting Feng language server';
+    } else if (state === 'restarting') {
+        statusBarItem.text = '$(sync~spin) Feng LSP';
+        statusBarItem.tooltip = 'Restarting Feng language server';
+    } else if (state === 'running') {
+        statusBarItem.text = '$(check) Feng LSP';
+        statusBarItem.tooltip = 'Feng language server is running. Click to restart.';
+    } else if (state === 'fallback') {
+        statusBarItem.text = '$(warning) Feng LSP';
+        statusBarItem.tooltip = 'Feng language server has no capabilities. Click to restart.';
+    } else if (state === 'failed') {
+        statusBarItem.text = '$(warning) Feng LSP';
+        statusBarItem.tooltip = 'Feng language server failed to start. Click to retry.';
+    } else {
+        statusBarItem.text = '$(debug-restart) Feng LSP';
+        statusBarItem.tooltip = 'Feng language server is stopped. Click to start.';
+    }
+}
+
+function createLanguageServerStatusBar(vscodeApi = vscode) {
+    let statusBarItem;
+
+    if (vscodeApi.window == null || typeof vscodeApi.window.createStatusBarItem !== 'function') {
+        return undefined;
+    }
+
+    statusBarItem = vscodeApi.window.createStatusBarItem(
+        vscodeApi.StatusBarAlignment != null ? vscodeApi.StatusBarAlignment.Right : undefined,
+        100
+    );
+    statusBarItem.name = 'Feng Language Server';
+    updateLanguageServerStatusBar(statusBarItem, 'starting');
+    if (typeof statusBarItem.show === 'function') {
+        statusBarItem.show();
+    }
+    return statusBarItem;
 }
 
 function hasAnyLspCapability(capabilities) {
@@ -288,14 +352,15 @@ function createDiagnosticController({ collection, runCheckEntries }) {
 function registerLegacyDiagnostics(context,
                                    vscodeApi = vscode,
                                    runCheckEntries = runCheck) {
+    const disposables = [];
     const collection = vscodeApi.languages.createDiagnosticCollection('feng');
-    context.subscriptions.push(collection);
+    disposables.push(collection);
     const diagnostics = createDiagnosticController({
         collection,
         runCheckEntries
     });
 
-    context.subscriptions.push(
+    disposables.push(
         vscodeApi.workspace.onDidOpenTextDocument(diagnostics.checkDocument),
         vscodeApi.workspace.onDidChangeTextDocument(event => {
             diagnostics.clearDocument(event.document);
@@ -307,6 +372,10 @@ function registerLegacyDiagnostics(context,
     vscodeApi.workspace.textDocuments.forEach(document => {
         void diagnostics.checkDocument(document);
     });
+
+    const disposable = createCompositeDisposable(disposables);
+    context.subscriptions.push(disposable);
+    return disposable;
 }
 
 function buildLspStartupWarning(error) {
@@ -329,44 +398,154 @@ function buildLspCapabilityWarning() {
     return 'Feng LSP reported no language capabilities, falling back to legacy diagnostics. Check that the extension is launching a current Feng executable.';
 }
 
-async function activate(context) {
-    const workspaceRoot = getPrimaryWorkspaceRoot(vscode);
-    const executablePathConfig = getExecutablePathConfig(vscode);
+function createLanguageServerController({
+    context,
+    vscodeApi = vscode,
+    loadLanguageClientModuleFn = loadLanguageClientModule,
+    runCheckEntries = runCheck,
+    statusBarItem
+}) {
+    let activeClient;
+    let legacyDiagnostics;
+    let lifecycle = Promise.resolve();
 
-    registerFormatter(context, vscode);
-    try {
-        client = createLanguageClient({
-            executablePath: executablePathConfig.executablePath,
-            workspaceRoot,
-            hasExplicitSetting: executablePathConfig.hasExplicitSetting,
-            languageClientModule: loadLanguageClientModule()
-        });
-        await client.start();
-    } catch (error) {
-        client = undefined;
-        if (vscode.window != null && typeof vscode.window.showWarningMessage === 'function') {
-            void vscode.window.showWarningMessage(buildLspStartupWarning(error));
+    function registerFallbackDiagnostics() {
+        if (legacyDiagnostics === undefined) {
+            legacyDiagnostics = registerLegacyDiagnostics(context, vscodeApi, runCheckEntries);
         }
-        registerLegacyDiagnostics(context, vscode, runCheck);
+    }
+
+    function disposeFallbackDiagnostics() {
+        disposeDisposable(legacyDiagnostics);
+        legacyDiagnostics = undefined;
+    }
+
+    async function stopActiveClient() {
+        const clientToStop = activeClient;
+
+        activeClient = undefined;
+        if (clientToStop != null && typeof clientToStop.stop === 'function') {
+            await clientToStop.stop();
+        }
+    }
+
+    async function startClient() {
+        const workspaceRoot = getPrimaryWorkspaceRoot(vscodeApi);
+        const executablePathConfig = getExecutablePathConfig(vscodeApi);
+        let nextClient;
+
+        updateLanguageServerStatusBar(statusBarItem, 'starting');
+        try {
+            nextClient = createLanguageClient({
+                executablePath: executablePathConfig.executablePath,
+                workspaceRoot,
+                hasExplicitSetting: executablePathConfig.hasExplicitSetting,
+                languageClientModule: loadLanguageClientModuleFn()
+            });
+            await nextClient.start();
+        } catch (error) {
+            activeClient = undefined;
+            registerFallbackDiagnostics();
+            updateLanguageServerStatusBar(statusBarItem, 'failed');
+            if (vscodeApi.window != null && typeof vscodeApi.window.showWarningMessage === 'function') {
+                void vscodeApi.window.showWarningMessage(buildLspStartupWarning(error));
+            }
+            return false;
+        }
+
+        activeClient = nextClient;
+        if (!hasAnyLspCapability(nextClient.initializeResult != null ? nextClient.initializeResult.capabilities : null)) {
+            registerFallbackDiagnostics();
+            updateLanguageServerStatusBar(statusBarItem, 'fallback');
+            if (vscodeApi.window != null && typeof vscodeApi.window.showWarningMessage === 'function') {
+                void vscodeApi.window.showWarningMessage(buildLspCapabilityWarning());
+            }
+            return false;
+        }
+
+        disposeFallbackDiagnostics();
+        updateLanguageServerStatusBar(statusBarItem, 'running');
+        return true;
+    }
+
+    function serialize(operation) {
+        lifecycle = lifecycle.then(operation, operation);
+        return lifecycle;
+    }
+
+    async function start() {
+        return startClient();
+    }
+
+    async function restart() {
+        return serialize(async () => {
+            const restarted = await (async () => {
+                updateLanguageServerStatusBar(statusBarItem, 'restarting');
+                await stopActiveClient();
+                disposeFallbackDiagnostics();
+                return startClient();
+            })();
+
+            if (restarted && vscodeApi.window != null && typeof vscodeApi.window.showInformationMessage === 'function') {
+                void vscodeApi.window.showInformationMessage('Feng language server restarted.');
+            }
+            return restarted;
+        });
+    }
+
+    async function stop() {
+        return serialize(async () => {
+            updateLanguageServerStatusBar(statusBarItem, 'stopped');
+            disposeFallbackDiagnostics();
+            await stopActiveClient();
+        });
+    }
+
+    return {
+        start,
+        restart,
+        stop,
+        get client() {
+            return activeClient;
+        }
+    };
+}
+
+function registerLanguageServerRestartCommand(context, controller, vscodeApi = vscode) {
+    if (vscodeApi.commands == null || typeof vscodeApi.commands.registerCommand !== 'function') {
         return;
     }
+    context.subscriptions.push(
+        vscodeApi.commands.registerCommand(RESTART_LANGUAGE_SERVER_COMMAND, () => controller.restart())
+    );
+}
 
-    if (!hasAnyLspCapability(client.initializeResult != null ? client.initializeResult.capabilities : null)) {
-        if (vscode.window != null && typeof vscode.window.showWarningMessage === 'function') {
-            void vscode.window.showWarningMessage(buildLspCapabilityWarning());
-        }
-        registerLegacyDiagnostics(context, vscode, runCheck);
+async function activate(context) {
+    const statusBarItem = createLanguageServerStatusBar(vscode);
+
+    registerFormatter(context, vscode);
+    if (statusBarItem !== undefined) {
+        context.subscriptions.push(statusBarItem);
     }
+    languageServerController = createLanguageServerController({
+        context,
+        vscodeApi: vscode,
+        loadLanguageClientModuleFn: loadLanguageClientModule,
+        runCheckEntries: runCheck,
+        statusBarItem
+    });
+    registerLanguageServerRestartCommand(context, languageServerController, vscode);
+    await languageServerController.start();
 }
 
 function deactivate() {
-    if (client === undefined) {
+    if (languageServerController === undefined) {
         return undefined;
     }
 
-    const activeClient = client;
-    client = undefined;
-    return activeClient.stop();
+    const controller = languageServerController;
+    languageServerController = undefined;
+    return controller.stop();
 }
 
 module.exports = {
@@ -376,8 +555,11 @@ module.exports = {
         buildLspCapabilityWarning,
         buildLspStartupWarning,
         buildCheckCommand,
+        createCompositeDisposable,
         createLanguageClient,
         createDiagnosticController,
+        createLanguageServerController,
+        createLanguageServerStatusBar,
         createServerOptions,
         entriesToDiagnostics,
         filterEntriesForPath,
@@ -387,7 +569,10 @@ module.exports = {
         getPrimaryWorkspaceRoot,
         hasAnyLspCapability,
         isCheckableFengDocument,
+        registerLanguageServerRestartCommand,
         registerLegacyDiagnostics,
+        updateLanguageServerStatusBar,
+        RESTART_LANGUAGE_SERVER_COMMAND,
         resolveExecutablePath,
         sameFilePath,
         formatDocumentSource

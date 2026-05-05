@@ -17,10 +17,6 @@
   "scripts": {
     "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/icon.test.js && node ./test/syntax.test.js"
   },
-  "activationEvents": [
-    "onLanguage:feng",
-    "onLanguage:feng-manifest"
-  ],
   "main": "./extension.js",
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -39,6 +35,23 @@
     "ft"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "feng.restartLanguageServer",
+        "title": "Feng: Restart Language Server",
+        "category": "Feng"
+      }
+    ],
+    "configurationDefaults": {
+      "[feng]": {
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": false
+        },
+        "editor.suggestOnTriggerCharacters": true
+      }
+    },
     "languages": [
       {
         "id": "feng",

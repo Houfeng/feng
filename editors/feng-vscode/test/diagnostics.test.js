@@ -13,8 +13,11 @@ function createDisposable() {
 
 function createMockVscode(options = {}) {
     const recorder = {
+        commands: [],
         diagnosticCollections: [],
         formattingProviders: [],
+        informationMessages: [],
+        statusBarItems: [],
         warningMessages: []
     };
     const workspaceRoot = options.workspaceRoot || null;
@@ -48,6 +51,16 @@ function createMockVscode(options = {}) {
         DiagnosticSeverity: {
             Error: 0,
             Information: 1
+        },
+        StatusBarAlignment: {
+            Left: 1,
+            Right: 2
+        },
+        commands: {
+            registerCommand(command, callback) {
+                recorder.commands.push({ command, callback });
+                return createDisposable();
+            }
         },
         languages: {
             createDiagnosticCollection(name) {
@@ -88,6 +101,31 @@ function createMockVscode(options = {}) {
             }
         },
         window: {
+            createStatusBarItem(alignment, priority) {
+                const item = {
+                    alignment,
+                    priority,
+                    command: undefined,
+                    name: undefined,
+                    text: undefined,
+                    tooltip: undefined,
+                    showCalls: 0,
+                    disposeCalls: 0,
+                    show() {
+                        this.showCalls += 1;
+                    },
+                    dispose() {
+                        this.disposeCalls += 1;
+                    }
+                };
+
+                recorder.statusBarItems.push(item);
+                return item;
+            },
+            showInformationMessage(message) {
+                recorder.informationMessages.push(message);
+                return Promise.resolve(undefined);
+            },
             showWarningMessage(message) {
                 recorder.warningMessages.push(message);
                 return Promise.resolve(undefined);
@@ -101,6 +139,8 @@ function createMockVscode(options = {}) {
 function createMockLanguageClientModule(options = {}) {
     const recorder = {
         constructorArgs: null,
+        constructorArgsList: [],
+        clients: [],
         startCalls: 0,
         stopCalls: 0
     };
@@ -108,7 +148,11 @@ function createMockLanguageClientModule(options = {}) {
     class MockLanguageClient {
         constructor(id, name, serverOptions, clientOptions) {
             recorder.constructorArgs = { id, name, serverOptions, clientOptions };
-            this.initializeResult = options.initializeResult;
+            recorder.constructorArgsList.push(recorder.constructorArgs);
+            recorder.clients.push(this);
+            this.initializeResult = Array.isArray(options.initializeResults)
+                ? options.initializeResults[Math.min(recorder.clients.length - 1, options.initializeResults.length - 1)]
+                : options.initializeResult;
         }
 
         async start() {
@@ -212,9 +256,11 @@ async function run() {
         hasAnyLspCapability,
         isCheckableFengDocument,
         formatDocumentSource,
+        RESTART_LANGUAGE_SERVER_COMMAND,
         resolveExecutablePath
     } = extension.__test__;
 
+    assert.strictEqual(RESTART_LANGUAGE_SERVER_COMMAND, 'feng.restartLanguageServer');
     assert.strictEqual(resolveExecutablePath('./build/bin/feng', '/workspace/demo'), path.join('/workspace/demo', './build/bin/feng'));
     assert.strictEqual(resolveExecutablePath('/usr/local/bin/feng', '/workspace/demo'), '/usr/local/bin/feng');
     assert.strictEqual(resolveExecutablePath('feng', '/workspace/demo', false), 'feng');
@@ -443,9 +489,50 @@ async function run() {
             });
             assert.strictEqual(recorder.formattingProviders.length, 1);
             assert.strictEqual(recorder.diagnosticCollections.length, 0);
+            assert.strictEqual(recorder.commands.length, 1);
+            assert.strictEqual(recorder.commands[0].command, 'feng.restartLanguageServer');
+            assert.strictEqual(recorder.statusBarItems.length, 1);
+            assert.strictEqual(recorder.statusBarItems[0].command, 'feng.restartLanguageServer');
+            assert.strictEqual(recorder.statusBarItems[0].text, '$(check) Feng LSP');
 
             await extensionWithLsp.deactivate();
             assert.strictEqual(mockClient.recorder.stopCalls, 1);
+        } finally {
+            loaded.restore();
+        }
+    }
+
+    {
+        const { mockVscode, recorder } = createMockVscode({
+            workspaceRoot: '/workspace/demo',
+            executablePath: './build/bin/feng'
+        });
+        const mockClient = createMockLanguageClientModule({
+            initializeResult: {
+                capabilities: {
+                    completionProvider: true
+                }
+            }
+        });
+        const loaded = loadExtensionModule({
+            mockVscode,
+            mockLanguageClientModule: mockClient.module,
+            keepPatchedLoad: true
+        });
+        const extensionWithRestart = loaded.extension;
+
+        try {
+            await extensionWithRestart.activate({ subscriptions: [] });
+            await recorder.commands[0].callback();
+
+            assert.strictEqual(mockClient.recorder.startCalls, 2);
+            assert.strictEqual(mockClient.recorder.stopCalls, 1);
+            assert.strictEqual(mockClient.recorder.constructorArgsList.length, 2);
+            assert.strictEqual(recorder.statusBarItems[0].text, '$(check) Feng LSP');
+            assert.deepStrictEqual(recorder.informationMessages, ['Feng language server restarted.']);
+
+            await extensionWithRestart.deactivate();
+            assert.strictEqual(mockClient.recorder.stopCalls, 2);
         } finally {
             loaded.restore();
         }

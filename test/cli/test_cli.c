@@ -2202,9 +2202,20 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
         "    us\n"
         "    user.say(\"Hello World\");\n"
         "}\n";
+    static const char *kMainPrefixBeforeClose =
+        "mod test.lsp.completionmainprefix;\n"
+        "\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    puts(\"hello, examples\");\n"
+        "    p\n"
+        "}\n";
     const char *member_labels[] = {"name", "age", "say"};
     const char *scope_labels[] = {"args", "user", "puts", "User", "hello_world_example"};
     const char *prefix_labels[] = {"user", "User", "puts", "hello_world_example"};
+    const char *main_prefix_labels[] = {"args", "puts", "main"};
 
     assert_lsp_completion_contains_labels(kMemberBeforeNextStmt,
                                           "user.\n    user.say",
@@ -2221,6 +2232,11 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
                                           2U,
                                           prefix_labels,
                                           sizeof(prefix_labels) / sizeof(prefix_labels[0]));
+    assert_lsp_completion_contains_labels(kMainPrefixBeforeClose,
+                                          "p\n}\n",
+                                          1U,
+                                          main_prefix_labels,
+                                          sizeof(main_prefix_labels) / sizeof(main_prefix_labels[0]));
 }
 
 static void test_lsp_member_completion_infers_constructor_call_overloads(void) {

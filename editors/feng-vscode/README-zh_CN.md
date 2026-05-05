@@ -7,6 +7,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 - 语法高亮：覆盖 Feng 常见关键字、字符串、注释、赋值与复合运算符，以及基础语法结构，并为 `.fm` 文件提供节标题与 `#` 注释高亮。
 - 文档格式化：统一缩进、空白和常见语法间距，适合日常编辑时快速整理代码；其中包含复合赋值与位移运算符的空格规范；对 `.fm` 文件会额外按节对齐 `key: "value"` 项。
 - Language Server 客户端：对于 Feng 源文件，扩展会通过已配置的 Feng 可执行文件启动 `feng lsp`，并用 VS Code 标准 Language Client 连接。hover、completion、definition、references、rename、diagnostics 以及后续语言能力都从当前 CLI 暴露出来的 LSP capability 集合获取。
+- Language Server 重启：命令面板中的 `Feng: Restart Language Server` 命令和底部 Feng LSP 状态条入口都会停止当前语言服务，并按最新 `feng.executablePath` 设置重新启动 `feng lsp`。
 - 诊断兼容回退：如果当前 Feng CLI 还没有暴露任何 LSP capability，扩展会临时保留现有的 `check` 诊断链路，避免打开/保存时的基础校验回退。
 - 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会分别回退到 `.feng`/`.ff` 源文件、`.fm` 清单、`.fb` 包文件与 `.ft` 符号表文件对应的内置 Feng 图标。
 
@@ -31,7 +32,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 
 ```json
 {
-	"feng.executablePath": "./build/bin/feng"
+  "feng.executablePath": "./build/bin/feng"
 }
 ```
 
@@ -63,5 +64,6 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 - Feng 源文件通过标准 VS Code Language Client 启动 `feng lsp`。
 - 默认执行程序名为 `feng`，按系统 `PATH` 查找。
 - 如果你的 CLI 不在默认路径中，请通过 `feng.executablePath` 指定可执行文件位置。
+- 重新构建 CLI 或修改执行程序配置后，可以在命令面板执行 `Feng: Restart Language Server`，也可以点击底部 Feng LSP 状态条入口重启语言服务。
 - 内置 formatter 与 TextMate grammar 保持不变；只有语言服务能力改走 LSP。
 - 如果当前安装的 CLI 还返回空的 LSP capability 集合，扩展会临时保留旧的诊断实现：项目文件走 `feng check --format json <file>`，独立文件走 `feng tool check <file>`。
