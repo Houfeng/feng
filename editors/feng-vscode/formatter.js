@@ -93,22 +93,34 @@ function classifySymbol(value) {
 function pushBlockComment(source, start, tokens) {
     let index = start + 2;
     let fragment = '/*';
+    let isFirstLine = true;
 
     while (index < source.length) {
         const current = source[index];
         const next = index + 1 < source.length ? source[index + 1] : '';
 
         if (current === '\n') {
-            tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+            if (isFirstLine) {
+                tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+            } else {
+                const stripped = fragment.replace(/^[\t ]+/, '').replace(/[\t ]+$/g, '');
+                tokens.push({ type: 'comment', value: stripped, commentRole: 'body' });
+            }
             tokens.push({ type: 'newline' });
             fragment = '';
+            isFirstLine = false;
             index += 1;
             continue;
         }
 
         if (current === '*' && next === '/') {
             fragment += '*/';
-            tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+            if (isFirstLine) {
+                tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+            } else {
+                const stripped = fragment.replace(/^[\t ]+/, '').replace(/[\t ]+$/g, '');
+                tokens.push({ type: 'comment', value: stripped, commentRole: 'body' });
+            }
             return index + 2;
         }
 
@@ -117,7 +129,12 @@ function pushBlockComment(source, start, tokens) {
     }
 
     if (fragment.length > 0) {
-        tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+        if (isFirstLine) {
+            tokens.push({ type: 'comment', value: fragment.replace(/[\t ]+$/g, '') });
+        } else {
+            const stripped = fragment.replace(/^[\t ]+/, '').replace(/[\t ]+$/g, '');
+            tokens.push({ type: 'comment', value: stripped, commentRole: 'body' });
+        }
     }
 
     return index;
@@ -537,7 +554,14 @@ function formatFengSource(source, options = {}) {
         const effectiveIndent = Math.max(delimiterStack.length - leadingClosers, 0);
         const formattedLine = formatLineTokens(tokens, previousSignificantToken);
 
-        formattedLines.push(indentUnit.repeat(effectiveIndent) + formattedLine.text);
+        const isBodyCommentLine = tokens.length === 1 &&
+            tokens[0].type === 'comment' &&
+            tokens[0].commentRole === 'body';
+        const indentPrefix = isBodyCommentLine
+            ? (formattedLine.text.length > 0 ? indentUnit.repeat(effectiveIndent) + ' ' : '')
+            : indentUnit.repeat(effectiveIndent);
+
+        formattedLines.push(indentPrefix + formattedLine.text);
 
         if (formattedLine.lastSignificantToken != null) {
             previousSignificantToken = formattedLine.lastSignificantToken;

@@ -62,6 +62,24 @@
           "match": "//.*$"
         },
         {
+          "name": "comment.block.documentation.feng",
+          "begin": "/\\*\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "match": "(@param)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+              "captures": {
+                "1": { "name": "keyword.other.documentation.tag.feng" },
+                "2": { "name": "variable.other.documentation.parameter.feng" }
+              }
+            },
+            {
+              "name": "keyword.other.documentation.tag.feng",
+              "match": "@[A-Za-z_][A-Za-z0-9_]*"
+            }
+          ]
+        },
+        {
           "name": "comment.block.feng",
           "begin": "/\\*",
           "end": "\\*/"

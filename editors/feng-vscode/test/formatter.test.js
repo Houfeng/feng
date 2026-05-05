@@ -59,4 +59,28 @@ runManifestCase(
     '[package]\nname: "demo"\ninvalid line\n# note\n'
 );
 
+runCase(
+    'preserves single-line block comment unchanged',
+    'fn test(): void {\n    let x = /* value */ 1;\n}\n',
+    'fn test(): void {\n    let x = /* value */ 1;\n}\n'
+);
+
+runCase(
+    'formats top-level doc comment with standard alignment',
+    '/**\n* Description\n* @param foo bar\n*/\nfn test(): void {}\n',
+    '/**\n * Description\n * @param foo bar\n */\nfn test(): void {}\n'
+);
+
+runCase(
+    'formats doc comment inside function body',
+    'fn outer(): void {\n/**\n* Does something\n* @param x the value\n*/\nlet y = 1;\n}\n',
+    'fn outer(): void {\n    /**\n     * Does something\n     * @param x the value\n     */\n    let y = 1;\n}\n'
+);
+
+runCase(
+    'formats doc comment with closing delimiter on its own line',
+    '/**\n* Summary line\n*\n* @return result\n*/\nfn get(): int {}\n',
+    '/**\n * Summary line\n *\n * @return result\n */\nfn get(): int {}\n'
+);
+
 console.log('formatter tests passed');
