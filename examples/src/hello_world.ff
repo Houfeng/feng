@@ -9,6 +9,7 @@ type User {
 
   /**
    * 测试
+   * @param msg 消息
    */
   fn say(msg: string): void {
     puts(msg);
@@ -20,7 +21,5 @@ fn hello_world_example(args: string[]): void {
     name: "Houfeng",
     age: 18
   };
-  
   user.say("Hello World: " + user.name);
-  
 }
