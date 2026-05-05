@@ -238,6 +238,97 @@ static bool set_remote_install_internal_errorf(FengCliProjectError *error,
     return ok;
 }
 
+static char *dup_project_error_detail(const FengCliProjectError *error) {
+    if (error == NULL || error->message == NULL) {
+        return dup_cstr("unknown error");
+    }
+    if (error->path != NULL && error->line > 0U) {
+        return dup_printf("%s:%u: %s", error->path, error->line, error->message);
+    }
+    if (error->path != NULL) {
+        return dup_printf("%s: %s", error->path, error->message);
+    }
+    return dup_cstr(error->message);
+}
+
+static bool set_local_dependency_errorf(FengCliProjectError *error,
+                                        const char *owner_manifest_path,
+                                        unsigned int line,
+                                        const char *dependency_name,
+                                        const char *dependency_value,
+                                        const char *fmt,
+                                        ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *reason;
+    bool ok;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          owner_manifest_path,
+                          line,
+                          "failed to validate local dependency %s declared as \"%s\": unknown error",
+                          dependency_name,
+                          dependency_value);
+    }
+
+    reason = (char *)malloc((size_t)needed + 1U);
+    if (reason == NULL) {
+        va_end(args_copy);
+        return set_errorf(error,
+                          owner_manifest_path,
+                          line,
+                          "failed to validate local dependency %s declared as \"%s\": out of memory",
+                          dependency_name,
+                          dependency_value);
+    }
+    vsnprintf(reason, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    ok = set_errorf(error,
+                    owner_manifest_path,
+                    line,
+                    "failed to validate local dependency %s declared as \"%s\": %s",
+                    dependency_name,
+                    dependency_value,
+                    reason);
+    free(reason);
+    return ok;
+}
+
+static bool wrap_local_dependency_error(FengCliProjectError *error,
+                                        const char *owner_manifest_path,
+                                        unsigned int line,
+                                        const char *dependency_name,
+                                        const char *dependency_value,
+                                        const FengCliProjectError *cause) {
+    char *detail = dup_project_error_detail(cause);
+    bool ok;
+
+    if (detail == NULL) {
+        return set_local_dependency_errorf(error,
+                                           owner_manifest_path,
+                                           line,
+                                           dependency_name,
+                                           dependency_value,
+                                           "unknown error");
+    }
+    ok = set_local_dependency_errorf(error,
+                                     owner_manifest_path,
+                                     line,
+                                     dependency_name,
+                                     dependency_value,
+                                     "%s",
+                                     detail);
+    free(detail);
+    return ok;
+}
+
 static bool path_is_absolute(const char *path) {
     return path != NULL && path[0] == '/';
 }
@@ -1263,7 +1354,12 @@ bool feng_cli_deps_validate_local_dependency(const char *owner_manifest_path,
                                    &child_manifest_path,
                                    &child_bundle_path,
                                    out_error)) {
-        return false;
+        return wrap_local_dependency_error(out_error,
+                                           owner_manifest_path,
+                                           dependency.line,
+                                           dependency_name,
+                                           dependency_value,
+                                           out_error);
     }
 
     if (child_bundle_path != NULL) {
@@ -1271,16 +1367,23 @@ bool feng_cli_deps_validate_local_dependency(const char *owner_manifest_path,
 
         if (!read_bundle_manifest(child_bundle_path, &bundle_manifest, out_error)) {
             free(child_bundle_path);
-            return false;
+            return wrap_local_dependency_error(out_error,
+                                               owner_manifest_path,
+                                               dependency.line,
+                                               dependency_name,
+                                               dependency_value,
+                                               out_error);
         }
         free(child_bundle_path);
         if (strcmp(bundle_manifest.name, dependency_name) != 0) {
-            bool ok = set_errorf(out_error,
-                                 owner_manifest_path,
-                                 0U,
-                                 "local dependency name mismatch: expected %s but found %s",
-                                 dependency_name,
-                                 bundle_manifest.name);
+            bool ok = set_local_dependency_errorf(out_error,
+                                                  owner_manifest_path,
+                                                  dependency.line,
+                                                  dependency_name,
+                                                  dependency_value,
+                                                  "dependency name mismatch: expected %s but found %s",
+                                                  dependency_name,
+                                                  bundle_manifest.name);
             feng_cli_project_manifest_dispose(&bundle_manifest);
             return ok;
         }
@@ -1293,24 +1396,33 @@ bool feng_cli_deps_validate_local_dependency(const char *owner_manifest_path,
 
         if (!read_project_manifest_from_disk(child_manifest_path, &child_manifest, out_error)) {
             free(child_manifest_path);
-            return false;
+            return wrap_local_dependency_error(out_error,
+                                               owner_manifest_path,
+                                               dependency.line,
+                                               dependency_name,
+                                               dependency_value,
+                                               out_error);
         }
         free(child_manifest_path);
         if (strcmp(child_manifest.name, dependency_name) != 0) {
-            bool ok = set_errorf(out_error,
-                                 owner_manifest_path,
-                                 0U,
-                                 "local dependency name mismatch: expected %s but found %s",
-                                 dependency_name,
-                                 child_manifest.name);
+            bool ok = set_local_dependency_errorf(out_error,
+                                                  owner_manifest_path,
+                                                  dependency.line,
+                                                  dependency_name,
+                                                  dependency_value,
+                                                  "dependency name mismatch: expected %s but found %s",
+                                                  dependency_name,
+                                                  child_manifest.name);
             feng_cli_project_manifest_dispose(&child_manifest);
             return ok;
         }
         if (child_manifest.target != FENG_COMPILE_TARGET_LIB) {
-            bool ok = set_errorf(out_error,
-                                 owner_manifest_path,
-                                 0U,
-                                 "local dependency project must use target: \"lib\"");
+            bool ok = set_local_dependency_errorf(out_error,
+                                                  owner_manifest_path,
+                                                  dependency.line,
+                                                  dependency_name,
+                                                  dependency_value,
+                                                  "local dependency project must use target: \"lib\"");
             feng_cli_project_manifest_dispose(&child_manifest);
             return ok;
         }
@@ -1375,7 +1487,12 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
                                            &child_bundle_path,
                                            out_error)) {
                 feng_cli_deps_manifest_dependency_list_dispose(dependencies, manifest->dependency_count);
-                return false;
+                return wrap_local_dependency_error(out_error,
+                                                   manifest_path,
+                                                   source->line,
+                                                   source->name,
+                                                   source->value,
+                                                   out_error);
             }
             if (child_bundle_path != NULL) {
                 FengCliProjectManifest bundle_manifest = {0};
@@ -1383,18 +1500,25 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
                 if (!read_bundle_manifest(child_bundle_path, &bundle_manifest, out_error)) {
                     free(child_bundle_path);
                     feng_cli_deps_manifest_dependency_list_dispose(dependencies, manifest->dependency_count);
-                    return false;
+                    return wrap_local_dependency_error(out_error,
+                                                       manifest_path,
+                                                       source->line,
+                                                       source->name,
+                                                       source->value,
+                                                       out_error);
                 }
                 if (strcmp(bundle_manifest.name, source->name) != 0) {
                     feng_cli_project_manifest_dispose(&bundle_manifest);
                     free(child_bundle_path);
                     feng_cli_deps_manifest_dependency_list_dispose(dependencies, manifest->dependency_count);
-                    return set_errorf(out_error,
-                                      manifest_path,
-                                      source->line,
-                                      "local dependency name mismatch: expected %s but found %s",
-                                      source->name,
-                                      bundle_manifest.name);
+                    return set_local_dependency_errorf(out_error,
+                                                       manifest_path,
+                                                       source->line,
+                                                       source->name,
+                                                       source->value,
+                                                       "dependency name mismatch: expected %s but found %s",
+                                                       source->name,
+                                                       bundle_manifest.name);
                 }
                 dest->value = dup_cstr(bundle_manifest.version);
                 feng_cli_project_manifest_dispose(&bundle_manifest);
@@ -1405,18 +1529,25 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
                 if (!read_project_manifest_from_disk(child_manifest_path, &child_manifest, out_error)) {
                     free(child_manifest_path);
                     feng_cli_deps_manifest_dependency_list_dispose(dependencies, manifest->dependency_count);
-                    return false;
+                    return wrap_local_dependency_error(out_error,
+                                                       manifest_path,
+                                                       source->line,
+                                                       source->name,
+                                                       source->value,
+                                                       out_error);
                 }
                 if (strcmp(child_manifest.name, source->name) != 0) {
                     feng_cli_project_manifest_dispose(&child_manifest);
                     free(child_manifest_path);
                     feng_cli_deps_manifest_dependency_list_dispose(dependencies, manifest->dependency_count);
-                    return set_errorf(out_error,
-                                      manifest_path,
-                                      source->line,
-                                      "local dependency name mismatch: expected %s but found %s",
-                                      source->name,
-                                      child_manifest.name);
+                    return set_local_dependency_errorf(out_error,
+                                                       manifest_path,
+                                                       source->line,
+                                                       source->name,
+                                                       source->value,
+                                                       "dependency name mismatch: expected %s but found %s",
+                                                       source->name,
+                                                       child_manifest.name);
                 }
                 dest->value = dup_cstr(child_manifest.version);
                 feng_cli_project_manifest_dispose(&child_manifest);
@@ -1563,7 +1694,12 @@ static bool resolve_project_dependencies(ResolveState *state,
                                            &child_bundle_path,
                                            error)) {
                 free(project_registry);
-                return false;
+                return wrap_local_dependency_error(error,
+                                                   manifest_path,
+                                                   dependency->line,
+                                                   dependency->name,
+                                                   dependency->value,
+                                                   error);
             }
             if (child_bundle_path != NULL) {
                 if (!resolve_bundle_node(state,
@@ -1575,7 +1711,12 @@ static bool resolve_project_dependencies(ResolveState *state,
                                          error)) {
                     free(child_bundle_path);
                     free(project_registry);
-                    return false;
+                    return wrap_local_dependency_error(error,
+                                                       manifest_path,
+                                                       dependency->line,
+                                                       dependency->name,
+                                                       dependency->value,
+                                                       error);
                 }
                 free(child_bundle_path);
             } else {
@@ -1591,11 +1732,13 @@ static bool resolve_project_dependencies(ResolveState *state,
                     if (child->visiting) {
                         free(child_manifest_path);
                         free(project_registry);
-                        return set_errorf(error,
-                                          manifest_path,
-                                          dependency->line,
-                                          "local dependency cycle detected at %s",
-                                          child->identity_path);
+                        return set_local_dependency_errorf(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           "local dependency cycle detected at %s",
+                                                           child->identity_path);
                     }
                 } else {
                     child = append_node(state,
@@ -1613,27 +1756,36 @@ static bool resolve_project_dependencies(ResolveState *state,
                     if (!read_project_manifest_from_disk(child_manifest_path, &child_manifest, error)) {
                         free(child_manifest_path);
                         free(project_registry);
-                        return false;
+                        return wrap_local_dependency_error(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           error);
                     }
                     if (strcmp(child_manifest.name, dependency->name) != 0) {
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
-                        return set_errorf(error,
-                                          manifest_path,
-                                          dependency->line,
-                                          "local dependency name mismatch: expected %s but found %s",
-                                          dependency->name,
-                                          child_manifest.name);
+                        return set_local_dependency_errorf(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           "dependency name mismatch: expected %s but found %s",
+                                                           dependency->name,
+                                                           child_manifest.name);
                     }
                     if (child_manifest.target != FENG_COMPILE_TARGET_LIB) {
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
-                        return set_errorf(error,
-                                          child_manifest_path,
-                                          0U,
-                                          "local dependency project must use target: \"lib\"");
+                        return set_local_dependency_errorf(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           "local dependency project must use target: \"lib\"");
                     }
                     if (!check_package_version_compatibility(state,
                                                             child_manifest.name,
@@ -1643,7 +1795,12 @@ static bool resolve_project_dependencies(ResolveState *state,
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
-                        return false;
+                        return wrap_local_dependency_error(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           error);
                     }
                     state->nodes[child_slot].visiting = true;
                     state->nodes[child_slot].name = dup_cstr(child_manifest.name);
@@ -1664,7 +1821,12 @@ static bool resolve_project_dependencies(ResolveState *state,
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
-                        return false;
+                        return wrap_local_dependency_error(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           error);
                     }
                     if (state->materialize_local_projects &&
                         !build_local_project_bundle(state->program,
@@ -1677,7 +1839,12 @@ static bool resolve_project_dependencies(ResolveState *state,
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
-                        return false;
+                        return wrap_local_dependency_error(error,
+                                                           manifest_path,
+                                                           dependency->line,
+                                                           dependency->name,
+                                                           dependency->value,
+                                                           error);
                     }
                     state->nodes[child_slot].resolved = true;
                     state->nodes[child_slot].visiting = false;

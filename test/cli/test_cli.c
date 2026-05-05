@@ -4422,6 +4422,115 @@ static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
     feng_cli_project_error_dispose(&error);
 }
 
+static void test_deps_add_local_bundle_error_reports_dependency_context(void) {
+    char template_path[] = "/tmp/feng_cli_deps_add_local_bundle_error_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *dep_dir;
+    char *project_manifest_path;
+    char *dep_bundle_path;
+    char *manifest_text;
+    char *stderr_text;
+    char *remove_error = NULL;
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    dep_dir = path_join(workspace_dir, "dep");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    dep_bundle_path = path_join(dep_dir, "local_dep.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(dep_dir);
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_bundle_path, "not a bundle\n");
+
+    {
+        char *argv[] = { "add", "local_dep", "../dep/local_dep.fb", project_dir };
+        stderr_text = run_deps_capture_stderr(4, argv, &rc);
+    }
+
+    ASSERT(rc != 0);
+    ASSERT(strstr(stderr_text,
+                  "failed to validate local dependency local_dep declared as \"../dep/local_dep.fb\"") != NULL);
+    ASSERT(strstr(stderr_text, "failed to open bundle") != NULL);
+    manifest_text = read_text_file(project_manifest_path);
+    ASSERT(strstr(manifest_text, "[dependencies]") == NULL);
+
+    free(stderr_text);
+    free(manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_bundle_path);
+    free(project_manifest_path);
+    free(dep_dir);
+    free(project_dir);
+}
+
+static void test_deps_install_local_dependency_error_reports_dependency_context(void) {
+    char template_path[] = "/tmp/feng_cli_deps_install_local_error_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *dep_dir;
+    char *project_manifest_path;
+    char *dep_manifest_path;
+    char *stderr_text;
+    char *remove_error = NULL;
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    dep_dir = path_join(workspace_dir, "dep");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    dep_manifest_path = path_join(dep_dir, "feng.fm");
+
+    mkdir_p(project_dir);
+    mkdir_p(dep_dir);
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_dep: \"../dep\"\n");
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+
+    {
+        char *argv[] = { "install", project_dir };
+        stderr_text = run_deps_capture_stderr(2, argv, &rc);
+    }
+
+    ASSERT(rc != 0);
+    ASSERT(strstr(stderr_text,
+                  "failed to validate local dependency local_dep declared as \"../dep\"") != NULL);
+    ASSERT(strstr(stderr_text, dep_manifest_path) != NULL);
+    ASSERT(strstr(stderr_text, "manifest requires `target` field") != NULL);
+
+    free(stderr_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(dep_manifest_path);
+    free(project_manifest_path);
+    free(dep_dir);
+    free(project_dir);
+}
+
 static void test_deps_install_hides_cache_dir_prefix_in_error_output(void) {
     char template_path[] = "/tmp/feng_cli_deps_install_cache_prefix_XXXXXX";
     char *workspace_dir;
@@ -5058,10 +5167,12 @@ int main(void) {
     test_deps_resolve_reports_local_dependency_cycle();
     test_deps_add_remote_updates_manifest_and_cache();
     test_deps_add_local_validates_then_writes_manifest();
+    test_deps_add_local_bundle_error_reports_dependency_context();
     test_deps_add_local_rejects_name_mismatch_before_write();
     test_deps_add_local_rejects_non_lib_target_before_write();
     test_deps_remove_updates_manifest();
     test_deps_install_populates_cache_from_registry();
+    test_deps_install_local_dependency_error_reports_dependency_context();
     test_deps_install_reports_download_failure_with_reason();
     test_deps_install_rejects_invalid_downloaded_bundle();
     test_deps_install_hides_cache_dir_prefix_in_error_output();
