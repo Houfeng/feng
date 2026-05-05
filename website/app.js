@@ -7,6 +7,27 @@ function setCurrentYear() {
   }
 }
 
+function setupHeaderSurface() {
+  const header = document.querySelector('.site-header');
+  const hero = document.querySelector('.hero');
+
+  if (!header || !hero) {
+    return;
+  }
+
+  const syncSurface = () => {
+    const heroTop = hero.getBoundingClientRect().top;
+    const headerBottom = header.getBoundingClientRect().bottom;
+    const surfaced = heroTop <= headerBottom;
+
+    header.classList.toggle('is-surfaced', surfaced);
+  };
+
+  syncSurface();
+  window.addEventListener('scroll', syncSurface, { passive: true });
+  window.addEventListener('resize', syncSurface);
+}
+
 function setupMenu() {
   const toggle = document.querySelector('[data-menu-toggle]');
   const nav = document.querySelector('[data-nav]');
@@ -132,6 +153,7 @@ function setupReveal() {
 
 body.dataset.jsReady = 'true';
 setCurrentYear();
+setupHeaderSurface();
 setupMenu();
 setupSampleTabs();
 setupReveal();

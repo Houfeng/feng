@@ -81,6 +81,12 @@ textarea {
   z-index: 20;
   border-bottom-left-radius: 24px;
   border-bottom-right-radius: 24px;
+  background: transparent;
+  backdrop-filter: none;
+  transition: background-color 180ms ease, backdrop-filter 180ms ease;
+}
+
+.site-header.is-surfaced {
   background: rgba(248, 242, 232, 0.72);
   backdrop-filter: blur(18px);
 }
@@ -170,11 +176,12 @@ textarea {
 }
 
 .hero {
+  margin-top: 24px;
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 28px;
   align-items: stretch;
-  padding-top: 28px;
+  padding-top: 0;
 }
 
 .hero-copy,
