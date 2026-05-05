@@ -16,7 +16,7 @@
   --radius-lg: 32px;
   --radius-md: 20px;
   --radius-sm: 12px;
-  --content-width: min(1180px, calc(100vw - 40px));
+  --content-width: min(1180px, calc(100vw - 48px));
   --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
@@ -62,7 +62,6 @@ textarea {
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 88%);
 }
 
-.site-header,
 .section-shell,
 .site-footer {
   width: var(--content-width);
@@ -70,14 +69,19 @@ textarea {
 }
 
 .site-header {
+  width: min(calc(var(--content-width) + 48px), 100vw);
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 24px 0 12px;
+  padding: 24px 24px 12px;
   position: sticky;
   top: 0;
   z-index: 20;
+  border-bottom-left-radius: 24px;
+  border-bottom-right-radius: 24px;
+  background: rgba(248, 242, 232, 0.72);
   backdrop-filter: blur(18px);
 }
 
@@ -632,7 +636,7 @@ body[data-js-ready="true"] .site-nav[data-open="false"] {
 
 @media (max-width: 560px) {
   :root {
-    --content-width: min(100vw - 24px, 100vw - 24px);
+    --content-width: min(100vw - 48px, 100vw - 48px);
   }
 
   .hero-copy,
