@@ -1856,6 +1856,13 @@ static size_t expr_start(const FengExpr *expr) {
     if (expr->kind == FENG_EXPR_CALL && expr->as.call.callee != NULL) {
         return expr_start(expr->as.call.callee);
     }
+    /* Binary expressions store the operator as their token, but the actual
+     * span begins at the left operand.  Without this adjustment, hovering or
+     * clicking on the left operand of any binary expression fails the
+     * early-exit check in find_expr_hit. */
+    if (expr->kind == FENG_EXPR_BINARY && expr->as.binary.left != NULL) {
+        return expr_start(expr->as.binary.left);
+    }
     return expr->token.offset;
 }
 
@@ -2542,7 +2549,23 @@ static size_t decl_end_for_source(const char *source, const FengDecl *decl) {
 
 static const FengCliLoadedSource *find_source(const FengLspAnalysisSession *session,
                                               const char *path) {
-    return feng_cli_find_loaded_source(session->sources, session->source_count, path);
+    const FengCliLoadedSource *source = feng_cli_find_loaded_source(session->sources,
+                                                                    session->source_count,
+                                                                    path);
+    if (source == NULL && path != NULL) {
+        /* The session's source paths are canonical (resolved via realpath
+         * inside feng_cli_project_open).  If the lookup above failed, the
+         * caller's path may go through a symlink (e.g. /tmp -> /private/tmp
+         * on macOS).  Resolve it and retry. */
+        char *resolved = realpath(path, NULL);
+        if (resolved != NULL) {
+            source = feng_cli_find_loaded_source(session->sources,
+                                                 session->source_count,
+                                                 resolved);
+            free(resolved);
+        }
+    }
+    return source;
 }
 
 static const FengProgram *find_program(const FengLspAnalysisSession *session,
@@ -4242,6 +4265,7 @@ static bool find_type_ref_hit(const FengDecl *decl,
                               size_t offset,
                               FengLspResolvedTarget *target);
 static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset);
+static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t offset);
 
 static bool find_decl_token_hit_member(const FengDecl *owner_decl,
                                        const FengTypeMember *member,
@@ -4699,10 +4723,27 @@ static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
             if (hit != NULL) {
                 return hit;
             }
-            break;
+            hit = find_expr_hit_in_block(expr->as.if_expr.then_block, offset);
+            if (hit != NULL) {
+                return hit;
+            }
+            return find_expr_hit_in_block(expr->as.if_expr.else_block, offset);
         }
-        case FENG_EXPR_MATCH:
-            return find_expr_hit(expr->as.match_expr.target, offset);
+        case FENG_EXPR_MATCH: {
+            const FengExpr *hit = find_expr_hit(expr->as.match_expr.target, offset);
+            size_t branch_index;
+
+            if (hit != NULL) {
+                return hit;
+            }
+            for (branch_index = 0U; branch_index < expr->as.match_expr.branch_count; ++branch_index) {
+                hit = find_expr_hit_in_block(expr->as.match_expr.branches[branch_index].body, offset);
+                if (hit != NULL) {
+                    return hit;
+                }
+            }
+            return find_expr_hit_in_block(expr->as.match_expr.else_block, offset);
+        }
         default:
             break;
     }
@@ -4781,7 +4822,35 @@ static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t off
                         hit = find_expr_hit_in_block(stmt->as.for_stmt.body, offset);
                     }
                 } else {
-                    hit = find_expr_hit_in_block(stmt->as.for_stmt.body, offset);
+                    /* Search init statement expressions (e.g. var i = expr). */
+                    if (stmt->as.for_stmt.init != NULL) {
+                        const FengStmt *init = stmt->as.for_stmt.init;
+
+                        if (init->kind == FENG_STMT_BINDING) {
+                            hit = find_expr_hit(init->as.binding.initializer, offset);
+                        } else if (init->kind == FENG_STMT_ASSIGN) {
+                            hit = find_expr_hit(init->as.assign.target, offset);
+                            if (hit == NULL) {
+                                hit = find_expr_hit(init->as.assign.value, offset);
+                            }
+                        }
+                    }
+                    /* Search update statement expressions (e.g. i += 1). */
+                    if (hit == NULL && stmt->as.for_stmt.update != NULL) {
+                        const FengStmt *update = stmt->as.for_stmt.update;
+
+                        if (update->kind == FENG_STMT_ASSIGN) {
+                            hit = find_expr_hit(update->as.assign.target, offset);
+                            if (hit == NULL) {
+                                hit = find_expr_hit(update->as.assign.value, offset);
+                            }
+                        } else if (update->kind == FENG_STMT_EXPR) {
+                            hit = find_expr_hit(update->as.expr, offset);
+                        }
+                    }
+                    if (hit == NULL) {
+                        hit = find_expr_hit_in_block(stmt->as.for_stmt.body, offset);
+                    }
                     if (hit == NULL) {
                         hit = find_expr_hit(stmt->as.for_stmt.condition, offset);
                     }
@@ -5319,11 +5388,16 @@ static char *hover_text_for_cache_target(const FengLspCacheResolvedTarget *targe
                                     target->binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") ||
                 !string_append_bytes(&signature,
                                      target->binding->name.data,
-                                     target->binding->name.length) ||
-                !string_append_cstr(&signature, ": ") ||
-                !type_ref_to_string(&signature, target->binding->type)) {
+                                     target->binding->name.length)) {
                 string_dispose(&signature);
                 return NULL;
+            }
+            if (target->binding->type != NULL) {
+                if (!string_append_cstr(&signature, ": ") ||
+                    !type_ref_to_string(&signature, target->binding->type)) {
+                    string_dispose(&signature);
+                    return NULL;
+                }
             }
             break;
         case FENG_LSP_RESOLVED_SELF: {
@@ -8877,6 +8951,266 @@ static bool append_alias_module_completion_items(FengLspString *json,
     return true;
 }
 
+/* Returns true if the cursor at `offset` in `text` is inside a `use` module
+ * path (e.g. `use feng.` or `use feng.examples`).  When true, fills
+ * `prefix_segments[0..prefix_count-1]` with the already-typed path segments
+ * (the ones before the current dot, if any) and `partial` with the partial
+ * segment being typed. `prefix_segments` must point to an array of at least
+ * `max_prefix` elements. */
+static bool extract_use_path_context(const char *text,
+                                     size_t offset,
+                                     FengSlice *prefix_segments,
+                                     size_t *prefix_count,
+                                     size_t max_prefix,
+                                     FengSlice *partial) {
+    size_t pos = offset;
+    /* Temporary storage for segments collected in reverse order. */
+    FengSlice reverse_buf[16];
+    size_t reverse_count = 0U;
+    size_t seg_end;
+    size_t i;
+
+    *prefix_count = 0U;
+    partial->data = NULL;
+    partial->length = 0U;
+
+    if (text == NULL) {
+        return false;
+    }
+
+    /* Collect the partial segment being typed (identifier chars up to cursor). */
+    seg_end = pos;
+    while (pos > 0U && completion_identifier_continue((unsigned char)text[pos - 1U])) {
+        --pos;
+    }
+    partial->data = text + pos;
+    partial->length = seg_end - pos;
+
+    /* Walk backward through dot-separated identifier segments to build the
+     * prefix, storing them in reverse order. */
+    while (pos > 0U && text[pos - 1U] == '.') {
+        size_t seg_start;
+
+        --pos; /* skip dot */
+        seg_end = pos;
+        while (pos > 0U && completion_identifier_continue((unsigned char)text[pos - 1U])) {
+            --pos;
+        }
+        seg_start = pos;
+        if (seg_end == seg_start) {
+            break; /* empty segment between dots — malformed, stop */
+        }
+        if (reverse_count < 16U) {
+            reverse_buf[reverse_count].data = text + seg_start;
+            reverse_buf[reverse_count].length = seg_end - seg_start;
+            ++reverse_count;
+        }
+    }
+
+    /* Skip any whitespace before the path. */
+    while (pos > 0U && (text[pos - 1U] == ' ' || text[pos - 1U] == '\t')) {
+        --pos;
+    }
+
+    /* Check for the `use` keyword immediately before the path. */
+    if (pos < 3U ||
+        text[pos - 3U] != 'u' || text[pos - 2U] != 's' || text[pos - 1U] != 'e') {
+        return false;
+    }
+    /* Ensure `use` is not part of a longer identifier. */
+    if (pos > 3U && completion_identifier_continue((unsigned char)text[pos - 4U])) {
+        return false;
+    }
+
+    /* Write prefix segments in correct order. */
+    {
+        size_t count = reverse_count < max_prefix ? reverse_count : max_prefix;
+
+        for (i = 0U; i < count; ++i) {
+            prefix_segments[i] = reverse_buf[count - 1U - i];
+        }
+        *prefix_count = count;
+    }
+    return true;
+}
+
+/* Emits completion items for the next segment of a use-path.  All loaded
+ * source files whose module path starts with `prefix_segments[0..n-1]` are
+ * examined; for each one the segment at index `n` (if it starts with
+ * `partial`) is offered as a completion item.  Duplicate segment names are
+ * suppressed. */
+static bool append_use_path_completion_items(FengLspString *json,
+                                             bool *first,
+                                             const FengLspAnalysisSession *session,
+                                             const FengSlice *prefix_segments,
+                                             size_t prefix_count,
+                                             FengSlice partial) {
+    size_t source_index;
+    /* Simple seen-list to suppress duplicates (up to 64 unique segments). */
+    FengSlice seen[64];
+    size_t seen_count = 0U;
+
+    if (session == NULL) {
+        return true;
+    }
+    for (source_index = 0U; source_index < session->source_count; ++source_index) {
+        const FengProgram *prog = session->sources[source_index].program;
+        FengSlice next_seg;
+        size_t i;
+        bool already_seen;
+
+        if (prog == NULL || prog->module_segment_count <= prefix_count) {
+            continue;
+        }
+        /* Check that the first `prefix_count` segments match. */
+        for (i = 0U; i < prefix_count; ++i) {
+            if (!slice_equals(prog->module_segments[i], prefix_segments[i])) {
+                break;
+            }
+        }
+        if (i < prefix_count) {
+            continue;
+        }
+        /* The segment at position `prefix_count` is the candidate. */
+        next_seg = prog->module_segments[prefix_count];
+        /* Filter by partial prefix. */
+        if (partial.length > 0U &&
+            (next_seg.length < partial.length ||
+             memcmp(next_seg.data, partial.data, partial.length) != 0)) {
+            continue;
+        }
+        /* Deduplicate. */
+        already_seen = false;
+        for (i = 0U; i < seen_count; ++i) {
+            if (slice_equals(seen[i], next_seg)) {
+                already_seen = true;
+                break;
+            }
+        }
+        if (already_seen) {
+            continue;
+        }
+        if (seen_count < 64U) {
+            seen[seen_count++] = next_seg;
+        }
+        if (!append_completion_item(json, first, next_seg, "module", 9)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Scans every source file in the project (except the document being edited)
+ * by parsing each file individually.  This is used as a fallback when the
+ * current file has a parse error that prevents the normal analysis session
+ * from loading all project sources (e.g. an incomplete `use` declaration).
+ * Emits the next module-path segment for all files whose module path starts
+ * with `prefix_segments[0..prefix_count-1]` and whose segment at index
+ * `prefix_count` starts with `partial`. */
+static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
+                                                  const FengLspDocument *document,
+                                                  const FengSlice *prefix_segments,
+                                                  size_t prefix_count,
+                                                  FengSlice partial,
+                                                  FengLspString *json,
+                                                  bool *first) {
+    char *manifest_path = NULL;
+    FengCliProjectError error = {0};
+    FengCliProjectContext context = {0};
+    char *doc_resolved = NULL;
+    FengSlice seen[64];
+    size_t seen_count = 0U;
+    size_t i;
+    bool ok = true;
+
+    (void)runtime; /* reserved for future diagnostics */
+
+    if (document == NULL || !document->is_file || !file_exists(document->path)) {
+        return true;
+    }
+    if (!feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
+        feng_cli_project_error_dispose(&error);
+        return true; /* standalone file — no project sources to scan */
+    }
+    feng_cli_project_error_dispose(&error);
+
+    if (!feng_cli_project_open(manifest_path, &context, &error)) {
+        feng_cli_project_error_dispose(&error);
+        free(manifest_path);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    free(manifest_path);
+    manifest_path = NULL;
+
+    /* Resolve the current document's canonical path so we can skip it. */
+    doc_resolved = realpath(document->path, NULL);
+
+    for (i = 0U; i < context.source_count && ok; ++i) {
+        const char *src_path = context.source_paths[i];
+        char *source = NULL;
+        size_t source_length = 0U;
+        FengProgram *prog = NULL;
+        FengParseError parse_err = {0};
+        size_t j;
+
+        /* Skip the file being edited — it may have parse errors. */
+        if (doc_resolved != NULL && strcmp(src_path, doc_resolved) == 0) {
+            continue;
+        }
+        if (doc_resolved == NULL && strcmp(src_path, document->path) == 0) {
+            continue;
+        }
+
+        source = feng_cli_read_entire_file(src_path, &source_length);
+        if (source == NULL) {
+            continue; /* unreadable — skip */
+        }
+
+        if (feng_parse_source(source, source_length, src_path, &prog, &parse_err)) {
+            if (prog != NULL && prog->module_segment_count > prefix_count) {
+                bool all_match = true;
+                FengSlice next_seg;
+                bool already_seen = false;
+
+                for (j = 0U; j < prefix_count; ++j) {
+                    if (!slice_equals(prog->module_segments[j], prefix_segments[j])) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if (all_match) {
+                    next_seg = prog->module_segments[prefix_count];
+                    /* Filter by partial prefix. */
+                    if (partial.length == 0U ||
+                        (next_seg.length >= partial.length &&
+                         memcmp(next_seg.data, partial.data, partial.length) == 0)) {
+                        /* Deduplicate. */
+                        for (j = 0U; j < seen_count; ++j) {
+                            if (slice_equals(seen[j], next_seg)) {
+                                already_seen = true;
+                                break;
+                            }
+                        }
+                        if (!already_seen) {
+                            if (seen_count < 64U) {
+                                seen[seen_count++] = next_seg;
+                            }
+                            ok = append_completion_item(json, first, next_seg, "module", 9);
+                        }
+                    }
+                }
+            }
+            feng_program_free(prog);
+        }
+        free(source);
+    }
+
+    free(doc_resolved);
+    feng_cli_project_context_dispose(&context);
+    return ok;
+}
+
 static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysisSession *session,
                                                            const FengProgram *program,
                                                            FengSlice object_name,
@@ -8940,6 +9274,30 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
         return false;
     }
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
+    /* Check if cursor is inside a `use` module path (e.g. `use feng.` or
+     * `use feng.examples`).  If so, offer module path segment completions and
+     * skip the normal member/identifier completion logic. */
+    {
+        FengSlice use_prefix[16];
+        size_t use_prefix_count = 0U;
+        FengSlice use_partial = {0};
+
+        if (extract_use_path_context(source_text,
+                                     offset,
+                                     use_prefix,
+                                     &use_prefix_count,
+                                     16U,
+                                     &use_partial)) {
+            bool ok = append_use_path_completion_items(json,
+                                                       &first,
+                                                       session,
+                                                       use_prefix,
+                                                       use_prefix_count,
+                                                       use_partial);
+            local_list_dispose(&locals);
+            return ok && string_append_cstr(json, "]");
+        }
+    }
     if (completion_context.is_member) {
         const FengDecl *owner_decl = NULL;
         bool alias_handled = false;
@@ -9420,6 +9778,31 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             string_dispose(&json);
         } else {
             session_dispose(&session);
+            /* The current file failed to parse (e.g. an incomplete `use` path).
+             * For use-path completions, scan other project source files
+             * individually so we can still discover available module segments. */
+            {
+                FengSlice use_prefix[16];
+                size_t use_prefix_count = 0U;
+                FengSlice use_partial = {0};
+                bool use_first = true;
+
+                if (extract_use_path_context(document->text, offset,
+                                             use_prefix, &use_prefix_count,
+                                             16U, &use_partial) &&
+                    string_append_cstr(&json, "[") &&
+                    append_use_path_items_by_project_scan(runtime, document,
+                                                          use_prefix, use_prefix_count,
+                                                          use_partial, &json, &use_first) &&
+                    string_append_cstr(&json, "]") &&
+                    completion_json_has_items(&json)) {
+                    free(uri);
+                    ok = send_json_response(output, id, json.data);
+                    string_dispose(&json);
+                    return ok;
+                }
+                string_dispose(&json);
+            }
         }
     }
     if (build_single_parse_session(document, &session)) {

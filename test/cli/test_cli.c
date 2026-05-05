@@ -5151,6 +5151,361 @@ static void test_project_pack_rejects_release_flag(void) {
     free(manifest_path);
 }
 
+/* Tests that hover and go-to-definition resolve correctly for local variables
+ * referenced in for-loop update expressions and in the bodies of if
+ * expressions.  Before the fix, find_expr_hit skipped if-expression bodies
+ * and the for-loop update statement, so the LSP returned null for those
+ * cursor positions. */
+static void test_lsp_hover_and_definition_local_var_rhs(void) {
+    static const char *kSource =
+        "mod test.lsp.localrhs;\n"
+        "\n"
+        "fn check(n: int): int {\n"
+        "    let doubled = if n > 0 { n + n; } else { 0; };\n"
+        "    return doubled;\n"
+        "}\n"
+        "\n"
+        "fn loop_sum(n: int): int {\n"
+        "    var acc: int = 0;\n"
+        "    for var i = 0; i < n; i += 1 {\n"
+        "        acc = acc + i;\n"
+        "    }\n"
+        "    return acc;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_lsp_localrhs_XXXXXX";
+    char *workspace_dir;
+    char *src_path;
+    char *src_uri;
+    char *escaped_source;
+    char *initialize;
+    char *did_open;
+    char *hover_n_in_if_body;
+    char *hover_i_in_for_update;
+    char *def_n_in_if_body;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int n_if_line;
+    unsigned int n_if_char;
+    unsigned int i_update_line;
+    unsigned int i_update_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    src_path = path_join(workspace_dir, "main.ff");
+    write_text_file(src_path, kSource);
+
+    /* `n + n` appears only inside the if-expression then-block; char 0 = 'n'. */
+    find_line_character(kSource, "n + n", 0U, &n_if_line, &n_if_char);
+    /* `i += 1` is the for-loop update; char 0 = 'i'. */
+    find_line_character(kSource, "i += 1", 0U, &i_update_line, &i_update_char);
+
+    src_uri = file_uri_from_path(src_path);
+    escaped_source = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          src_uri,
+                          escaped_source);
+    hover_n_in_if_body = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                    "\"method\":\"textDocument/hover\","
+                                    "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                    "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                    src_uri,
+                                    n_if_line,
+                                    n_if_char);
+    hover_i_in_for_update = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,"
+                                       "\"method\":\"textDocument/hover\","
+                                       "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                       "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                       src_uri,
+                                       i_update_line,
+                                       i_update_char);
+    def_n_in_if_body = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,"
+                                  "\"method\":\"textDocument/definition\","
+                                  "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                  "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                  src_uri,
+                                  n_if_line,
+                                  n_if_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_n_in_if_body);
+    write_lsp_message(input, hover_i_in_for_update);
+    write_lsp_message(input, def_n_in_if_body);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* Hover on `n` inside the if-expression then-block must resolve to the
+     * function parameter.  Before the fix, find_expr_hit skipped if-expression
+     * bodies, so the result was null. */
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "param n: int") != NULL);
+
+    /* Hover on `i` in `i += 1` (for-loop update) must resolve to the for-init
+     * binding.  Before the fix, find_expr_hit_in_block skipped the update
+     * statement, so the result was null. */
+    ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
+    ASSERT(strstr(output, "var i") != NULL);
+
+    /* Go-to-definition on `n` inside the if-expression body must return a
+     * non-null location. */
+    ASSERT(strstr(output, "\"id\":4,\"result\":null") == NULL);
+
+    free(output);
+    free(shutdown);
+    free(def_n_in_if_body);
+    free(hover_i_in_for_update);
+    free(hover_n_in_if_body);
+    free(did_open);
+    free(initialize);
+    free(escaped_source);
+    free(src_uri);
+    free(src_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Tests that typing `use foo.bar.` in a project file triggers module-path
+ * segment completion, offering the next path component of known source files.
+ * Before the fix, the cursor-after-dot in a `use` statement was misidentified
+ * as member access on an alias, producing an empty completion list. */
+static void test_lsp_use_path_completion(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"usepath_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kLibSource =
+        "pu mod test.lsp.usepath.lib;\n"
+        "\n"
+        "pu fn value(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    /* Main source ends with an incomplete `use` path — the cursor is placed
+     * right after the trailing dot to trigger path-segment completion. */
+    static const char *kMainSource =
+        "mod test.lsp.usepath.main;\n"
+        "use test.lsp.usepath.\n";
+    char template_path[] = "/tmp/feng_lsp_usepath_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *lib_path;
+    char *main_path;
+    char *main_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int comp_line;
+    unsigned int comp_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    lib_path = path_join(src_dir, "lib.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(lib_path, kLibSource);
+    write_text_file(main_path, kMainSource);
+
+    /* Position the cursor right after the trailing dot in `use test.lsp.usepath.`
+     * (line 1, character 21). */
+    find_line_character(kMainSource, "use test.lsp.usepath.", 21U, &comp_line, &comp_char);
+
+    main_uri = file_uri_from_path(main_path);
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                "\"method\":\"textDocument/completion\","
+                                "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                main_uri,
+                                comp_line,
+                                comp_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* Completion must offer the next module path segment "lib" (from lib.ff).
+     * Before the fix, the `use` context was not detected and the result was
+     * an empty list or member-access completions for a non-existent alias. */
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(output, "\"label\":\"lib\"") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(main_uri);
+    free(main_path);
+    free(lib_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Tests that after a `use` statement imports a module, the exported types and
+ * functions from that module appear as completion candidates in identifier
+ * position inside the importing file's function bodies.  This exercises the
+ * analysis-path branch that appends loaded-module completion items for each
+ * `use` declaration in the program. */
+static void test_lsp_imported_type_completion_after_use(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"impcomp_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kTypesSource =
+        "pu mod test.lsp.imptypes;\n"
+        "\n"
+        "pu type Widget {\n"
+        "    let id: int;\n"
+        "}\n"
+        "\n"
+        "pu fn make_widget(): Widget {\n"
+        "    return Widget { id: 0 };\n"
+        "}\n";
+    static const char *kMainSource =
+        "mod test.lsp.impcomp.main;\n"
+        "use test.lsp.imptypes;\n"
+        "\n"
+        "fn run(): int {\n"
+        "    return 0;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_lsp_impcomp_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *types_path;
+    char *main_path;
+    char *main_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int comp_line;
+    unsigned int comp_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    types_path = path_join(src_dir, "types.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(types_path, kTypesSource);
+    write_text_file(main_path, kMainSource);
+
+    /* Trigger completion at the beginning of `    return 0;` (inside run()'s
+     * body), so the completion list includes all identifiers in scope. */
+    find_line_character(kMainSource, "    return 0", 4U, &comp_line, &comp_char);
+
+    main_uri = file_uri_from_path(main_path);
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                "\"method\":\"textDocument/completion\","
+                                "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                main_uri,
+                                comp_line,
+                                comp_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    /* The imported type `Widget` and function `make_widget` from the `use`d
+     * module must appear as completion candidates in run()'s body. */
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(output, "\"label\":\"Widget\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"make_widget\"") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(main_uri);
+    free(main_path);
+    free(types_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 int main(void) {
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
@@ -5196,6 +5551,9 @@ int main(void) {
     test_lsp_no_crash_on_library_file_without_main();
     test_lsp_didopen_handles_unicode_escape_in_source();
     test_lsp_project_cache_hit_survives_broken_dependency_source();
+    test_lsp_hover_and_definition_local_var_rhs();
+    test_lsp_use_path_completion();
+    test_lsp_imported_type_completion_after_use();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
