@@ -23,7 +23,7 @@
       <g transform="translate(-12 0)">
         <path d="M64 59H104V77H82V92H100V110H82V141H64V59Z"
           fill="#A78549"/>
-        <g transform="translate(122 119) scale(0.88 1) translate(-122 -119)">
+        <g transform="translate(123 119) scale(0.92 0.92) translate(-122 -119)">
           <g fill="#F05A5A">
             <rect x="118" y="95" width="8" height="13"/>
             <rect x="118" y="130" width="8" height="13"/>
