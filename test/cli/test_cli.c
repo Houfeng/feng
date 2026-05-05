@@ -565,6 +565,23 @@ static void find_line_character(const char *text,
     }
 }
 
+static size_t count_substring(const char *text, const char *needle) {
+    size_t count = 0U;
+    size_t needle_length;
+    const char *cursor;
+
+    ASSERT(text != NULL);
+    ASSERT(needle != NULL);
+    needle_length = strlen(needle);
+    ASSERT(needle_length > 0U);
+    cursor = text;
+    while ((cursor = strstr(cursor, needle)) != NULL) {
+        ++count;
+        cursor += needle_length;
+    }
+    return count;
+}
+
 static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     char template_path[] = "/tmp/feng_cli_direct_ir_XXXXXX";
     char *workspace_dir;
@@ -5388,6 +5405,112 @@ static void test_lsp_use_path_completion(void) {
     free(remove_error);
 }
 
+/* Tests that intermediate module-path segments are deduplicated when several
+ * modules share the same prefix.  For `a.b.c` and `a.b.d`, completing
+ * `use a.` must offer exactly one `b`. */
+static void test_lsp_use_path_completion_deduplicates_segments(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"usepath_dedup_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kCSource =
+        "pu mod a.b.c;\n";
+    static const char *kDSource =
+        "pu mod a.b.d;\n";
+    static const char *kMainSource =
+        "mod app.main;\n"
+        "use a.\n";
+    char template_path[] = "/tmp/feng_lsp_usepath_dedup_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *c_path;
+    char *d_path;
+    char *main_path;
+    char *main_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int comp_line;
+    unsigned int comp_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    c_path = path_join(src_dir, "c.ff");
+    d_path = path_join(src_dir, "d.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(c_path, kCSource);
+    write_text_file(d_path, kDSource);
+    write_text_file(main_path, kMainSource);
+
+    find_line_character(kMainSource, "use a.", 6U, &comp_line, &comp_char);
+
+    main_uri = file_uri_from_path(main_path);
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                "\"method\":\"textDocument/completion\","
+                                "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                main_uri,
+                                comp_line,
+                                comp_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(output, "\"label\":\"b\"") != NULL);
+    ASSERT(count_substring(output, "\"label\":\"b\"") == 1U);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(main_uri);
+    free(main_path);
+    free(d_path);
+    free(c_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Tests that after a `use` statement imports a module, the exported types and
  * functions from that module appear as completion candidates in identifier
  * position inside the importing file's function bodies.  This exercises the
@@ -5506,6 +5629,121 @@ static void test_lsp_imported_type_completion_after_use(void) {
     free(remove_error);
 }
 
+/* Tests that imported public declarations remain available to completion even
+ * when project-wide analysis fails for reasons unrelated to the current file.
+ * Here the package target is `bin` but the project lacks a `main` entry; the
+ * current document still parses and should still surface names from
+ * `use other.lib;`. */
+static void test_lsp_imported_type_completion_survives_project_semantic_failure(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"impcomp_degraded_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kTypesSource =
+        "pu mod other.lib;\n"
+        "\n"
+        "pu type Widget {\n"
+        "    let id: int;\n"
+        "}\n"
+        "\n"
+        "pu fn make_widget(): Widget {\n"
+        "    return Widget { id: 0 };\n"
+        "}\n";
+    static const char *kMainSource =
+        "mod app.main;\n"
+        "use other.lib;\n"
+        "\n"
+        "fn helper(): int {\n"
+        "    return 0;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_lsp_impcomp_degraded_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *types_path;
+    char *main_path;
+    char *main_uri;
+    char *escaped_main;
+    char *initialize;
+    char *did_open;
+    char *completion_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int comp_line;
+    unsigned int comp_char;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    types_path = path_join(src_dir, "types.ff");
+    main_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(types_path, kTypesSource);
+    write_text_file(main_path, kMainSource);
+
+    find_line_character(kMainSource, "    return 0", 4U, &comp_line, &comp_char);
+
+    main_uri = file_uri_from_path(main_path);
+    escaped_main = json_escape_text(kMainSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          main_uri,
+                          escaped_main);
+    completion_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                "\"method\":\"textDocument/completion\","
+                                "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                main_uri,
+                                comp_line,
+                                comp_char);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, completion_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(output, "\"label\":\"helper\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"Widget\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"make_widget\"") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_main);
+    free(main_uri);
+    free(main_path);
+    free(types_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 int main(void) {
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
@@ -5553,7 +5791,9 @@ int main(void) {
     test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_lsp_hover_and_definition_local_var_rhs();
     test_lsp_use_path_completion();
+    test_lsp_use_path_completion_deduplicates_segments();
     test_lsp_imported_type_completion_after_use();
+    test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();

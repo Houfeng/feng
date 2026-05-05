@@ -1,7 +1,7 @@
 mod feng.examples;
 
 // use feng.examples.loop;
-// use feng.examples.loop as lp;
+use feng.examples.loop as lp;
 
 /**
  * Prints a message to the console.
@@ -14,5 +14,5 @@ extern fn puts(msg: string): int;
  */
 fn main(args: string[]) {
   puts("hello, examples");
-  // lp.loop_example([""]); 
+  // lp.loop_example([""]);
 }

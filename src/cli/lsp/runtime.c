@@ -9211,6 +9211,117 @@ static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
     return ok;
 }
 
+static bool session_contains_module_program(const FengLspAnalysisSession *session,
+                                            const FengSlice *segments,
+                                            size_t segment_count) {
+    size_t source_index;
+
+    if (session == NULL || segments == NULL || segment_count == 0U) {
+        return false;
+    }
+    for (source_index = 0U; source_index < session->source_count; ++source_index) {
+        if (program_module_matches(session->sources[source_index].program, segments, segment_count)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Best-effort fallback for identifier completion after `use foo.bar;` when
+ * project-level analysis failed before it could hand loaded source programs
+ * back to LSP. As long as the current file still parses, reopen the project,
+ * scan sibling source files on disk, and surface public declarations from any
+ * imported modules that are not already present in `session->sources`. */
+static bool append_project_imported_completion_items(FengLspString *json,
+                                                     bool *first,
+                                                     const FengLspAnalysisSession *session,
+                                                     const FengProgram *program) {
+    char *manifest_path = NULL;
+    FengCliProjectError error = {0};
+    FengCliProjectContext context = {0};
+    char *program_resolved = NULL;
+    bool needs_scan = false;
+    bool ok = true;
+    size_t use_index;
+    size_t source_index;
+
+    if (json == NULL || first == NULL || session == NULL || program == NULL ||
+        program->path == NULL || program->use_count == 0U || !file_exists(program->path)) {
+        return true;
+    }
+    for (use_index = 0U; use_index < program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+
+        if (!use_decl->has_alias &&
+            !session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
+            needs_scan = true;
+            break;
+        }
+    }
+    if (!needs_scan) {
+        return true;
+    }
+    if (!feng_cli_project_find_manifest_in_ancestors(program->path, &manifest_path, &error)) {
+        feng_cli_project_error_dispose(&error);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    if (!feng_cli_project_open(manifest_path, &context, &error)) {
+        feng_cli_project_error_dispose(&error);
+        free(manifest_path);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    free(manifest_path);
+    program_resolved = realpath(program->path, NULL);
+
+    for (source_index = 0U; source_index < context.source_count && ok; ++source_index) {
+        const char *src_path = context.source_paths[source_index];
+        char *source = NULL;
+        size_t source_length = 0U;
+        FengProgram *scanned_program = NULL;
+        FengParseError parse_error = {0};
+
+        if ((program_resolved != NULL && strcmp(src_path, program_resolved) == 0) ||
+            (program_resolved == NULL && strcmp(src_path, program->path) == 0)) {
+            continue;
+        }
+        source = feng_cli_read_entire_file(src_path, &source_length);
+        if (source == NULL) {
+            continue;
+        }
+        if (feng_parse_source(source, source_length, src_path, &scanned_program, &parse_error)) {
+            for (use_index = 0U; use_index < program->use_count; ++use_index) {
+                const FengUseDecl *use_decl = &program->uses[use_index];
+
+                if (use_decl->has_alias ||
+                    session_contains_module_program(session,
+                                                    use_decl->segments,
+                                                    use_decl->segment_count)) {
+                    continue;
+                }
+                if (program_module_matches(scanned_program,
+                                           use_decl->segments,
+                                           use_decl->segment_count)) {
+                    ok = append_program_decl_completion_items(json,
+                                                              first,
+                                                              scanned_program,
+                                                              true,
+                                                              "imported",
+                                                              -1);
+                    break;
+                }
+            }
+        }
+        feng_program_free(scanned_program);
+        free(source);
+    }
+
+    free(program_resolved);
+    feng_cli_project_context_dispose(&context);
+    return ok;
+}
+
 static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysisSession *session,
                                                            const FengProgram *program,
                                                            FengSlice object_name,
@@ -9403,6 +9514,10 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 local_list_dispose(&locals);
                 return false;
             }
+        }
+        if (!append_project_imported_completion_items(json, &first, session, program)) {
+            local_list_dispose(&locals);
+            return false;
         }
     }
     local_list_dispose(&locals);
