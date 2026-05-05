@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng 是一门强类型静态语言，适合编写清晰、可靠、易维护的程序，提供显式契约、顺手工作流、C 互操作与统一包分发。">
+  <meta name="description" content="Feng is a statically typed language for building clear, reliable, and maintainable software, with explicit contracts, a straightforward workflow, C interop, and unified package distribution.">
   <meta name="theme-color" content="#f5efe2">
-  <title>Feng | 清晰、可靠、易维护的强类型静态语言</title>
+  <title>Feng | A Clear and Reliable Statically Typed Language</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
 </head>
@@ -13,23 +13,23 @@
   <div class="page-backdrop" aria-hidden="true"></div>
   <header class="site-header">
     <div class="brand-lockup">
-      <a class="brand" href="#hero" aria-label="Feng 官方网站首页">
+      <a class="brand" href="#hero" aria-label="Feng home">
         <span class="brand-mark">F</span>
         <span class="brand-text">
           <strong>Feng</strong>
           <span>Static, strongly typed, spec-first</span>
         </span>
       </a>
-      <p class="brand-caption">清晰语法、可靠类型、顺手工作流</p>
+      <p class="brand-caption">Clear syntax, reliable types, smooth workflow</p>
     </div>
     <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu-toggle>
-      导航
+      Menu
     </button>
     <nav class="site-nav" id="site-nav" data-nav>
-      <a href="#features">特性</a>
-      <a href="#sample">示例</a>
-      <a href="#workflow">工作流</a>
-      <a href="#language-map">更多</a>
+      <a href="#features">Features</a>
+      <a href="#sample">Sample</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#language-map">More</a>
     </nav>
   </header>
 
@@ -37,27 +37,27 @@
     <section class="hero section-shell" id="hero" data-reveal>
       <div class="hero-copy">
         <p class="eyebrow">Official website for the Feng language</p>
-        <h1>写出更可靠的程序。</h1>
+        <h1>Build more reliable software.</h1>
         <p class="hero-lead">
-          Feng 把静态类型、显式契约、模块化组织和直接的项目工作流放在一起，
-          让你既能写日常应用和库，也能在需要时接入 C 能力并打包分发。
+          Feng combines static typing, explicit contracts, modular organization, and a straightforward workflow,
+          so you can build everyday apps and libraries, call into C when needed, and ship packages with the same toolchain.
         </p>
         <div class="hero-actions">
-          <a class="button primary" href="#features">查看特性</a>
-          <a class="button secondary" href="#workflow">查看工作流</a>
+          <a class="button primary" href="#features">See Features</a>
+          <a class="button secondary" href="#workflow">See Workflow</a>
         </div>
-        <ul class="hero-metrics" aria-label="Feng 语言速览">
+        <ul class="hero-metrics" aria-label="Feng at a glance">
           <li>
             <strong>26</strong>
-            <span>关键字</span>
+            <span>Keywords</span>
           </li>
           <li>
             <strong>23</strong>
-            <span>保留字</span>
+            <span>Reserved Words</span>
           </li>
           <li>
             <strong>6</strong>
-            <span>内建注解</span>
+            <span>Built-in Annotations</span>
           </li>
         </ul>
       </div>
@@ -70,22 +70,22 @@
           <span>.fb</span>
         </div>
         <div class="panel-card">
-          <h2>为什么选 Feng</h2>
+          <h2>Why Feng</h2>
           <p>
-            如果你希望语言既有紧凑语法，也能把类型、抽象、异常处理和 C 互操作讲清楚，Feng 试图提供一条更直接的路径。
+            If you want a language with compact syntax and clear rules for types, abstractions, error handling, and C interop, Feng aims to offer a more direct path.
           </p>
           <dl class="panel-list">
             <div>
-              <dt>写代码时</dt>
-              <dd>类型在编译期确定，重构和排错更直接，不必一路追到运行时。</dd>
+              <dt>While coding</dt>
+              <dd>Types are known at compile time, so refactoring and debugging stay direct instead of turning into runtime hunts.</dd>
             </div>
             <div>
-              <dt>做抽象时</dt>
-              <dd>用 `spec` 和 `fit` 把契约写清楚，协作和长期演进都更稳。</dd>
+              <dt>While designing APIs</dt>
+              <dd>Use `spec` and `fit` to make contracts explicit, which keeps collaboration and long-term evolution stable.</dd>
             </div>
             <div>
-              <dt>接入现有库时</dt>
-              <dd>可以通过 `extern fn` 和 `@fixed` 调用 C 侧能力，而不用放弃语言本身的清晰性。</dd>
+              <dt>While integrating existing code</dt>
+              <dd>Call into C with `extern fn` and `@fixed` without giving up the language's clarity.</dd>
             </div>
           </dl>
         </div>
@@ -95,32 +95,32 @@
     <section class="section-shell" id="features" data-reveal>
       <div class="section-heading">
         <p class="eyebrow">Language features</p>
-        <h2>特性</h2>
+        <h2>Features</h2>
       </div>
       <div class="feature-grid">
         <article class="feature-card tone-ink">
-          <h3>强类型 / 静态类型</h3>
-          <p>很多错误能在编译期就暴露出来，写代码和重构时更有把握。</p>
+          <h3>Static typing</h3>
+          <p>Many mistakes show up at compile time, which makes day-to-day coding and refactoring more predictable.</p>
         </article>
         <article class="feature-card tone-sand">
-          <h3>type 统一类型系统</h3>
-          <p>对象类型和 ABI 固定布局类型都能放在同一套语言里表达，概念切换更少。</p>
+          <h3>Unified type system</h3>
+          <p>Object types and ABI-fixed layout types live in the same language, so you spend less time switching mental models.</p>
         </article>
         <article class="feature-card tone-teal">
-          <h3>spec / fit 显式契约</h3>
-          <p>接口契约和适配关系都写在源码里，代码意图更容易读懂，也更适合团队协作。</p>
+          <h3>Explicit contracts</h3>
+          <p>`spec` and `fit` keep contracts and adaptation rules in the source, which makes intent easier to read and maintain.</p>
         </article>
         <article class="feature-card tone-paper">
-          <h3>函数、Lambda 与闭包</h3>
-          <p>既能写直接的业务逻辑，也能把行为提炼成可复用的函数、Lambda 和闭包。</p>
+          <h3>Functions, lambdas, closures</h3>
+          <p>You can write straightforward application code and still lift behavior into reusable functions, lambdas, and closures.</p>
         </article>
         <article class="feature-card tone-brass">
-          <h3>结构化异常与自动内存管理</h3>
-          <p>异常处理路径明确，普通对象由运行时自动管理，日常开发更容易保持代码整洁。</p>
+          <h3>Structured exceptions and memory management</h3>
+          <p>Error handling stays explicit, and ordinary objects are managed by the runtime, which helps keep everyday code clean.</p>
         </article>
         <article class="feature-card tone-clay">
-          <h3>C 互操作与包分发</h3>
-          <p>需要接入 C 库或分发二进制包时，语言本身就提供了一条清楚的路径。</p>
+          <h3>C interop and package distribution</h3>
+          <p>When you need to call C libraries or ship binary packages, the language already gives you a clear path.</p>
         </article>
       </div>
     </section>
@@ -129,21 +129,21 @@
       <div class="section-heading split-heading">
         <div>
           <p class="eyebrow">Code sample</p>
-          <h2>示例</h2>
+          <h2>Sample</h2>
         </div>
-        <p class="section-note">左边偏语法，右边偏项目起步。</p>
+        <p class="section-note">One shows syntax, the other shows a minimal project setup.</p>
       </div>
       <div class="sample-frame">
         <div class="sample-toolbar">
-          <div class="sample-tabs" role="tablist" aria-label="官网示例切换">
-            <button class="sample-tab is-active" type="button" role="tab" aria-selected="true" data-sample-tab="hello">语言片段</button>
-            <button class="sample-tab" type="button" role="tab" aria-selected="false" data-sample-tab="manifest">项目清单</button>
+          <div class="sample-tabs" role="tablist" aria-label="Sample switcher">
+            <button class="sample-tab is-active" type="button" role="tab" aria-selected="true" data-sample-tab="hello">Code</button>
+            <button class="sample-tab" type="button" role="tab" aria-selected="false" data-sample-tab="manifest">Manifest</button>
           </div>
-          <button class="copy-button" type="button" data-copy-sample>复制当前示例</button>
+          <button class="copy-button" type="button" data-copy-sample>Copy Sample</button>
         </div>
         <div class="sample-panels">
           <figure class="sample-panel is-active" data-sample-panel="hello">
-            <figcaption>类型、方法与 C 函数导入</figcaption>
+            <figcaption>Types, methods, and a C import</figcaption>
             <pre><code>mod app.hello;
 
 @cdecl("libc")
@@ -168,7 +168,7 @@ fn main(args: string[]): void {
 }</code></pre>
           </figure>
           <figure class="sample-panel" data-sample-panel="manifest" hidden>
-            <figcaption>最小可执行项目清单</figcaption>
+            <figcaption>Minimal executable project manifest</figcaption>
             <pre><code>[package]
 name: "demo"
 version: "0.1.0"
@@ -183,33 +183,33 @@ out: "build/"</code></pre>
     <section class="section-shell" id="workflow" data-reveal>
       <div class="section-heading">
         <p class="eyebrow">Workflow</p>
-        <h2>工作流</h2>
+        <h2>Workflow</h2>
       </div>
       <div class="workflow-grid">
         <article class="workflow-step">
           <span class="step-index">01</span>
-          <h3>初始化项目</h3>
-          <p>先用 `feng init` 建好项目骨架，拿到清单和入口模板，马上就能开始写代码。</p>
+          <h3>Initialize</h3>
+          <p>Start with `feng init` to get a project skeleton, a manifest, and an entry template so you can begin immediately.</p>
           <pre><code>feng init demo</code></pre>
         </article>
         <article class="workflow-step">
           <span class="step-index">02</span>
-          <h3>边写边检查</h3>
-          <p>写完先跑 `feng check`，尽早发现问题，比等到最后构建失败更省时间。</p>
+          <h3>Check as you go</h3>
+          <p>Run `feng check` while you work so you can catch problems early instead of waiting for a later build failure.</p>
           <pre><code>feng check</code></pre>
         </article>
         <article class="workflow-step">
           <span class="step-index">03</span>
-          <h3>构建目标</h3>
-          <p>`feng build` 会按项目清单生成目标产物，日常构建路径保持简单直接。</p>
+          <h3>Build</h3>
+          <p>`feng build` reads the project manifest and produces the target artifact through one straightforward path.</p>
           <pre><code>feng build</code></pre>
         </article>
         <article class="workflow-step">
           <span class="step-index">04</span>
-          <h3>运行或打包</h3>
-          <p>写应用就 `feng run` 直接看结果；写库时再用 `feng pack` 产出 `.fb` 包。</p>
+          <h3>Run or pack</h3>
+          <p>Use `feng run` for applications, and switch to `feng pack` when you want a `.fb` package for a library.</p>
           <pre><code>feng run
-# lib 项目
+# for library projects
 feng pack</code></pre>
         </article>
       </div>
@@ -219,41 +219,41 @@ feng pack</code></pre>
       <div class="section-heading split-heading">
         <div>
           <p class="eyebrow">What to learn next</p>
-          <h2>更多</h2>
+          <h2>More</h2>
         </div>
-        <p class="section-note">从语法到项目组织，按这几块理解最快。</p>
+        <p class="section-note">These are the main topics to explore after the homepage overview.</p>
       </div>
       <div class="docs-grid">
         <article class="doc-card">
-          <strong>模块与导入</strong>
-          <span>`mod` 和 `use` 用来组织代码、拆分模块，并把依赖关系写清楚。</span>
+          <strong>Modules and imports</strong>
+          <span>`mod` and `use` help you organize code, split modules, and make dependencies explicit.</span>
         </article>
         <article class="doc-card">
-          <strong>类型与绑定</strong>
-          <span>`type`、`let`、`var`、构造函数和成员方法决定了你怎么组织数据和行为。</span>
+          <strong>Types and bindings</strong>
+          <span>`type`, `let`, `var`, constructors, and methods define how you organize data and behavior.</span>
         </article>
         <article class="doc-card">
-          <strong>函数与抽象</strong>
-          <span>`fn`、重载、Lambda 和闭包让你能从简单调用自然过渡到可复用抽象。</span>
+          <strong>Functions and abstraction</strong>
+          <span>`fn`, overloading, lambdas, and closures let you move naturally from simple calls to reusable abstractions.</span>
         </article>
         <article class="doc-card">
-          <strong>流程控制</strong>
-          <span>`if`、条件表达式、`while`、`for`、`break` 和 `continue` 覆盖日常控制流需求。</span>
+          <strong>Control flow</strong>
+          <span>`if`, conditional expressions, `while`, `for`, `break`, and `continue` cover everyday control-flow needs.</span>
         </article>
         <article class="doc-card">
-          <strong>异常与生命周期</strong>
-          <span>结构化异常和自动内存管理决定了程序出错时怎么处理、对象何时被回收。</span>
+          <strong>Exceptions and lifetime</strong>
+          <span>Structured exceptions and automatic memory management define how programs handle failure and how objects are reclaimed.</span>
         </article>
         <article class="doc-card">
-          <strong>互操作与分发</strong>
-          <span>当你需要接系统能力、复用现有库或发布二进制包时，这部分会特别重要。</span>
+          <strong>Interop and distribution</strong>
+          <span>This area matters when you need system integration, existing libraries, or binary package distribution.</span>
         </article>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>Feng | 清晰、可靠、易维护的强类型静态语言</p>
+    <p>Feng | A clear, reliable, and maintainable statically typed language</p>
     <p>© <span data-year></span> Feng Language Project</p>
   </footer>
 </body>

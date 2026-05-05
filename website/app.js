@@ -96,7 +96,7 @@ function setupSampleTabs() {
     }
 
     const original = copyButton.textContent;
-    copyButton.textContent = copied ? '已复制' : '复制失败';
+    copyButton.textContent = copied ? 'Copied' : 'Copy failed';
     window.setTimeout(() => {
       copyButton.textContent = original;
     }, 1200);

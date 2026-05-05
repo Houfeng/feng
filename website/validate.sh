@@ -34,6 +34,10 @@ require_file "$INDEX_PATH"
 require_file "$ROOT_DIR/styles.css"
 require_file "$ROOT_DIR/app.js"
 
+if ! perl -CS -ne 'exit 1 if /[\x{4E00}-\x{9FFF}]/' "$INDEX_PATH" "$ROOT_DIR/app.js"; then
+  fail "website still contains user-facing Chinese text"
+fi
+
 for section_id in hero features sample workflow language-map; do
   grep -q "id=\"$section_id\"" "$INDEX_PATH" || fail "missing section id: $section_id"
 done
