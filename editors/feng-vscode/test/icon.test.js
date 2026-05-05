@@ -23,6 +23,7 @@ function assertLanguageIcon(id, expectedExtensions, expectedIconPath) {
 }
 
 const extensionRoot = path.join(__dirname, '..');
+const extensionIconPath = packageJson.icon;
 const commands = packageJson.contributes && Array.isArray(packageJson.contributes.commands)
     ? packageJson.contributes.commands
     : [];
@@ -35,8 +36,11 @@ assertLanguageIcon('feng', ['.feng', '.ff'], './icons/feng-ff.svg');
 assertLanguageIcon('feng-manifest', ['.fm'], './icons/feng-fm.svg');
 assertLanguageIcon('feng-bundle', ['.fb'], './icons/feng-fb.svg');
 assertLanguageIcon('feng-symbol-table', ['.ft'], './icons/feng-ft.svg');
+assert.strictEqual(extensionIconPath, './icons/feng-logo.png');
 
 for (const iconPath of [
+    'icons/feng-logo.png',
+    'icons/feng-logo.svg',
     'icons/feng-ff.svg',
     'icons/feng-fm.svg',
     'icons/feng-fb.svg',

@@ -9,7 +9,7 @@ Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展
 - Language Server 客户端：对于 Feng 源文件，扩展会通过已配置的 Feng 可执行文件启动 `feng lsp`，并用 VS Code 标准 Language Client 连接。hover、completion、definition、references、rename、diagnostics 以及后续语言能力都从当前 CLI 暴露出来的 LSP capability 集合获取。
 - Language Server 重启：命令面板中的 `Feng: Restart Language Server` 命令和底部 Feng LSP 状态条入口都会停止当前语言服务，并按最新 `feng.executablePath` 设置重新启动 `feng lsp`。
 - 诊断兼容回退：如果当前 Feng CLI 还没有暴露任何 LSP capability，扩展会临时保留现有的 `check` 诊断链路，避免打开/保存时的基础校验回退。
-- 图标支持：扩展使用 Feng Logo；当当前文件图标主题没有提供 Feng 专用图标时，会分别回退到 `.feng`/`.ff` 源文件、`.fm` 清单、`.fb` 包文件与 `.ft` 符号表文件对应的内置 Feng 图标。
+- 图标支持：扩展 logo 与内置的 `.feng`/`.ff`、`.fm`、`.fb`、`.ft` 文件图标都使用最新的 Feng 文档图标族；当当前文件图标主题没有提供 Feng 专用图标时，会回退到这些内置图标。
 
 ## 支持的文件后缀
 

@@ -9,7 +9,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 - Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, references, rename, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
 - Language Server restart: The command palette command `Feng: Restart Language Server` and the Feng LSP status bar item both stop the current language server and start a fresh `feng lsp` process using the latest `feng.executablePath` setting.
 - Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
-- Icon support: The extension uses the Feng Logo, and falls back to built-in Feng icons for `.feng`/`.ff` source files, `.fm` manifests, `.fb` bundles, and `.ft` symbol tables when your current file icon theme does not provide a Feng-specific icon.
+- Icon support: The extension logo and the built-in `.feng`/`.ff`, `.fm`, `.fb`, and `.ft` file icons all use the latest Feng document icon family when your current file icon theme does not provide a Feng-specific icon.
 
 ## Supported File Extensions
 
