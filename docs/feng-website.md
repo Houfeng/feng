@@ -25,10 +25,10 @@
 首页至少包含以下区块：
 
 1. Hero：一句话介绍 Feng 的设计定位，并将访客导向“特性”和“工作流”。
-2. Language Features：突出强类型、`spec` / `fit`、函数与闭包、异常、C 互操作、包分发等语言能力。
-3. Code Sample：展示一段 Feng 语法片段与一段最小项目清单，帮助理解表层语法与项目形态。
-4. Workflow：说明从 `feng init`、`feng check`、`feng build` 到 `feng run` / `feng pack` 的典型路径。
-5. Language Surface：概括模块、类型系统、流程控制、异常、内存管理与互操作等主题分布。
+2. 特性：突出强类型、`spec` / `fit`、函数与闭包、异常、C 互操作、包分发等语言能力。
+3. 示例：展示一段 Feng 语法片段与一段最小项目清单，帮助理解表层语法与项目形态。
+4. 工作流：说明从 `feng init`、`feng check`、`feng build` 到 `feng run` / `feng pack` 的典型路径。
+5. 更多：概括模块、类型系统、流程控制、异常、内存管理与互操作等主题分布。
 
 ## 4 实现约束
 
@@ -42,5 +42,5 @@
 ## 5 验证要求
 
 - 至少验证首页 HTML 能正确引用自身 CSS / JS / 资源文件。
-- 至少验证首页关键区块存在：Hero、Language Features、Code Sample、Workflow、Language Surface。
+- 至少验证首页关键区块存在：Hero、特性、示例、工作流、更多。
 - 至少验证首页不存在跳出 `website/` 根目录的本地链接。
