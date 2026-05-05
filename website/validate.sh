@@ -34,13 +34,17 @@ require_file "$INDEX_PATH"
 require_file "$ROOT_DIR/styles.css"
 require_file "$ROOT_DIR/app.js"
 
-for section_id in hero pillars sample workflow docs-map status; do
+for section_id in hero features sample workflow language-map; do
   grep -q "id=\"$section_id\"" "$INDEX_PATH" || fail "missing section id: $section_id"
 done
 
-for snippet in 'href="styles.css"' 'src="app.js"' '../docs/feng-language.md' '../docs/feng-cli.md' '../docs/feng-build.md' '../docs/feng-package.md' '../docs/feng-interop.md' '../docs/feng-lifetime.md' '../examples/src/hello_world.ff' '../examples/feng.fm'; do
+for snippet in 'href="styles.css"' 'src="app.js"' 'href="#features"' 'href="#workflow"'; do
   grep -q "$snippet" "$INDEX_PATH" || fail "missing expected reference: $snippet"
 done
+
+if grep -qE '(href|src)="\.\./' "$INDEX_PATH"; then
+  fail "index.html contains a link that escapes website root"
+fi
 
 grep -Eo '(href|src)="[^"]+"' "$INDEX_PATH" |
   sed -E 's/^[^=]+=\"([^\"]+)\"$/\1/' |
@@ -53,6 +57,13 @@ grep -Eo '(href|src)="[^"]+"' "$INDEX_PATH" |
     esac
 
     resolved_path="$(resolve_target "$target")"
+    case "$resolved_path" in
+      "$ROOT_DIR"|"$ROOT_DIR"/*)
+        ;;
+      *)
+        fail "link escapes website root: $target"
+        ;;
+    esac
     [[ -e "$resolved_path" ]] || fail "broken local reference: $target"
   done
 
