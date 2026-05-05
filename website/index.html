@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Feng 是一门面向生产级实现的强类型静态语言，提供 spec/fit 显式契约、清晰的 C 互操作边界与 .fb 二进制分发。">
+  <meta name="theme-color" content="#f5efe2">
+  <title>Feng | 强类型、静态、面向生产级实现的语言</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="page-backdrop" aria-hidden="true"></div>
+  <header class="site-header">
+    <div class="brand-lockup">
+      <a class="brand" href="#hero" aria-label="Feng 官方网站首页">
+        <span class="brand-mark">F</span>
+        <span class="brand-text">
+          <strong>Feng</strong>
+          <span>Spec-first language site</span>
+        </span>
+      </a>
+      <p class="brand-caption">强类型、静态、契约显式、C 边界清晰</p>
+    </div>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu-toggle>
+      导航
+    </button>
+    <nav class="site-nav" id="site-nav" data-nav>
+      <a href="#pillars">能力</a>
+      <a href="#sample">示例</a>
+      <a href="#workflow">工作流</a>
+      <a href="#docs-map">文档</a>
+      <a href="#status">状态</a>
+      <a href="../docs/feng-language.md">核心规范</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero section-shell" id="hero" data-reveal>
+      <div class="hero-copy">
+        <p class="eyebrow">Official site for the Feng language</p>
+        <h1>把语言规则、工程工作流和 C 互操作放在同一条清晰边界上。</h1>
+        <p class="hero-lead">
+          Feng 面向生产级实现，采用强类型与静态类型系统，用 spec / fit 显式描述契约，
+          用 @fixed 与 extern fn 把 ABI 边界收紧到可验证的范围内，再用 .fb 做二进制分发。
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="../docs/feng-language.md">阅读核心规范</a>
+          <a class="button secondary" href="#workflow">查看上手路径</a>
+        </div>
+        <ul class="hero-metrics" aria-label="Feng 语言速览">
+          <li>
+            <strong>26</strong>
+            <span>关键字</span>
+          </li>
+          <li>
+            <strong>23</strong>
+            <span>保留字</span>
+          </li>
+          <li>
+            <strong>6</strong>
+            <span>内建注解</span>
+          </li>
+        </ul>
+      </div>
+      <div class="hero-panel">
+        <div class="panel-strip">
+          <span>type</span>
+          <span>spec</span>
+          <span>fit</span>
+          <span>@fixed</span>
+          <span>.fb</span>
+        </div>
+        <div class="panel-card">
+          <h2>为什么是 Feng</h2>
+          <p>
+            这个仓库里已经同时存在语言规范、编译器、运行时、CLI、LSP 扩展与示例工程。
+            官网的职责不是重新定义语言，而是把这些能力组织成一条可读、可试、可继续深入的入口。
+          </p>
+          <dl class="panel-list">
+            <div>
+              <dt>语言模型</dt>
+              <dd>强类型、静态、无 any、转换必须显式写出</dd>
+            </div>
+            <div>
+              <dt>工程边界</dt>
+              <dd>项目级命令、.fm 清单与 .fb 包分发分层明确</dd>
+            </div>
+            <div>
+              <dt>互操作</dt>
+              <dd>通过 extern fn、调用约定注解与 @fixed 控制 ABI 风险</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-shell" id="pillars" data-reveal>
+      <div class="section-heading">
+        <p class="eyebrow">Core pillars</p>
+        <h2>官网先回答的，不是“语法像谁”，而是“边界怎么定”。</h2>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card tone-ink">
+          <h3>强类型 / 静态类型</h3>
+          <p>所有类型在编译期确定，类型转换必须显式写出，没有 any 逃生口。</p>
+        </article>
+        <article class="feature-card tone-sand">
+          <h3>spec / fit 显式契约</h3>
+          <p>契约形状与满足关系都用显式语法表达，不依赖隐式结构匹配。</p>
+        </article>
+        <article class="feature-card tone-teal">
+          <h3>C 互操作边界清晰</h3>
+          <p>通过 @fixed、extern fn 与调用约定注解建立 ABI 兼容层，不把异常和托管对象随意穿透过去。</p>
+        </article>
+        <article class="feature-card tone-paper">
+          <h3>.fb 二进制分发</h3>
+          <p>统一包格式承载公开 .ft 与正式库文件，兼顾闭源复用、编译加速和跨语言使用。</p>
+        </article>
+        <article class="feature-card tone-brass">
+          <h3>项目工作流分层</h3>
+          <p>编译器只关心源文件与 .fb，feng build / check / pack 负责清单、依赖与项目组织。</p>
+        </article>
+        <article class="feature-card tone-clay">
+          <h3>规范先行</h3>
+          <p>仓库中的 docs 目录已经按主题拆分规范，官网只做摘要和导览，不再制造第二套标准。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="sample section-shell" id="sample" data-reveal>
+      <div class="section-heading split-heading">
+        <div>
+          <p class="eyebrow">Code sample</p>
+          <h2>示例直接取自仓库，不用编造语法来“美化”首页。</h2>
+        </div>
+        <div class="sample-meta">
+          <a class="inline-link" href="../examples/src/hello_world.ff">查看 hello_world.ff</a>
+          <a class="inline-link" href="../examples/feng.fm">查看 examples/feng.fm</a>
+        </div>
+      </div>
+      <div class="sample-frame">
+        <div class="sample-toolbar">
+          <div class="sample-tabs" role="tablist" aria-label="官网示例切换">
+            <button class="sample-tab is-active" type="button" role="tab" aria-selected="true" data-sample-tab="hello">hello_world.ff</button>
+            <button class="sample-tab" type="button" role="tab" aria-selected="false" data-sample-tab="manifest">feng.fm</button>
+          </div>
+          <button class="copy-button" type="button" data-copy-sample>复制当前示例</button>
+        </div>
+        <div class="sample-panels">
+          <figure class="sample-panel is-active" data-sample-panel="hello">
+            <figcaption>示例来自 examples/src/hello_world.ff</figcaption>
+            <pre><code>mod feng.examples.hello_world;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type User {
+  let name: string;
+  let age: i32;
+
+  fn say(msg: string): void {
+    puts(msg);
+  }
+}
+
+fn hello_world_example(args: string[]): void {
+  let user = User {
+    name: "Houfeng",
+    age: 18
+  };
+
+  user.say("Hello World: " + user.name);
+}</code></pre>
+          </figure>
+          <figure class="sample-panel" data-sample-panel="manifest" hidden>
+            <figcaption>示例来自 examples/feng.fm</figcaption>
+            <pre><code>[package]
+name:    "examples"
+version: "0.1.0"
+target:  "lib"
+src:     "src/"
+out:     "build/"
+
+[dependencies]
+# demo: "0.1.0"</code></pre>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-shell" id="workflow" data-reveal>
+      <div class="section-heading">
+        <p class="eyebrow">Workflow</p>
+        <h2>当前仓库里一条最短的试跑路径。</h2>
+      </div>
+      <div class="workflow-grid">
+        <article class="workflow-step">
+          <span class="step-index">01</span>
+          <h3>构建 CLI</h3>
+          <p>Makefile 当前会生成 build/bin/feng，可直接拿来试跑项目命令。</p>
+          <pre><code>make cli</code></pre>
+        </article>
+        <article class="workflow-step">
+          <span class="step-index">02</span>
+          <h3>初始化项目</h3>
+          <p>在空目录下生成 feng.fm 和 starter 源文件。</p>
+          <pre><code>mkdir -p demo
+cd demo
+../build/bin/feng init demo</code></pre>
+        </article>
+        <article class="workflow-step">
+          <span class="step-index">03</span>
+          <h3>先检查，再构建</h3>
+          <p>项目级命令统一从 feng.fm 解析工作区范围。</p>
+          <pre><code>../build/bin/feng check
+../build/bin/feng build</code></pre>
+        </article>
+        <article class="workflow-step">
+          <span class="step-index">04</span>
+          <h3>运行或打包</h3>
+          <p>可执行项目走 run；库项目走 pack 生成 .fb。</p>
+          <pre><code>../build/bin/feng run
+# lib 项目
+../build/bin/feng pack</code></pre>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-shell" id="docs-map" data-reveal>
+      <div class="section-heading split-heading">
+        <div>
+          <p class="eyebrow">Docs map</p>
+          <h2>继续深入时，直接跳到权威文档，不在官网里二次改写。</h2>
+        </div>
+        <p class="section-note">官网负责导览，规则细节仍以 docs 目录为准。</p>
+      </div>
+      <div class="docs-grid">
+        <a class="doc-card" href="../docs/feng-language.md">
+          <strong>语言总览</strong>
+          <span>设计哲学、特性总览、关键字与整体索引入口。</span>
+        </a>
+        <a class="doc-card" href="../docs/feng-cli.md">
+          <strong>CLI 命令</strong>
+          <span>init、build、run、check、pack、deps 与 lsp 的对外接口。</span>
+        </a>
+        <a class="doc-card" href="../docs/feng-build.md">
+          <strong>构建分层</strong>
+          <span>编译器、构建工具与依赖解析各自负责什么，不负责什么。</span>
+        </a>
+        <a class="doc-card" href="../docs/feng-package.md">
+          <strong>包与清单</strong>
+          <span>.fb、.fm、abi、arch 与依赖声明的正式规则。</span>
+        </a>
+        <a class="doc-card" href="../docs/feng-interop.md">
+          <strong>C 互操作</strong>
+          <span>@fixed、extern fn、调用约定注解与 ABI 边界。</span>
+        </a>
+        <a class="doc-card" href="../docs/feng-lifetime.md">
+          <strong>生命周期</strong>
+          <span>托管对象与 ABI 边界值的管理分层，以及自动内存管理说明。</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="status section-shell" id="status" data-reveal>
+      <div class="section-heading">
+        <p class="eyebrow">Project status</p>
+        <h2>这是一个还在持续推进中的语言仓库，但目标不是玩具实现。</h2>
+      </div>
+      <div class="status-grid">
+        <article class="status-card">
+          <h3>仓库组成</h3>
+          <ul>
+            <li>docs 下已有分主题规范文档</li>
+            <li>src 下已有 lexer、parser、semantic、codegen、runtime 与 CLI</li>
+            <li>editors/feng-vscode 提供编辑器扩展实现</li>
+          </ul>
+        </article>
+        <article class="status-card highlight-card">
+          <h3>当前官网的定位</h3>
+          <p>把语言定位、真实示例、项目工作流和规范入口组织成一个统一首页，降低首次进入仓库时的理解成本。</p>
+        </article>
+        <article class="status-card">
+          <h3>继续探索</h3>
+          <ul>
+            <li><a href="../examples/src/main.ff">阅读 examples/src/main.ff</a></li>
+            <li><a href="../editors/feng-vscode/README.md">查看 VS Code 扩展说明</a></li>
+            <li><a href="../dev/feng-plan.md">查看阶段规划</a></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Feng 官方网站页面位于 website/，语言规则权威来源位于 docs/。</p>
+    <p>© <span data-year></span> Feng Language Project</p>
+  </footer>
+</body>
+</html>
