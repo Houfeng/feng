@@ -183,7 +183,7 @@ if expect_ok "lsp_stdio" bash -lc "cat '$lsp_input' | '$FENG' lsp --stdio"; then
         echo "FAIL[lsp_stdio] missing rename capability"
         failures=$((failures + 1))
     fi
-    if ! grep -q '"completionProvider":{"triggerCharacters":\["\."\]}' "$WORK/lsp_stdio.out"; then
+    if ! grep -q '"completionProvider":{"triggerCharacters":\["\.","_","a"' "$WORK/lsp_stdio.out"; then
         echo "FAIL[lsp_stdio] missing completion capability"
         failures=$((failures + 1))
     fi

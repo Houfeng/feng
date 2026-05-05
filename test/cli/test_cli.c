@@ -1991,6 +1991,8 @@ static void test_lsp_hover_definition_and_completion(void) {
     ASSERT(strstr(output, "\"referencesProvider\":true") != NULL);
     ASSERT(strstr(output, "\"renameProvider\":{\"prepareProvider\":true}") != NULL);
     ASSERT(strstr(output, "\"completionProvider\"") != NULL);
+    ASSERT(strstr(output, "\"triggerCharacters\":[\".\",\"_\",\"a\"") != NULL);
+    ASSERT(strstr(output, "\"Z\"") != NULL);
     ASSERT(strstr(output, "Formats a user label.") != NULL);
     ASSERT(strstr(output, "fn format(user: User): string") != NULL);
     ASSERT(strstr(output, "Display name.") != NULL);
@@ -2015,11 +2017,9 @@ static void test_lsp_hover_definition_and_completion(void) {
     free(source_path);
 }
 
-static void assert_lsp_completion_contains_labels(const char *source,
-                                                  const char *needle,
-                                                  size_t char_offset,
-                                                  const char **labels,
-                                                  size_t label_count) {
+static char *capture_lsp_completion_response(const char *source,
+                                             const char *needle,
+                                             size_t char_offset) {
     char template_path[] = "/tmp/feng_cli_lsp_completion_incomplete_XXXXXX";
     char *workspace_dir;
     char *source_path;
@@ -2033,7 +2033,6 @@ static void assert_lsp_completion_contains_labels(const char *source,
     FILE *input;
     unsigned int line;
     unsigned int character;
-    size_t index;
     char *remove_error = NULL;
 
     workspace_dir = mkdtemp(template_path);
@@ -2065,6 +2064,25 @@ static void assert_lsp_completion_contains_labels(const char *source,
 
     output = run_lsp_server_capture(input);
     fclose(input);
+    free(shutdown);
+    free(completion_req);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    return output;
+}
+
+static void assert_lsp_completion_contains_labels(const char *source,
+                                                  const char *needle,
+                                                  size_t char_offset,
+                                                  const char **labels,
+                                                  size_t label_count) {
+    char *output = capture_lsp_completion_response(source, needle, char_offset);
+    size_t index;
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
     for (index = 0U; index < label_count; ++index) {
@@ -2075,15 +2093,6 @@ static void assert_lsp_completion_contains_labels(const char *source,
     }
 
     free(output);
-    free(shutdown);
-    free(completion_req);
-    free(did_open);
-    free(initialize);
-    free(escaped_text);
-    free(uri);
-    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
-    free(remove_error);
-    free(source_path);
 }
 
 static void assert_lsp_completion_contains_name(const char *source,
@@ -2212,6 +2221,38 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
                                           2U,
                                           prefix_labels,
                                           sizeof(prefix_labels) / sizeof(prefix_labels[0]));
+}
+
+static void test_lsp_member_completion_infers_constructor_call_overloads(void) {
+    static const char *kSource =
+        "mod test.lsp.completionoverload;\n"
+        "\n"
+        "spec CommitOptions {\n"
+        "    var message: i32;\n"
+        "}\n"
+        "\n"
+        "type User {\n"
+        "    fn commit(options: CommitOptions): void {\n"
+        "        options.message = 1;\n"
+        "    }\n"
+        "\n"
+        "    fn commit(message: i32): int {\n"
+        "        return message;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "fn debug_example(args: string[]): void {\n"
+        "    let user = User();\n"
+        "    user.co\n"
+        "}\n";
+    char *output = capture_lsp_completion_response(kSource, "user.co", 7U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(count_occurrences(output, "\"label\":\"commit\"") == 2);
+    ASSERT(strstr(output, "fn commit(options: CommitOptions): void") != NULL);
+    ASSERT(strstr(output, "fn commit(message: i32): int") != NULL);
+
+    free(output);
 }
 
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
@@ -4783,6 +4824,7 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
+    test_lsp_member_completion_infers_constructor_call_overloads();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_rename_accepts_identifier_end_position();
