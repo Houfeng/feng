@@ -8912,6 +8912,76 @@ static bool append_owner_member_completion_items(FengLspString *json,
     return true;
 }
 
+static bool session_contains_module_program(const FengLspAnalysisSession *session,
+                                            const FengSlice *segments,
+                                            size_t segment_count);
+
+static bool append_project_module_completion_items(FengLspString *json,
+                                                   bool *first,
+                                                   const char *program_path,
+                                                   const FengSlice *segments,
+                                                   size_t segment_count,
+                                                   bool public_only,
+                                                   const char *detail,
+                                                   int forced_kind) {
+    char *manifest_path = NULL;
+    FengCliProjectError error = {0};
+    FengCliProjectContext context = {0};
+    char *program_resolved = NULL;
+    bool ok = true;
+    size_t source_index;
+
+    if (json == NULL || first == NULL || program_path == NULL || segments == NULL ||
+        segment_count == 0U || !file_exists(program_path)) {
+        return true;
+    }
+    if (!feng_cli_project_find_manifest_in_ancestors(program_path, &manifest_path, &error)) {
+        feng_cli_project_error_dispose(&error);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    if (!feng_cli_project_open(manifest_path, &context, &error)) {
+        feng_cli_project_error_dispose(&error);
+        free(manifest_path);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    free(manifest_path);
+    program_resolved = realpath(program_path, NULL);
+
+    for (source_index = 0U; source_index < context.source_count && ok; ++source_index) {
+        const char *src_path = context.source_paths[source_index];
+        char *source = NULL;
+        size_t source_length = 0U;
+        FengProgram *scanned_program = NULL;
+        FengParseError parse_error = {0};
+
+        if ((program_resolved != NULL && strcmp(src_path, program_resolved) == 0) ||
+            (program_resolved == NULL && strcmp(src_path, program_path) == 0)) {
+            continue;
+        }
+        source = feng_cli_read_entire_file(src_path, &source_length);
+        if (source == NULL) {
+            continue;
+        }
+        if (feng_parse_source(source, source_length, src_path, &scanned_program, &parse_error) &&
+            program_module_matches(scanned_program, segments, segment_count)) {
+            ok = append_program_decl_completion_items(json,
+                                                      first,
+                                                      scanned_program,
+                                                      public_only,
+                                                      detail,
+                                                      forced_kind);
+        }
+        feng_program_free(scanned_program);
+        free(source);
+    }
+
+    free(program_resolved);
+    feng_cli_project_context_dispose(&context);
+    return ok;
+}
+
 static bool append_alias_module_completion_items(FengLspString *json,
                                                  bool *first,
                                                  const FengLspAnalysisSession *session,
@@ -8939,14 +9009,24 @@ static bool append_alias_module_completion_items(FengLspString *json,
         if (module != NULL) {
             return append_semantic_module_completion_items(json, first, module, true, "module", 9);
         }
-        return append_loaded_module_completion_items(json,
-                                                     first,
-                                                     session,
-                                                     use_decl->segments,
-                                                     use_decl->segment_count,
-                                                     true,
-                                                     "module",
-                                                     9);
+        if (session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
+            return append_loaded_module_completion_items(json,
+                                                         first,
+                                                         session,
+                                                         use_decl->segments,
+                                                         use_decl->segment_count,
+                                                         true,
+                                                         "module",
+                                                         9);
+        }
+        return append_project_module_completion_items(json,
+                                                      first,
+                                                      program->path,
+                                                      use_decl->segments,
+                                                      use_decl->segment_count,
+                                                      true,
+                                                      "module",
+                                                      9);
     }
     return true;
 }
