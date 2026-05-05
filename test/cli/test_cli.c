@@ -2037,6 +2037,7 @@ static void test_lsp_hover_definition_and_completion(void) {
     ASSERT(strstr(output, "\"completionProvider\"") != NULL);
     ASSERT(strstr(output, "\"triggerCharacters\":[\".\",\"_\",\"a\"") != NULL);
     ASSERT(strstr(output, "\"Z\"") != NULL);
+    ASSERT(strstr(output, "\"kind\":\"plaintext\"") != NULL);
     ASSERT(strstr(output, "Formats a user label.") != NULL);
     ASSERT(strstr(output, "fn format(user: User): string") != NULL);
     ASSERT(strstr(output, "Display name.") != NULL);
@@ -2118,6 +2119,126 @@ static char *capture_lsp_completion_response(const char *source,
     free(remove_error);
     free(source_path);
     return output;
+}
+
+static char *capture_lsp_hover_response(const char *source,
+                                        const char *initialize,
+                                        const char *needle,
+                                        size_t char_offset) {
+    char template_path[] = "/tmp/feng_cli_lsp_hover_markup_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *did_open;
+    char *hover_req;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int line;
+    unsigned int character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, source);
+
+    find_line_character(source, needle, char_offset, &line, &character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    hover_req = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                           uri,
+                           line,
+                           character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_req);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+    free(shutdown);
+    free(hover_req);
+    free(did_open);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    return output;
+}
+
+static void test_lsp_hover_uses_markdown_when_supported(void) {
+    static const char *kSource =
+        "mod test.lsp.markdown;\n"
+        "\n"
+        "/**\n"
+        " * Summarizes the CLI arguments.\n"
+        " *\n"
+        " * @param args The command-line arguments.\n"
+        " */\n"
+        "fn describe(args: string[]): string {\n"
+        "    return \"ok\";\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let label: string = describe(args);\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\",\"plaintext\"]}}}}}";
+    char *output = capture_lsp_hover_response(kSource,
+                                              kInitialize,
+                                              "let label: string = describe(args);",
+                                              20U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":{\"contents\":{\"kind\":\"markdown\"") != NULL);
+    ASSERT(strstr(output, "```feng\\nfn describe(args: string[]): string\\n```") != NULL);
+    ASSERT(strstr(output, "Summarizes the CLI arguments.") != NULL);
+    ASSERT(strstr(output, "- **@param** `args` The command-line arguments.") != NULL);
+
+    free(output);
+}
+
+static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(void) {
+    static const char *kSource =
+        "mod test.lsp.plaintext;\n"
+        "\n"
+        "/**\n"
+        " * Summarizes the CLI arguments.\n"
+        " *\n"
+        " * @param args The command-line arguments.\n"
+        " */\n"
+        "fn describe(args: string[]): string {\n"
+        "    return \"ok\";\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let label: string = describe(args);\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output = capture_lsp_hover_response(kSource,
+                                              kInitialize,
+                                              "let label: string = describe(args);",
+                                              20U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":{\"contents\":{\"kind\":\"plaintext\"") != NULL);
+    ASSERT(strstr(output, "fn describe(args: string[]): string") != NULL);
+    ASSERT(strstr(output, "@param args The command-line arguments.") != NULL);
+    ASSERT(strstr(output, "**@param**") == NULL);
+    ASSERT(strstr(output, "```feng") == NULL);
+
+    free(output);
 }
 
 static void assert_lsp_completion_contains_labels(const char *source,
@@ -6023,6 +6144,8 @@ int main(void) {
     test_lsp_rejects_unknown_option();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_hover_uses_markdown_when_supported();
+    test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();

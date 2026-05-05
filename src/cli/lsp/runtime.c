@@ -164,6 +164,11 @@ typedef struct FengLspReferenceList {
     size_t capacity;
 } FengLspReferenceList;
 
+typedef enum FengLspMarkupKind {
+    FENG_LSP_MARKUP_PLAINTEXT = 0,
+    FENG_LSP_MARKUP_MARKDOWN
+} FengLspMarkupKind;
+
 struct FengLspRuntime {
     FengLspDocument *documents;
     size_t document_count;
@@ -171,6 +176,7 @@ struct FengLspRuntime {
     bool shutdown_requested;
     bool should_exit;
     int exit_code;
+    FengLspMarkupKind hover_markup_kind;
     FILE *errors; /* diagnostics log; set at the start of each handle_payload call */
 };
 
@@ -678,6 +684,17 @@ static bool json_array_get(FengLspJsonValue array,
         }
     }
     return false;
+}
+
+static bool json_string_equals(FengLspJsonValue value, const char *text) {
+    size_t text_length;
+
+    if (value.type != FENG_LSP_JSON_STRING || text == NULL) {
+        return false;
+    }
+    text_length = strlen(text);
+    return (size_t)(value.value_end - value.value_start) == text_length &&
+           memcmp(value.value_start, text, text_length) == 0;
 }
 
 static bool json_hex_digit(char ch, unsigned int *out) {
@@ -5133,6 +5150,166 @@ static char *normalize_doc_comment(FengSlice raw) {
     return out.data;
 }
 
+static FengLspMarkupKind hover_markup_kind_from_initialize_params(FengLspJsonValue params) {
+    FengLspJsonValue capabilities = {0};
+    FengLspJsonValue text_document = {0};
+    FengLspJsonValue hover = {0};
+    FengLspJsonValue content_format = {0};
+    FengLspJsonValue format = {0};
+    size_t index = 0U;
+
+    if (!json_object_get(params, "capabilities", &capabilities) ||
+        !json_object_get(capabilities, "textDocument", &text_document) ||
+        !json_object_get(text_document, "hover", &hover) ||
+        !json_object_get(hover, "contentFormat", &content_format)) {
+        return FENG_LSP_MARKUP_PLAINTEXT;
+    }
+    while (json_array_get(content_format, index, &format)) {
+        if (json_string_equals(format, "markdown")) {
+            return FENG_LSP_MARKUP_MARKDOWN;
+        }
+        ++index;
+    }
+    return FENG_LSP_MARKUP_PLAINTEXT;
+}
+
+static bool append_hover_doc_markdown(FengLspString *buffer, const char *doc_text) {
+    const char *cursor = doc_text;
+    bool wrote_any = false;
+    bool previous_was_tag = false;
+    bool pending_blank = false;
+
+    if (buffer == NULL || doc_text == NULL) {
+        return false;
+    }
+    while (*cursor != '\0') {
+        const char *line_start = cursor;
+        const char *line_end = cursor;
+
+        while (*line_end != '\0' && *line_end != '\n') {
+            ++line_end;
+        }
+        if (line_start == line_end) {
+            pending_blank = wrote_any;
+            previous_was_tag = false;
+        } else if (*line_start == '@') {
+            const char *tag_end = line_start + 1U;
+            const char *name_start;
+            const char *name_end;
+            const char *desc_start;
+
+            while (tag_end < line_end && !isspace((unsigned char)*tag_end)) {
+                ++tag_end;
+            }
+            name_start = tag_end;
+            while (name_start < line_end && isspace((unsigned char)*name_start)) {
+                ++name_start;
+            }
+            name_end = name_start;
+            while (name_end < line_end && !isspace((unsigned char)*name_end)) {
+                ++name_end;
+            }
+            desc_start = name_end;
+            while (desc_start < line_end && isspace((unsigned char)*desc_start)) {
+                ++desc_start;
+            }
+            if (wrote_any &&
+                !string_append_cstr(buffer,
+                                    pending_blank || !previous_was_tag ? "\n\n" : "\n")) {
+                return false;
+            }
+            if (!string_append_cstr(buffer, "- **") ||
+                !string_append_bytes(buffer, line_start, (size_t)(tag_end - line_start)) ||
+                !string_append_cstr(buffer, "**")) {
+                return false;
+            }
+            if (name_end > name_start) {
+                if (!string_append_cstr(buffer, " `") ||
+                    !string_append_bytes(buffer, name_start, (size_t)(name_end - name_start)) ||
+                    !string_append_cstr(buffer, "`")) {
+                    return false;
+                }
+            }
+            if (desc_start < line_end) {
+                if (!string_append_cstr(buffer, " ") ||
+                    !string_append_bytes(buffer, desc_start, (size_t)(line_end - desc_start))) {
+                    return false;
+                }
+            }
+            wrote_any = true;
+            previous_was_tag = true;
+            pending_blank = false;
+        } else {
+            if (wrote_any &&
+                !string_append_cstr(buffer,
+                                    pending_blank || previous_was_tag ? "\n\n" : "\n")) {
+                return false;
+            }
+            if (!string_append_bytes(buffer, line_start, (size_t)(line_end - line_start))) {
+                return false;
+            }
+            wrote_any = true;
+            previous_was_tag = false;
+            pending_blank = false;
+        }
+        cursor = *line_end == '\n' ? line_end + 1U : line_end;
+    }
+    return true;
+}
+
+static char *hover_markdown_from_plaintext(const char *hover_text) {
+    FengLspString out = {0};
+    const char *doc = NULL;
+    const char *signature_end;
+
+    if (hover_text == NULL) {
+        return NULL;
+    }
+    doc = strstr(hover_text, "\n\n");
+    signature_end = doc != NULL ? doc : hover_text + strlen(hover_text);
+    if (!string_append_cstr(&out, "```feng\n") ||
+        !string_append_bytes(&out, hover_text, (size_t)(signature_end - hover_text)) ||
+        !string_append_cstr(&out, "\n```")) {
+        string_dispose(&out);
+        return NULL;
+    }
+    if (doc != NULL && doc[2] != '\0') {
+        if (!string_append_cstr(&out, "\n\n") ||
+            !append_hover_doc_markdown(&out, doc + 2U)) {
+            string_dispose(&out);
+            return NULL;
+        }
+    }
+    return out.data;
+}
+
+static bool build_hover_result_json(FengLspString *result,
+                                    FengLspMarkupKind markup_kind,
+                                    const char *hover_text) {
+    char *markdown = NULL;
+    const char *contents = hover_text;
+    const char *kind = markup_kind == FENG_LSP_MARKUP_MARKDOWN ? "markdown" : "plaintext";
+    bool ok;
+
+    if (result == NULL || hover_text == NULL) {
+        return false;
+    }
+    if (markup_kind == FENG_LSP_MARKUP_MARKDOWN) {
+        markdown = hover_markdown_from_plaintext(hover_text);
+        if (markdown == NULL) {
+            return false;
+        }
+        contents = markdown;
+    }
+    ok = string_append_cstr(result, "{\"contents\":{\"kind\":") &&
+         string_append_json_string(result, kind) &&
+         string_append_cstr(result, ",\"value\":") &&
+         string_append_json_string(result, contents) &&
+         string_append_cstr(result, "}}");
+    free(markdown);
+    return ok;
+}
+
 static char *hover_text_for_target(const FengLspAnalysisSession *session,
                                    const FengProgram *program,
                                    const FengLspResolvedTarget *target) {
@@ -8445,10 +8622,9 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         program = find_program(&session, document->path);
         if (program != NULL && resolve_target_at(&session, program, offset, &target)) {
             hover_text = hover_text_for_target(&session, program, &target);
-            ok = hover_text != NULL &&
-                 string_append_cstr(&result, "{\"contents\":{\"kind\":\"plaintext\",\"value\":") &&
-                 string_append_json_string(&result, hover_text) &&
-                 string_append_cstr(&result, "}}");
+                        ok = build_hover_result_json(&result,
+                                                                                 runtime->hover_markup_kind,
+                                                                                 hover_text);
             free(hover_text);
             free(uri);
             session_dispose(&session);
@@ -8469,10 +8645,9 @@ static bool handle_hover_request(FengLspRuntime *runtime,
        analysis cannot resolve — uses pre-built .ft symbol tables). */
     if (build_cache_query_context(document, &cache) && resolve_symbol_target_at(&cache, offset, &cache_target)) {
         hover_text = hover_text_for_cache_target(&cache_target);
-        ok = hover_text != NULL &&
-             string_append_cstr(&result, "{\"contents\":{\"kind\":\"plaintext\",\"value\":") &&
-             string_append_json_string(&result, hover_text) &&
-             string_append_cstr(&result, "}}");
+          ok = build_hover_result_json(&result,
+                                                 runtime->hover_markup_kind,
+                                                 hover_text);
         free(hover_text);
         cache_query_context_dispose(&cache);
         free(uri);
@@ -10306,7 +10481,13 @@ void feng_lsp_runtime_free(FengLspRuntime *runtime) {
     free(runtime);
 }
 
-static bool handle_initialize(FILE *output, FengLspJsonValue id) {
+static bool handle_initialize(FengLspRuntime *runtime,
+                              FILE *output,
+                              FengLspJsonValue id,
+                              FengLspJsonValue params) {
+    if (runtime != NULL) {
+        runtime->hover_markup_kind = hover_markup_kind_from_initialize_params(params);
+    }
     return send_json_response(output,
                               id,
                               "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"triggerCharacters\":[\".\",\"_\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
@@ -10339,7 +10520,7 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
     }
 
     if (strcmp(message.method, "initialize") == 0) {
-        ok = message.has_id ? handle_initialize(output, message.id)
+        ok = message.has_id ? handle_initialize(runtime, output, message.id, message.params)
                             : send_error_response(output, null_id, -32600, "Invalid Request");
     } else if (strcmp(message.method, "shutdown") == 0) {
         runtime->shutdown_requested = true;
