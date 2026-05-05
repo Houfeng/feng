@@ -5737,6 +5737,10 @@ static void test_lsp_imported_type_completion_after_use(void) {
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"Widget\"") != NULL);
     ASSERT(strstr(output, "\"label\":\"make_widget\"") != NULL);
+    ASSERT(strstr(output,
+                  "\"label\":\"Widget\",\"kind\":6,\"detail\":\"type Widget\"") != NULL);
+    ASSERT(strstr(output,
+                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"fn make_widget(): Widget\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -5852,6 +5856,10 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
     ASSERT(strstr(output, "\"label\":\"helper\"") != NULL);
     ASSERT(strstr(output, "\"label\":\"Widget\"") != NULL);
     ASSERT(strstr(output, "\"label\":\"make_widget\"") != NULL);
+    ASSERT(strstr(output,
+                  "\"label\":\"Widget\",\"kind\":6,\"detail\":\"type Widget\"") != NULL);
+    ASSERT(strstr(output,
+                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"fn make_widget(): Widget\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -5961,6 +5969,8 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"loop_example\"") != NULL);
+    ASSERT(strstr(output,
+                  "\"label\":\"loop_example\",\"kind\":3,\"detail\":\"fn loop_example(): int\"") != NULL);
 
     free(output);
     free(shutdown);

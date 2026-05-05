@@ -15,5 +15,4 @@ extern fn puts(msg: string): int;
 fn main(args: string[]) {
   puts("hello, examples");
   // lp.loop_example([""]);
-  lp.
 }

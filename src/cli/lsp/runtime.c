@@ -9007,7 +9007,7 @@ static bool append_alias_module_completion_items(FengLspString *json,
         *handled = true;
         module = find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count);
         if (module != NULL) {
-            return append_semantic_module_completion_items(json, first, module, true, "module", 9);
+            return append_semantic_module_completion_items(json, first, module, true, NULL, -1);
         }
         if (session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
             return append_loaded_module_completion_items(json,
@@ -9016,8 +9016,8 @@ static bool append_alias_module_completion_items(FengLspString *json,
                                                          use_decl->segments,
                                                          use_decl->segment_count,
                                                          true,
-                                                         "module",
-                                                         9);
+                                                         NULL,
+                                                         -1);
         }
         return append_project_module_completion_items(json,
                                                       first,
@@ -9025,8 +9025,8 @@ static bool append_alias_module_completion_items(FengLspString *json,
                                                       use_decl->segments,
                                                       use_decl->segment_count,
                                                       true,
-                                                      "module",
-                                                      9);
+                                                      NULL,
+                                                      -1);
     }
     return true;
 }
@@ -9401,7 +9401,7 @@ static bool append_project_imported_completion_items(FengLspString *json,
                                                               first,
                                                               scanned_program,
                                                               true,
-                                                              "imported",
+                                                              NULL,
                                                               -1);
                     break;
                 }
@@ -9538,7 +9538,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
             alias_module = find_alias_module(session, program, expr->as.member.object->as.identifier);
         }
         if (alias_module != NULL) {
-            if (!append_semantic_module_completion_items(json, &first, alias_module, true, "module", 9)) {
+            if (!append_semantic_module_completion_items(json, &first, alias_module, true, NULL, -1)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -9593,7 +9593,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 continue;
             }
             if (module != NULL) {
-                if (!append_semantic_module_completion_items(json, &first, module, true, "imported", -1)) {
+                if (!append_semantic_module_completion_items(json, &first, module, true, NULL, -1)) {
                     local_list_dispose(&locals);
                     return false;
                 }
@@ -9603,7 +9603,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                               use_decl->segments,
                                                               use_decl->segment_count,
                                                               true,
-                                                              "imported",
+                                                              NULL,
                                                               -1)) {
                 local_list_dispose(&locals);
                 return false;
@@ -9664,7 +9664,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
                     continue;
                 }
-                if (!append_symbol_decl_completion_item(json, &first, decl, "module", 9)) {
+                if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
                     local_list_dispose(&locals);
                     return false;
                 }
@@ -9735,7 +9735,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                     if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
                         continue;
                     }
-                    if (!append_symbol_decl_completion_item(json, &first, decl, "imported", -1)) {
+                    if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
                         local_list_dispose(&locals);
                         return false;
                     }
