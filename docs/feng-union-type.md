@@ -1,8 +1,8 @@
-# Feng 联合类型草案
+# Feng 联合类型规范
 
-> **状态**: 讨论草案。
-> 本文档用于整理 2026-05-05 关于联合类型的讨论结论与待定问题，**不是当前语言权威规范**。
-> 若后续采纳，应把已确认规则拆分并并入 [feng-spec.md](./feng-spec.md)、[feng-language.md](./feng-language.md)、[feng-type.md](./feng-type.md) 与相关规范；本文档本身不替代这些主规范。
+> **状态**: 设计已收口，待实现。
+> 本文档用于收敛 Feng 联合类型在当前阶段的专项规范与实现边界。
+> 在相关总规范完成并入前，涉及 union-form 语义时，其他文档应引用本文；`if 目标值 { ... }` 的通用流程控制语法外壳见 [feng-flow.md](./feng-flow.md)。
 
 ## 1 目标
 
@@ -87,7 +87,7 @@ spec DisplayTarget: string | User;
 spec ValueOrName: int | string {}
 ```
 
-上例不符合本草案，因为 union-form 不允许块体。
+上例不符合本文规范，因为 union-form 不允许块体。
 
 ### 3.3 逗号与竖线的语义不同，不只是写法不同
 
@@ -138,6 +138,8 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 ### 3.6 union-form 的基础收窄语法复用现有 `if` 条件匹配，不引入独立 `is`
 
 本次讨论已确认：union-form 的成员判别与类型收窄不引入独立 `is` 运算符，而是复用现有 `if 目标值 { ... }` 条件匹配形式，并在该语法下扩展 union member 匹配能力。
+
+其中，`if 目标值 { ... }` 作为流程控制语法外壳及其表达式位置规则由 [feng-flow.md](./feng-flow.md) 统一定义；本文只补充 union-form 在该语法下的 member 标签、active member 判别与收窄语义。
 
 候选形式如下：
 
@@ -236,7 +238,7 @@ let x = (Named)u;   // 当前阶段不支持
 
 对 object-form `spec` 而言，目标值不仅包含 `subject`，还需要对应的目标 witness。若 `UserType1` 与 `UserType2` 各自进入 `Named` 时使用不同 witness，则一般需要先根据 union 当前 active member 选择正确的那一条投影路径。也就是说，这类投影在一般情形下**可能需要一次基于 `tag` 的运行时选择**，然后才能构造目标 `Named` 值。
 
-出于 Feng 当前“高性能静态语言”的目标，以及“普通向上转换资格与发码路径应尽可能在编译期定死”的约束，本草案当前阶段不把这种 `union -> common spec` 投影纳入普通显式转换规则。若后续需要支持，应作为单独能力设计，而不是并入当前的向上转换语义。
+出于 Feng 当前“高性能静态语言”的目标，以及“普通向上转换资格与发码路径应尽可能在编译期定死”的约束，本文当前阶段不把这种 `union -> common spec` 投影纳入普通显式转换规则。若后续需要支持，应作为单独能力设计，而不是并入当前的向上转换语义。
 
 ### 3.7 union-form 的成员允许包含基础类型、用户定义类型与其他 `spec`
 
@@ -357,20 +359,17 @@ spec Display: Named | string;
 
 ### 4.2 联合类型的映射原则
 
-本次讨论已确认：联合类型可以走 `aggregate`，而且对多数有意义的联合，这应当是主路线。
+本次讨论已确认：union-form 的值级实现统一采用 `aggregate-with-managed-slots` 基线表示。
 
-在当前讨论下，较稳妥的理解是：
+首版固定包含三个组成部分：
 
-- `all-trivial union`：可映射到 `trivial`。
-- `mixed union`：应映射到 `aggregate`。
-- `包含 aggregate 成员的 union`：应映射到 `aggregate`。
+- 一个 `tag`，用于表达当前 active variant。
+- 一个 `inline value`，用于承载按值 payload。
+- 一个托管指针槽位，用于承载当前 variant 需要的托管引用部分。
 
-其中，member 本身既可以是基础类型、用户定义类型，也可以是其他 `spec`；这些类别的混合并不改变 union-form 需要最终映射到既有三类值模型之一这一原则。
+其中，member 本身既可以是基础类型、用户定义类型，也可以是其他 `spec`；这些类别的混合并不改变 union-form 统一落到既有 `aggregate-with-managed-slots` 这一顶层值模型的原则。
 
-对 `all-managed-pointer union`，本次讨论未形成最终定稿：
-
-- 可以继续评估是否允许它落到 `managed-pointer`；
-- 若不能在不引入额外顶层类别的前提下稳定恢复 active variant，则仍建议统一落到 `aggregate`。
+这意味着首版不再为 `all-trivial union` 或 `all-managed-pointer union` 额外定义另一套顶层值分类特例；它们同样按这套统一基线表示落地。
 
 ### 4.3 union-form 的访问路径开销模型
 
@@ -389,15 +388,19 @@ spec Display: Named | string;
 
 ### 4.4 union-form 的运行时基线表示
 
-当前讨论倾向于：
+当前讨论已确认：
 
-- 把 `aggregate` 作为 union-form 的**统一基线表示**；
+- 把 `aggregate-with-managed-slots` 作为 union-form 的**统一基线表示**；
+- 其首版固定布局为“一个 `tag`、一个 `inline value`、一个托管指针槽位”；
+- 其中 `tag` 负责表达当前 active variant；
+- 托管指针槽位是否有效，由当前 active variant 决定；未使用该槽位的 variant 视为该槽位为空；
+- 复制、销毁与托管扫描只按当前 active variant 对应的布局规则处理该托管指针槽位；这套生命周期继续复用现有 aggregate 通用能力，由相应描述符驱动，不要求为 union-form 新增专用 runtime 分支或新的通用 API；
 - 即使未来对某些受限子集做优化，也不影响 union-form 在抽象层面归类为既有三类之一。
 
 这条结论的含义是：
 
 - 联合类型**不需要新增第四类顶层运行时结构**；
-- 但它仍可能需要新的布局规则、判别规则或描述符扩展。
+- 首版主要新增的是 codegen 发出的固定布局与描述符元信息，而不是修改现有 runtime 的通用 aggregate 生命周期实现。
 
 ## 5 关于开销的评估结论
 
@@ -425,7 +428,7 @@ spec Display: Named | string;
 
 ## 6 对 parser / AST / 语义层的直接要求
 
-若后续采纳本草案，需要把联合类型视为 `spec` 的新增 form，而不是沿用现有字段名硬塞进 object-form 语义。
+若按本文推进实现，需要把联合类型视为 `spec` 的新增 form，而不是沿用现有字段名硬塞进 object-form 语义。
 
 最低要求如下：
 
@@ -471,9 +474,9 @@ spec Display: Named | string;
   - 可编译期收窄时优先编译期收窄；
   - 运行时收窄时，分支内后续访问按确定 member 直接发码。
 
-## 7 当前尚未拍板的问题
+## 7 已收口的边界问题
 
-以下小节用于汇总 union-form 当前仍需跟踪的设计点。标明“仍待明确”的内容属于尚未最终定稿的问题；已写明“当前阶段无剩余未决项”的小节表示该主题已在本轮讨论中收口。
+以下小节记录 union-form 在本轮讨论中需要单独收口、现已确认的边界问题。当前阶段无剩余未决项；若后续能力边界发生变化，应同步修订本文与相关主规范。
 
 ### 7.1 union-form 的成员合法集合
 
@@ -487,7 +490,7 @@ spec Display: Named | string;
 
 当前阶段无剩余未决项。
 
-与 C ABI 相关的表示、兼容性与约束问题，不在本草案当前阶段处理；该问题留待未来统一方案单独收口，不作为 union-form 当前设计的前置约束。
+与 C ABI 相关的表示、兼容性与约束问题，不在本文当前阶段处理；该问题留待未来统一方案单独收口，不作为 union-form 当前设计的前置约束。
 
 ### 7.2 union-form 的相等性
 
@@ -519,15 +522,20 @@ spec Display: Named | string;
 
 ### 7.4 aggregate union 的条件性槽位
 
-若 union-form 的值级实现采用 `aggregate`，仍需回答：
+当前讨论已确认：union-form 的值级实现固定包含：
 
-- 如何表达 active variant。
-- 如何表达“某些托管槽位只在某个 variant 下有效”。
+- 一个 `tag`。
+- 一个 `inline value`。
+- 一个托管指针槽位。
 
-本次讨论仅确认：
+对应语义为：
 
-- 这属于 union-form 的核心实现问题；
-- 但它不构成引入第四类顶层运行时结构的理由。
+- `tag` 负责表达当前 active variant。
+- 托管指针槽位是否有效由当前 active variant 决定；对不使用该槽位的 variant，该槽位视为空。
+- 复制、销毁与托管扫描仅按当前 active variant 对应的 member 规则处理该托管指针槽位。
+- 该设计仍属于既有 `aggregate-with-managed-slots` 顶层值模型，不构成第四类运行时结构。
+
+当前阶段无剩余未决项。
 
 ### 7.5 重叠 member 的歧义判定与 active variant 选择
 
@@ -566,9 +574,9 @@ let t: Display = s;
 
 当前阶段无剩余未决项。
 
-## 8 若后续采纳，需要更新的主规范
+## 8 若后续并入主规范，需要更新的文档
 
-若本草案后续进入正式规范，至少需要评估以下文档的改动面：
+若后续把本文并入总规范，至少需要评估以下文档的改动面：
 
 - [feng-spec.md](./feng-spec.md)
 - [feng-language.md](./feng-language.md)
@@ -584,18 +592,20 @@ let t: Display = s;
 
 - `feng-spec.md` 应成为 union-form `spec` 的主规范归属。
 - `feng-language.md` 只负责总览性说明，不应重复细则。
-- `feng-type.md` 与 `feng-flow.md` 只负责引用与协作规则，不应重复 union-form 的主定义。
+- `feng-type.md` 只负责类型系统总览与引用，不应重复 union-form 的主定义。
+- `feng-flow.md` 只负责 `if 目标值 { ... }` 的流程控制语法外壳与其对 union member 匹配的入口说明；union member 的归一化、收窄、active member 判别与转换边界仍由本文定义。
 
-## 9 当前建议的推进顺序
+## 9 当前建议的实现顺序
 
-若继续推进，建议按以下顺序收敛：
+若继续推进实现，建议按以下顺序落地：
 
-1. 先拍板 union-form 的语法与 form 边界。
-2. 再拍板 union-form 的成员合法集合。
-3. 再拍板 union-form 的相等性。
-4. 最后才进入运行时布局与 codegen 细化。
+1. 先落 parser / AST，补齐 union-form 语法、form 边界与成员集合承载。
+2. 再落语义层，完成成员归一化、进入站点 member 选择、显式转换边界与 `if` 收窄规则。
+3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按“一个 `tag`、一个 `inline value`、一个托管指针槽位”的固定布局完成构造、判别、复制、销毁与扫描。
+4. 最后补齐 diagnostics、测试与主规范并入。
 
 原因：
 
-- 语法与语义边界先定，才能稳定 AST 结构。
-- 成员合法集合、相等性决定后，运行时结构才不会反复返工。
+- 语法承载与语义归一化先稳定，后续 runtime / codegen 才有确定输入。
+- 固定布局与分支收窄规则需要依赖已完成的语义信息，不能倒序施工。
+- 现有 runtime 的 aggregate 通用能力已足以承载 union 生命周期；实现工作重心在描述符设计与发码接入，而不在 runtime 通用层改造。
