@@ -438,6 +438,8 @@ spec Reader<T: Bar> { ... }
 - [Feng 语言 `spec` 规范](./feng-spec.md)：object-form `spec` 与 callable-form `spec` 的现有语义边界。
 - [Feng 语言类型规范](./feng-type.md)：`type` 成员、类型位置与对象构造规则。
 - [Feng 语言表达式与运算规范](./feng-expression.md)：调用、成员访问与表达式语法外壳。
+- [Feng 语言符号表规范](./feng-symbol-table.md)：公开泛型声明在 `.ft` 中的导出事实、类型节点与关系编码要求。
+- [Feng 语言包规范](./feng-package.md)：泛型声明进入 `.fb/mod/**/*.ft` 后的包级定位与消费规则。
 - [Feng 语言 C 互操作规范](./feng-interop.md)：`@fixed`、`extern` 与 C ABI 边界；泛型与其交叉规则待后续统一收敛。
 
 ## 9 实现分阶段工作（非规范性）
@@ -492,6 +494,7 @@ spec Reader<T: Bar> { ... }
 
 ### 9.4 符号表与跨模块
 
+- 公开泛型声明进入 `.ft` / `.fb` 的权威规则,以 [feng-symbol-table.md](./feng-symbol-table.md) 与 [feng-package.md](./feng-package.md) 为准; 本小节只说明实现阶段至少需要消费哪些结论。
 - 若公开泛型声明需要进入 `.ft` / `.fb` 导出层，则符号表必须保留泛型参数列表、参数个数以及未实例化签名骨架，不能只导出某个已替换后的具体文本签名。
 - 当前阶段公开符号表无需导出 variance 元信息；泛型实例兼容性统一按不变规则处理即可。
 - 若公开泛型声明支持省略显式类型实参的调用，则 `.ft` / `.fb` 导出层还必须保留支撑推导所需的参数类型、返回类型与约束事实，不能只保留“已推导后的使用结果”。

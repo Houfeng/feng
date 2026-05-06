@@ -154,6 +154,9 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开模块级 `let` / `var`。
 - 公开成员字段与成员方法。
 - 公开构造函数与终结器函数。
+- 公开泛型声明的类型参数列表、参数顺序、参数约束目标与未实例化签名骨架。
+- 公开泛型父 `spec` 使用、泛型 `fit` 契约使用以及其有序类型实参事实。
+- 支撑跨包重载决议与泛型推导所需的泛型参数数量、参数类型与约束事实。
 - 公开 `extern fn` 与 `@fixed` 声明所需的 ABI 元信息。
 - 公开 `let` 成员的 `@bounded` 声明事实,以及构造函数 `@bounded(...)` 绑定关系。
 - 公开声明的文档注释。
@@ -164,6 +167,13 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 绑定初值、常量值、运行时数据。
 - 私有声明。
 - 源码绝对路径、源码行列号等闭源分发不应泄露的信息。
+
+针对泛型,公开包表还必须满足以下约束:
+
+- `.ft` / `.fb` 导出的是**声明级泛型事实**,而不是某次调用点推导结果或某个单态化实例的专用实现。
+- 公开泛型 `type`、`spec`、顶层 `fn` 与成员方法,都必须以“声明符号 + 有序类型参数 + 约束 + 未替换签名骨架”的形式导出,使 consumer 仅依赖 `.ft` 就能完成名称解析、约束检查、重载决议与泛型推导。
+- 跨包消费泛型时,consumer 不得以“重新读取 provider 源码”或“包内一定存在某个已单态化实例”作为成立前提。
+- 当前阶段公开包表无需导出 variance 元信息; 泛型实例兼容性统一按语言规范中的不变规则处理。
 
 ### 5.2 本地缓存 `.ft` 相比公开 `.ft` 的增量信息
 
@@ -217,8 +227,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 |  | STRS  | string pool                                    |  |
 |  | SYMS  | symbol records                                 |  |
 |  | TYPS  | type nodes                                     |  |
-|  | SIGS  | callable signatures                            |  |
-|  | PRMS  | parameters                                     |  |
+|  | TSEQ  | type sequence elements                         |  |
 |  | RELS  | semantic relations                             |  |
 |  | DOCS? | doc map                                         |  |
 |  | ATRS? | extensible attributes                           |  |
@@ -239,8 +248,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
   |- STRS
   |- SYMS
   |- TYPS
-  |- SIGS
-  |- PRMS
+  |- TSEQ
   |- RELS
   |- DOCS? 
   `- ATRS?
@@ -256,8 +264,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
   |- STRS
   |- SYMS
   |- TYPS
-  |- SIGS
-  |- PRMS
+  |- TSEQ
   |- RELS
   |- DOCS?
   |- ATRS?
@@ -366,18 +373,17 @@ Header
 | `FT_SEC_STRS` | `0x0001` | 必需 | 全部 | 字符串池 |
 | `FT_SEC_SYMS` | `0x0002` | 必需 | 全部 | 符号记录 |
 | `FT_SEC_TYPS` | `0x0003` | 必需 | 全部 | 类型节点 |
-| `FT_SEC_SIGS` | `0x0004` | 必需 | 全部 | 可调用签名 |
-| `FT_SEC_PRMS` | `0x0005` | 必需 | 全部 | 参数记录 |
-| `FT_SEC_RELS` | `0x0006` | 必需 | 全部 | 关系记录 |
-| `FT_SEC_DOCS` | `0x0007` | 可选 | 全部 | 文档注释 |
-| `FT_SEC_ATTRS` | `0x0008` | 可选 | 全部 | 扩展属性 |
+| `FT_SEC_TSEQ` | `0x0004` | 必需 | 全部 | 类型序列元素 |
+| `FT_SEC_RELS` | `0x0005` | 必需 | 全部 | 关系记录 |
+| `FT_SEC_DOCS` | `0x0006` | 可选 | 全部 | 文档注释 |
+| `FT_SEC_ATTRS` | `0x0007` | 可选 | 全部 | 扩展属性 |
 | `FT_SEC_SPNS` | `0x0010` | 可选 | workspace-cache | 源码位置 |
 | `FT_SEC_USES` | `0x0011` | 可选 | workspace-cache | 依赖模块与指纹 |
 | `FT_SEC_META` | `0x0012` | 可选 | workspace-cache | 缓存失效信息 |
 
 保留规则:
 
-- `0x0009` 至 `0x000F` 预留给未来核心节。
+- `0x0008` 至 `0x000F` 预留给未来核心节。
 - `0x0013` 至 `0x001F` 预留给未来 workspace-cache 专用节。
 - package-public profile 不得出现 `0x0010` 以上的 workspace-only 节。
 
@@ -435,8 +441,7 @@ Section Directory
 |- entry(kind = STRS,  offset = ..., size = ...)
 |- entry(kind = SYMS,  offset = ..., size = ...)
 |- entry(kind = TYPS,  offset = ..., size = ...)
-|- entry(kind = SIGS,  offset = ..., size = ...)
-|- entry(kind = PRMS,  offset = ..., size = ...)
+|- entry(kind = TSEQ,  offset = ..., size = ...)
 |- entry(kind = RELS,  offset = ..., size = ...)
 |- entry(kind = DOCS,  offset = ..., size = ...) ?
 |- entry(kind = ATRS,  offset = ..., size = ...) ?
@@ -451,7 +456,7 @@ Section Directory
 read header
   -> validate version/profile
   -> read section directory
-  -> locate STRS/SYMS/TYPS/SIGS/PRMS/RELS
+  -> locate STRS/SYMS/TYPS/TSEQ/RELS
   -> load optional DOCS/ATRS as needed
   -> if workspace-cache profile, load SPNS/USES/META
 ```
@@ -465,6 +470,7 @@ read header
 - 编译器不得仅因包由不同版本的 Feng 编译器生成而拒绝使用。
 - `FT_VERSION_MAJOR` 相同表示 core 外壳兼容: Header 布局、Section Directory 布局以及 core required section 的固定记录外形保持稳定。
 - 在相同 `FT_VERSION_MAJOR` 内,`FT_VERSION_MINOR` 只允许做追加式演进: 新增可选 section、新增 attr key、新增 flag bit、新增 append-only kind 常量; 不得改写既有 required section 的固定记录布局。
+- 泛型进入公开 `.ft` 时,必须优先通过“追加新的 `FT_SYM_*` / `FT_TYPE_*` / `FT_REL_*` kind 常量与追加 attr key”表达新增语义,让不理解这些语义的旧 consumer 显式拒绝; 不得把泛型结构偷偷折叠进旧 `FT_TYPE_KIND_NAMED` 的字符串文本或其他会被旧 consumer 误读的既有字段语义中。
 - 若新增语义会让旧 consumer 在“忽略后仍可能编译错误或链接错误”,则不得作为同 major 的 silently-optional 扩展发出; 此类变化必须提升 major,或通过新的 required section 让旧 consumer 明确拒绝。
 - 新er 编译器必须能够读取并消费旧的同 major `.ft` 包; 旧编译器是否能读取较新的同 major `.ft`,取决于该包是否只使用了其可安全忽略的追加扩展。
 - 是否可链接、是否可运行,除 `.ft` 格式外还取决于对应平台库文件、运行时 ABI 和 `@fixed` / bridge 规则是否兼容; 这些不由编译器版本号单独决定。
@@ -484,6 +490,34 @@ read header
 - `ATRS` 为可选 section。
 - 未识别的 attr key,只有在其所在 section 标记 `FT_SEC_FLAG_IGNORABLE` 时,consumer 才可安全跳过。
 - 若某个新增语义对正确编译是强制性的,则不得仅以“可忽略 attr”形式发布给旧 consumer。
+
+`ATRS` 的固定记录结构建议与当前实现保持一致:
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `symbol_id` | `u32` | attr 所属 `SYMS.id` |
+| `kind` | `u16` | attr key 常量 |
+| `reserved0` | `u16` | 固定写 `0` |
+| `value0` | `u32` | key 专用值 |
+| `value1` | `u32` | key 专用值 |
+| `value2` | `u32` | key 专用值 |
+
+attr key 常量建议如下:
+
+| 常量 | 值 | owner | 说明 |
+| --- | --- | --- | --- |
+| `FT_ATTR_DECLARED_SPECS` | `0x0001` | `type` / `spec` | 头部 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
+| `FT_ATTR_UNION` | `0x0002` | `type` | `@union` 标记 |
+| `FT_ATTR_CALL_CONV` | `0x0003` | `extern_fn` | ABI 调用约定枚举值；`value0` = 调用约定枚举 |
+| `FT_ATTR_ABI_LIBRARY` | `0x0004` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
+| `FT_ATTR_FIT_SPECS` | `0x0005` | `fit` | `fit A: B, C` 右侧 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
+
+补充规则:
+
+- `FT_ATTR_DECLARED_SPECS` 在 `type` 上表示 `type A: B, C` 头部的 `spec` 使用列表,在 `spec` 上表示 `spec Child: Parent, Other` 的父 `spec` 使用列表。
+- `FT_ATTR_FIT_SPECS` 用于 `fit` 右侧 `spec` 使用列表; `fit` 目标类型自身继续走 `SYMS.extra_ref`。
+- `FT_ATTR_CALL_CONV` 与 `FT_ATTR_ABI_LIBRARY` 仅出现在 `extern_fn` 符号上; 普通函数与方法无需这两个 attr。
+- 泛型第一阶段不要求新增其他 attr key。类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达,而不是把核心语义塞进 `ATRS`。
 
 ### 6.4 `STRS` 字符串池
 
@@ -513,12 +547,22 @@ read header
 | `id` | `u32` | 符号 ID |
 | `owner_id` | `u32` | 所属符号; 顶层归根模块 |
 | `name_str` | `u32` | 名称字符串 ID |
-| `kind` | `u16` | 符号类型 |
+| `kind` | `u16` | 符号种类 |
 | `flags` | `u16` | 符号标志 |
-| `type_ref` | `u32` | 绑定/字段的类型 ID; 非类型类符号为 `0` |
-| `sig_ref` | `u32` | 函数/方法/构造等签名 ID; 非 callable 为 `0` |
-| `extra_ref` | `u32` | kind 专用辅助引用 |
+| `type_ref` | `u32` | 符号的完整类型节点 ID（`TYPS.id`）; MODULE / FIT 为 `0` |
+| `extra_ref` | `u32` | kind 专用辅助引用: FIT 为目标类型 `TYPS.id`; MODULE 为模块名字符串 ID; 其余 `0` |
 | `doc_ref` | `u32` | 文档记录 ID,无则为 `0` |
+
+`type_ref` 对各 kind 的含义:
+
+| kind | `type_ref` 指向 |
+| --- | --- |
+| `binding` / `field` | 值类型的 `TYPS.id` |
+| `fn` / `method` / `ctor` / `dtor` | TYPS callable 节点（含所有参数 + 返回类型） |
+| `spec` | TYPS spec 节点（TYPS.kind 区分 form: object / callable / union） |
+| `type` | 类型自身对应的 `TYPS.id` |
+| `fit` | `0`（fit 无自己的"类型"；目标类型走 `extra_ref`） |
+| `module` | `0` |
 
 建议支持的 `kind`:
 
@@ -534,6 +578,23 @@ read header
 - `method`
 - `top_let`
 - `top_var`
+- `type_param`
+
+建议第一版 `SYMS.kind` 固定常量值如下:
+
+- `FT_SYM_KIND_MODULE = 1`
+- `FT_SYM_KIND_TYPE = 2`
+- `FT_SYM_KIND_SPEC = 3`
+- `FT_SYM_KIND_FIT = 4`
+- `FT_SYM_KIND_TOP_FN = 5`
+- `FT_SYM_KIND_EXTERN_FN = 6`
+- `FT_SYM_KIND_CTOR = 7`
+- `FT_SYM_KIND_DTOR = 8`
+- `FT_SYM_KIND_FIELD = 9`
+- `FT_SYM_KIND_METHOD = 10`
+- `FT_SYM_KIND_TOP_LET = 11`
+- `FT_SYM_KIND_TOP_VAR = 12`
+- `FT_SYM_KIND_TYPE_PARAM = 13`
 
 建议支持的 `flags`:
 
@@ -550,48 +611,141 @@ read header
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
 - 被语义分析判定为“不得导出”的声明,不进入公开 `.ft`; 本地缓存 `.ft` 可按本地需要保留。
 
+针对泛型,`SYMS` 还必须满足以下规则:
+
+- 泛型声明的类型参数必须作为独立符号导出,并使用 `FT_SYM_KIND_TYPE_PARAM`; 其 `owner_id` 指向所属声明符号。合法 owner 仅包括 `type`、`spec`、`top_fn` 与 `method`; `fit` 不定义新的类型参数,因此不得拥有 `type_param` 子符号。
+- `type_param` 符号的 `name_str` 表达参数名,`extra_ref` 固定表达其在声明头中的 0-based 有序位置,`type_ref` 在有约束时指向约束目标对应的 `TYPS.id`,无约束时为 `0`,`doc_ref` 固定为 `0`。
+- `type_param` 是导出辅助符号,用于恢复泛型声明头; consumer 不得把它当作普通可枚举成员方法、字段或顶层声明对外展示。
+- consumer 必须按 `owner_id + extra_ref` 恢复类型参数顺序; 不得按名称重排或重编号。
+- 具名泛型声明在跨包查询时的 identity 仍按“名称 + 泛型参数数量”判断; `.ft` 读取器不得仅因参数名或约束目标不同就把同名同参数数量声明视为不同实体。
+- `fit` 符号的 `extra_ref` 继续表示目标类型的 `TYPS.id`; 当目标是 `UserType<T, U>` 这类泛型使用时,该 `TYPS.id` 必须指向结构化泛型类型节点,而不是纯文本名字。
+
 #### 6.5.1 core section 引用关系图
 
 从“谁引用谁”的角度看,core section 大致是这个结构:
 
 ```text
 STRS
- ^   ^        ^         ^
- |   |        |         |
- |   |        |         +------------------ DOCS.doc_str_id
- |   |        +---------------------------- PRMS.name_str
- |   +------------------------------------- SYMS.name_str
- +----------------------------------------- module names / ABI strings / paths
+ ^        ^
+ |        |
+ |        +--------------------------------- DOCS.doc_str_id
+ +----------------------------------------- SYMS.name_str / MODULE name / ABI library str
 
 SYMS
  |- owner_id  ------> SYMS.id
  |- type_ref  ------> TYPS.id
- |- sig_ref   ------> SIGS.id
  `- doc_ref   ------> DOCS.id
 
-SIGS
- |- return_type_id --> TYPS.id
- `- params ---------> PRMS range
+TYPS
+ `- elem_start ------> TSEQ range (elem_count 个元素)
+
+TSEQ
+ `- type_id ---------> TYPS.id
 
 RELS
  `- left/right/owner -> SYMS.id
 ```
 
-也就是说,实际消费时通常先读 `STRS`,再读 `SYMS`,然后按需解开 `TYPS`、`SIGS`、`PRMS`、`RELS` 与 `DOCS`。
+也就是说,实际消费时通常先读 `STRS`,再读 `SYMS`,然后按需解开 `TYPS`、`TSEQ`、`RELS` 与 `DOCS`。
 
 ### 6.6 `TYPS` 类型节点
 
 `TYPS` 用于表达已解析后的类型结构,避免在消费端再次解析类型文本。
 
-建议第一版至少支持:
+`TYPS` 的固定记录结构如下:
 
-- `builtin`
-- `named`
-- `array`
-- `callable-spec`
-- `c-pointer`
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kind` | `u16` | 类型节点 kind 常量 |
+| `reserved0` | `u16` | 固定写 `0` |
+| `string_ref` | `u32` | kind 专用字符串引用（见各 kind 说明） |
+| `sym_ref` | `u32` | kind 专用声明符号引用（见各 kind 说明） |
+| `elem_start` | `u32` | TSEQ 第一个元素的 0-based 下标（0 = 无） |
+| `elem_count` | `u32` | TSEQ 元素数量（array: rank） |
+| `reserved1` | `u32` | 固定写 `0` |
 
-类型节点建议以 DAG 形式表达,供多个符号和签名共享引用。复杂类型一律通过子节点 ID 组合,不在字符串里重新编码一份“类型文本”。
+建议第一版 `TYPS.kind` 固定常量值如下:
+
+- `FT_TYPE_KIND_BUILTIN = 1`
+- `FT_TYPE_KIND_NAMED = 2`
+- `FT_TYPE_KIND_ARRAY = 3`
+- `FT_TYPE_KIND_C_POINTER = 4`
+- `FT_TYPE_KIND_TYPE_PARAM_REF = 5`
+- `FT_TYPE_KIND_NAMED_GENERIC = 6`
+- `FT_TYPE_KIND_CALLABLE = 7`
+- `FT_TYPE_KIND_SPEC_OBJECT = 8`
+- `FT_TYPE_KIND_SPEC_CALLABLE = 9`
+
+未来若出现新的不可约类型构造（如元组、union spec），优先追加新的 `FT_TYPE_*` kind 常量，而不是改动既有 `TYPS` 记录壳。预留位置：
+
+- `FT_TYPE_KIND_SPEC_UNION = 10`（未来 union spec form）
+- `FT_TYPE_KIND_TUPLE = 11`（未来元组）
+
+类型节点建议以 DAG 形式表达,供多个符号共享引用。复杂类型一律通过子节点 ID 组合,不在字符串里重新编码一份"类型文本"。
+
+各 kind 的字段使用规则:
+
+**`FT_TYPE_KIND_BUILTIN`**（内置类型）:
+
+- `string_ref`：内置类型名字符串；其余字段为 `0`。
+
+**`FT_TYPE_KIND_NAMED`**（具名非泛型类型）:
+
+- `string_ref`：按 `.` 连接的规范名称；`sym_ref`：声明符号 ID；其余字段为 `0`。
+
+**`FT_TYPE_KIND_NAMED_GENERIC`**（泛型具名使用，如 `Box<T>`）:
+
+- `string_ref`：不含类型实参的规范名称；`sym_ref`：基声明符号 ID；
+- `elem_start` / `elem_count`：在 TSEQ 中的类型实参范围（各元素 `name_str=0`）。
+- consumer 不得把它降格为纯文本名字；必须使用新增 kind 让旧 consumer 显式拒绝。
+
+**`FT_TYPE_KIND_CALLABLE`**（函数/方法签名）:
+
+- `elem_start` / `elem_count`：在 TSEQ 中的有序元素范围。
+  - 前 N-1 个元素为参数（`name_str` = 参数名字符串 ID）；
+  - 最后 1 个元素为返回类型（`name_str = 0`）。
+- 方法的 `self` 不写入 TSEQ；由 `owner_id` 与符号 `kind` 隐式表达。
+- `string_ref`、`sym_ref`、`reserved1` 固定为 `0`。
+
+**`FT_TYPE_KIND_SPEC_OBJECT`** / **`FT_TYPE_KIND_SPEC_CALLABLE`**（spec 不同 form）:
+
+- spec 的 form 通过 TYPS.kind 区分，不通过 SYMS.kind；
+- `sym_ref`：spec 声明符号 ID；其余字段见 spec 具体编码规则。
+
+**`FT_TYPE_KIND_TYPE_PARAM_REF`**（类型参数引用）:
+
+- `string_ref`：参数名字符串；`sym_ref`：被引用的 `type_param` 符号 ID；其余字段为 `0`。
+- consumer 不得把它降格为纯文本名字。
+
+**`FT_TYPE_KIND_ARRAY`**（数组类型）:
+
+- `string_ref`：逐层可写位图 `mutability_bitmap`（覆盖 `T[]`、`T[]!`、`T[]![]` 等语义）；
+- `elem_count`：数组层数 `rank`；`elem_start`：元素类型 TYPS.id；`sym_ref`、`reserved1` 为 `0`。
+
+**`FT_TYPE_KIND_C_POINTER`**（C 指针类型）:
+
+- `elem_start`：指向的元素类型 TYPS.id；其余字段为 `0`。
+
+各 kind 的字段汇总:
+
+| kind | string_ref | sym_ref | elem_start | elem_count |
+| --- | --- | --- | --- | --- |
+| BUILTIN | 类型名字符串 | 0 | 0 | 0 |
+| NAMED | 规范名称字符串 | 声明符号 ID | 0 | 0 |
+| NAMED_GENERIC | 基名称字符串 | 声明符号 ID | TSEQ 起始下标 | 类型实参数量 |
+| CALLABLE | 0 | 0 | TSEQ 起始下标 | 参数数量 + 1 |
+| SPEC_OBJECT / SPEC_CALLABLE | 0 | spec 声明符号 ID | 0 | 0 |
+| TYPE_PARAM_REF | 参数名字符串 | type_param 符号 ID | 0 | 0 |
+| ARRAY | mutability_bitmap | 0 | 元素类型 TYPS.id | rank |
+| C_POINTER | 0 | 0 | 指向元素 TYPS.id | 0 |
+
+针对泛型,`TYPS` 还必须覆盖以下类型特征:
+
+- 类型参数引用必须以独立类型节点表达,使用 `FT_TYPE_KIND_TYPE_PARAM_REF`。
+- 具名泛型使用必须保留"目标声明符号 + 有序类型实参列表"，使用 `FT_TYPE_KIND_NAMED_GENERIC` + TSEQ。
+- 同一个具名声明在不同类型实参数量下是不同的类型使用；consumer 按"名称 + 类型实参数量"精确匹配。
+- 泛型可调用签名的参数/返回类型，使用 `FT_TYPE_KIND_CALLABLE` + TSEQ；类型参数引用在 TSEQ 元素的 `type_id` 中以 `TYPE_PARAM_REF` 节点表达。
+- 导出的泛型 callable 签名必须保持未实例化声明骨架；不得在导出时提前替换为某个调用点的推导结果。
 
 当前 Feng 已有但必须被 `TYPS` 覆盖的类型特征包括:
 
@@ -599,45 +753,77 @@ RELS
 - `*T` 作为 `c-pointer` 类型节点处理。
 - 数组的层数与逐层可写性必须进入类型节点,不能只把 `T[]![]` 抹平成一个字符串。
 
-因此,`array` 类型节点至少应编码:
+### 6.7 `TSEQ` 类型序列元素
 
-- 元素类型 ID。
-- 数组层数 `rank`。
-- 逐层可写位图 `mutability_bitmap`,用于覆盖 `T[]`、`T[]!`、`T[][]!`、`T[]![]`、`T[]![]!` 等现有语义。
+`TSEQ` 是通用有序类型列表，供 `TYPS` 节点（callable 参数列表、泛型实参、元组元素等）共享使用。
 
-未来若出现新的不可约类型构造,优先追加新的 `FT_TYPE_*` kind 常量,而不是改动既有 `TYPS` 记录壳。
+`TSEQ` 的固定记录结构如下:
 
-### 6.7 `SIGS` 与 `PRMS`
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name_str` | `u32` | 元素名称字符串 ID（0 = 匿名） |
+| `type_id` | `u32` | 元素类型 TYPS.id |
+| `flags` | `u16` | 元素标志位（`let`/`var` 可写性等） |
+| `reserved0` | `u16` | 固定写 `0` |
 
-`SIGS` 表达 callable 的签名轮廓,`PRMS` 表达参数列表。
+`TSEQ` 元素的使用场景:
 
-`SIGS` 最少应包含:
+| 场景 | TYPS kind | TSEQ 内容 |
+| --- | --- | --- |
+| 函数/方法签名 | CALLABLE | 前 N 个是参数（`name_str` = 参数名），最后 1 个是返回类型（`name_str = 0`） |
+| 泛型类型实参 | NAMED_GENERIC | 各实参（`name_str = 0`） |
+| 元组（未来） | TUPLE | 各元素（`name_str = 0` 或有标签） |
+| union spec（未来） | SPEC_UNION | 各变体类型（`name_str` 可为变体名） |
 
-- 返回类型 ID
-- 参数起始偏移
-- 参数数量
-- 调用约定/ABI 辅助字段
+补充规则:
 
-`PRMS` 最少应包含:
+- `TSEQ` 记录全局顺序存储；`TYPS` 节点通过 `elem_start` + `elem_count` 引用一段连续范围。
+- writer 必须保证同一 `TYPS` 节点引用的 `TSEQ` 元素是连续的。
+- `CALLABLE` 类型的返回类型元素永远是 TSEQ 范围中的最后一个（`name_str = 0`）；consumer 可直接取最后元素作为返回类型，前面所有元素为参数。
+- 顶层泛型函数与泛型方法的类型参数列表不平铺进 TSEQ；它们通过 owner 为该 callable 的 `type_param` 子符号表达，callable TSEQ 只引用这些参数参与构成的参数类型与返回类型。
+- 若某方法定义在泛型 `type` 内，其 TSEQ 中的参数类型和返回类型可同时引用外层 `type` 的 `type_param` 与当前方法自己的 `type_param`；consumer 必须保持两层作用域可区分。
+- `flags` 的具体位定义与 SYMS.flags 保持一致的规范子集，第一版只使用 bit 0（`0x0001` = `var`，即可变参数）；未使用位固定写 `0`。
 
-- 参数名字符串 ID
-- 参数类型 ID
-- 参数标志位（`let` / `var` 等）
-
-方法的 `self` 不作为显式参数写入 `PRMS`; 它由 `owner_id` 与符号 `kind` 隐式表达。
 
 ### 6.8 `RELS` 关系记录
 
 `RELS` 负责表达“不是单个符号属性、而是两个符号之间”的语义关系。
 
+`RELS` 的固定记录结构建议与当前实现保持一致:
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kind` | `u16` | relation kind 常量 |
+| `reserved0` | `u16` | 固定写 `0` |
+| `left_symbol_id` | `u32` | 关系左端声明符号 |
+| `right_symbol_id` | `u32` | 关系右端声明符号 |
+| `owner_symbol_id` | `u32` | 关系归属声明符号 |
+
 建议第一版至少覆盖:
 
 - `type_implements_spec`: `type A: B`
+- `spec_extends_spec`: `spec Child: Parent`
 - `fit_implements_spec`: `fit A: B`
 - `fit_extends_type`: `fit A { ... }` 或 `fit A: B { ... }` 对目标类型 `A` 的扩展归属
 - `ctor_binds_member`: 构造函数 `@bounded(foo, bar)` 绑定了哪些公开 `let` 成员
 
+建议第一版 `RELS.kind` 固定常量值如下:
+
+- `FT_REL_TYPE_IMPLEMENTS_SPEC = 1`
+- `FT_REL_FIT_IMPLEMENTS_SPEC = 2`
+- `FT_REL_FIT_EXTENDS_TYPE = 3`
+- `FT_REL_CTOR_BINDS_MEMBER = 4`
+- `FT_REL_SPEC_EXTENDS_SPEC = 5`（追加常量）
+
 无参数 `@bounded` 的成员绑定状态由 `SYMS.flags.bounded_decl` 表达,无需额外 relation。
+
+针对泛型,`RELS` 还必须满足以下规则:
+
+- `RELS` 本身继续只保存声明符号关系,不新增额外字段。关系右侧若存在结构化 `spec` 使用,其具体 `TYPS` 负载通过 owner 上的 attr 范围表达: `type` / `spec` 使用 `FT_ATTR_DECLARED_SPECS`, `fit` 使用 `FT_ATTR_FIT_SPECS`。
+- 对同一个 owner,对应 attr 范围中的 `TYPS` 节点顺序必须与同 owner、同 relation kind 的 `RELS` 记录顺序严格一致。consumer 通过“owner + relation kind + ordinal”配对恢复每条关系对应的结构化使用。
+- 因而,`spec Child<T>: Parent<T>` 与 `spec Child<T>: Parent<int>` 必须导出为两条 `FT_REL_SPEC_EXTENDS_SPEC` relation,并在 owner 为 `Child` 的 `FT_ATTR_DECLARED_SPECS` 范围中按源代码顺序提供各自的 `TYPS` 使用节点。
+- `fit UserType<T, U>: UserSpec<T, U>` 这类泛型 `fit` 必须同时导出“fit 扩展哪个目标 `type`”和“fit 建立了哪个泛型 `spec` 使用关系”两类事实: 目标 `type` 使用继续保存在 `fit` 符号的 `extra_ref`,右侧 `spec` 使用则按 `FT_ATTR_FIT_SPECS` 范围与 `FT_REL_FIT_IMPLEMENTS_SPEC` 顺序配对恢复。
+- 若关系右侧无类型实参,则对应 attr 范围中的 `TYPS` 节点使用普通 `FT_TYPE_KIND_NAMED`; 不得为兼容旧 consumer 而隐式补出不存在的泛型参数。
 
 ### 6.9 `DOCS` 文档注释
 
@@ -722,6 +908,37 @@ pu fn add_user(u: User): bool;
 
 这意味着消费端不需要再从文本里推导“`User` 是否满足 `Named` / `Auditable`、`id` 是否已在声明阶段绑定、`audit` 是来自 `fit` 还是来自原始 `type`”。这些都已经固化为查询事实。
 
+若把示例扩展为:
+
+```feng
+pu spec Reader<T> {
+  fn get(): T;
+}
+
+pu type Box<T> {
+  pu let value: T;
+}
+
+pu fit Box<T>: Reader<T> {
+  pu fn get(): T;
+}
+```
+
+则公开 `.ft` 还最少应出现:
+
+- `type(Box)`
+- `type_param(T)` owned by `Box`,其顺序为 `0`
+- `spec(Reader)`
+- `type_param(T)` owned by `Reader`,其顺序为 `0`
+- `fit(Box<T>: Reader<T>)`
+- `fit.extra_ref -> TYPS(NAMED_GENERIC, string_ref='Box', sym_ref=Box符号ID, elem_start=K, elem_count=1)`，TSEQ[K] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}`
+- attr `fit_specs(fit#2)` 记录一个长度为 `1` 的 `TYPS` 范围,其中唯一节点为 `TYPS(NAMED_GENERIC, string_ref='Reader', elem_start=M, elem_count=1)`，TSEQ[M] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}`
+- relation `fit_extends_type(fit#2 -> Box)`
+- relation `fit_implements_spec(fit#2 -> Reader)`,并按 attr 顺序与 `Reader<T>` 这一结构化使用配对
+- `method(get)` owned by `fit#2`,其 `type_ref` 为 `TYPS(CALLABLE, elem_start=P, elem_count=1)`，TSEQ[P] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}` （返回类型 T）
+
+这样外部 consumer 在只读取 `.ft` 的情况下,就能知道这是一个泛型 `fit`,并能恢复 `Box<T>` 与 `Reader<T>` 的声明级关系,而不需要读取 provider 源码或假设包内存在某个 `Box<int>` 的专门实例。
+
 ## 8 失效与复用策略
 
 ### 8.1 公开 `.ft`
@@ -752,8 +969,9 @@ pu fn add_user(u: User): bool;
 
 1. Phase 3 的本地缓存 `.ft` 是否只缓存声明级符号,还是要把局部符号也一并纳入。当前建议是**先不纳入局部符号**。
 2. 公开 `.ft` 是否在第一版就强制包含 `DOCS`; 当前建议是**应包含**,这样外部依赖包的 hover 才不需要额外侧车文件。
-3. `ATRS` 第一版是先只覆盖 `@union`、调用约定与外部库来源,还是同时预留更多 attr key。当前建议是**先覆盖当前已存在且确定属于声明级的 ABI 元信息**。
-4. 若实现阶段需要兼容读取旧 `.fi`,是否只作为临时 reader 兼容而不进入规范。当前建议是**即使短期兼容读取,仓库文档与新产物也只使用 `.ft`**。
+3. `ATRS` 第一版是否把泛型所需 attr key 一并纳入,还是继续只覆盖非泛型 ABI 元信息。当前建议是**一并纳入**,至少覆盖 `FT_ATTR_DECLARED_SPECS` 与 `FT_ATTR_FIT_SPECS` 对泛型结构化使用范围的表达。
+4. 泛型 capability 是否直接沿用当前 `FST1` major 的 append-only 演进方式。当前建议是**可以**,但必须通过新增 `FT_SYM_KIND_TYPE_PARAM`、`FT_TYPE_KIND_TYPE_PARAM_REF`、`FT_TYPE_KIND_NAMED_GENERIC`、`FT_TYPE_KIND_CALLABLE`、`FT_REL_SPEC_EXTENDS_SPEC` 与新增 TSEQ section、新增 attr key 明确表达,让旧 consumer 显式拒绝,不得把泛型结构偷偷编码进旧 kind 的字符串语义里。
+5. 若实现阶段需要兼容读取旧 `.fi`,是否只作为临时 reader 兼容而不进入规范。当前建议是**即使短期兼容读取,仓库文档与新产物也只使用 `.ft`**。
 
 ## 11 统一迁移策略
 

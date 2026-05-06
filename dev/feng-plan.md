@@ -270,6 +270,30 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 - 本阶段关注构建工具侧依赖解析，不扩展 C ABI 兼容面。
 - 当前该阶段所定义范围已完成；C ABI 兼容与更完整的互操作能力继续放到 Phase 6。
 
+### Phase 5.5：符号表结构重构（泛型实现前置任务）
+
+目标：
+
+- 在开始泛型实现之前，按照 `docs/feng-symbol-table.md` 新规范完成符号表底层结构重构，为泛型支持奠定基础。
+
+范围：
+
+- 取消 SIGS（0x0004）和 PRMS（0x0005）section，新增 TSEQ（0x0004）section；重编号 RELS=0x0005、DOCS=0x0006、ATTRS=0x0007
+- 更新 `FengSymbolFtSymRecord`：删除 `sig_ref` 字段，`type_ref` 统一为"符号的完整类型"（fn/method/ctor/dtor 指向 CALLABLE 类型节点）
+- 更新 `FengSymbolFtTypeRecord`：`aux/aux2/aux3` → `sym_ref/elem_start/elem_count/reserved1`
+- 新增 `FengSymbolFtTseqRecord` 结构（`name_str/type_id/flags/reserved0`）与读写实现
+- 新增 TYPS kind 常量：`FT_TYPE_KIND_CALLABLE=7`、`FT_TYPE_KIND_SPEC_OBJECT=8`、`FT_TYPE_KIND_SPEC_CALLABLE=9`；去掉 `FT_TYPE_KIND_TYPE_ARG_PACK`
+- 更新 `ft_write.c`：函数/方法签名改写为 CALLABLE + TSEQ；spec form 通过 TYPS.kind 区分
+- 更新 `ft_read.c` / `imported_module.c`：适配新字段布局与新 section 编号
+- 将 ABI 信息（`call_conv`、`abi_library`）从 SIGS 移入 ATRS（`FT_ATTR_CALL_CONV=0x0003`、`FT_ATTR_ABI_LIBRARY=0x0004`）
+- 全量回归测试验证重构后的符号表读写正确性
+
+说明：
+
+- 规范文档权威来源：`docs/feng-symbol-table.md`。
+- 此阶段只做结构重构，不实现泛型语法与语义；泛型实现在后续阶段展开。
+- 重构完成后，源码中不应再出现 `sig_ref`、`SIGS`、`PRMS` 相关逻辑。
+
 ### Phase 6：细化 C ABI 兼容与互操作
 
 目标：
@@ -318,8 +342,9 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 8. Phase 3 CLI 与 `.fb` 打包
 9. Phase 4 外部包 + 本地源码
 10. Phase 5 包管理机制
-11. Phase 6 C ABI 兼容与互操作
-12. Phase 7 标准库
+11. Phase 5.5 符号表结构重构（泛型实现前置任务）
+12. Phase 6 C ABI 兼容与互操作
+13. Phase 7 标准库
 
 说明：
 
