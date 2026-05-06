@@ -845,6 +845,251 @@ static void test_block_yield_omits_trailing_semicolon(void) {
     feng_program_free(program);
 }
 
+/* G3-9: Parser tests for generic declarations and type references. */
+
+static void test_generic_type_declaration(void) {
+    /* type Box<T> with one unconstrained type parameter */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_type.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_TYPE);
+    ASSERT(program->declarations[0]->as.type_decl.type_param_count == 1U);
+    ASSERT(program->declarations[0]->as.type_decl.type_params[0].constraint == NULL);
+    assert_slice_text(program->declarations[0]->as.type_decl.type_params[0].name, "T");
+
+    feng_program_free(program);
+}
+
+static void test_generic_type_declaration_with_constraint(void) {
+    /* type Wrapper<T: Named> with a constrained type parameter */
+    const char *source =
+        "mod demo.main;\n"
+        "type Wrapper<T: Named> {\n"
+        "    var inner: T;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_type_constrained.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->as.type_decl.type_param_count == 1U);
+    ASSERT(program->declarations[0]->as.type_decl.type_params[0].constraint != NULL);
+    assert_slice_text(program->declarations[0]->as.type_decl.type_params[0].name, "T");
+    assert_slice_text(program->declarations[0]->as.type_decl.type_params[0].constraint->as.named.segments[0], "Named");
+
+    feng_program_free(program);
+}
+
+static void test_generic_spec_declaration(void) {
+    /* spec Container<T> with one type parameter */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Container<T> {\n"
+        "    fn fetch(): T;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_spec.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_SPEC);
+    ASSERT(program->declarations[0]->as.spec_decl.type_param_count == 1U);
+    assert_slice_text(program->declarations[0]->as.spec_decl.type_params[0].name, "T");
+
+    feng_program_free(program);
+}
+
+static void test_generic_function_declaration(void) {
+    /* fn identity<T>(value: T): T with one type parameter */
+    const char *source =
+        "mod demo.main;\n"
+        "fn identity<T>(value: T): T {\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_fn.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_FUNCTION);
+    ASSERT(program->declarations[0]->as.function_decl.type_param_count == 1U);
+    assert_slice_text(program->declarations[0]->as.function_decl.type_params[0].name, "T");
+    ASSERT(program->declarations[0]->as.function_decl.type_params[0].constraint == NULL);
+
+    feng_program_free(program);
+}
+
+static void test_generic_function_multi_type_params(void) {
+    /* fn zip<A, B: Named>(a: A, b: B): A with two type parameters */
+    const char *source =
+        "mod demo.main;\n"
+        "fn zip<A, B: Named>(a: A, b: B): A {\n"
+        "    return a;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_fn2.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declarations[0]->as.function_decl.type_param_count == 2U);
+    assert_slice_text(program->declarations[0]->as.function_decl.type_params[0].name, "A");
+    ASSERT(program->declarations[0]->as.function_decl.type_params[0].constraint == NULL);
+    assert_slice_text(program->declarations[0]->as.function_decl.type_params[1].name, "B");
+    ASSERT(program->declarations[0]->as.function_decl.type_params[1].constraint != NULL);
+
+    feng_program_free(program);
+}
+
+static void test_generic_type_ref_with_args(void) {
+    /* Let binding with generic type ref: let x: Map<string, int>; */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let x: Map<string, int>;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengTypeRef *type_ref;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_ref.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    ASSERT(fn_decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(fn_decl->as.function_decl.body->statement_count == 1U);
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_BINDING);
+    type_ref = stmt->as.binding.type;
+    ASSERT(type_ref != NULL);
+    ASSERT(type_ref->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(type_ref->as.named.type_arg_count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_generic_type_ref_nested(void) {
+    /* Nested generic type ref: Map<string, List<int>> handled via pending_gt */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let x: Map<string, List<int>>;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengTypeRef *outer;
+    const FengTypeRef *inner;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_ref_nested.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    outer = stmt->as.binding.type;
+    ASSERT(outer->as.named.type_arg_count == 2U);
+    /* Second type arg is List<int> */
+    inner = outer->as.named.type_args[1];
+    ASSERT(inner->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(inner->as.named.type_arg_count == 1U);
+    assert_slice_text(inner->as.named.segments[0], "List");
+
+    feng_program_free(program);
+}
+
+static void test_explicit_generic_call(void) {
+    /* Explicit generic call: callee:<int>(arg) */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    callee:<int>(42);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengExpr *call;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_call.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_EXPR);
+    call = stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.has_explicit_type_args);
+    ASSERT(call->as.call.explicit_type_arg_count == 1U);
+    ASSERT(call->as.call.arg_count == 1U);
+
+    feng_program_free(program);
+}
+
+static void test_explicit_generic_call_multi_type_args(void) {
+    /* Explicit generic call with two type args: callee:<A, B>(x, y) */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    callee:<A, B>(x, y);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengExpr *call;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_call2.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    call = stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.has_explicit_type_args);
+    ASSERT(call->as.call.explicit_type_arg_count == 2U);
+    ASSERT(call->as.call.arg_count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_generic_parse_error_missing_closing_gt(void) {
+    /* type Box<T { ... } — missing `>` */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T {\n"
+        "    var value: T;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "generic_err.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+}
+
+static void test_generic_parse_error_missing_type_param_name(void) {
+    /* fn foo<, T>() — missing type parameter name */
+    const char *source =
+        "mod demo.main;\n"
+        "fn foo<, T>(): void {\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "generic_err2.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
@@ -883,6 +1128,17 @@ int main(void) {
     test_compound_assignment_parsing();
     test_lambda_block_body_parses();
     test_lambda_block_body_with_arrow_is_rejected();
+    test_generic_type_declaration();
+    test_generic_type_declaration_with_constraint();
+    test_generic_spec_declaration();
+    test_generic_function_declaration();
+    test_generic_function_multi_type_params();
+    test_generic_type_ref_with_args();
+    test_generic_type_ref_nested();
+    test_explicit_generic_call();
+    test_explicit_generic_call_multi_type_args();
+    test_generic_parse_error_missing_closing_gt();
+    test_generic_parse_error_missing_type_param_name();
     puts("parser tests passed");
     return 0;
 }

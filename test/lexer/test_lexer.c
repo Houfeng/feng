@@ -510,6 +510,65 @@ static void test_flow_control_tokens(void) {
     (void)next_token(&lexer, FENG_TOKEN_EOF);
 }
 
+/* G1-3: Verify generic-related token sequences produced by the lexer.
+ * The lexer makes no special provisions for generics; `:<` is always two
+ * tokens (COLON + LT) and `>>` is always SHR.  The parser resolves
+ * ambiguity via pending_gt without any lexer changes. */
+static void test_generic_token_sequences(void) {
+    /* `:<` is always COLON followed by LT (never a merged token). */
+    {
+        const char *src = ":<";
+        FengLexer lexer;
+
+        feng_lexer_init(&lexer, src, strlen(src), "g1.f");
+        (void)next_token(&lexer, FENG_TOKEN_COLON);
+        (void)next_token(&lexer, FENG_TOKEN_LT);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Simple generic type reference: Map<int> → IDENT LT IDENT GT */
+    {
+        const char *src = "Map<int>";
+        FengLexer lexer;
+
+        feng_lexer_init(&lexer, src, strlen(src), "g1.f");
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_LT);
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_GT);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Nested generic: Map<List<int>> → IDENT LT IDENT LT IDENT SHR
+     * The closing `>>` is produced as a single SHR token; the parser
+     * is responsible for splitting it via pending_gt. */
+    {
+        const char *src = "Map<List<int>>";
+        FengLexer lexer;
+
+        feng_lexer_init(&lexer, src, strlen(src), "g1.f");
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_LT);
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_LT);
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_SHR); /* >> as a single SHR */
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Shift-right expression stays as SHR and is NOT split by the lexer. */
+    {
+        const char *src = "a >> b";
+        FengLexer lexer;
+
+        feng_lexer_init(&lexer, src, strlen(src), "g1.f");
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_SHR);
+        (void)next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+}
+
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
@@ -525,6 +584,7 @@ int main(void) {
     test_numeric_literal_bases_and_separators();
     test_numeric_literal_rejects_trailing_underscore();
     test_flow_control_tokens();
+    test_generic_token_sequences();
 
     puts("lexer tests passed");
     return 0;

@@ -360,6 +360,8 @@ static void free_synthetic_type_ref(FengTypeRef *type_ref) {
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             free(type_ref->as.named.segments);
+            /* synthetic type refs never carry type_args, but free defensively */
+            free(type_ref->as.named.type_args);
             break;
 
         case FENG_TYPE_REF_POINTER:

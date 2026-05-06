@@ -64,6 +64,18 @@ static void dump_type_ref(FILE *stream, const FengTypeRef *type_ref) {
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             dump_path(stream, type_ref->as.named.segments, type_ref->as.named.segment_count);
+            if (type_ref->as.named.type_arg_count > 0U) {
+                size_t i;
+
+                fputc('<', stream);
+                for (i = 0U; i < type_ref->as.named.type_arg_count; ++i) {
+                    if (i != 0U) {
+                        fputs(", ", stream);
+                    }
+                    dump_type_ref(stream, type_ref->as.named.type_args[i]);
+                }
+                fputc('>', stream);
+            }
             break;
         case FENG_TYPE_REF_POINTER:
             fputc('*', stream);
@@ -425,6 +437,20 @@ static void dump_callable(FILE *stream, const FengCallableSignature *callable, i
 
     dump_indent(stream, indent);
     dump_slice(stream, callable->name);
+    if (callable->type_param_count > 0U) {
+        fputc('<', stream);
+        for (index = 0U; index < callable->type_param_count; ++index) {
+            if (index != 0U) {
+                fputs(", ", stream);
+            }
+            dump_slice(stream, callable->type_params[index].name);
+            if (callable->type_params[index].constraint != NULL) {
+                fputs(": ", stream);
+                dump_type_ref(stream, callable->type_params[index].constraint);
+            }
+        }
+        fputc('>', stream);
+    }
     fputc('(', stream);
     for (index = 0U; index < callable->param_count; ++index) {
         if (index != 0U) {
@@ -493,6 +519,20 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
             case FENG_DECL_TYPE:
                 fputs("type ", stream);
                 dump_slice(stream, decl->as.type_decl.name);
+                if (decl->as.type_decl.type_param_count > 0U) {
+                    fputc('<', stream);
+                    for (member_index = 0U; member_index < decl->as.type_decl.type_param_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_slice(stream, decl->as.type_decl.type_params[member_index].name);
+                        if (decl->as.type_decl.type_params[member_index].constraint != NULL) {
+                            fputs(": ", stream);
+                            dump_type_ref(stream, decl->as.type_decl.type_params[member_index].constraint);
+                        }
+                    }
+                    fputc('>', stream);
+                }
                 if (decl->as.type_decl.declared_spec_count > 0U) {
                     fputs(" : ", stream);
                     for (member_index = 0U; member_index < decl->as.type_decl.declared_spec_count; ++member_index) {
@@ -542,6 +582,20 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                         "spec %s ",
                         decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ? "object" : "callable");
                 dump_slice(stream, decl->as.spec_decl.name);
+                if (decl->as.spec_decl.type_param_count > 0U) {
+                    fputc('<', stream);
+                    for (member_index = 0U; member_index < decl->as.spec_decl.type_param_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_slice(stream, decl->as.spec_decl.type_params[member_index].name);
+                        if (decl->as.spec_decl.type_params[member_index].constraint != NULL) {
+                            fputs(": ", stream);
+                            dump_type_ref(stream, decl->as.spec_decl.type_params[member_index].constraint);
+                        }
+                    }
+                    fputc('>', stream);
+                }
                 if (decl->as.spec_decl.parent_spec_count > 0U) {
                     fputs(" : ", stream);
                     for (member_index = 0U; member_index < decl->as.spec_decl.parent_spec_count; ++member_index) {

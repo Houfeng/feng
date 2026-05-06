@@ -77,6 +77,13 @@ typedef struct FengAnnotation {
     size_t arg_count;
 } FengAnnotation;
 
+/* A single type parameter definition, e.g. <T> or <T: Named>. */
+typedef struct FengTypeParam {
+    FengToken token;
+    FengSlice name;          /* parameter name (e.g. "T") */
+    FengTypeRef *constraint; /* NULL = unconstrained */
+} FengTypeParam;
+
 struct FengTypeRef {
     FengToken token;
     FengTypeRefKind kind;
@@ -88,6 +95,8 @@ struct FengTypeRef {
         struct {
             FengSlice *segments;
             size_t segment_count;
+            FengTypeRef **type_args;    /* NULL if non-generic */
+            size_t type_arg_count;
         } named;
         FengTypeRef *inner;
     } as;
@@ -178,6 +187,9 @@ struct FengExpr {
             FengExpr **args;
             size_t arg_count;
             FengResolvedCallable resolved_callable;
+            FengTypeRef **explicit_type_args;  /* for callee:<T1, T2>(...) */
+            size_t explicit_type_arg_count;
+            bool has_explicit_type_args;
         } call;
         struct {
             FengExpr *object;
@@ -319,6 +331,8 @@ typedef enum FengTypeMemberKind {
 typedef struct FengCallableSignature {
     FengToken token;
     FengSlice name;
+    FengTypeParam *type_params; /* generic type parameters, e.g. fn f<T>(...) */
+    size_t type_param_count;
     FengParameter *params;
     size_t param_count;
     FengTypeRef *return_type;
@@ -376,6 +390,8 @@ struct FengDecl {
         FengBinding binding;
         struct {
             FengSlice name;
+            FengTypeParam *type_params; /* generic type parameters, e.g. type Box<T> */
+            size_t type_param_count;
             FengTypeMember **members;
             size_t member_count;
             FengTypeRef **declared_specs;
@@ -383,6 +399,8 @@ struct FengDecl {
         } type_decl;
         struct {
             FengSlice name;
+            FengTypeParam *type_params; /* generic type parameters, e.g. spec Reader<T> */
+            size_t type_param_count;
             FengSpecForm form;
             FengTypeRef **parent_specs;
             size_t parent_spec_count;
