@@ -110,6 +110,7 @@ const FengSymbolTypeView *feng_symbol_decl_param_type(const FengSymbolDeclView *
 size_t feng_symbol_decl_declared_spec_count(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDeclView *decl,
                                                             size_t index);
+size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
 
 const FengSymbolDeclView *feng_symbol_fit_decl(const FengSymbolFitView *fit);
 
@@ -120,6 +121,13 @@ FengSlice feng_symbol_type_segment_at(const FengSymbolTypeView *type, size_t ind
 const FengSymbolTypeView *feng_symbol_type_inner(const FengSymbolTypeView *type);
 size_t feng_symbol_type_array_rank(const FengSymbolTypeView *type);
 bool feng_symbol_type_array_layer_writable(const FengSymbolTypeView *type, size_t layer_index);
+/* TYPE_PARAM_REF: name of the type parameter, e.g. "T" */
+FengSlice feng_symbol_type_type_param_ref_name(const FengSymbolTypeView *type);
+/* NAMED_GENERIC: number of type arguments */
+size_t feng_symbol_type_generic_arg_count(const FengSymbolTypeView *type);
+/* NAMED_GENERIC: type argument at index */
+const FengSymbolTypeView *feng_symbol_type_generic_arg_at(const FengSymbolTypeView *type,
+                                                          size_t index);
 
 void feng_symbol_provider_free(FengSymbolProvider *provider);
 

@@ -376,8 +376,6 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
         case FENG_SYMBOL_FT_TYPE_KIND_CALLABLE:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE:
-        case FENG_SYMBOL_FT_TYPE_KIND_NAMED_GENERIC:
-        case FENG_SYMBOL_FT_TYPE_KIND_TYPE_PARAM_REF:
             /* These node kinds are structural (not value types) and are
              * handled directly in parse_symbols.  If encountered here it
              * means a corrupt TYPS reference from a value-type context. */
@@ -389,6 +387,77 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
                                            type_id,
                                            (unsigned)kind);
             return NULL;
+        case FENG_SYMBOL_FT_TYPE_KIND_TYPE_PARAM_REF:
+            type->kind = FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF;
+            type->as.type_param_ref.name = feng_symbol_internal_dup_cstr(string_at(ctx, string_ref));
+            if (string_ref != 0U && type->as.type_param_ref.name == NULL) {
+                free(type);
+                feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                               "out of memory reading type parameter ref name");
+                return NULL;
+            }
+            break;
+        case FENG_SYMBOL_FT_TYPE_KIND_NAMED_GENERIC: {
+            FengSymbolTypeView *named_base;
+            size_t arg_index;
+
+            free(type);
+            named_base = parse_named_type_from_string(string_at(ctx, string_ref), path, out_error);
+            if (named_base == NULL) {
+                return NULL;
+            }
+            /* Transplant segments from NAMED into a new NAMED_GENERIC node. */
+            type = (FengSymbolTypeView *)calloc(1U, sizeof(*type));
+            if (type == NULL) {
+                feng_symbol_internal_type_free(named_base);
+                feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                               "out of memory building generic type node");
+                return NULL;
+            }
+            type->kind = FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC;
+            type->as.named_generic.segments = named_base->as.named.segments;
+            type->as.named_generic.segment_count = named_base->as.named.segment_count;
+            named_base->as.named.segments = NULL;
+            named_base->as.named.segment_count = 0U;
+            feng_symbol_internal_type_free(named_base);
+            /* Read type args from TSEQ section. */
+            if (elem_count > 0U) {
+                type->as.named_generic.type_args =
+                    (FengSymbolTypeView **)calloc(elem_count, sizeof(FengSymbolTypeView *));
+                if (type->as.named_generic.type_args == NULL) {
+                    feng_symbol_internal_type_free(type);
+                    feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                   "out of memory loading generic type args");
+                    return NULL;
+                }
+                type->as.named_generic.type_arg_count = 0U;
+                for (arg_index = 0U; arg_index < elem_count; ++arg_index) {
+                    const unsigned char *tseq_base2;
+                    uint32_t tseq_total2;
+                    uint32_t tseq_id;
+                    uint32_t arg_type_id;
+
+                    tseq_total2 = read_u32_le((const unsigned char *)ctx->tseq_section + 0x04);
+                    tseq_id = elem_start + (uint32_t)arg_index;
+                    if (tseq_id == 0U || tseq_id > tseq_total2) {
+                        feng_symbol_internal_type_free(type);
+                        feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "generic type TSEQ index %u out of range", tseq_id);
+                        return NULL;
+                    }
+                    tseq_base2 = ctx->data + read_u64_le((const unsigned char *)ctx->tseq_section + 0x08);
+                    arg_type_id = read_u32_le(tseq_base2 + (size_t)(tseq_id - 1U) * 12U + 0x04);
+                    type->as.named_generic.type_args[arg_index] =
+                        parse_type_by_id(ctx, arg_type_id, path, out_error);
+                    if (arg_type_id != 0U && type->as.named_generic.type_args[arg_index] == NULL) {
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                    type->as.named_generic.type_arg_count = arg_index + 1U;
+                }
+            }
+            break;
+        }
         default:
             free(type);
             feng_symbol_internal_set_error(out_error,
@@ -552,6 +621,8 @@ static FengSymbolDeclKind decode_decl_kind(uint16_t kind) {
         case FENG_SYMBOL_FT_SYM_KIND_TOP_LET:
         case FENG_SYMBOL_FT_SYM_KIND_TOP_VAR:
             return FENG_SYMBOL_DECL_KIND_BINDING;
+        case FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM:
+            return FENG_SYMBOL_DECL_KIND_TYPE_PARAM;
     }
     return FENG_SYMBOL_DECL_KIND_BINDING;
 }
@@ -804,6 +875,25 @@ static bool attach_decl_hierarchy(ReadContext *ctx,
         owner->members[owner->member_count++] = decl;
         decl->owner = owner;
     }
+
+    /* Compute type_param_count for each decl from its TYPE_PARAM children. */
+    for (symbol_index = 0U; symbol_index < count; ++symbol_index) {
+        FengSymbolDeclView *decl = ctx->decls[symbol_index];
+        size_t tp_count = 0U;
+        size_t mi;
+
+        if (decl == NULL) {
+            continue;
+        }
+        for (mi = 0U; mi < decl->member_count; ++mi) {
+            if (decl->members[mi] != NULL &&
+                decl->members[mi]->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                ++tp_count;
+            }
+        }
+        decl->type_param_count = tp_count;
+    }
+
     return true;
 }
 

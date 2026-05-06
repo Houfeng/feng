@@ -728,6 +728,235 @@ static FengSymbolTypeView *build_type_from_type_ref(const FengTypeRef *type_ref,
     return NULL;
 }
 
+/* Returns the index of the type parameter whose name matches the given segment,
+ * or SIZE_MAX if not found. */
+static size_t find_type_param_index(const FengTypeParam *type_params,
+                                    size_t type_param_count,
+                                    FengSlice segment) {
+    size_t index;
+
+    for (index = 0U; index < type_param_count; ++index) {
+        if (feng_symbol_internal_slice_equals(type_params[index].name, segment)) {
+            return index;
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Like build_type_from_type_ref, but resolves single-segment named types that
+ * match a type parameter to TYPE_PARAM_REF nodes, and handles named types with
+ * type_args as NAMED_GENERIC nodes. */
+static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
+    const FengTypeRef *type_ref,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    const char *path,
+    FengToken token,
+    FengSymbolError *out_error);
+
+static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
+    const FengTypeRef *type_ref,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    const char *path,
+    FengToken token,
+    FengSymbolError *out_error) {
+    FengSymbolTypeView *type;
+    size_t index;
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED: {
+            const char *builtin_name = NULL;
+
+            /* Check if this is a single-segment name that matches a type param. */
+            if (type_ref->as.named.segment_count == 1U && type_param_count > 0U) {
+                size_t param_index = find_type_param_index(type_params,
+                                                           type_param_count,
+                                                           type_ref->as.named.segments[0]);
+                if (param_index != SIZE_MAX) {
+                    type = new_type(FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF, path, token, out_error);
+                    if (type == NULL) {
+                        return NULL;
+                    }
+                    type->as.type_param_ref.name =
+                        feng_symbol_internal_dup_slice(type_ref->as.named.segments[0]);
+                    if (type->as.type_param_ref.name == NULL) {
+                        feng_symbol_internal_set_error(out_error, path, token,
+                                                       "out of memory cloning type param name");
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                    return type;
+                }
+            }
+
+            /* Check if it is a generic application (has type args). */
+            if (type_ref->as.named.type_arg_count > 0U) {
+                type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC, path, token, out_error);
+                if (type == NULL) {
+                    return NULL;
+                }
+                type->as.named_generic.segment_count = type_ref->as.named.segment_count;
+                type->as.named_generic.segments =
+                    (char **)calloc(type->as.named_generic.segment_count,
+                                    sizeof(*type->as.named_generic.segments));
+                if (type->as.named_generic.segments == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory cloning named_generic segments");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+                for (index = 0U; index < type->as.named_generic.segment_count; ++index) {
+                    type->as.named_generic.segments[index] =
+                        feng_symbol_internal_dup_slice(type_ref->as.named.segments[index]);
+                    if (type->as.named_generic.segments[index] == NULL) {
+                        feng_symbol_internal_set_error(out_error, path, token,
+                                                       "out of memory cloning named_generic segment");
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                }
+                type->as.named_generic.type_arg_count = type_ref->as.named.type_arg_count;
+                type->as.named_generic.type_args =
+                    (FengSymbolTypeView **)calloc(type->as.named_generic.type_arg_count,
+                                                  sizeof(*type->as.named_generic.type_args));
+                if (type->as.named_generic.type_args == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory cloning named_generic type_args");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+                for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                    type->as.named_generic.type_args[index] =
+                        build_type_from_type_ref_with_tparams(type_ref->as.named.type_args[index],
+                                                              type_params,
+                                                              type_param_count,
+                                                              path,
+                                                              token,
+                                                              out_error);
+                    if (type_ref->as.named.type_args[index] != NULL &&
+                        type->as.named_generic.type_args[index] == NULL) {
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                }
+                return type;
+            }
+
+            /* Fall back to plain named or builtin handling. */
+            if (type_ref->as.named.segment_count == 1U) {
+                builtin_name = canonical_builtin_name(type_ref->as.named.segments[0]);
+            }
+            if (builtin_name != NULL) {
+                type = new_type(FENG_SYMBOL_TYPE_KIND_BUILTIN, path, token, out_error);
+                if (type == NULL) {
+                    return NULL;
+                }
+                type->as.builtin.name = feng_symbol_internal_dup_cstr(builtin_name);
+                if (type->as.builtin.name == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory cloning builtin name");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+                return type;
+            }
+
+            type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED, path, token, out_error);
+            if (type == NULL) {
+                return NULL;
+            }
+            type->as.named.segment_count = type_ref->as.named.segment_count;
+            type->as.named.segments = (char **)calloc(type->as.named.segment_count,
+                                                      sizeof(*type->as.named.segments));
+            if (type->as.named.segments == NULL) {
+                feng_symbol_internal_set_error(out_error, path, token,
+                                               "out of memory cloning named type segments");
+                feng_symbol_internal_type_free(type);
+                return NULL;
+            }
+            for (index = 0U; index < type->as.named.segment_count; ++index) {
+                type->as.named.segments[index] =
+                    feng_symbol_internal_dup_slice(type_ref->as.named.segments[index]);
+                if (type->as.named.segments[index] == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory cloning named type segment");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+            }
+            return type;
+        }
+
+        case FENG_TYPE_REF_POINTER:
+            type = new_type(FENG_SYMBOL_TYPE_KIND_POINTER, path, token, out_error);
+            if (type == NULL) {
+                return NULL;
+            }
+            type->as.pointer.inner =
+                build_type_from_type_ref_with_tparams(type_ref->as.inner,
+                                                      type_params,
+                                                      type_param_count,
+                                                      path,
+                                                      token,
+                                                      out_error);
+            if (type_ref->as.inner != NULL && type->as.pointer.inner == NULL) {
+                feng_symbol_internal_type_free(type);
+                return NULL;
+            }
+            return type;
+
+        case FENG_TYPE_REF_ARRAY: {
+            const FengTypeRef *cursor = type_ref;
+            size_t rank = 0U;
+            size_t array_index = 0U;
+
+            while (cursor != NULL && cursor->kind == FENG_TYPE_REF_ARRAY) {
+                ++rank;
+                cursor = cursor->as.inner;
+            }
+
+            type = new_type(FENG_SYMBOL_TYPE_KIND_ARRAY, path, token, out_error);
+            if (type == NULL) {
+                return NULL;
+            }
+            type->as.array.rank = rank;
+            type->as.array.layer_writable =
+                (bool *)calloc(rank, sizeof(*type->as.array.layer_writable));
+            if (type->as.array.layer_writable == NULL) {
+                feng_symbol_internal_set_error(out_error, path, token,
+                                               "out of memory cloning array mutability bitmap");
+                feng_symbol_internal_type_free(type);
+                return NULL;
+            }
+
+            cursor = type_ref;
+            while (cursor != NULL && cursor->kind == FENG_TYPE_REF_ARRAY) {
+                type->as.array.layer_writable[array_index++] = cursor->array_element_writable;
+                cursor = cursor->as.inner;
+            }
+            type->as.array.element =
+                build_type_from_type_ref_with_tparams(cursor,
+                                                      type_params,
+                                                      type_param_count,
+                                                      path,
+                                                      token,
+                                                      out_error);
+            if (cursor != NULL && type->as.array.element == NULL) {
+                feng_symbol_internal_type_free(type);
+                return NULL;
+            }
+            return type;
+        }
+    }
+
+    return NULL;
+}
+
 static FengSymbolTypeView *build_type_from_fact(const FengSemanticAnalysis *analysis,
                                                 const FengSemanticTypeFact *fact,
                                                 const char *path,
@@ -794,12 +1023,14 @@ static bool fill_declared_specs(FengSymbolDeclView *decl,
     return true;
 }
 
-static bool fill_params(FengSymbolDeclView *decl,
-                        const FengParameter *params,
-                        size_t param_count,
-                        const char *path,
-                        FengToken token,
-                        FengSymbolError *out_error) {
+static bool fill_params_with_tparams(FengSymbolDeclView *decl,
+                                     const FengParameter *params,
+                                     size_t param_count,
+                                     const FengTypeParam *type_params,
+                                     size_t type_param_count,
+                                     const char *path,
+                                     FengToken token,
+                                     FengSymbolError *out_error) {
     size_t index;
 
     for (index = 0U; index < param_count; ++index) {
@@ -808,12 +1039,18 @@ static bool fill_params(FengSymbolDeclView *decl,
         param.token = params[index].token;
         param.mutability = normalize_mutability(params[index].mutability);
         param.name = feng_symbol_internal_dup_slice(params[index].name);
-        param.type = build_type_from_type_ref(params[index].type, path, token, out_error);
+        param.type = build_type_from_type_ref_with_tparams(params[index].type,
+                                                           type_params,
+                                                           type_param_count,
+                                                           path,
+                                                           token,
+                                                           out_error);
         if ((params[index].name.data != NULL && param.name == NULL) ||
             (params[index].type != NULL && param.type == NULL)) {
             free(param.name);
             feng_symbol_internal_type_free(param.type);
-            return feng_symbol_internal_set_error(out_error, path, token, "out of memory building parameter signature");
+            return feng_symbol_internal_set_error(out_error, path, token,
+                                                  "out of memory building generic parameter signature");
         }
 
         if (!append_param(&decl->params,
@@ -828,6 +1065,51 @@ static bool fill_params(FengSymbolDeclView *decl,
         }
     }
 
+    return true;
+}
+
+/* Forward declaration - defined later. */
+static bool append_member_decl(FengSymbolDeclView *owner,
+                               FengSymbolDeclView *member,
+                               const char *path,
+                               FengToken token,
+                               FengSymbolError *out_error);
+
+/* Append TYPE_PARAM child decls and set type_param_count on the owner decl. */
+static bool emit_type_param_children(FengSymbolDeclView *decl,
+                                     const FengTypeParam *type_params,
+                                     size_t type_param_count,
+                                     const char *path,
+                                     FengSymbolError *out_error) {
+    size_t index;
+
+    for (index = 0U; index < type_param_count; ++index) {
+        char *name = feng_symbol_internal_dup_slice(type_params[index].name);
+        FengSymbolDeclView *tp_decl;
+
+        if (type_params[index].name.data != NULL && name == NULL) {
+            return feng_symbol_internal_set_error(out_error, path, type_params[index].token,
+                                                  "out of memory cloning type parameter name");
+        }
+        tp_decl = new_decl(FENG_SYMBOL_DECL_KIND_TYPE_PARAM,
+                           FENG_VISIBILITY_PUBLIC,
+                           FENG_MUTABILITY_LET,
+                           name,
+                           path,
+                           type_params[index].token,
+                           out_error);
+        free(name);
+        if (tp_decl == NULL) {
+            return false;
+        }
+        if (!append_member_decl(decl, tp_decl, path, type_params[index].token, out_error)) {
+            feng_symbol_internal_decl_free_members(tp_decl);
+            free(tp_decl);
+            return false;
+        }
+    }
+
+    decl->type_param_count = type_param_count;
     return true;
 }
 
@@ -909,6 +1191,9 @@ typedef struct BuildContext {
     FengSymbolModuleGraph *graph;
     DeclSourceMap *source_map;
     size_t source_count;
+    /* Current enclosing generic context; NULL / 0 outside generics. */
+    const FengTypeParam *type_params;
+    size_t type_param_count;
 } BuildContext;
 
 static FengSymbolDeclView *new_decl_from_slice(FengSymbolDeclKind kind,
@@ -999,19 +1284,32 @@ static FengSymbolTypeView *build_site_type(const FengSemanticAnalysis *analysis,
     return build_type_from_fact(analysis, fact, path, token, out_error);
 }
 
-static FengSymbolTypeView *build_callable_return_type(const FengSemanticAnalysis *analysis,
-                                                      const void *site,
-                                                      const FengTypeRef *explicit_type,
-                                                      bool fallback_void,
-                                                      const char *path,
-                                                      FengToken token,
-                                                      FengSymbolError *out_error) {
-    FengSymbolTypeView *type = build_site_type(analysis, site, explicit_type, path, token, out_error);
+static FengSymbolTypeView *build_callable_return_type_with_tparams(
+    const FengSemanticAnalysis *analysis,
+    const void *site,
+    const FengTypeRef *explicit_type,
+    bool fallback_void,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    const char *path,
+    FengToken token,
+    FengSymbolError *out_error) {
+    FengSymbolTypeView *type;
 
-    if (type != NULL || explicit_type != NULL || !fallback_void) {
+    if (explicit_type != NULL) {
+        type = build_type_from_type_ref_with_tparams(explicit_type,
+                                                     type_params,
+                                                     type_param_count,
+                                                     path,
+                                                     token,
+                                                     out_error);
         return type;
     }
-
+    /* Fall back to the non-tparam path for inferred return types. */
+    type = build_site_type(analysis, site, explicit_type, path, token, out_error);
+    if (type != NULL || !fallback_void) {
+        return type;
+    }
     type = new_type(FENG_SYMBOL_TYPE_KIND_BUILTIN, path, token, out_error);
     if (type == NULL) {
         return NULL;
@@ -1023,6 +1321,25 @@ static FengSymbolTypeView *build_callable_return_type(const FengSemanticAnalysis
         return NULL;
     }
     return type;
+}
+
+static FengSymbolTypeView *build_site_type_with_tparams(const FengSemanticAnalysis *analysis,
+                                                        const void *site,
+                                                        const FengTypeRef *explicit_type,
+                                                        const FengTypeParam *type_params,
+                                                        size_t type_param_count,
+                                                        const char *path,
+                                                        FengToken token,
+                                                        FengSymbolError *out_error) {
+    if (explicit_type != NULL) {
+        return build_type_from_type_ref_with_tparams(explicit_type,
+                                                     type_params,
+                                                     type_param_count,
+                                                     path,
+                                                     token,
+                                                     out_error);
+    }
+    return build_site_type(analysis, site, explicit_type, path, token, out_error);
 }
 
 static bool cstr_equals_slice(const char *text, FengSlice slice) {
@@ -1427,12 +1744,14 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
-            decl->value_type = build_site_type(ctx->analysis,
-                                               member,
-                                               member->as.field.type,
-                                               path,
-                                               member->token,
-                                               out_error);
+            decl->value_type = build_site_type_with_tparams(ctx->analysis,
+                                                            member,
+                                                            member->as.field.type,
+                                                            ctx->type_params,
+                                                            ctx->type_param_count,
+                                                            path,
+                                                            member->token,
+                                                            out_error);
             if (decl->value_type == NULL) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
@@ -1475,24 +1794,28 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
-            decl->return_type = build_callable_return_type(ctx->analysis,
-                                                           &member->as.callable,
-                                                           member->as.callable.return_type,
-                                                           true,
-                                                           path,
-                                                           member->token,
-                                                           out_error);
+            decl->return_type = build_callable_return_type_with_tparams(ctx->analysis,
+                                                                        &member->as.callable,
+                                                                        member->as.callable.return_type,
+                                                                        true,
+                                                                        ctx->type_params,
+                                                                        ctx->type_param_count,
+                                                                        path,
+                                                                        member->token,
+                                                                        out_error);
             if (decl->return_type == NULL) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
-            if (!fill_params(decl,
-                             member->as.callable.params,
-                             member->as.callable.param_count,
-                             path,
-                             member->token,
-                             out_error) ||
+            if (!fill_params_with_tparams(decl,
+                                          member->as.callable.params,
+                                          member->as.callable.param_count,
+                                          ctx->type_params,
+                                          ctx->type_param_count,
+                                          path,
+                                          member->token,
+                                          out_error) ||
                 !apply_decl_annotations(decl,
                                         ctx->module,
                                         member->annotations,
@@ -1606,7 +1929,23 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
+            /* Emit generic type parameter children before member fields. */
+            if (source_decl->as.type_decl.type_param_count > 0U) {
+                if (!emit_type_param_children(decl,
+                                              source_decl->as.type_decl.type_params,
+                                              source_decl->as.type_decl.type_param_count,
+                                              path,
+                                              out_error)) {
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+                ctx->type_params = source_decl->as.type_decl.type_params;
+                ctx->type_param_count = source_decl->as.type_decl.type_param_count;
+            }
             if (!register_source_decl(ctx, source_decl, decl, path, source_decl->token, out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
@@ -1623,11 +1962,15 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         path,
                                         source_decl->as.type_decl.members[index]->token,
                                         out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
                     feng_symbol_internal_decl_free_members(decl);
                     free(decl);
                     return NULL;
                 }
             }
+            ctx->type_params = NULL;
+            ctx->type_param_count = 0U;
             return decl;
 
         case FENG_DECL_SPEC:
@@ -1664,27 +2007,51 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
-            if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
-                decl->return_type = build_callable_return_type(ctx->analysis,
-                                                               source_decl,
-                                                               source_decl->as.spec_decl.as.callable.return_type,
-                                                               true,
-                                                               path,
-                                                               source_decl->token,
-                                                               out_error);
-                if (decl->return_type == NULL ||
-                    !fill_params(decl,
-                                 source_decl->as.spec_decl.as.callable.params,
-                                 source_decl->as.spec_decl.as.callable.param_count,
-                                 path,
-                                 source_decl->token,
-                                 out_error)) {
+            /* Emit generic type parameter children for the spec. */
+            if (source_decl->as.spec_decl.type_param_count > 0U) {
+                if (!emit_type_param_children(decl,
+                                              source_decl->as.spec_decl.type_params,
+                                              source_decl->as.spec_decl.type_param_count,
+                                              path,
+                                              out_error)) {
                     feng_symbol_internal_decl_free_members(decl);
                     free(decl);
                     return NULL;
                 }
+                ctx->type_params = source_decl->as.spec_decl.type_params;
+                ctx->type_param_count = source_decl->as.spec_decl.type_param_count;
+            }
+            if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                decl->return_type = build_callable_return_type_with_tparams(ctx->analysis,
+                                                                            source_decl,
+                                                                            source_decl->as.spec_decl.as.callable.return_type,
+                                                                            true,
+                                                                            ctx->type_params,
+                                                                            ctx->type_param_count,
+                                                                            path,
+                                                                            source_decl->token,
+                                                                            out_error);
+                if (decl->return_type == NULL ||
+                    !fill_params_with_tparams(decl,
+                                              source_decl->as.spec_decl.as.callable.params,
+                                              source_decl->as.spec_decl.as.callable.param_count,
+                                              ctx->type_params,
+                                              ctx->type_param_count,
+                                              path,
+                                              source_decl->token,
+                                              out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
             } else {
                 if (!register_source_decl(ctx, source_decl, decl, path, source_decl->token, out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
                     feng_symbol_internal_decl_free_members(decl);
                     free(decl);
                     return NULL;
@@ -1702,11 +2069,15 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                             path,
                                             source_decl->as.spec_decl.as.object.members[index]->token,
                                             out_error)) {
+                        ctx->type_params = NULL;
+                        ctx->type_param_count = 0U;
                         feng_symbol_internal_decl_free_members(decl);
                         free(decl);
                         return NULL;
                     }
                 }
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
                 return decl;
             }
             break;
@@ -1798,20 +2169,38 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 return NULL;
             }
             decl->is_extern = source_decl->is_extern;
-            decl->return_type = build_callable_return_type(ctx->analysis,
-                                                           &source_decl->as.function_decl,
-                                                           source_decl->as.function_decl.return_type,
-                                                           true,
-                                                           path,
-                                                           source_decl->token,
-                                                           out_error);
+            /* Emit type parameter children if this is a generic function. */
+            if (source_decl->as.function_decl.type_param_count > 0U) {
+                if (!emit_type_param_children(decl,
+                                              source_decl->as.function_decl.type_params,
+                                              source_decl->as.function_decl.type_param_count,
+                                              path,
+                                              out_error)) {
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+                ctx->type_params = source_decl->as.function_decl.type_params;
+                ctx->type_param_count = source_decl->as.function_decl.type_param_count;
+            }
+            decl->return_type = build_callable_return_type_with_tparams(ctx->analysis,
+                                                                        &source_decl->as.function_decl,
+                                                                        source_decl->as.function_decl.return_type,
+                                                                        true,
+                                                                        ctx->type_params,
+                                                                        ctx->type_param_count,
+                                                                        path,
+                                                                        source_decl->token,
+                                                                        out_error);
             if (decl->return_type == NULL ||
-                !fill_params(decl,
-                             source_decl->as.function_decl.params,
-                             source_decl->as.function_decl.param_count,
-                             path,
-                             source_decl->token,
-                             out_error) ||
+                !fill_params_with_tparams(decl,
+                                          source_decl->as.function_decl.params,
+                                          source_decl->as.function_decl.param_count,
+                                          ctx->type_params,
+                                          ctx->type_param_count,
+                                          path,
+                                          source_decl->token,
+                                          out_error) ||
                 !apply_decl_annotations(decl,
                                         ctx->module,
                                         source_decl->annotations,
@@ -1820,10 +2209,14 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         path,
                                         source_decl->token,
                                         out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
+            ctx->type_params = NULL;
+            ctx->type_param_count = 0U;
             break;
     }
 

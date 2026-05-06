@@ -227,6 +227,40 @@ static char *join_type_segments(const FengSymbolTypeView *type) {
     return out;
 }
 
+/* Forward declaration (defined after writer_serialize_type). */
+static bool writer_append_tseq(WriterContext *ctx,
+                               uint32_t name_str,
+                               uint32_t type_id,
+                               uint16_t flags,
+                               const char *path,
+                               FengToken token,
+                               FengSymbolError *out_error);
+
+static char *join_string_array_with_dot(char **segments, size_t count) {
+    size_t total = 0U;
+    size_t index;
+    char *out;
+    size_t cursor = 0U;
+
+    for (index = 0U; index < count; ++index) {
+        total += strlen(segments[index]);
+    }
+    total += count > 0U ? count - 1U : 0U;
+    out = (char *)malloc(total + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < count; ++index) {
+        if (index > 0U) {
+            out[cursor++] = '.';
+        }
+        memcpy(out + cursor, segments[index], strlen(segments[index]));
+        cursor += strlen(segments[index]);
+    }
+    out[cursor] = '\0';
+    return out;
+}
+
 static uint32_t writer_serialize_type(WriterContext *ctx,
                                       const FengSymbolTypeView *type,
                                       const char *path,
@@ -303,6 +337,54 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             }
             record.string_ref = (uint32_t)(mutability_bits & 0xFFFFFFFFULL);
             break;
+
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            record.kind = FENG_SYMBOL_FT_TYPE_KIND_TYPE_PARAM_REF;
+            record.string_ref = writer_intern_string(ctx,
+                                                     type->as.type_param_ref.name,
+                                                     path,
+                                                     token,
+                                                     out_error);
+            if (type->as.type_param_ref.name != NULL && record.string_ref == 0U) {
+                return 0U;
+            }
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
+            uint32_t tseq_start;
+            size_t arg_index;
+            char *base_name = join_string_array_with_dot(type->as.named_generic.segments,
+                                                         type->as.named_generic.segment_count);
+
+            if (type->as.named_generic.segment_count > 0U && base_name == NULL) {
+                feng_symbol_internal_set_error(out_error, path, token,
+                                               "out of memory serializing generic type name");
+                return 0U;
+            }
+            record.kind = FENG_SYMBOL_FT_TYPE_KIND_NAMED_GENERIC;
+            record.string_ref = writer_intern_string(ctx, base_name, path, token, out_error);
+            free(base_name);
+            if (type->as.named_generic.segment_count > 0U && record.string_ref == 0U) {
+                return 0U;
+            }
+            tseq_start = (uint32_t)(ctx->tseq_count + 1U);
+            record.elem_start = tseq_start;
+            record.elem_count = (uint32_t)type->as.named_generic.type_arg_count;
+            for (arg_index = 0U; arg_index < type->as.named_generic.type_arg_count; ++arg_index) {
+                uint32_t arg_type_id = writer_serialize_type(ctx,
+                                                             type->as.named_generic.type_args[arg_index],
+                                                             path,
+                                                             token,
+                                                             out_error);
+                if (type->as.named_generic.type_args[arg_index] != NULL && arg_type_id == 0U) {
+                    return 0U;
+                }
+                if (!writer_append_tseq(ctx, 0U, arg_type_id, 0U, path, token, out_error)) {
+                    return 0U;
+                }
+            }
+            break;
+        }
 
         case FENG_SYMBOL_TYPE_KIND_INVALID:
         default:
@@ -500,6 +582,8 @@ static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
             return FENG_SYMBOL_FT_SYM_KIND_CTOR;
         case FENG_SYMBOL_DECL_KIND_FINALIZER:
             return FENG_SYMBOL_FT_SYM_KIND_DTOR;
+        case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
+            return FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM;
     }
     return 0U;
 }

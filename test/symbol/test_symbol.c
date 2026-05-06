@@ -625,6 +625,138 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
     free(tmp_dir);
 }
 
+static void test_generic_function_ft_roundtrip(void) {
+    /* pu fn identity<T>(x: T): T
+     * After roundtrip: function decl should have type_param_count == 1,
+     * and the parameter type / return type should be TYPE_PARAM_REF with name "T". */
+    static const char *kSource =
+        "pu mod feng.test.symbol.generic_fn;\n"
+        "\n"
+        "pu fn identity<T>(x: T): T { return x; }\n";
+
+    FengProgram *program = parse_or_die("generic_fn.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolDeclView *fn_decl = NULL;
+    const FengSymbolTypeView *param_type = NULL;
+    const FengSymbolTypeView *return_type = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("generic_fn");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    fn_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("identity"));
+    ASSERT(fn_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(fn_decl) == FENG_SYMBOL_DECL_KIND_FUNCTION);
+    ASSERT(feng_symbol_decl_type_param_count(fn_decl) == 1U);
+    ASSERT(feng_symbol_decl_param_count(fn_decl) == 1U);
+
+    param_type = feng_symbol_decl_param_type(fn_decl, 0U);
+    ASSERT(param_type != NULL);
+    ASSERT(feng_symbol_type_kind(param_type) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(param_type), "T"));
+
+    return_type = feng_symbol_decl_return_type(fn_decl);
+    ASSERT(return_type != NULL);
+    ASSERT(feng_symbol_type_kind(return_type) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(return_type), "T"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_generic_type_ft_roundtrip(void) {
+    /* pu type Box<T> { pu let value: T; }
+     * After roundtrip: type decl should have type_param_count == 1,
+     * and the field type should be TYPE_PARAM_REF with name "T". */
+    static const char *kSource =
+        "pu mod feng.test.symbol.generic_type;\n"
+        "\n"
+        "pu type Box<T> { pu let value: T; }\n";
+
+    FengProgram *program = parse_or_die("generic_type.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolDeclView *type_decl = NULL;
+    const FengSymbolDeclView *value_field = NULL;
+    const FengSymbolTypeView *field_type = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("generic_type");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    type_decl = feng_symbol_module_find_public_type(module, slice_from_cstr("Box"));
+    ASSERT(type_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(type_decl) == FENG_SYMBOL_DECL_KIND_TYPE);
+    ASSERT(feng_symbol_decl_type_param_count(type_decl) == 1U);
+
+    value_field = feng_symbol_decl_find_public_member(type_decl, slice_from_cstr("value"));
+    ASSERT(value_field != NULL);
+    ASSERT(feng_symbol_decl_kind(value_field) == FENG_SYMBOL_DECL_KIND_FIELD);
+
+    field_type = feng_symbol_decl_value_type(value_field);
+    ASSERT(field_type != NULL);
+    ASSERT(feng_symbol_type_kind(field_type) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(field_type), "T"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     test_roundtrip_public_module();
     test_roundtrip_public_module_docs();
@@ -634,6 +766,8 @@ int main(void) {
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();
+    test_generic_function_ft_roundtrip();
+    test_generic_type_ft_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

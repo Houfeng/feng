@@ -5438,6 +5438,22 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
                 }
             }
             return true;
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF: {
+            FengSlice pname = feng_symbol_type_type_param_ref_name(type);
+            return string_append_bytes(buffer, pname.data, pname.length);
+        }
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            for (index = 0U; index < feng_symbol_type_segment_count(type); ++index) {
+                FengSlice segment = feng_symbol_type_segment_at(type, index);
+
+                if (index > 0U && !string_append_cstr(buffer, ".")) {
+                    return false;
+                }
+                if (!string_append_bytes(buffer, segment.data, segment.length)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_SYMBOL_TYPE_KIND_INVALID:
             return false;
     }
@@ -5489,6 +5505,8 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
         case FENG_SYMBOL_DECL_KIND_METHOD:
         case FENG_SYMBOL_DECL_KIND_CONSTRUCTOR:
         case FENG_SYMBOL_DECL_KIND_FINALIZER:
+            break;
+        case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
             break;
     }
     return false;

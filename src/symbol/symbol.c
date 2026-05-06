@@ -154,6 +154,18 @@ void feng_symbol_internal_type_free(FengSymbolTypeView *type) {
             free(type->as.array.layer_writable);
             break;
 
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            free(type->as.type_param_ref.name);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            free_string_array(type->as.named_generic.segments, type->as.named_generic.segment_count);
+            for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                feng_symbol_internal_type_free(type->as.named_generic.type_args[index]);
+            }
+            free(type->as.named_generic.type_args);
+            break;
+
         case FENG_SYMBOL_TYPE_KIND_INVALID:
         default:
             break;
@@ -323,6 +335,60 @@ FengSymbolTypeView *feng_symbol_internal_type_clone(const FengSymbolTypeView *ty
                        clone->as.array.rank * sizeof(*clone->as.array.layer_writable));
             }
             break;
+
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            clone->as.type_param_ref.name = feng_symbol_internal_dup_cstr(type->as.type_param_ref.name);
+            if (type->as.type_param_ref.name != NULL && clone->as.type_param_ref.name == NULL) {
+                feng_symbol_internal_set_error(out_error, NULL, (FengToken){0}, "out of memory cloning type param ref name");
+                feng_symbol_internal_type_free(clone);
+                return NULL;
+            }
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
+            size_t arg_index;
+            clone->as.named_generic.segment_count = type->as.named_generic.segment_count;
+            if (clone->as.named_generic.segment_count > 0U) {
+                clone->as.named_generic.segments =
+                    (char **)calloc(clone->as.named_generic.segment_count,
+                                    sizeof(*clone->as.named_generic.segments));
+                if (clone->as.named_generic.segments == NULL) {
+                    feng_symbol_internal_set_error(out_error, NULL, (FengToken){0}, "out of memory cloning named_generic segments");
+                    feng_symbol_internal_type_free(clone);
+                    return NULL;
+                }
+                for (index = 0U; index < clone->as.named_generic.segment_count; ++index) {
+                    clone->as.named_generic.segments[index] =
+                        feng_symbol_internal_dup_cstr(type->as.named_generic.segments[index]);
+                    if (clone->as.named_generic.segments[index] == NULL) {
+                        feng_symbol_internal_set_error(out_error, NULL, (FengToken){0}, "out of memory cloning named_generic segment");
+                        feng_symbol_internal_type_free(clone);
+                        return NULL;
+                    }
+                }
+            }
+            clone->as.named_generic.type_arg_count = type->as.named_generic.type_arg_count;
+            if (clone->as.named_generic.type_arg_count > 0U) {
+                clone->as.named_generic.type_args =
+                    (FengSymbolTypeView **)calloc(clone->as.named_generic.type_arg_count,
+                                                  sizeof(*clone->as.named_generic.type_args));
+                if (clone->as.named_generic.type_args == NULL) {
+                    feng_symbol_internal_set_error(out_error, NULL, (FengToken){0}, "out of memory cloning named_generic type args");
+                    feng_symbol_internal_type_free(clone);
+                    return NULL;
+                }
+                for (arg_index = 0U; arg_index < clone->as.named_generic.type_arg_count; ++arg_index) {
+                    clone->as.named_generic.type_args[arg_index] =
+                        feng_symbol_internal_type_clone(type->as.named_generic.type_args[arg_index], out_error);
+                    if (type->as.named_generic.type_args[arg_index] != NULL &&
+                        clone->as.named_generic.type_args[arg_index] == NULL) {
+                        feng_symbol_internal_type_free(clone);
+                        return NULL;
+                    }
+                }
+            }
+            break;
+        }
 
         case FENG_SYMBOL_TYPE_KIND_INVALID:
         default:

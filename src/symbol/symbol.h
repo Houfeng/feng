@@ -25,7 +25,8 @@ typedef enum FengSymbolDeclKind {
     FENG_SYMBOL_DECL_KIND_FIELD,
     FENG_SYMBOL_DECL_KIND_METHOD,
     FENG_SYMBOL_DECL_KIND_CONSTRUCTOR,
-    FENG_SYMBOL_DECL_KIND_FINALIZER
+    FENG_SYMBOL_DECL_KIND_FINALIZER,
+    FENG_SYMBOL_DECL_KIND_TYPE_PARAM  /* generic type-parameter placeholder */
 } FengSymbolDeclKind;
 
 typedef enum FengSymbolTypeKind {
@@ -33,7 +34,9 @@ typedef enum FengSymbolTypeKind {
     FENG_SYMBOL_TYPE_KIND_BUILTIN,
     FENG_SYMBOL_TYPE_KIND_NAMED,
     FENG_SYMBOL_TYPE_KIND_POINTER,
-    FENG_SYMBOL_TYPE_KIND_ARRAY
+    FENG_SYMBOL_TYPE_KIND_ARRAY,
+    FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF,  /* reference to a generic type param */
+    FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC    /* named type applied to type args */
 } FengSymbolTypeKind;
 
 typedef struct FengSymbolGraph FengSymbolGraph;

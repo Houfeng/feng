@@ -46,6 +46,15 @@ struct FengSymbolTypeView {
             bool *layer_writable;
             size_t rank;
         } array;
+        struct {
+            char *name;  /* type parameter name, e.g. "T" */
+        } type_param_ref;
+        struct {
+            char **segments;      /* base type name segments */
+            size_t segment_count;
+            FengSymbolTypeView **type_args;
+            size_t type_arg_count;
+        } named_generic;
     } as;
 };
 
@@ -74,6 +83,7 @@ struct FengSymbolDeclView {
     size_t member_count;
     struct FengSymbolDeclView *owner;
     FengSymbolTypeView *fit_target;
+    size_t type_param_count;  /* number of generic type parameters (TYPE_PARAM children) */
 };
 
 typedef struct FengSymbolRelation {

@@ -983,6 +983,10 @@ const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDecl
     return decl->declared_specs[index];
 }
 
+size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->type_param_count : 0U;
+}
+
 const FengSymbolDeclView *feng_symbol_fit_decl(const FengSymbolFitView *fit) {
     return fit != NULL ? fit->decl : NULL;
 }
@@ -1030,6 +1034,28 @@ size_t feng_symbol_type_array_rank(const FengSymbolTypeView *type) {
 bool feng_symbol_type_array_layer_writable(const FengSymbolTypeView *type, size_t layer_index) {
     return type != NULL && type->kind == FENG_SYMBOL_TYPE_KIND_ARRAY &&
            layer_index < type->as.array.rank && type->as.array.layer_writable[layer_index];
+}
+
+FengSlice feng_symbol_type_type_param_ref_name(const FengSymbolTypeView *type) {
+    if (type == NULL || type->kind != FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) {
+        return (FengSlice){0};
+    }
+    return slice_from_cstr(type->as.type_param_ref.name);
+}
+
+size_t feng_symbol_type_generic_arg_count(const FengSymbolTypeView *type) {
+    return type != NULL && type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC
+               ? type->as.named_generic.type_arg_count
+               : 0U;
+}
+
+const FengSymbolTypeView *feng_symbol_type_generic_arg_at(const FengSymbolTypeView *type,
+                                                          size_t index) {
+    if (type == NULL || type->kind != FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC ||
+        index >= type->as.named_generic.type_arg_count) {
+        return NULL;
+    }
+    return type->as.named_generic.type_args[index];
 }
 
 void feng_symbol_provider_free(FengSymbolProvider *provider) {

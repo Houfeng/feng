@@ -313,6 +313,66 @@ static FengTypeRef *synthesize_type_ref(const FengSymbolTypeView *symbol_type) {
             return inner;
         }
 
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            /* Synthesize as a single-segment NAMED type ref using the param name. */
+            type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
+            if (type_ref == NULL) {
+                return NULL;
+            }
+            type_ref->kind = FENG_TYPE_REF_NAMED;
+            type_ref->as.named.segment_count = 1U;
+            type_ref->as.named.segments = (FengSlice *)calloc(1U, sizeof(FengSlice));
+            if (type_ref->as.named.segments == NULL ||
+                !clone_cstr_as_slice(symbol_type->as.type_param_ref.name, &type_ref->as.named.segments[0])) {
+                free_synthetic_type_ref(type_ref);
+                return NULL;
+            }
+            return type_ref;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
+            if (type_ref == NULL) {
+                return NULL;
+            }
+            type_ref->kind = FENG_TYPE_REF_NAMED;
+            type_ref->as.named.segment_count = symbol_type->as.named_generic.segment_count;
+            if (type_ref->as.named.segment_count > 0U) {
+                type_ref->as.named.segments = (FengSlice *)calloc(
+                    type_ref->as.named.segment_count, sizeof(FengSlice));
+                if (type_ref->as.named.segments == NULL) {
+                    free_synthetic_type_ref(type_ref);
+                    return NULL;
+                }
+                for (index = 0U; index < type_ref->as.named.segment_count; ++index) {
+                    if (!clone_cstr_as_slice(symbol_type->as.named_generic.segments[index],
+                                             &type_ref->as.named.segments[index])) {
+                        free_synthetic_type_ref(type_ref);
+                        return NULL;
+                    }
+                }
+            }
+            /* Synthesize type args if present. */
+            if (symbol_type->as.named_generic.type_arg_count > 0U) {
+                type_ref->as.named.type_args = (FengTypeRef **)calloc(
+                    symbol_type->as.named_generic.type_arg_count, sizeof(FengTypeRef *));
+                if (type_ref->as.named.type_args == NULL) {
+                    free_synthetic_type_ref(type_ref);
+                    return NULL;
+                }
+                type_ref->as.named.type_arg_count = 0U;
+                for (index = 0U; index < symbol_type->as.named_generic.type_arg_count; ++index) {
+                    type_ref->as.named.type_args[index] =
+                        synthesize_type_ref(symbol_type->as.named_generic.type_args[index]);
+                    if (symbol_type->as.named_generic.type_args[index] != NULL &&
+                        type_ref->as.named.type_args[index] == NULL) {
+                        free_synthetic_type_ref(type_ref);
+                        return NULL;
+                    }
+                    type_ref->as.named.type_arg_count = index + 1U;
+                }
+            }
+            return type_ref;
+
         case FENG_SYMBOL_TYPE_KIND_INVALID:
         default:
             break;
@@ -460,6 +520,7 @@ static FengTypeMember **synthesize_type_members(const FengSymbolDeclView *symbol
     FengTypeMember **members;
     size_t index;
     size_t cleanup_index;
+    size_t real_count;
 
     if (out_count == NULL) {
         return NULL;
@@ -469,21 +530,41 @@ static FengTypeMember **synthesize_type_members(const FengSymbolDeclView *symbol
         return NULL;
     }
 
-    members = (FengTypeMember **)calloc(symbol_decl->member_count, sizeof(*members));
+    /* Count non-TYPE_PARAM members. */
+    real_count = 0U;
+    for (index = 0U; index < symbol_decl->member_count; ++index) {
+        if (symbol_decl->members[index] != NULL &&
+            symbol_decl->members[index]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            ++real_count;
+        }
+    }
+    if (real_count == 0U) {
+        return NULL;
+    }
+
+    members = (FengTypeMember **)calloc(real_count, sizeof(*members));
     if (members == NULL) {
         return NULL;
     }
+    *out_count = 0U;
     for (index = 0U; index < symbol_decl->member_count; ++index) {
-        members[index] = synthesize_type_member(symbol_decl->members[index]);
-        if (members[index] == NULL) {
-            for (cleanup_index = 0U; cleanup_index < symbol_decl->member_count; ++cleanup_index) {
+        FengTypeMember *m;
+
+        if (symbol_decl->members[index] == NULL ||
+            symbol_decl->members[index]->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        m = synthesize_type_member(symbol_decl->members[index]);
+        if (m == NULL) {
+            for (cleanup_index = 0U; cleanup_index < *out_count; ++cleanup_index) {
                 free_synthetic_type_member(members[cleanup_index]);
             }
             free(members);
+            *out_count = 0U;
             return NULL;
         }
+        members[(*out_count)++] = m;
     }
-    *out_count = symbol_decl->member_count;
     return members;
 }
 
@@ -511,6 +592,7 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
         case FENG_SYMBOL_DECL_KIND_TYPE:
             synth_decl->decl.kind = FENG_DECL_TYPE;
             synth_decl->decl.as.type_decl.name = name;
+            synth_decl->decl.as.type_decl.type_param_count = symbol_decl->type_param_count;
             synth_decl->decl.as.type_decl.members =
                 synthesize_type_members(symbol_decl, &synth_decl->decl.as.type_decl.member_count);
             if (symbol_decl->member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
@@ -529,6 +611,7 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
         case FENG_SYMBOL_DECL_KIND_SPEC:
             synth_decl->decl.kind = FENG_DECL_SPEC;
             synth_decl->decl.as.spec_decl.name = name;
+            synth_decl->decl.as.spec_decl.type_param_count = symbol_decl->type_param_count;
             synth_decl->decl.as.spec_decl.parent_specs =
                 synthesize_type_ref_list(symbol_decl->declared_specs,
                                          symbol_decl->declared_spec_count);
@@ -567,6 +650,7 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
 
         case FENG_SYMBOL_DECL_KIND_FUNCTION:
             synth_decl->decl.kind = FENG_DECL_FUNCTION;
+            synth_decl->decl.as.function_decl.type_param_count = symbol_decl->type_param_count;
             if (!synthesize_callable_signature(&synth_decl->decl.as.function_decl,
                                                symbol_decl,
                                                name)) {
