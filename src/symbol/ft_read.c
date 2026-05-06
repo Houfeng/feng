@@ -12,8 +12,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *strs_section;
     const FengSymbolFtSectionEntry *syms_section;
     const FengSymbolFtSectionEntry *typs_section;
-    const FengSymbolFtSectionEntry *sigs_section;
-    const FengSymbolFtSectionEntry *prms_section;
+    const FengSymbolFtSectionEntry *tseq_section;
     const FengSymbolFtSectionEntry *rels_section;
     const FengSymbolFtSectionEntry *docs_section;
     const FengSymbolFtSectionEntry *attrs_section;
@@ -174,15 +173,14 @@ static bool load_required_sections(ReadContext *ctx,
     ctx->strs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_STRS);
     ctx->syms_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SYMS);
     ctx->typs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_TYPS);
-    ctx->sigs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SIGS);
-    ctx->prms_section = find_section(ctx, FENG_SYMBOL_FT_SEC_PRMS);
+    ctx->tseq_section = find_section(ctx, FENG_SYMBOL_FT_SEC_TSEQ);
     ctx->rels_section = find_section(ctx, FENG_SYMBOL_FT_SEC_RELS);
     ctx->docs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_DOCS);
     ctx->attrs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_ATTRS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
     if (ctx->strs_section == NULL || ctx->syms_section == NULL || ctx->typs_section == NULL ||
-        ctx->sigs_section == NULL || ctx->prms_section == NULL || ctx->rels_section == NULL) {
+        ctx->tseq_section == NULL || ctx->rels_section == NULL) {
         return feng_symbol_internal_set_error(out_error,
                                               path,
                                               (FengToken){0},
@@ -315,12 +313,10 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
     FengSymbolTypeView *type;
     uint16_t kind;
     uint32_t string_ref;
-    uint32_t inner_type_id;
-    uint32_t aux;
-    uint32_t aux2;
-    uint32_t aux3;
+    uint32_t sym_ref;
+    uint32_t elem_start;
+    uint32_t elem_count;
     size_t layer;
-    uint64_t bits;
 
     if (type_id == 0U) {
         return NULL;
@@ -337,10 +333,9 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
     record = base + (size_t)(type_id - 1U) * sizeof(FengSymbolFtTypeRecord);
     kind = read_u16_le(record + 0x00);
     string_ref = read_u32_le(record + 0x04);
-    inner_type_id = read_u32_le(record + 0x08);
-    aux = read_u32_le(record + 0x0C);
-    aux2 = read_u32_le(record + 0x10);
-    aux3 = read_u32_le(record + 0x14);
+    sym_ref = read_u32_le(record + 0x08);
+    elem_start = read_u32_le(record + 0x0C);
+    elem_count = read_u32_le(record + 0x10);
 
     type = (FengSymbolTypeView *)calloc(1U, sizeof(*type));
     if (type == NULL) {
@@ -357,14 +352,15 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
             break;
         case FENG_SYMBOL_FT_TYPE_KIND_C_POINTER:
             type->kind = FENG_SYMBOL_TYPE_KIND_POINTER;
-            type->as.pointer.inner = parse_type_by_id(ctx, inner_type_id, path, out_error);
+            type->as.pointer.inner = parse_type_by_id(ctx, elem_start, path, out_error);
             break;
         case FENG_SYMBOL_FT_TYPE_KIND_ARRAY:
             type->kind = FENG_SYMBOL_TYPE_KIND_ARRAY;
-            type->as.array.rank = aux;
-            type->as.array.element = parse_type_by_id(ctx, inner_type_id, path, out_error);
-            type->as.array.layer_writable = (bool *)calloc(aux, sizeof(*type->as.array.layer_writable));
-            if (aux > 0U && type->as.array.layer_writable == NULL) {
+            type->as.array.rank = elem_count;
+            type->as.array.element = parse_type_by_id(ctx, elem_start, path, out_error);
+            type->as.array.layer_writable =
+                (bool *)calloc(elem_count, sizeof(*type->as.array.layer_writable));
+            if (elem_count > 0U && type->as.array.layer_writable == NULL) {
                 feng_symbol_internal_type_free(type);
                 feng_symbol_internal_set_error(out_error,
                                                path,
@@ -372,13 +368,29 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
                                                "out of memory loading array mutability bitmap");
                 return NULL;
             }
-            bits = ((uint64_t)aux3 << 32U) | aux2;
-            for (layer = 0U; layer < aux; ++layer) {
-                type->as.array.layer_writable[layer] = (bits & (1ULL << layer)) != 0U;
+            /* string_ref holds the 32-bit mutability bitmap */
+            for (layer = 0U; layer < elem_count; ++layer) {
+                type->as.array.layer_writable[layer] = (string_ref & (1U << layer)) != 0U;
             }
             break;
+        case FENG_SYMBOL_FT_TYPE_KIND_CALLABLE:
+        case FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT:
+        case FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE:
+        case FENG_SYMBOL_FT_TYPE_KIND_NAMED_GENERIC:
+        case FENG_SYMBOL_FT_TYPE_KIND_TYPE_PARAM_REF:
+            /* These node kinds are structural (not value types) and are
+             * handled directly in parse_symbols.  If encountered here it
+             * means a corrupt TYPS reference from a value-type context. */
+            free(type);
+            feng_symbol_internal_set_error(out_error,
+                                           path,
+                                           (FengToken){0},
+                                           "type id %u (kind %u) is not a value type",
+                                           type_id,
+                                           (unsigned)kind);
+            return NULL;
         default:
-            feng_symbol_internal_type_free(type);
+            free(type);
             feng_symbol_internal_set_error(out_error,
                                            path,
                                            (FengToken){0},
@@ -386,6 +398,8 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
                                            kind);
             return NULL;
     }
+    /* suppress unused-variable warning for sym_ref (reserved for future use) */
+    (void)sym_ref;
     if (type_id > ctx->type_count) {
         FengSymbolTypeView **grown = (FengSymbolTypeView **)realloc(ctx->types,
                                                                     type_id * sizeof(*grown));
@@ -405,7 +419,115 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
     ctx->types[type_id - 1U] = feng_symbol_internal_type_clone(type, out_error);
     return type;
 }
+/* Populate decl->params and decl->return_type by reading a CALLABLE or
+ * SPEC_CALLABLE TYPS node and the corresponding TSEQ elements.
+ * type_id == 0 is silently accepted (no signature). */
+static bool parse_callable_from_type_ref(ReadContext *ctx,
+                                         uint32_t type_id,
+                                         FengSymbolDeclView *decl,
+                                         const char *path,
+                                         FengSymbolError *out_error) {
+    const unsigned char *typs_base;
+    const unsigned char *record;
+    uint32_t typs_count;
+    uint16_t kind;
+    uint32_t elem_start;
+    uint32_t elem_count;
+    uint32_t tseq_total;
+    const unsigned char *tseq_base;
+    uint32_t param_index;
 
+    if (type_id == 0U) {
+        return true;
+    }
+    typs_count = read_u32_le((const unsigned char *)ctx->typs_section + 0x04);
+    if (type_id > typs_count) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "callable type id %u is out of TYPS range",
+                                              type_id);
+    }
+    typs_base = ctx->data + read_u64_le((const unsigned char *)ctx->typs_section + 0x08);
+    record = typs_base + (size_t)(type_id - 1U) * sizeof(FengSymbolFtTypeRecord);
+    kind = read_u16_le(record + 0x00);
+    elem_start = read_u32_le(record + 0x0C);
+    elem_count = read_u32_le(record + 0x10);
+
+    if (kind != FENG_SYMBOL_FT_TYPE_KIND_CALLABLE &&
+        kind != FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE) {
+        if (kind == FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT) {
+            return true; /* object-form spec: no callable info */
+        }
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "type_ref %u for callable symbol has unexpected kind %u",
+                                              type_id,
+                                              (unsigned)kind);
+    }
+    if (elem_count == 0U) {
+        return true; /* no elements at all */
+    }
+
+    tseq_total = read_u32_le((const unsigned char *)ctx->tseq_section + 0x04);
+    if (elem_start + elem_count > tseq_total) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "callable TSEQ range [%u, %u) exceeds TSEQ section size %u",
+                                              elem_start,
+                                              elem_start + elem_count,
+                                              tseq_total);
+    }
+    tseq_base = ctx->data + read_u64_le((const unsigned char *)ctx->tseq_section + 0x08);
+
+    /* First (elem_count - 1) elements are parameters */
+    for (param_index = 0U; param_index < elem_count - 1U; ++param_index) {
+        const unsigned char *elem =
+            tseq_base + (size_t)(elem_start + param_index) * sizeof(FengSymbolFtTseqRecord);
+        FengSymbolParamView *grown;
+        uint32_t name_str = read_u32_le(elem + 0x00);
+        uint32_t type_id_elem = read_u32_le(elem + 0x04);
+        uint16_t flags = read_u16_le(elem + 0x08);
+
+        grown = (FengSymbolParamView *)realloc(decl->params,
+                                               (decl->param_count + 1U) * sizeof(*decl->params));
+        if (grown == NULL) {
+            return feng_symbol_internal_set_error(out_error,
+                                                  path,
+                                                  (FengToken){0},
+                                                  "out of memory loading parameter list");
+        }
+        decl->params = grown;
+        memset(&decl->params[decl->param_count], 0, sizeof(*decl->params));
+        decl->params[decl->param_count].name =
+            feng_symbol_internal_dup_cstr(string_at(ctx, name_str));
+        decl->params[decl->param_count].mutability =
+            (flags & FENG_SYMBOL_FT_TSEQ_FLAG_VAR) != 0U ? FENG_MUTABILITY_VAR
+                                                          : FENG_MUTABILITY_LET;
+        decl->params[decl->param_count].type =
+            parse_type_by_id(ctx, type_id_elem, path, out_error);
+        if ((name_str != 0U && decl->params[decl->param_count].name == NULL) ||
+            (type_id_elem != 0U && decl->params[decl->param_count].type == NULL)) {
+            return false;
+        }
+        ++decl->param_count;
+    }
+
+    /* Last element is the return type (name_str = 0) */
+    {
+        const unsigned char *elem =
+            tseq_base + (size_t)(elem_start + elem_count - 1U) * sizeof(FengSymbolFtTseqRecord);
+        uint32_t return_type_id = read_u32_le(elem + 0x04);
+
+        decl->return_type = parse_type_by_id(ctx, return_type_id, path, out_error);
+        if (return_type_id != 0U && decl->return_type == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
 static FengSymbolDeclKind decode_decl_kind(uint16_t kind) {
     switch (kind) {
         case FENG_SYMBOL_FT_SYM_KIND_MODULE:
@@ -451,6 +573,9 @@ static bool parse_symbols(ReadContext *ctx,
     ctx->decl_count = count;
 
     for (symbol_index = 0U; symbol_index < count; ++symbol_index) {
+        /* New FengSymbolFtSymRecord layout (28 bytes, sig_ref removed):
+         *   0x00 id, 0x04 owner_id, 0x08 name_str, 0x0C kind, 0x0E flags,
+         *   0x10 type_ref, 0x14 extra_ref, 0x18 doc_ref */
         const unsigned char *record = base + symbol_index * sizeof(FengSymbolFtSymRecord);
         FengSymbolDeclView *decl = (FengSymbolDeclView *)calloc(1U, sizeof(*decl));
         uint32_t id = read_u32_le(record + 0x00);
@@ -458,9 +583,9 @@ static bool parse_symbols(ReadContext *ctx,
         uint16_t kind = read_u16_le(record + 0x0C);
         uint16_t flags = read_u16_le(record + 0x0E);
         uint32_t type_ref = read_u32_le(record + 0x10);
-        uint32_t sig_ref = read_u32_le(record + 0x14);
-        uint32_t extra_ref = read_u32_le(record + 0x18);
-        uint32_t doc_ref = read_u32_le(record + 0x1C);
+        uint32_t extra_ref = read_u32_le(record + 0x14);
+        uint32_t doc_ref = read_u32_le(record + 0x18);
+        bool is_callable_kind;
 
         if (decl == NULL) {
             return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory allocating declaration view");
@@ -478,72 +603,51 @@ static bool parse_symbols(ReadContext *ctx,
         decl->path = ctx->module != NULL && ctx->module->primary_path != NULL
                          ? feng_symbol_internal_dup_cstr(ctx->module->primary_path)
                          : NULL;
-        decl->value_type = parse_type_by_id(ctx, type_ref, path, out_error);
-        decl->fit_target = decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_MODULE
-                               ? NULL
-                               : parse_type_by_id(ctx, extra_ref, path, out_error);
-        if ((name_str != 0U && decl->name == NULL) ||
-            (type_ref != 0U && decl->value_type == NULL) ||
-            (decode_decl_kind(kind) != FENG_SYMBOL_DECL_KIND_MODULE && extra_ref != 0U && decl->fit_target == NULL)) {
-            free(decl->name);
-            free(decl->path);
-            feng_symbol_internal_type_free(decl->value_type);
-            feng_symbol_internal_type_free(decl->fit_target);
-            free(decl);
-            return false;
-        }
-        if (sig_ref != 0U) {
-            const unsigned char *sig_base = ctx->data + read_u64_le((const unsigned char *)ctx->sigs_section + 0x08);
-            const unsigned char *sig = sig_base + (size_t)(sig_ref - 1U) * sizeof(FengSymbolFtSigRecord);
-            uint32_t return_type_id = read_u32_le(sig + 0x00);
-            uint32_t first_param_index = read_u32_le(sig + 0x04);
-            uint32_t param_count = read_u32_le(sig + 0x08);
-            uint32_t abi_library_str = read_u32_le(sig + 0x0C + 4U);
-            uint32_t param_index;
 
-            decl->calling_convention = (FengAnnotationKind)read_u16_le(sig + 0x0C);
-            decl->return_type = parse_type_by_id(ctx, return_type_id, path, out_error);
-            decl->abi_library = feng_symbol_internal_dup_cstr(string_at(ctx, abi_library_str));
-            if ((return_type_id != 0U && decl->return_type == NULL) ||
-                (abi_library_str != 0U && decl->abi_library == NULL)) {
+        /* Callable kinds (fn/method/ctor/dtor/spec): type_ref → CALLABLE or
+         * SPEC_OBJECT/SPEC_CALLABLE node; params and return_type are
+         * reconstructed from TSEQ.  Non-callable kinds: type_ref → value type. */
+        is_callable_kind = (kind == FENG_SYMBOL_FT_SYM_KIND_TOP_FN ||
+                            kind == FENG_SYMBOL_FT_SYM_KIND_EXTERN_FN ||
+                            kind == FENG_SYMBOL_FT_SYM_KIND_METHOD ||
+                            kind == FENG_SYMBOL_FT_SYM_KIND_CTOR ||
+                            kind == FENG_SYMBOL_FT_SYM_KIND_DTOR ||
+                            kind == FENG_SYMBOL_FT_SYM_KIND_SPEC);
+        if (is_callable_kind) {
+            if (!parse_callable_from_type_ref(ctx, type_ref, decl, path, out_error)) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return false;
             }
-            for (param_index = 0U; param_index < param_count; ++param_index) {
-                const unsigned char *param_base = ctx->data + read_u64_le((const unsigned char *)ctx->prms_section + 0x08);
-                const unsigned char *param = param_base + (size_t)(first_param_index + param_index - 1U) * sizeof(FengSymbolFtParamRecord);
-                FengSymbolParamView *grown = (FengSymbolParamView *)realloc(
-                    decl->params,
-                    (decl->param_count + 1U) * sizeof(*decl->params));
-                uint32_t param_name_str;
-                uint32_t param_type_id;
-                uint16_t param_flags;
-
-                if (grown == NULL) {
-                    feng_symbol_internal_decl_free_members(decl);
-                    free(decl);
-                    return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory loading parameter list");
-                }
-                decl->params = grown;
-                memset(&decl->params[decl->param_count], 0, sizeof(*decl->params));
-                param_name_str = read_u32_le(param + 0x00);
-                param_type_id = read_u32_le(param + 0x04);
-                param_flags = read_u16_le(param + 0x08);
-                decl->params[decl->param_count].name = feng_symbol_internal_dup_cstr(string_at(ctx, param_name_str));
-                decl->params[decl->param_count].mutability =
-                    (param_flags & FENG_SYMBOL_FT_PARAM_FLAG_MUTABLE) != 0U ? FENG_MUTABILITY_VAR
-                                                                            : FENG_MUTABILITY_LET;
-                decl->params[decl->param_count].type = parse_type_by_id(ctx, param_type_id, path, out_error);
-                if ((param_name_str != 0U && decl->params[decl->param_count].name == NULL) ||
-                    (param_type_id != 0U && decl->params[decl->param_count].type == NULL)) {
-                    feng_symbol_internal_decl_free_members(decl);
-                    free(decl);
-                    return false;
-                }
-                ++decl->param_count;
+        } else {
+            decl->value_type = parse_type_by_id(ctx, type_ref, path, out_error);
+            if (type_ref != 0U && decl->value_type == NULL) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return false;
             }
         }
+
+        /* extra_ref: MODULE → full-name string id; FIT → target TYPS.id; else 0 */
+        decl->fit_target = decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_MODULE
+                               ? NULL
+                               : parse_type_by_id(ctx, extra_ref, path, out_error);
+        if (decode_decl_kind(kind) != FENG_SYMBOL_DECL_KIND_MODULE &&
+            extra_ref != 0U && decl->fit_target == NULL) {
+            /* For non-FIT kinds extra_ref is typically 0, so this only fires
+             * for FIT with a missing target type – a genuine parse error. */
+            if (decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_FIT) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return false;
+            }
+        }
+        if (name_str != 0U && decl->name == NULL) {
+            feng_symbol_internal_decl_free_members(decl);
+            free(decl);
+            return false;
+        }
+
         ctx->decls[symbol_index] = decl;
         ctx->decl_symbol_ids[symbol_index] = id;
         ctx->decl_doc_refs[symbol_index] = doc_ref;
@@ -769,6 +873,21 @@ static bool parse_attrs(ReadContext *ctx,
         }
         if (kind == FENG_SYMBOL_ATTR_UNION) {
             decl->union_annotated = true;
+            continue;
+        }
+        if (kind == FENG_SYMBOL_ATTR_CALL_CONV) {
+            decl->calling_convention = (FengAnnotationKind)value0;
+            continue;
+        }
+        if (kind == FENG_SYMBOL_ATTR_ABI_LIBRARY) {
+            free(decl->abi_library);
+            decl->abi_library = feng_symbol_internal_dup_cstr(string_at(ctx, value0));
+            if (value0 != 0U && decl->abi_library == NULL) {
+                return feng_symbol_internal_set_error(out_error,
+                                                      path,
+                                                      (FengToken){0},
+                                                      "out of memory loading abi_library string");
+            }
             continue;
         }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {

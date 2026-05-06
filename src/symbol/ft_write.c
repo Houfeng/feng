@@ -28,10 +28,8 @@ typedef struct WriterContext {
     size_t string_count;
     FengSymbolFtTypeRecord *types;
     size_t type_count;
-    FengSymbolFtParamRecord *params;
-    size_t param_count;
-    FengSymbolFtSigRecord *sigs;
-    size_t sig_count;
+    FengSymbolFtTseqRecord *tseqs;
+    size_t tseq_count;
     FengSymbolFtSymRecord *syms;
     size_t sym_count;
     FengSymbolFtRelRecord *rels;
@@ -139,8 +137,7 @@ static void writer_context_dispose(WriterContext *ctx) {
     }
     free_string_entries(ctx->strings, ctx->string_count);
     free(ctx->types);
-    free(ctx->params);
-    free(ctx->sigs);
+    free(ctx->tseqs);
     free(ctx->syms);
     free(ctx->rels);
     free(ctx->docs);
@@ -261,7 +258,6 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             }
             record.kind = FENG_SYMBOL_FT_TYPE_KIND_NAMED;
             record.string_ref = writer_intern_string(ctx, joined_name, path, token, out_error);
-            record.aux = (uint32_t)type->as.named.segment_count;
             free(joined_name);
             if (record.string_ref == 0U) {
                 return 0U;
@@ -270,43 +266,42 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
 
         case FENG_SYMBOL_TYPE_KIND_POINTER:
             record.kind = FENG_SYMBOL_FT_TYPE_KIND_C_POINTER;
-            record.inner_type_id = writer_serialize_type(ctx,
-                                                         type->as.pointer.inner,
-                                                         path,
-                                                         token,
-                                                         out_error);
-            if (type->as.pointer.inner != NULL && record.inner_type_id == 0U) {
+            record.elem_start = writer_serialize_type(ctx,
+                                                      type->as.pointer.inner,
+                                                      path,
+                                                      token,
+                                                      out_error);
+            if (type->as.pointer.inner != NULL && record.elem_start == 0U) {
                 return 0U;
             }
             break;
 
         case FENG_SYMBOL_TYPE_KIND_ARRAY:
-            if (type->as.array.rank > 64U) {
+            if (type->as.array.rank > 32U) {
                 feng_symbol_internal_set_error(out_error,
                                                path,
                                                token,
-                                               "array rank %zu exceeds current .ft v1 bitmap capacity",
+                                               "array rank %zu exceeds current .ft v1 bitmap capacity (32)",
                                                type->as.array.rank);
                 return 0U;
             }
             record.kind = FENG_SYMBOL_FT_TYPE_KIND_ARRAY;
-            record.inner_type_id = writer_serialize_type(ctx,
-                                                         type->as.array.element,
-                                                         path,
-                                                         token,
-                                                         out_error);
-            if (type->as.array.element != NULL && record.inner_type_id == 0U) {
+            record.elem_start = writer_serialize_type(ctx,
+                                                      type->as.array.element,
+                                                      path,
+                                                      token,
+                                                      out_error);
+            if (type->as.array.element != NULL && record.elem_start == 0U) {
                 return 0U;
             }
-            record.aux = (uint32_t)type->as.array.rank;
+            record.elem_count = (uint32_t)type->as.array.rank;
             mutability_bits = 0U;
             for (layer_index = 0U; layer_index < type->as.array.rank; ++layer_index) {
                 if (type->as.array.layer_writable[layer_index]) {
                     mutability_bits |= (1ULL << layer_index);
                 }
             }
-            record.aux2 = (uint32_t)(mutability_bits & 0xFFFFFFFFULL);
-            record.aux3 = (uint32_t)((mutability_bits >> 32U) & 0xFFFFFFFFULL);
+            record.string_ref = (uint32_t)(mutability_bits & 0xFFFFFFFFULL);
             break;
 
         case FENG_SYMBOL_TYPE_KIND_INVALID:
@@ -325,59 +320,95 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
     return (uint32_t)ctx->type_count;
 }
 
-static uint32_t writer_serialize_signature(WriterContext *ctx,
-                                           const FengSymbolDeclView *decl,
-                                           const char *path,
-                                           FengToken token,
-                                           FengSymbolError *out_error) {
-    FengSymbolFtSigRecord record;
+/* Append one TSEQ element record.  Returns false on allocation failure. */
+static bool writer_append_tseq(WriterContext *ctx,
+                               uint32_t name_str,
+                               uint32_t type_id,
+                               uint16_t flags,
+                               const char *path,
+                               FengToken token,
+                               FengSymbolError *out_error) {
+    FengSymbolFtTseqRecord rec;
+
+    memset(&rec, 0, sizeof(rec));
+    rec.name_str = name_str;
+    rec.type_id = type_id;
+    rec.flags = flags;
+    return append_record((void **)&ctx->tseqs,
+                         &ctx->tseq_count,
+                         sizeof(rec),
+                         &rec,
+                         path,
+                         token,
+                         out_error);
+}
+
+/* Serialize a callable signature (params + return type) as a CALLABLE TYPS
+ * node backed by TSEQ elements.  Returns the 1-based TYPS.id of the new
+ * CALLABLE node, or 0 on failure. */
+static uint32_t writer_serialize_callable_type(WriterContext *ctx,
+                                               const FengSymbolDeclView *decl,
+                                               uint16_t type_kind,
+                                               uint32_t sym_ref,
+                                               const char *path,
+                                               FengToken token,
+                                               FengSymbolError *out_error) {
+    FengSymbolFtTypeRecord record;
     size_t param_index;
+    uint32_t tseq_start;
+    uint32_t return_type_id;
+    uint32_t param_name_str;
+    uint32_t param_type_id;
+    uint16_t param_flags;
 
-    memset(&record, 0, sizeof(record));
-    record.return_type_id = writer_serialize_type(ctx, decl->return_type, path, token, out_error);
-    if (decl->return_type != NULL && record.return_type_id == 0U) {
-        return 0U;
-    }
-    record.first_param_index = decl->param_count > 0U ? (uint32_t)(ctx->param_count + 1U) : 0U;
-    record.param_count = (uint32_t)decl->param_count;
-    record.call_conv = (uint16_t)decl->calling_convention;
-    record.abi_library_str = writer_intern_string(ctx, decl->abi_library, path, token, out_error);
-    if (decl->abi_library != NULL && record.abi_library_str == 0U) {
-        return 0U;
-    }
+    tseq_start = (uint32_t)ctx->tseq_count; /* 0-based start index */
 
+    /* Emit one TSEQ element per parameter */
     for (param_index = 0U; param_index < decl->param_count; ++param_index) {
-        FengSymbolFtParamRecord param_record;
-
-        memset(&param_record, 0, sizeof(param_record));
-        param_record.name_str = writer_intern_string(ctx,
-                                                     decl->params[param_index].name,
-                                                     path,
-                                                     decl->params[param_index].token,
-                                                     out_error);
-        param_record.type_id = writer_serialize_type(ctx,
-                                                     decl->params[param_index].type,
-                                                     path,
-                                                     decl->params[param_index].token,
-                                                     out_error);
-        param_record.flags = decl->params[param_index].mutability == FENG_MUTABILITY_VAR
-                                 ? FENG_SYMBOL_FT_PARAM_FLAG_MUTABLE
-                                 : 0U;
-        if ((decl->params[param_index].name != NULL && param_record.name_str == 0U) ||
-            (decl->params[param_index].type != NULL && param_record.type_id == 0U) ||
-            !append_record((void **)&ctx->params,
-                           &ctx->param_count,
-                           sizeof(param_record),
-                           &param_record,
-                           path,
-                           decl->params[param_index].token,
-                           out_error)) {
+        param_name_str = writer_intern_string(ctx,
+                                             decl->params[param_index].name,
+                                             path,
+                                             decl->params[param_index].token,
+                                             out_error);
+        param_type_id = writer_serialize_type(ctx,
+                                              decl->params[param_index].type,
+                                              path,
+                                              decl->params[param_index].token,
+                                              out_error);
+        param_flags = decl->params[param_index].mutability == FENG_MUTABILITY_VAR
+                          ? FENG_SYMBOL_FT_TSEQ_FLAG_VAR
+                          : 0U;
+        if ((decl->params[param_index].name != NULL && param_name_str == 0U) ||
+            (decl->params[param_index].type != NULL && param_type_id == 0U) ||
+            !writer_append_tseq(ctx,
+                                param_name_str,
+                                param_type_id,
+                                param_flags,
+                                path,
+                                decl->params[param_index].token,
+                                out_error)) {
             return 0U;
         }
     }
 
-    if (!append_record((void **)&ctx->sigs,
-                       &ctx->sig_count,
+    /* Emit return-type TSEQ element (name_str = 0, flags = 0) */
+    return_type_id = writer_serialize_type(ctx, decl->return_type, path, token, out_error);
+    if (decl->return_type != NULL && return_type_id == 0U) {
+        return 0U;
+    }
+    if (!writer_append_tseq(ctx, 0U, return_type_id, 0U, path, token, out_error)) {
+        return 0U;
+    }
+
+    /* Build the CALLABLE/SPEC_CALLABLE TYPS record */
+    memset(&record, 0, sizeof(record));
+    record.kind = type_kind;
+    record.sym_ref = sym_ref;
+    record.elem_start = tseq_start;
+    record.elem_count = (uint32_t)(decl->param_count + 1U);
+
+    if (!append_record((void **)&ctx->types,
+                       &ctx->type_count,
                        sizeof(record),
                        &record,
                        path,
@@ -385,7 +416,30 @@ static uint32_t writer_serialize_signature(WriterContext *ctx,
                        out_error)) {
         return 0U;
     }
-    return (uint32_t)ctx->sig_count;
+    return (uint32_t)ctx->type_count;
+}
+
+/* Serialize a SPEC_OBJECT TYPS node.  Returns the 1-based TYPS.id. */
+static uint32_t writer_serialize_spec_object_type(WriterContext *ctx,
+                                                   uint32_t spec_symbol_id,
+                                                   const char *path,
+                                                   FengToken token,
+                                                   FengSymbolError *out_error) {
+    FengSymbolFtTypeRecord record;
+
+    memset(&record, 0, sizeof(record));
+    record.kind = FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT;
+    record.sym_ref = spec_symbol_id;
+    if (!append_record((void **)&ctx->types,
+                       &ctx->type_count,
+                       sizeof(record),
+                       &record,
+                       path,
+                       token,
+                       out_error)) {
+        return 0U;
+    }
+    return (uint32_t)ctx->type_count;
 }
 
 static bool writer_append_decl_id(WriterContext *ctx,
@@ -552,6 +606,45 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    if (decl->calling_convention != FENG_ANNOTATION_NONE) {
+        FengSymbolFtAttrRecord attr;
+
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_CALL_CONV;
+        attr.value0 = (uint32_t)decl->calling_convention;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
+    if (decl->abi_library != NULL && decl->abi_library[0] != '\0') {
+        FengSymbolFtAttrRecord attr;
+        uint32_t lib_str;
+
+        lib_str = writer_intern_string(ctx, decl->abi_library, path, token, out_error);
+        if (lib_str == 0U) {
+            return false;
+        }
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_ABI_LIBRARY;
+        attr.value0 = lib_str;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -620,16 +713,37 @@ static bool writer_collect_decl(WriterContext *ctx,
         case FENG_SYMBOL_DECL_KIND_METHOD:
         case FENG_SYMBOL_DECL_KIND_CONSTRUCTOR:
         case FENG_SYMBOL_DECL_KIND_FINALIZER:
-            record.sig_ref = writer_serialize_signature(ctx, decl, path, decl->token, out_error);
-            if (record.sig_ref == 0U) {
+            record.type_ref = writer_serialize_callable_type(ctx,
+                                                             decl,
+                                                             FENG_SYMBOL_FT_TYPE_KIND_CALLABLE,
+                                                             0U,
+                                                             path,
+                                                             decl->token,
+                                                             out_error);
+            if (record.type_ref == 0U) {
                 return false;
             }
             break;
 
         case FENG_SYMBOL_DECL_KIND_SPEC:
             if (decl->param_count > 0U || decl->return_type != NULL) {
-                record.sig_ref = writer_serialize_signature(ctx, decl, path, decl->token, out_error);
-                if (record.sig_ref == 0U) {
+                record.type_ref = writer_serialize_callable_type(ctx,
+                                                                 decl,
+                                                                 FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE,
+                                                                 symbol_id,
+                                                                 path,
+                                                                 decl->token,
+                                                                 out_error);
+                if (record.type_ref == 0U) {
+                    return false;
+                }
+            } else {
+                record.type_ref = writer_serialize_spec_object_type(ctx,
+                                                                    symbol_id,
+                                                                    path,
+                                                                    decl->token,
+                                                                    out_error);
+                if (record.type_ref == 0U) {
                     return false;
                 }
             }
@@ -893,14 +1007,13 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     Buffer strings = {0};
     Buffer syms = {0};
     Buffer typs = {0};
-    Buffer sigs = {0};
-    Buffer prms = {0};
+    Buffer tseqs = {0};
     Buffer rels = {0};
     Buffer docs = {0};
     Buffer attrs = {0};
     Buffer spans = {0};
     Buffer payload = {0};
-    FengSymbolFtSectionEntry sections[9];
+    FengSymbolFtSectionEntry sections[8];
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
@@ -918,8 +1031,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         !build_strings_section(&ctx, &strings, path, module->root_decl.token, out_error) ||
         !build_fixed_section(&syms, ctx.syms, ctx.sym_count, sizeof(*ctx.syms), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&typs, ctx.types, ctx.type_count, sizeof(*ctx.types), path, module->root_decl.token, out_error) ||
-        !build_fixed_section(&sigs, ctx.sigs, ctx.sig_count, sizeof(*ctx.sigs), path, module->root_decl.token, out_error) ||
-        !build_fixed_section(&prms, ctx.params, ctx.param_count, sizeof(*ctx.params), path, module->root_decl.token, out_error) ||
+        !build_fixed_section(&tseqs, ctx.tseqs, ctx.tseq_count, sizeof(*ctx.tseqs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&rels, ctx.rels, ctx.rel_count, sizeof(*ctx.rels), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&docs, ctx.docs, ctx.doc_count, sizeof(*ctx.docs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&attrs, ctx.attrs, ctx.attr_count, sizeof(*ctx.attrs), path, module->root_decl.token, out_error) ||
@@ -959,9 +1071,10 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         } \
     } while (0)
 
+    /* 5 required core sections: STRS SYMS TYPS TSEQ RELS */
     header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE +
                             (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
-                                       (6U + (ctx.doc_count > 0U ? 1U : 0U) +
+                                       (5U + (ctx.doc_count > 0U ? 1U : 0U) +
                                         (ctx.attr_count > 0U ? 1U : 0U) +
                                         (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
     APPEND_SECTION(FENG_SYMBOL_FT_SEC_STRS,
@@ -979,16 +1092,11 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                    (uint32_t)ctx.type_count,
                    (uint32_t)sizeof(FengSymbolFtTypeRecord),
                    &typs);
-    APPEND_SECTION(FENG_SYMBOL_FT_SEC_SIGS,
+    APPEND_SECTION(FENG_SYMBOL_FT_SEC_TSEQ,
                    FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY,
-                   (uint32_t)ctx.sig_count,
-                   (uint32_t)sizeof(FengSymbolFtSigRecord),
-                   &sigs);
-    APPEND_SECTION(FENG_SYMBOL_FT_SEC_PRMS,
-                   FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY,
-                   (uint32_t)ctx.param_count,
-                   (uint32_t)sizeof(FengSymbolFtParamRecord),
-                   &prms);
+                   (uint32_t)ctx.tseq_count,
+                   (uint32_t)sizeof(FengSymbolFtTseqRecord),
+                   &tseqs);
     APPEND_SECTION(FENG_SYMBOL_FT_SEC_RELS,
                    FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY,
                    (uint32_t)ctx.rel_count,
@@ -1055,8 +1163,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     buffer_free(&strings);
     buffer_free(&syms);
     buffer_free(&typs);
-    buffer_free(&sigs);
-    buffer_free(&prms);
+    buffer_free(&tseqs);
     buffer_free(&rels);
     buffer_free(&docs);
     buffer_free(&attrs);
@@ -1072,8 +1179,7 @@ cleanup:
     buffer_free(&strings);
     buffer_free(&syms);
     buffer_free(&typs);
-    buffer_free(&sigs);
-    buffer_free(&prms);
+    buffer_free(&tseqs);
     buffer_free(&rels);
     buffer_free(&attrs);
     buffer_free(&spans);
