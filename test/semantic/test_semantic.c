@@ -8644,6 +8644,264 @@ static void test_value_kind_non_type_decl_is_trivial(void) {
     feng_program_free(program);
 }
 
+/* ───────────────────────────────── G4: Generics ─────────────────────────── */
+
+static void test_generic_function_decl_ok(void) {
+    /* A generic function with a single type parameter in both the parameter
+     * and the return type must analyse without errors. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn identity<T>(x: T): T {\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_fn_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_type_decl_ok(void) {
+    /* A generic type with a single type parameter used in a field type must
+     * analyse without errors. */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_spec_decl_ok(void) {
+    /* A generic spec with a single type parameter used in a method return type
+     * must analyse without errors. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Container<T> {\n"
+        "    fn fetch(): T;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_spec_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_function_call_wildcard_ok(void) {
+    /* Calling a generic function whose type parameter position matches any
+     * argument type (wildcard matching, G4-12) must succeed.  The result
+     * binding is untyped so no return-type inference is required. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn identity<T>(x: T): T {\n"
+        "    return x;\n"
+        "}\n"
+        "fn check(): void {\n"
+        "    let result = identity(42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_call_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_explicit_type_args_ok(void) {
+    /* Explicit type arguments with the correct arity must be accepted. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn identity<T>(x: T): T {\n"
+        "    return x;\n"
+        "}\n"
+        "fn check(): void {\n"
+        "    let result = identity:<int>(42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_explicit_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_type_param_constraint_must_be_spec(void) {
+    /* A type parameter constraint that names a *type* (not a spec) must be
+     * rejected.  Only specs are legal as constraints. */
+    const char *source =
+        "mod demo.main;\n"
+        "type MyType {}\n"
+        "fn process<T: MyType>(x: T): void {}\n";
+    FengProgram *program = parse_program_or_die("gen_bad_constraint.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "constraint must be a spec") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_type_ref_arity_too_many(void) {
+    /* Supplying more type arguments than a generic type declares must be an
+     * error (G4-7 arity check). */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "}\n"
+        "fn process(b: Box<int, bool>): void {}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_many.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "type argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_non_generic_type_with_type_args_rejected(void) {
+    /* Supplying type arguments to a non-generic type must be an error. */
+    const char *source =
+        "mod demo.main;\n"
+        "type Plain {}\n"
+        "fn process(p: Plain<int>): void {}\n";
+    FengProgram *program = parse_program_or_die("gen_non_generic.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "not a generic type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_type_with_finalizer_rejected(void) {
+    /* A generic type cannot declare a finalizer (G4-18). */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "    fn ~Box() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_fin.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "finalizer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_explicit_type_args_arity_mismatch(void) {
+    /* Providing the wrong number of explicit type arguments must be rejected
+     * (G4-13 arity check). */
+    const char *source =
+        "mod demo.main;\n"
+        "fn identity<T>(x: T): T {\n"
+        "    return x;\n"
+        "}\n"
+        "fn check(): void {\n"
+        "    let result = identity:<int, bool>(42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_explicit_bad.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "type argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_method_type_param_collides_with_type_param(void) {
+    /* A method may not reuse the same type parameter name as its enclosing
+     * type (G4-14 collision check). */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "    fn transform<T>(): void {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_shadow.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "shadows") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -8958,6 +9216,18 @@ int main(void) {
     test_value_kind_callable_form_spec_is_managed_pointer();
     test_value_kind_null_decl_is_trivial();
     test_value_kind_non_type_decl_is_trivial();
+
+    test_generic_function_decl_ok();
+    test_generic_type_decl_ok();
+    test_generic_spec_decl_ok();
+    test_generic_function_call_wildcard_ok();
+    test_generic_explicit_type_args_ok();
+    test_generic_type_param_constraint_must_be_spec();
+    test_generic_type_ref_arity_too_many();
+    test_generic_non_generic_type_with_type_args_rejected();
+    test_generic_type_with_finalizer_rejected();
+    test_generic_explicit_type_args_arity_mismatch();
+    test_generic_method_type_param_collides_with_type_param();
 
     puts("semantic tests passed");
     return 0;

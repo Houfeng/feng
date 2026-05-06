@@ -180,6 +180,12 @@ typedef struct CallableExceptionEscapeCache {
     bool changed;
 } CallableExceptionEscapeCache;
 
+/* G4: One entry per active type parameter in the current declaration scope. */
+typedef struct TypeParamEntry {
+    FengSlice name;
+    const FengTypeParam *type_param;
+} TypeParamEntry;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -241,6 +247,12 @@ typedef struct ResolveContext {
     struct LambdaCaptureFrame *lambda_frames;
     size_t lambda_frame_count;
     size_t lambda_frame_capacity;
+    /* G4: Active generic type parameter scope.  Pushed when entering a generic
+     * declaration (type, spec, fn) and popped on exit.  An inner push
+     * concatenates with the outer scope so that both type-level and
+     * method-level type params are simultaneously visible. */
+    const TypeParamEntry *type_params;
+    size_t type_param_count;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
@@ -1507,6 +1519,73 @@ static void resolver_pop_scope(ResolveContext *context) {
     --context->scope_count;
 }
 
+/* ─── G4: type parameter scope management ─────────────────────────── */
+
+/* Find a type parameter by name in the current scope. */
+static const TypeParamEntry *find_type_param(const ResolveContext *context, FengSlice name) {
+    size_t i;
+
+    for (i = 0U; i < context->type_param_count; ++i) {
+        if (slice_equals(context->type_params[i].name, name)) {
+            return &context->type_params[i];
+        }
+    }
+    return NULL;
+}
+
+/* Push a new type parameter scope, merging it with the existing one.
+ * Saves the previous scope into *out_prev / *out_prev_count for later pop.
+ * Returns false only on allocation failure. */
+static bool resolver_push_type_params(ResolveContext *context,
+                                      const FengTypeParam *type_params,
+                                      size_t type_param_count,
+                                      const TypeParamEntry **out_prev,
+                                      size_t *out_prev_count) {
+    size_t total;
+    TypeParamEntry *entries;
+    size_t i;
+
+    *out_prev = context->type_params;
+    *out_prev_count = context->type_param_count;
+
+    if (type_param_count == 0U) {
+        return true; /* nothing to add; context unchanged */
+    }
+
+    total = context->type_param_count + type_param_count;
+    entries = (TypeParamEntry *)malloc(total * sizeof(TypeParamEntry));
+    if (entries == NULL) {
+        return false;
+    }
+
+    /* Copy outer (already-active) type params first. */
+    if (context->type_param_count > 0U && context->type_params != NULL) {
+        memcpy(entries, context->type_params,
+               context->type_param_count * sizeof(TypeParamEntry));
+    }
+
+    /* Append the new (inner) type params. */
+    for (i = 0U; i < type_param_count; ++i) {
+        entries[context->type_param_count + i].name       = type_params[i].name;
+        entries[context->type_param_count + i].type_param = &type_params[i];
+    }
+
+    context->type_params       = entries;
+    context->type_param_count  = total;
+    return true;
+}
+
+/* Restore the type parameter scope saved by resolver_push_type_params. */
+static void resolver_pop_type_params(ResolveContext *context,
+                                     const TypeParamEntry *prev,
+                                     size_t prev_count) {
+    if (context->type_params != prev) {
+        free((void *)context->type_params);
+    }
+    context->type_params      = prev;
+    context->type_param_count = prev_count;
+}
+
 static bool resolver_add_local_entry(ResolveContext *context,
                                      FengSlice name,
                                      InferredExprType type,
@@ -1839,6 +1918,9 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
+static bool validate_type_param_constraints(ResolveContext *context,
+                                            const FengTypeParam *type_params,
+                                            size_t type_param_count);
 static bool resolve_block_contents(ResolveContext *context,
                                    const FengBlock *block,
                                    bool allow_self);
@@ -3710,6 +3792,25 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
         return true;
     }
 
+    /* G4-18: Generic types cannot declare a finalizer. */
+    if (type_decl->as.type_decl.type_param_count > 0U) {
+        for (member_index = 0U;
+             member_index < type_decl->as.type_decl.member_count;
+             ++member_index) {
+            const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+            if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
+                return resolver_append_error(
+                    context,
+                    member->token,
+                    format_message(
+                        "generic type '%.*s' cannot declare a finalizer",
+                        (int)decl_typeish_name(type_decl).length,
+                        decl_typeish_name(type_decl).data));
+            }
+        }
+        return true;
+    }
+
     type_is_fixed = annotations_contain_kind(type_decl->annotations,
                                              type_decl->annotation_count,
                                              FENG_ANNOTATION_FIXED);
@@ -3999,6 +4100,30 @@ static void note_callable_value_expr_exception_escape(ResolveContext *context,
     }
 }
 
+/* G4-12: Returns true when type_ref is a direct reference to one of the
+ * callable's own type parameters (single-segment, no type args).  Such
+ * positions accept any argument type (wildcard) during overload matching. */
+static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
+                                         const FengTypeRef *type_ref) {
+    size_t i;
+
+    if (callable == NULL || callable->type_param_count == 0U) {
+        return false;
+    }
+    if (type_ref == NULL ||
+        type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U ||
+        type_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    for (i = 0U; i < callable->type_param_count; ++i) {
+        if (slice_equals(callable->type_params[i].name, type_ref->as.named.segments[0])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool callable_parameters_match_args(ResolveContext *context,
                                            const FengCallableSignature *callable,
                                            FengExpr *const *args,
@@ -4010,9 +4135,14 @@ static bool callable_parameters_match_args(ResolveContext *context,
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        if (!expr_matches_expected_type_ref(context,
-                                            args[arg_index],
-                                            callable->params[arg_index].type)) {
+        const FengTypeRef *param_type = callable->params[arg_index].type;
+
+        /* G4-12: a type-parameter position accepts any argument type. */
+        if (param_type_is_type_param_ref(callable, param_type)) {
+            continue;
+        }
+
+        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
             return false;
         }
     }
@@ -9282,6 +9412,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
                                    bool allow_void) {
     const FengSlice *segments = type_ref->as.named.segments;
     size_t segment_count = type_ref->as.named.segment_count;
+    size_t type_arg_count = type_ref->as.named.type_arg_count;
     FengSlice name;
     char *qualified_name;
 
@@ -9290,6 +9421,73 @@ static bool resolve_named_type_ref(ResolveContext *context,
     }
 
     name = segments[segment_count - 1U];
+
+    /* G4-2: Single-segment name that matches an active type parameter.
+     * Type parameters cannot take type arguments themselves. */
+    if (segment_count == 1U && context->type_param_count > 0U &&
+        find_type_param(context, name) != NULL) {
+        if (type_arg_count > 0U) {
+            return resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("type parameter '%.*s' cannot take type arguments",
+                               (int)name.length, name.data));
+        }
+        return true;
+    }
+
+    /* G4-7: Type arguments present — resolve each arg and validate arity. */
+    if (type_arg_count > 0U) {
+        const FengDecl *base_decl;
+        size_t expected_arity;
+        size_t i;
+        bool ok;
+
+        for (i = 0U; i < type_arg_count; ++i) {
+            if (!resolve_type_ref(context, type_ref->as.named.type_args[i], false)) {
+                return false;
+            }
+        }
+
+        base_decl = find_named_type_decl(context, segments, segment_count);
+        if (base_decl == NULL) {
+            qualified_name = format_module_name(segments, segment_count);
+            ok = resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("unknown type '%s'",
+                               qualified_name != NULL ? qualified_name : "<unknown>"));
+            free(qualified_name);
+            return ok;
+        }
+
+        if (base_decl->kind == FENG_DECL_TYPE) {
+            expected_arity = base_decl->as.type_decl.type_param_count;
+        } else if (base_decl->kind == FENG_DECL_SPEC) {
+            expected_arity = base_decl->as.spec_decl.type_param_count;
+        } else {
+            expected_arity = 0U;
+        }
+
+        if (expected_arity == 0U) {
+            return resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("'%.*s' is not a generic type and does not take type arguments",
+                               (int)name.length, name.data));
+        }
+        if (type_arg_count != expected_arity) {
+            return resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
+                               (int)name.length, name.data,
+                               expected_arity, type_arg_count));
+        }
+        return true;
+    }
+
+    /* Normal named type reference (no type arguments). */
     if (segment_count == 1U) {
         if (is_builtin_type_name(name)) {
             if (!allow_void && slice_equals_cstr(name, "void")) {
@@ -9669,8 +9867,48 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            return validate_constructor_call_expr(context, expr) &&
-                   validate_function_call_expr(context, expr);
+            /* G4-13a: Resolve explicit type args (callee:<T1, T2>(...) syntax). */
+            if (expr->as.call.has_explicit_type_args) {
+                size_t type_arg_index;
+                for (type_arg_index = 0U;
+                     type_arg_index < expr->as.call.explicit_type_arg_count;
+                     ++type_arg_index) {
+                    if (!resolve_type_ref(context,
+                                         expr->as.call.explicit_type_args[type_arg_index],
+                                         false)) {
+                        return false;
+                    }
+                }
+            }
+            if (!validate_constructor_call_expr(context, expr) ||
+                !validate_function_call_expr(context, expr)) {
+                return false;
+            }
+            /* G4-13b: Arity check for explicit type args against resolved callable. */
+            if (expr->as.call.has_explicit_type_args) {
+                const FengResolvedCallable *rc = &expr->as.call.resolved_callable;
+                size_t callable_type_param_count = 0U;
+                if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+                    rc->function_decl != NULL) {
+                    callable_type_param_count =
+                        rc->function_decl->as.function_decl.type_param_count;
+                } else if ((rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+                            rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD) &&
+                           rc->member != NULL) {
+                    callable_type_param_count =
+                        rc->member->as.callable.type_param_count;
+                }
+                if (expr->as.call.explicit_type_arg_count != callable_type_param_count) {
+                    return resolver_append_error(
+                        context,
+                        expr->token,
+                        format_message(
+                            "function expects %zu type argument(s) but %zu were provided",
+                            callable_type_param_count,
+                            expr->as.call.explicit_type_arg_count));
+                }
+            }
+            return true;
 
         case FENG_EXPR_MEMBER:
             if (resolve_alias_member_expr(context, expr)) {
@@ -10041,7 +10279,43 @@ static bool resolve_callable(ResolveContext *context,
     size_t previous_finally_depth = context->finally_depth;
     size_t previous_loop_depth = context->loop_depth;
     bool previous_self_capturable = context->self_capturable;
+    /* G4-1/G4-14: push callable-level type params (method generics). */
+    const TypeParamEntry *previous_type_params = context->type_params;
+    size_t previous_type_param_count = context->type_param_count;
     bool ok;
+
+    /* G4-14: reject method type param names that collide with outer type params. */
+    if (callable->type_param_count > 0U && context->type_param_count > 0U) {
+        size_t ni;
+        for (ni = 0U; ni < callable->type_param_count; ++ni) {
+            if (find_type_param(context, callable->type_params[ni].name) != NULL) {
+                return resolver_append_error(
+                    context,
+                    callable->type_params[ni].token,
+                    format_message("type parameter '%.*s' shadows an outer type parameter with the same name",
+                                   (int)callable->type_params[ni].name.length,
+                                   callable->type_params[ni].name.data));
+            }
+        }
+    }
+
+    /* Push method-level type parameters into scope. */
+    if (!resolver_push_type_params(context, callable->type_params,
+                                   callable->type_param_count,
+                                   &previous_type_params, &previous_type_param_count)) {
+        return false;
+    }
+
+    /* G4-3: Validate constraints on callable-level type parameters now that
+     * they are in scope (needed if a constraint itself references a sibling
+     * type param). */
+    if (callable->type_param_count > 0U &&
+        !validate_type_param_constraints(context,
+                                         callable->type_params,
+                                         callable->type_param_count)) {
+        resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
+        return false;
+    }
 
     context->current_callable_signature = callable;
     context->current_callable_inferred_return_type = callable_effective_return_type(context, callable);
@@ -10056,6 +10330,7 @@ static bool resolve_callable(ResolveContext *context,
     }
 
     if (!resolve_type_ref(context, callable->return_type, true)) {
+        resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
@@ -10069,6 +10344,7 @@ static bool resolve_callable(ResolveContext *context,
 
     for (param_index = 0U; param_index < callable->param_count; ++param_index) {
         if (!resolve_type_ref(context, callable->params[param_index].type, false)) {
+            resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
             context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
             context->current_callable_saw_return = previous_callable_saw_return;
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
@@ -10082,6 +10358,7 @@ static bool resolve_callable(ResolveContext *context,
     }
 
     if (callable->body == NULL) {
+        resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
@@ -10101,6 +10378,7 @@ static bool resolve_callable(ResolveContext *context,
         if (is_constructor) {
             resolver_clear_current_constructor_bindings(context);
         }
+        resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
@@ -10155,6 +10433,7 @@ static bool resolve_callable(ResolveContext *context,
             ok = false;
         }
     }
+    resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
     context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
     context->current_callable_saw_return = previous_callable_saw_return;
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
@@ -11296,6 +11575,37 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     return ok;
 }
 
+/* G4-3: Validate the constraints on a list of type parameters.
+ * Each constraint (if present) must resolve to a spec declaration. */
+static bool validate_type_param_constraints(ResolveContext *context,
+                                            const FengTypeParam *type_params,
+                                            size_t type_param_count) {
+    size_t i;
+
+    for (i = 0U; i < type_param_count; ++i) {
+        if (type_params[i].constraint == NULL) {
+            continue;
+        }
+        if (!resolve_type_ref(context, type_params[i].constraint, false)) {
+            return false;
+        }
+        {
+            const FengDecl *constraint_decl =
+                resolve_type_ref_decl(context, type_params[i].constraint);
+
+            if (constraint_decl != NULL && constraint_decl->kind != FENG_DECL_SPEC) {
+                return resolver_append_error(
+                    context,
+                    type_params[i].token,
+                    format_message("type parameter '%.*s': constraint must be a spec, not a type",
+                                   (int)type_params[i].name.length,
+                                   type_params[i].name.data));
+            }
+        }
+    }
+    return true;
+}
+
 static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     size_t index;
 
@@ -11303,13 +11613,38 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
         case FENG_DECL_GLOBAL_BINDING:
             return resolve_binding(context, &decl->as.binding, false, false);
 
-        case FENG_DECL_TYPE:
-            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+        case FENG_DECL_TYPE: {
+            /* G4-1: Push the type's own type parameters into scope so that
+             * field types, declared spec refs, and member methods can all
+             * reference them.  Method-level type params (if any) are pushed
+             * additionally by resolve_callable.
+             * G4-3: Validate constraints before resolving members. */
+            const TypeParamEntry *prev_tp = NULL;
+            size_t prev_tp_count = 0U;
+            bool ok;
+
+            if (!resolver_push_type_params(context,
+                                           decl->as.type_decl.type_params,
+                                           decl->as.type_decl.type_param_count,
+                                           &prev_tp, &prev_tp_count)) {
+                return false;
+            }
+
+            if (!validate_type_param_constraints(context,
+                                                 decl->as.type_decl.type_params,
+                                                 decl->as.type_decl.type_param_count)) {
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                return false;
+            }
+
+            ok = true;
+            for (index = 0U; ok && index < decl->as.type_decl.declared_spec_count; ++index) {
                 if (!resolve_type_ref(context, decl->as.type_decl.declared_specs[index], false)) {
-                    return false;
+                    ok = false;
+                    break;
                 }
             }
-            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+            for (index = 0U; ok && index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
@@ -11321,7 +11656,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                                           member->as.field.initializer->kind == FENG_EXPR_LAMBDA;
 
                     if (!resolve_type_ref(context, member->as.field.type, false)) {
-                        return false;
+                        ok = false;
+                        break;
                     }
                     /* Per docs/feng-function.md: a callable-spec field whose
                      * initializer is a lambda may capture the enclosing
@@ -11349,14 +11685,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             context->current_type_decl = previous_type_decl;
                         }
                         if (!init_ok || !match_ok) {
-                            return false;
+                            ok = false;
+                            break;
                         }
 
                         field_type = member->as.field.type != NULL
                                          ? inferred_expr_type_from_type_ref(member->as.field.type)
                                          : infer_expr_type(context, member->as.field.initializer);
                         if (!record_type_fact_for_site(context, member, field_type)) {
-                            return false;
+                            ok = false;
+                            break;
                         }
                     }
                     if (member->as.field.initializer == NULL) {
@@ -11380,77 +11718,116 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 if (!resolve_callable(context, &member->as.callable, true)) {
                     context->current_callable_member = previous_callable_member;
                     context->current_type_decl = previous_type_decl;
-                    return false;
+                    ok = false;
+                    break;
                 }
                 if (!validate_fixed_callable_member(context, member)) {
                     context->current_callable_member = previous_callable_member;
                     context->current_type_decl = previous_type_decl;
-                    return false;
+                    ok = false;
+                    break;
                 }
                 context->current_callable_member = previous_callable_member;
                 context->current_type_decl = previous_type_decl;
             }
 
-            if (!validate_fixed_type_declaration(context, decl)) {
-                return false;
+            if (ok && !validate_fixed_type_declaration(context, decl)) {
+                ok = false;
             }
-            if (!validate_type_member_overloads(context, decl)) {
-                return false;
+            if (ok && !validate_type_member_overloads(context, decl)) {
+                ok = false;
             }
-            if (!validate_type_member_overload_overlap(context, decl)) {
-                return false;
+            if (ok && !validate_type_member_overload_overlap(context, decl)) {
+                ok = false;
             }
-            if (!validate_type_finalizer_constraints(context, decl)) {
-                return false;
+            if (ok && !validate_type_finalizer_constraints(context, decl)) {
+                ok = false;
             }
-            return validate_type_declared_specs_and_satisfaction(context, decl);
+            if (ok) {
+                ok = validate_type_declared_specs_and_satisfaction(context, decl);
+            }
+            resolver_pop_type_params(context, prev_tp, prev_tp_count);
+            return ok;
+        }
 
-        case FENG_DECL_SPEC:
-            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
-                if (!resolve_type_ref(context, decl->as.spec_decl.parent_specs[index], false)) {
-                    return false;
-                }
-            }
-            if (!validate_spec_parent_spec_list(context, decl)) {
+        case FENG_DECL_SPEC: {
+            /* G4-1: Push the spec's own type parameters into scope. */
+            const TypeParamEntry *prev_tp = NULL;
+            size_t prev_tp_count = 0U;
+            bool ok;
+
+            if (!resolver_push_type_params(context,
+                                           decl->as.spec_decl.type_params,
+                                           decl->as.spec_decl.type_param_count,
+                                           &prev_tp, &prev_tp_count)) {
                 return false;
             }
-            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
-                if (!resolve_type_ref(context, decl->as.spec_decl.as.callable.return_type, true)) {
-                    return false;
+
+            if (!validate_type_param_constraints(context,
+                                                 decl->as.spec_decl.type_params,
+                                                 decl->as.spec_decl.type_param_count)) {
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                return false;
+            }
+
+            ok = true;
+            for (index = 0U; ok && index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (!resolve_type_ref(context, decl->as.spec_decl.parent_specs[index], false)) {
+                    ok = false;
                 }
-                for (index = 0U; index < decl->as.spec_decl.as.callable.param_count; ++index) {
+            }
+            if (ok && !validate_spec_parent_spec_list(context, decl)) {
+                ok = false;
+            }
+            if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                if (!resolve_type_ref(context, decl->as.spec_decl.as.callable.return_type, true)) {
+                    ok = false;
+                }
+                for (index = 0U; ok && index < decl->as.spec_decl.as.callable.param_count; ++index) {
                     if (!resolve_type_ref(context,
                                           decl->as.spec_decl.as.callable.params[index].type,
                                           false)) {
-                        return false;
+                        ok = false;
                     }
                 }
-                return validate_fixed_type_declaration(context, decl);
+                if (ok) {
+                    ok = validate_fixed_type_declaration(context, decl);
+                }
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                return ok;
             }
-            for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
+            for (index = 0U; ok && index < decl->as.spec_decl.as.object.member_count; ++index) {
                 const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!resolve_type_ref(context, member->as.field.type, false)) {
-                        return false;
+                        ok = false;
                     }
                     continue;
                 }
                 if (!resolve_type_ref(context, member->as.callable.return_type, true)) {
-                    return false;
+                    ok = false;
+                    break;
                 }
                 {
                     size_t param_index;
-                    for (param_index = 0U; param_index < member->as.callable.param_count; ++param_index) {
+                    for (param_index = 0U;
+                         ok && param_index < member->as.callable.param_count;
+                         ++param_index) {
                         if (!resolve_type_ref(context,
                                               member->as.callable.params[param_index].type,
                                               false)) {
-                            return false;
+                            ok = false;
                         }
                     }
                 }
             }
-            return validate_fixed_type_declaration(context, decl);
+            if (ok) {
+                ok = validate_fixed_type_declaration(context, decl);
+            }
+            resolver_pop_type_params(context, prev_tp, prev_tp_count);
+            return ok;
+        }
 
         case FENG_DECL_FIT: {
             size_t fit_index;
