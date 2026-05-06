@@ -121,6 +121,30 @@ const FengGenericValueDescriptor feng_generic_Widget_desc = {
 - 运行时新增 `FengGenericValueDescriptor` 结构定义 + `feng_generic_trivial8_desc` 实例
 - `.fb` 分发：共享方法体预编译进 `lib/`，struct 定义在消费方生成，支持闭源分发
 
+**两阶段发码架构（进阶优化预留）**：
+
+`cg_emit_generic_xxx` 是泛型发码的统一 API 层，内部策略可以独立演进：
+
+| 阶段 | 策略 | 适用场景 | 方法编译份数 |
+|---|---|---|---|
+| 当前实现（通用） | **布局单态化 + 方法共享** | 所有场景，含跨包闭源 `.fb` | 1 份（共享） |
+| 进阶优化（可选） | **源码全单态化** | 同包泛型，源码可见 | 每个具体 T 一份 |
+
+进阶优化时，`cg_emit_generic_xxx` 的**调用接口不变**，只在内部按可见性分流：
+
+```c
+// 示例：未来分流点，接口对调用方完全透明
+static void cg_emit_generic_method(CG *cg, ...) {
+    if (cg_generic_source_visible(cg, generic_type)) {
+        cg_emit_generic_method_monomorphized(cg, ...);  // 全单态化：生成具体类型函数
+    } else {
+        cg_emit_generic_method_shared(cg, ...);         // 方法共享：void* + T + out
+    }
+}
+```
+
+**结论**：现在只实现方法共享路径，接口设计预留分流点；未来加全单态化时不改接口、只加实现，两条路径并存互不影响。
+
 **规范更新**：`docs/feng-generics-draft.md` §7 需要按此方案重写（详见 G0-1）。
 
 ---
