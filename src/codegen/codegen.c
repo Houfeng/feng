@@ -94,7 +94,8 @@ typedef enum CGTypeKind {
     CG_TYPE_STRING,
     CG_TYPE_ARRAY,        /* element kind held separately when needed */
     CG_TYPE_OBJECT,       /* user-defined type — Phase 1A iter 2 */
-    CG_TYPE_SPEC          /* fat object-form spec value (Step 4b — value model) */
+    CG_TYPE_SPEC,         /* fat object-form spec value (Step 4b — value model) */
+    CG_TYPE_GENERIC_PARAM /* erased type-parameter slot (G6 — generics) */
 } CGTypeKind;
 
 struct UserType;     /* forward */
@@ -111,6 +112,9 @@ typedef struct CGType {
      * otherwise. The UserSpec is owned by the CG context and outlives every
      * CGType. */
     const struct UserSpec *user_spec;
+    /* For GENERIC_PARAM (G6): 0-based index into the enclosing generic
+     * function's type_params array (e.g. 0 for T, 1 for U). */
+    size_t generic_param_index;
 } CGType;
 
 static CGType *cgtype_new(CGTypeKind k) {
@@ -132,6 +136,7 @@ static CGType *cgtype_clone(const CGType *t) {
     c->element = cgtype_clone(t->element);
     c->user = t->user;
     c->user_spec = t->user_spec;
+    c->generic_param_index = t->generic_param_index;
     return c;
 }
 
@@ -166,6 +171,11 @@ static CGValueKind cgtype_value_kind(const CGType *t) {
             return CG_VK_MANAGED_POINTER;
         case CG_TYPE_SPEC:
             return CG_VK_AGGREGATE;
+        case CG_TYPE_GENERIC_PARAM:
+            /* Erased type: ARC dispatch happens at the generic call-site via
+             * the FengGenericValueDescriptor; the placeholder itself is not
+             * managed through the normal ARC path. */
+            return CG_VK_TRIVIAL;
         default:
             return CG_VK_TRIVIAL;
     }
@@ -223,6 +233,7 @@ static const char *cgtype_to_c(CGTypeKind k) {
         case CG_TYPE_STRING: return "FengString *";
         case CG_TYPE_ARRAY: return "FengArray *";
         case CG_TYPE_OBJECT: return "void *";
+        case CG_TYPE_GENERIC_PARAM: return "void *"; /* erased; actual dispatch via descriptor */
         default: return "void";
     }
 }
@@ -497,6 +508,20 @@ typedef struct ModuleBinding {
     const FengBinding *binding;
 } ModuleBinding;
 
+/* ---- Generic function registry (G6) ----
+ * One entry per generic function declaration (type_param_count > 0).  These
+ * are NOT registered as FreeFns; they are emitted with a separate C
+ * signature that uses void* params + FengGenericValueDescriptor descriptors
+ * and a void-return + _out parameter convention. */
+typedef struct GenericFn {
+    char   *feng_name;          /* Feng identifier, e.g. "identity" */
+    char   *c_name;             /* Mangled C symbol, e.g. "feng__mod__identity" */
+    size_t  type_param_count;
+    char  **type_param_names;   /* ["T", "U", ...] — heap-owned strings */
+    const FengDecl    *decl;
+    const FengProgram *owner_program;
+} GenericFn;
+
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
@@ -592,6 +617,25 @@ typedef struct CG {
     /* Error state. */
     FengCodegenError *error;
     bool failed;
+
+    /* ---- Generic codegen state (G6) ---- */
+    /* Registry: generic function declarations. */
+    GenericFn *generic_fns;
+    size_t     generic_fn_count;
+    size_t     generic_fn_capacity;
+    /* Registry: generic type declarations (skipped from user_types[]). */
+    const FengDecl **generic_type_decls;
+    size_t           generic_type_decl_count;
+    size_t           generic_type_decl_capacity;
+    /* Per-function emission state when inside a generic function body.
+     * `in_generic_fn` is the gate; the parallel arrays are borrowed from the
+     * GenericFn being emitted and must not be freed by this block. */
+    bool         in_generic_fn;
+    size_t       generic_fn_type_param_count;
+    char       **generic_fn_type_param_names;   /* borrowed — do NOT free */
+    /* C descriptor argument names for each type param ("_T", "_U", …).
+     * Heap-owned; freed when in_generic_fn is cleared. */
+    const char **generic_fn_type_param_descs;
 } CG;
 
 /* Forward decls. */
@@ -615,6 +659,14 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var);
+/* G6 — generic codegen helpers. */
+static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
+                                        const FengToken *tok, char **out);
+static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt);
+static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
+                                      FengCompileTarget target);
+static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
+                                  const GenericFn *gfn, ExprResult *out);
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
                                                 FengToken blame);
 static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
@@ -946,6 +998,71 @@ static const UserFit *cg_find_user_fit_by_decl(const CG *cg, const FengDecl *dec
     return NULL;
 }
 
+/* ---- Generic registry helpers (G6) ---- */
+
+static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
+    const FengCallableSignature *sig = &decl->as.function_decl;
+    if (cg->generic_fn_count + 1 > cg->generic_fn_capacity) {
+        size_t cap = cg->generic_fn_capacity ? cg->generic_fn_capacity * 2 : 4;
+        void *p = realloc(cg->generic_fns, cap * sizeof *cg->generic_fns);
+        if (!p) return false;
+        cg->generic_fns = p;
+        cg->generic_fn_capacity = cap;
+    }
+    GenericFn *gf = &cg->generic_fns[cg->generic_fn_count];
+    memset(gf, 0, sizeof *gf);
+    char *feng_n = malloc(sig->name.length + 1);
+    if (!feng_n) return false;
+    memcpy(feng_n, sig->name.data, sig->name.length);
+    feng_n[sig->name.length] = '\0';
+    gf->feng_name = feng_n;
+    /* C name: module-mangled base only — no param suffix for generic fns. */
+    gf->c_name = cg_fn_mangle(cg->module_mangle, &sig->name);
+    if (!gf->c_name) { free(feng_n); return false; }
+    gf->type_param_count = sig->type_param_count;
+    if (sig->type_param_count > 0) {
+        gf->type_param_names = calloc(sig->type_param_count, sizeof(char *));
+        if (!gf->type_param_names) { free(feng_n); free(gf->c_name); return false; }
+        for (size_t i = 0; i < sig->type_param_count; i++) {
+            const FengSlice tp_name = sig->type_params[i].name;
+            const FengSlice *tp = &tp_name;
+            char *s = malloc(tp->length + 1);
+            if (!s) {
+                for (size_t j = 0; j < i; j++) free(gf->type_param_names[j]);
+                free(gf->type_param_names);
+                free(feng_n); free(gf->c_name);
+                return false;
+            }
+            memcpy(s, tp->data, tp->length);
+            s[tp->length] = '\0';
+            gf->type_param_names[i] = s;
+        }
+    }
+    gf->decl = decl;
+    gf->owner_program = cg->cur_program;
+    cg->generic_fn_count++;
+    return true;
+}
+
+static const GenericFn *cg_find_generic_fn_by_decl(const CG *cg, const FengDecl *decl) {
+    for (size_t i = 0; i < cg->generic_fn_count; i++) {
+        if (cg->generic_fns[i].decl == decl) return &cg->generic_fns[i];
+    }
+    return NULL;
+}
+
+static bool cg_register_generic_type_decl(CG *cg, const FengDecl *decl) {
+    if (cg->generic_type_decl_count + 1 > cg->generic_type_decl_capacity) {
+        size_t cap = cg->generic_type_decl_capacity ? cg->generic_type_decl_capacity * 2 : 4;
+        void *p = realloc(cg->generic_type_decls, cap * sizeof *cg->generic_type_decls);
+        if (!p) return false;
+        cg->generic_type_decls = p;
+        cg->generic_type_decl_capacity = cap;
+    }
+    cg->generic_type_decls[cg->generic_type_decl_count++] = decl;
+    return true;
+}
+
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type) {
     *out_type = NULL;
@@ -959,6 +1076,21 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 "codegen: qualified type names not supported in Phase 1A");
         }
         const FengSlice *seg = &ref->as.named.segments[0];
+        /* G6: when inside a generic function body, check type parameter names
+         * first so they shadow any same-named types in scope. */
+        if (cg->in_generic_fn && ref->as.named.type_arg_count == 0) {
+            for (size_t i = 0; i < cg->generic_fn_type_param_count; i++) {
+                const char *tp = cg->generic_fn_type_param_names[i];
+                if (seg->length == strlen(tp) &&
+                    memcmp(seg->data, tp, seg->length) == 0) {
+                    CGType *t = cgtype_new(CG_TYPE_GENERIC_PARAM);
+                    if (!t) return false;
+                    t->generic_param_index = i;
+                    *out_type = t;
+                    return true;
+                }
+            }
+        }
         for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; i++) {
             const BuiltinTypeMap *m = &k_builtin_types[i];
             if (strlen(m->name) == seg->length &&
@@ -2533,6 +2665,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     const FreeFn *fn = NULL;
     if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
         fn = cg_find_free_fn_by_decl(cg, rc->function_decl);
+        /* G6: check if this is a call to a registered generic function. */
+        if (!fn) {
+            const GenericFn *gfn = cg_find_generic_fn_by_decl(cg, rc->function_decl);
+            if (gfn) return cg_emit_generic_call(cg, e, gfn, out);
+        }
     }
     if (!fn && !ext) {
         fn = cg_find_free_fn(cg, name.data, name.length);
@@ -4244,6 +4381,10 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token,
             "codegen: 'return' inside try/catch/finally is not yet supported in Phase 1A");
     }
+    /* G6: inside a generic function, all returns use the _out out-parameter. */
+    if (cg->in_generic_fn) {
+        return cg_emit_generic_return(cg, stmt);
+    }
     if (!cg->cur_return_type ||
         cg->cur_return_type->kind == CG_TYPE_VOID) {
         if (stmt->as.return_value) {
@@ -5122,6 +5263,619 @@ static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
     return true;
 }
 
+/* ===================== G6 — generic codegen ===================== */
+
+/* Build a compound-literal expression for a FengGenericValueDescriptor
+ * matching the given concrete CGType.  *out is set to a heap-allocated C
+ * expression string; caller frees.
+ * Returns false (with error set) if the type is not yet supported as a
+ * generic type argument (e.g. aggregate/spec). */
+static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
+                                        const FengToken *tok, char **out) {
+    Buf b; buf_init(&b);
+    switch (cgtype_value_kind(t)) {
+        case CG_VK_TRIVIAL: {
+            const char *cty = cgtype_to_c(t->kind);
+            buf_append_fmt(&b,
+                "&(const FengGenericValueDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL}",
+                cty);
+            break;
+        }
+        case CG_VK_MANAGED_POINTER:
+            buf_append_cstr(&b,
+                "&(const FengGenericValueDescriptor)"
+                "{sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL}");
+            break;
+        case CG_VK_AGGREGATE:
+            buf_free(&b);
+            return cg_fail(cg, *tok,
+                "codegen: aggregate/spec type as generic type argument not yet supported (G6)");
+    }
+    *out = b.data;
+    return *out != NULL;
+}
+
+/* Emit the return statement body when inside a generic function.
+ * All generic-function returns go through the void *_out out-parameter
+ * so the C function's return type is always `void`. */
+static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
+    /* Void-return: just release and return. */
+    if (!cg->cur_return_type || cg->cur_return_type->kind == CG_TYPE_VOID) {
+        if (stmt->as.return_value) {
+            return cg_fail(cg, stmt->token,
+                "codegen: void function cannot return a value");
+        }
+        cg_release_through(cg, NULL);
+        buf_append_cstr(cg->cur_body, "    return;\n");
+        return true;
+    }
+    if (!stmt->as.return_value) {
+        return cg_fail(cg, stmt->token,
+            "codegen: non-void function must return a value");
+    }
+    ExprResult r;
+    if (!cg_emit_expr(cg, stmt->as.return_value, &r)) return false;
+
+    if (cg->cur_return_type->kind == CG_TYPE_GENERIC_PARAM) {
+        /* Erased return type T: dispatch via the descriptor for T. */
+        size_t idx = cg->cur_return_type->generic_param_index;
+        const char *desc = cg->generic_fn_type_param_descs[idx];
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body,
+            "    switch (%s->kind) {\n"
+            "        case FENG_VALUE_TRIVIAL:\n"
+            "            memcpy(_out, %s, %s->size); break;\n"
+            "        case FENG_VALUE_MANAGED_POINTER: {\n"
+            "            void *_mptr_ = *(void *const *)%s;\n"
+            "            feng_retain(_mptr_);\n"
+            "            *(void **)_out = _mptr_; break;\n"
+            "        }\n"
+            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+            "            feng_aggregate_retain((void *)%s, %s->aggregate);\n"
+            "            memcpy(_out, %s, %s->size); break;\n"
+            "    }\n"
+            "    return;\n",
+            desc,
+            r.c_expr, desc,
+            r.c_expr,
+            r.c_expr, desc,
+            r.c_expr, desc);
+        er_free(&r);
+        return true;
+    }
+    /* Concrete return type inside a generic function: compute result and
+     * memcpy into _out. */
+    if (cgtype_is_managed(r.type)) {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        char *cty = cg_ctype_dup(r.type);
+        if (!r.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = %s; feng_retain(%s);\n", cty, tmp, r.c_expr, tmp);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+        }
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body,
+            "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
+        free(tmp);
+    } else if (cgtype_is_aggregate(r.type)) {
+        er_free(&r);
+        return cg_fail(cg, stmt->token,
+            "codegen: aggregate return inside generic function not yet supported (G6)");
+    } else {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        char *cty = cg_ctype_dup(r.type);
+        buf_append_fmt(cg->cur_body,
+            "    %s %s = (%s)(%s);\n", cty, tmp, cty, r.c_expr);
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body,
+            "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
+        free(tmp);
+    }
+    er_free(&r);
+    return true;
+}
+
+/* Emit a generic function (type_param_count > 0).
+ *
+ * ABI:
+ *   void c_name(
+ *       const FengGenericValueDescriptor *_T [, *_U, ...],
+ *       <params — T-typed as const void *, non-generic as normal C type>,
+ *       [void *_out]       ← present iff return type is non-void
+ *   );
+ *
+ * The caller is responsible for setting up concrete FengGenericValueDescriptor
+ * compound-literal arguments and passing T-typed values by pointer. */
+static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
+                                      FengCompileTarget target) {
+    const FengCallableSignature *sig = &decl->as.function_decl;
+
+    /* Register in the GenericFn table.  May already be registered if we
+     * processed a forward prototype earlier; guard with a lookup. */
+    if (!cg_find_generic_fn_by_decl(cg, decl)) {
+        if (!cg_register_generic_fn(cg, decl)) return false;
+    }
+    const GenericFn *gfn = cg_find_generic_fn_by_decl(cg, decl);
+
+    /* Allocate descriptor arg names: "_T", "_U", ... */
+    size_t tp_count = sig->type_param_count;
+    const char **desc_names = calloc(tp_count, sizeof *desc_names);
+    if (!desc_names) return cg_fail(cg, decl->token, "codegen: out of memory");
+    for (size_t i = 0; i < tp_count; i++) {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "_%s", gfn->type_param_names[i]);
+        desc_names[i] = b.data;
+        if (!desc_names[i]) {
+            for (size_t j = 0; j < i; j++) free((void *)desc_names[j]);
+            free(desc_names);
+            return cg_fail(cg, decl->token, "codegen: out of memory");
+        }
+    }
+
+    /* Activate generic-function emission state. */
+    cg->in_generic_fn = true;
+    cg->generic_fn_type_param_count = tp_count;
+    cg->generic_fn_type_param_names = gfn->type_param_names; /* borrowed */
+    cg->generic_fn_type_param_descs = desc_names;             /* owned */
+
+    /* Resolve return type (CG_TYPE_GENERIC_PARAM when it's T/U/…). */
+    CGType *return_type = NULL;
+    if (sig->return_type) {
+        if (!cg_resolve_type(cg, sig->return_type, &decl->token, &return_type)) {
+            goto cleanup;
+        }
+    } else {
+        return_type = cgtype_new(CG_TYPE_VOID);
+        if (!return_type) { cg_fail(cg, decl->token, "codegen: out of memory"); goto cleanup; }
+    }
+    cg->cur_return_type = return_type;
+    bool has_out_param = (return_type->kind != CG_TYPE_VOID);
+
+    /* Resolve parameter types. */
+    size_t param_count = sig->param_count;
+    CGType **param_types = calloc(param_count + 1, sizeof *param_types);
+    char  **param_cnames = calloc(param_count + 1, sizeof *param_cnames);
+    char  **param_fnames = calloc(param_count + 1, sizeof *param_fnames); /* Feng names */
+    if (!param_types || !param_cnames || !param_fnames) {
+        free(param_types); free(param_cnames); free(param_fnames);
+        cg_fail(cg, decl->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < param_count; i++) {
+        const FengParameter *p = &sig->params[i];
+        if (!cg_resolve_type(cg, p->type, &p->token, &param_types[i])) {
+            for (size_t j = 0; j < i; j++) {
+                cgtype_free(param_types[j]);
+                free(param_cnames[j]);
+                free(param_fnames[j]);
+            }
+            free(param_types); free(param_cnames); free(param_fnames);
+            goto cleanup;
+        }
+        /* Feng name: used for scope_add so the body can look up the param. */
+        param_fnames[i] = strndup(p->name.data, p->name.length);
+        /* C name: _p_<feng_name> to avoid C keyword conflicts. */
+        Buf cb; buf_init(&cb);
+        buf_append_fmt(&cb, "_p_%.*s", (int)p->name.length, p->name.data);
+        param_cnames[i] = cb.data;
+        if (!param_fnames[i] || !param_cnames[i]) {
+            for (size_t j = 0; j <= i; j++) {
+                cgtype_free(param_types[j]);
+                free(param_cnames[j]);
+                free(param_fnames[j]);
+            }
+            free(param_types); free(param_cnames); free(param_fnames);
+            cg_fail(cg, decl->token, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
+                          decl->visibility == FENG_VISIBILITY_PUBLIC);
+
+    /* Helper: emit the parameter list (shared for proto + definition). */
+    #define EMIT_GENERIC_PARAMS(buf_ptr)                                       \
+    do {                                                                        \
+        bool _first = true;                                                     \
+        if (tp_count == 0 && param_count == 0 && !has_out_param) {             \
+            buf_append_cstr((buf_ptr), "void");                                 \
+        }                                                                       \
+        for (size_t _i = 0; _i < tp_count; _i++) {                             \
+            if (!_first) buf_append_cstr((buf_ptr), ", ");                      \
+            buf_append_fmt((buf_ptr), "const FengGenericValueDescriptor *%s",  \
+                           desc_names[_i]);                                     \
+            _first = false;                                                     \
+        }                                                                       \
+        for (size_t _i = 0; _i < param_count; _i++) {                          \
+            if (!_first) buf_append_cstr((buf_ptr), ", ");                      \
+            if (param_types[_i]->kind == CG_TYPE_GENERIC_PARAM) {              \
+                buf_append_fmt((buf_ptr), "const void *%s", param_cnames[_i]); \
+            } else {                                                            \
+                cg_emit_c_type((buf_ptr), param_types[_i]);                    \
+                buf_append_fmt((buf_ptr), " %s", param_cnames[_i]);            \
+            }                                                                   \
+            _first = false;                                                     \
+        }                                                                       \
+        if (has_out_param) {                                                    \
+            if (!_first) buf_append_cstr((buf_ptr), ", ");                      \
+            buf_append_cstr((buf_ptr), "void *_out");                           \
+        }                                                                       \
+    } while (0)
+
+    /* Forward prototype. */
+    {
+        Buf *p = &cg->fn_protos;
+        if (needs_static) buf_append_cstr(p, "static ");
+        buf_append_fmt(p, "void %s(", gfn->c_name);
+        EMIT_GENERIC_PARAMS(p);
+        buf_append_cstr(p, ");\n");
+    }
+
+    /* Function body. */
+    {
+        Buf *body = &cg->fn_defs;
+        cg->cur_body = body;
+
+        if (needs_static) buf_append_cstr(body, "static ");
+        buf_append_fmt(body, "void %s(", gfn->c_name);
+        EMIT_GENERIC_PARAMS(body);
+        buf_append_cstr(body, ") {\n");
+
+        /* Suppress unused-parameter warnings. */
+        for (size_t i = 0; i < tp_count; i++) {
+            buf_append_fmt(body, "    (void)%s;\n", desc_names[i]);
+        }
+        for (size_t i = 0; i < param_count; i++) {
+            buf_append_fmt(body, "    (void)%s;\n", param_cnames[i]);
+        }
+        if (has_out_param) {
+            buf_append_cstr(body, "    (void)_out;\n");
+        }
+
+        Scope *fn_scope = scope_push(NULL);
+        if (!fn_scope) {
+            cg_fail(cg, decl->token, "codegen: out of memory");
+            goto cleanup_params;
+        }
+        cg->cur_scope = fn_scope;
+        cg->tmp_counter = 0;
+        cg->loop_depth = 0;
+        cg->try_depth = 0;
+        cg->cur_fn_is_main = false;
+
+        /* Add parameters to scope. */
+        for (size_t i = 0; i < param_count; i++) {
+            CGType *pt = cgtype_clone(param_types[i]);
+            if (!scope_add(fn_scope, param_fnames[i], param_cnames[i], pt, /*is_param=*/true)) {
+                cgtype_free(pt);
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                goto cleanup_params;
+            }
+        }
+
+        if (!cg_emit_block(cg, sig->body)) {
+            cg->cur_scope = NULL;
+            scope_pop_free(fn_scope);
+            goto cleanup_params;
+        }
+
+        /* Implicit fall-off. */
+        cg_release_scope(cg, fn_scope);
+        if (return_type->kind == CG_TYPE_VOID) {
+            buf_append_cstr(body, "    return;\n");
+        } else {
+            buf_append_cstr(body,
+                "    feng_panic(\"generic function reached end without return\");\n");
+        }
+        buf_append_cstr(body, "}\n\n");
+
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+        cg->cur_body = NULL;
+    }
+
+    #undef EMIT_GENERIC_PARAMS
+
+    bool ok = true;
+    goto cleanup_params;   /* intentional — cleanup_params frees arrays then cleanup clears state */
+
+cleanup_params:
+    for (size_t i = 0; i < param_count; i++) {
+        cgtype_free(param_types[i]);
+        free(param_cnames[i]);
+        free(param_fnames[i]);
+    }
+    free(param_types); free(param_cnames); free(param_fnames);
+    cgtype_free(return_type);
+    cg->cur_return_type = NULL;
+cleanup:
+    for (size_t i = 0; i < tp_count; i++) free((void *)desc_names[i]);
+    free(desc_names);
+    cg->in_generic_fn = false;
+    cg->generic_fn_type_param_count = 0;
+    cg->generic_fn_type_param_names = NULL;
+    cg->generic_fn_type_param_descs = NULL;
+    return ok;
+}
+
+/* Helper: infer the concrete CGType for type parameter `tp_idx` from
+ * the actual call arguments.  Returns a cloned (heap-owned) CGType or NULL
+ * if inference failed. */
+static CGType *cg_infer_type_arg(const GenericFn *gfn, size_t tp_idx,
+                                  ExprResult *args, size_t arg_count) {
+    const FengCallableSignature *sig = &gfn->decl->as.function_decl;
+    size_t param_count = sig->param_count;
+    size_t n = arg_count < param_count ? arg_count : param_count;
+    for (size_t i = 0; i < n; i++) {
+        const FengParameter *p = &sig->params[i];
+        /* A type param ref is: single-segment NAMED with 0 type_args whose
+         * name matches the type param. */
+        if (!p->type || p->type->kind != FENG_TYPE_REF_NAMED) continue;
+        if (p->type->as.named.segment_count != 1) continue;
+        if (p->type->as.named.type_arg_count != 0) continue;
+        const FengSlice *seg = &p->type->as.named.segments[0];
+        const char *tpname = gfn->type_param_names[tp_idx];
+        if (seg->length == strlen(tpname) &&
+            memcmp(seg->data, tpname, seg->length) == 0) {
+            return cgtype_clone(args[i].type);
+        }
+    }
+    return NULL;
+}
+
+/* Emit a call to a generic function.
+ *
+ * Protocol at the call site:
+ *   1. For each type parameter: build a FengGenericValueDescriptor
+ *      compound literal and pass its address.
+ *   2. For each parameter whose type is a type param: materialise the
+ *      argument to a local variable of the concrete C type, pass &local.
+ *   3. If the function has a non-void return type: allocate a local of the
+ *      concrete return C type, pass &local, use local as the result expr. */
+static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
+                                  const GenericFn *gfn, ExprResult *out) {
+    er_init(out);
+    const FengCallableSignature *sig = &gfn->decl->as.function_decl;
+    size_t tp_count  = gfn->type_param_count;
+    size_t arg_count = e->as.call.arg_count;
+
+    /* ---- Step 1: emit all argument expressions ---- */
+    ExprResult *args = calloc(arg_count + 1, sizeof *args);
+    if (!args) return cg_fail(cg, e->token, "codegen: out of memory");
+    for (size_t i = 0; i < arg_count; i++) {
+        if (!cg_emit_expr(cg, e->as.call.args[i], &args[i])) {
+            for (size_t j = 0; j < i; j++) er_free(&args[j]);
+            free(args);
+            return false;
+        }
+    }
+
+    /* ---- Step 2: determine concrete type for each type parameter ---- */
+    CGType **type_args = calloc(tp_count + 1, sizeof *type_args);
+    if (!type_args) {
+        for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+        free(args);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    bool ok = true;
+
+    if (e->as.call.has_explicit_type_args &&
+        e->as.call.explicit_type_arg_count == tp_count) {
+        /* Use explicit type arguments, e.g. identity:<int>(42). */
+        for (size_t i = 0; i < tp_count; i++) {
+            if (!cg_resolve_type(cg, e->as.call.explicit_type_args[i],
+                                 &e->token, &type_args[i])) {
+                ok = false; break;
+            }
+        }
+    } else {
+        /* Infer type arguments from actual argument types. */
+        for (size_t i = 0; i < tp_count && ok; i++) {
+            type_args[i] = cg_infer_type_arg(gfn, i, args, arg_count);
+            if (!type_args[i]) {
+                cg_fail(cg, e->token,
+                    "codegen: cannot infer type argument %zu for generic function '%s'",
+                    i, gfn->feng_name);
+                ok = false;
+            }
+        }
+    }
+    if (!ok) goto bail;
+
+    /* ---- Step 3: build descriptor expressions for each type param ---- */
+    char **desc_exprs = calloc(tp_count + 1, sizeof *desc_exprs);
+    if (!desc_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; goto bail; }
+    for (size_t i = 0; i < tp_count && ok; i++) {
+        FengToken _etok = e->token;
+        if (!cg_generic_descriptor_expr(cg, type_args[i], &_etok, &desc_exprs[i])) {
+            ok = false;
+        }
+    }
+    if (!ok) { for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]); free(desc_exprs); goto bail; }
+
+    /* ---- Step 4: determine if each param is T-typed; materialise arg ---- */
+    /* Temporarily activate generic-fn type param state so cg_resolve_type
+     * recognises the param type refs (T, U, …) as generic params. */
+    cg->in_generic_fn = true;
+    cg->generic_fn_type_param_count = tp_count;
+    cg->generic_fn_type_param_names = gfn->type_param_names;
+    cg->generic_fn_type_param_descs = NULL;
+
+    char **arg_addr_exprs = calloc(arg_count + 1, sizeof *arg_addr_exprs);
+    if (!arg_addr_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; }
+
+    for (size_t i = 0; i < arg_count && ok; i++) {
+        /* Resolve the param's type to see if it's a type-param reference. */
+        bool is_tp_param = false;
+        if (i < sig->param_count && sig->params[i].type) {
+            CGType *pt = NULL;
+            if (cg_resolve_type(cg, sig->params[i].type, &e->token, &pt)) {
+                is_tp_param = (pt->kind == CG_TYPE_GENERIC_PARAM);
+                cgtype_free(pt);
+            }
+        }
+        if (is_tp_param) {
+            /* Materialise to a local of the concrete C type, then take &local. */
+            char *tmp = cg_fresh_temp(cg, "_ga");
+            char *cty = cg_ctype_dup(args[i].type);
+            if (args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
+                /* Nested generic param — just forward the pointer. */
+                buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, args[i].c_expr);
+                Buf ab; buf_init(&ab);
+                buf_append_fmt(&ab, "%s", tmp);
+                arg_addr_exprs[i] = ab.data;
+            } else {
+                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, args[i].c_expr);
+                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
+                    /* Ownership transfers to the local; track for release. */
+                    cg_emit_cleanup_push_for_managed_local(cg, tmp);
+                    args[i].owns_ref = false; /* local now owns it */
+                }
+                Buf ab; buf_init(&ab);
+                buf_append_fmt(&ab, "&%s", tmp);
+                arg_addr_exprs[i] = ab.data;
+            }
+            free(cty); free(tmp);
+        } else {
+            /* Non-generic param: pass by value as usual. */
+            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
+                cg_materialize_to_local(cg, &args[i], "_ga");
+            }
+            arg_addr_exprs[i] = strdup(args[i].c_expr);
+        }
+        if (!arg_addr_exprs[i]) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; }
+    }
+
+    cg->in_generic_fn = false;
+    cg->generic_fn_type_param_count = 0;
+    cg->generic_fn_type_param_names = NULL;
+    cg->generic_fn_type_param_descs = NULL;
+
+    if (!ok) {
+        for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+        free(arg_addr_exprs);
+        for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+        free(desc_exprs);
+        goto bail;
+    }
+
+    /* ---- Step 5: determine concrete return type ---- */
+    CGType *concrete_return = NULL;
+    {
+        /* Temporarily re-enable type-param resolution to resolve the
+         * return type ref.  The result may be CG_TYPE_GENERIC_PARAM,
+         * which we then substitute. */
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count = tp_count;
+        cg->generic_fn_type_param_names = gfn->type_param_names;
+        cg->generic_fn_type_param_descs = NULL;
+        CGType *rt = NULL;
+        if (sig->return_type) {
+            ok = cg_resolve_type(cg, sig->return_type, &e->token, &rt);
+        } else {
+            rt = cgtype_new(CG_TYPE_VOID);
+            ok = (rt != NULL);
+        }
+        cg->in_generic_fn = false;
+        cg->generic_fn_type_param_count = 0;
+        cg->generic_fn_type_param_names = NULL;
+        cg->generic_fn_type_param_descs = NULL;
+        if (!ok || !rt) {
+            cgtype_free(rt);
+            for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+            free(arg_addr_exprs);
+            for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+            free(desc_exprs);
+            goto bail;
+        }
+        if (rt->kind == CG_TYPE_GENERIC_PARAM) {
+            size_t idx = rt->generic_param_index;
+            cgtype_free(rt);
+            concrete_return = idx < tp_count ? cgtype_clone(type_args[idx]) : NULL;
+            if (!concrete_return) {
+                cg_fail(cg, e->token, "codegen: cannot determine concrete return type");
+                for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+                free(arg_addr_exprs);
+                for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+                free(desc_exprs);
+                goto bail;
+            }
+        } else {
+            concrete_return = rt;
+        }
+    }
+    bool has_out_param = (concrete_return->kind != CG_TYPE_VOID);
+
+    /* ---- Step 6: allocate result local and emit the call ---- */
+    char *ret_cname = NULL;
+    if (has_out_param) {
+        ret_cname = cg_fresh_temp(cg, "_gr");
+        char *cty = cg_ctype_dup(concrete_return);
+        /* Zero-init so managed slots start NULL. */
+        buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+        free(cty);
+    }
+
+    /* Emit the call expression. */
+    buf_append_fmt(cg->cur_body, "    %s(", gfn->c_name);
+    bool first = true;
+    for (size_t i = 0; i < tp_count; i++) {
+        if (!first) buf_append_cstr(cg->cur_body, ", ");
+        buf_append_cstr(cg->cur_body, desc_exprs[i]);
+        first = false;
+    }
+    for (size_t i = 0; i < arg_count; i++) {
+        if (!first) buf_append_cstr(cg->cur_body, ", ");
+        buf_append_cstr(cg->cur_body, arg_addr_exprs[i]);
+        first = false;
+    }
+    if (has_out_param) {
+        if (!first) buf_append_cstr(cg->cur_body, ", ");
+        buf_append_fmt(cg->cur_body, "&%s", ret_cname);
+    }
+    buf_append_cstr(cg->cur_body, ");\n");
+
+    /* ---- Step 7: set out result ---- */
+    if (has_out_param) {
+        out->c_expr = strdup(ret_cname);
+        out->type = concrete_return;
+        out->owns_ref = cgtype_is_managed(concrete_return) ||
+                        cgtype_is_aggregate(concrete_return);
+        /* Track managed result for ARC cleanup. */
+        if (cgtype_is_managed(concrete_return)) {
+            cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
+            out->owns_ref = true;
+        }
+    } else {
+        out->c_expr = strdup("((void)0)");
+        out->type = cgtype_new(CG_TYPE_VOID);
+        out->owns_ref = false;
+        cgtype_free(concrete_return);
+    }
+
+    for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+    free(arg_addr_exprs);
+    for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+    free(desc_exprs);
+    for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+    free(args);
+    for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
+    free(type_args);
+    free(ret_cname);
+    return out->c_expr && out->type;
+
+bail:
+    for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+    free(args);
+    for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
+    free(type_args);
+    return false;
+}
+
 static bool cg_emit_function(CG *cg,
                              const FengDecl *decl,
                              bool is_main,
@@ -5518,7 +6272,13 @@ static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_TYPE) {
-            if (!cg_register_user_type_shell(cg, d)) return false;
+            /* G6: generic types are stored separately and not monomorphized
+             * during registration — they are emitted on demand at call sites. */
+            if (d->as.type_decl.type_param_count > 0) {
+                if (!cg_register_generic_type_decl(cg, d)) return false;
+            } else {
+                if (!cg_register_user_type_shell(cg, d)) return false;
+            }
         }
     }
     /* Pass 1.5: register every spec SHELL (Step 4b). Specs may appear before
@@ -5527,6 +6287,8 @@ static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_SPEC) {
+            /* G6: generic specs not yet supported in codegen. */
+            if (d->as.spec_decl.type_param_count > 0) continue;
             if (!cg_register_user_spec_shell(cg, d)) return false;
         }
     }
@@ -5611,6 +6373,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                  * initializer runs from the main wrapper. */
                 continue;
             case FENG_DECL_TYPE: {
+                /* G6: generic type declarations have no methods to emit in the
+                 * base pass; monomorphized variants are generated on demand. */
+                if (d->as.type_decl.type_param_count > 0) break;
                 /* Find the registered UserType by AST identity. */
                 const UserType *ut = NULL;
                 for (size_t k = 0; k < cg->user_type_count; k++) {
@@ -5643,6 +6408,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
             case FENG_DECL_FUNCTION:
                 if (d->is_extern) {
                     if (!cg_emit_extern_decl(cg, d)) return false;
+                } else if (d->as.function_decl.type_param_count > 0) {
+                    /* G6: generic function — emit with the generic ABI. */
+                    if (!cg_emit_generic_function(cg, d, target)) return false;
                 } else {
                     bool is_main = (target == FENG_COMPILE_TARGET_BIN) &&
                                    slice_eq(d->as.function_decl.name, "main");
@@ -6541,6 +7309,16 @@ static void cg_dispose(CG *cg) {
         free(us->members);
     }
     free(cg->user_specs);
+    /* G6: generic function registry cleanup. */
+    for (size_t i = 0; i < cg->generic_fn_count; i++) {
+        free(cg->generic_fns[i].feng_name);
+        free(cg->generic_fns[i].c_name);
+        for (size_t j = 0; j < cg->generic_fns[i].type_param_count; j++)
+            free(cg->generic_fns[i].type_param_names[j]);
+        free(cg->generic_fns[i].type_param_names);
+    }
+    free(cg->generic_fns);
+    free(cg->generic_type_decls);
     for (size_t i = 0; i < cg->user_fit_count; i++) {
         UserFit *uf = &cg->user_fits[i];
         for (size_t j = 0; j < uf->method_count; j++) {

@@ -575,6 +575,111 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
     feng_program_free(program);
 }
 
+/* ---- G6 generic codegen tests ------------------------------------------ */
+
+static const char *kGenericFnSrc =
+    "mod feng.codegen.gf1;\n"
+    "pu fn identity<T>(x: T): T { return x; }\n";
+
+static void test_generic_fn_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericFnSrc, "gf1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic fn): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengGenericValueDescriptor") != NULL);
+    ASSERT(strstr(out.c_source, "void *_out") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericTypeSrc =
+    "mod feng.codegen.gf2;\n"
+    "pu type Box<T> { pu let value: int; }\n";
+
+static void test_generic_type_decl_no_crash(void) {
+    FengProgram *program = parse_or_die(kGenericTypeSrc, "gf2.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic type): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericCallSrc =
+    "mod feng.codegen.gf3;\n"
+    "fn identity<T>(x: T): T { return x; }\n"
+    "fn use_it() { let result = identity(42); }\n";
+
+static void test_generic_fn_call_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericCallSrc, "gf3.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic call): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FENG_VALUE_TRIVIAL") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -583,6 +688,9 @@ int main(void) {
     test_imported_feng_function_prototypes_compile();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
+    test_generic_fn_codegen();
+    test_generic_type_decl_no_crash();
+    test_generic_fn_call_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

@@ -160,6 +160,21 @@ typedef enum FengValueKind {
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS = 3
 } FengValueKind;
 
+/* ---- Generic value descriptor (G6 — layout monomorphization + method sharing) ----
+ * Passed as the first argument to every generic function.  Carries the
+ * minimum runtime information needed by a generic function to correctly
+ * copy, retain, and release values of the erased type T.
+ *
+ *   size      — sizeof(T); used for memcpy when kind == TRIVIAL or AGGREGATE.
+ *   kind      — ARC classification; drives the switch in generic return/copy.
+ *   aggregate — required when kind == AGGREGATE_WITH_MANAGED_SLOTS; NULL
+ *               otherwise. */
+typedef struct FengGenericValueDescriptor {
+    size_t          size;
+    FengValueKind   kind;
+    const struct FengAggregateValueDescriptor *aggregate;
+} FengGenericValueDescriptor;
+
 /* Single managed slot inside a by-value aggregate. `offset` is measured from
  * the aggregate value's base address (NOT from a FengManagedHeader). */
 typedef enum FengManagedSlotKind {
