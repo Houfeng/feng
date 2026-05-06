@@ -1,6 +1,6 @@
 # Feng 语言 `spec` 规范
 
-本文档说明 Feng 中 `spec` 的职责、语法、语义与实现约束。`spec` 用于声明契约形状; 具体类型如何显式满足这些契约,见 [feng-fit.md](./feng-fit.md)。
+本文档说明 Feng 中 `spec` 的职责、语法、语义与实现约束。`spec` 用于声明契约形状; 具体类型如何显式满足 object-form `spec` 契约,见 [feng-fit.md](./feng-fit.md)。
 
 ## 1 职责
 
@@ -12,8 +12,8 @@
 ## 2 术语
 
 - `spec`: 契约声明,定义字段与行为签名边界。
-- `type`: 具体类型声明,可通过定义头或 `fit` 显式进入一个或多个 `spec`。
-- 契约满足: 指具体 `type` 满足目标 `spec` 的全部字段与方法要求。
+- `type`: 具体类型声明,可通过定义头或 `fit` 显式进入一个或多个 object-form `spec`。
+- 契约满足: 指具体 `type` 满足目标 object-form `spec` 的全部字段与方法要求。
 - 方法签名: 方法名、参数个数、参数类型、参数顺序与返回值类型的组合。
 - 默认 witness: `spec` 默认初始化时由语言规则提供的默认实例语义。
 
@@ -78,6 +78,22 @@ spec A: B {}
 spec B: A {}
 ```
 
+错语法四,`type` 声明头满足 callable-form `spec`:
+
+```feng
+spec Click(): void;
+
+type Button: Click {}
+```
+
+错语法五,`type` 声明头满足 union-form `spec`:
+
+```feng
+spec Choice: int | string;
+
+type Box: Choice {}
+```
+
 ## 4 语义
 
 - `spec` 只约束可见形状（字段名、绑定方式 `let`/`var`、字段类型、行为签名与返回类型）,不约束具体内存布局、对象物理结构或 ABI 值布局。
@@ -88,7 +104,9 @@ spec B: A {}
 - `spec` 中任何位置的参数均不可使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数; 参数可变性属于实现侧内部约束,不属于 `spec` 契约形状的一部分。
 - `spec` 中的成员类型规则与 `type` 的成员类型引用规则一致: 成员类型必须引用已声明的具名类型,不能在成员类型位置内联匿名类型定义。
 - 可调用形状使用 `spec Name(args): ReturnType;` 形式定义。
-- 具体 `type` 可在声明头上直接写出其满足的一个或多个 `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
+- 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
+- callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
+- union-form `spec` 只描述值进入时的 member 选择与收窄边界,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标; union-form 的专门规则见 [feng-union-type.md](./feng-union-type.md)。
 - 对象形状 `spec` 的显式转换只允许向上建立视角: 具体 `type` 可显式转换到当前可见契约闭包中已证明满足的 object-form `spec`; object-form `spec` 也可显式转换到其当前可见父 `spec` 视角。
 - 对象形状 `spec` 的显式转换资格必须在编译期确定; 运行时不得重新搜索满足关系,也不得依据对象真实具体类型临时决定转换是否成立。
 - 对象形状 `spec` 的显式转换一旦合法,编译器必须直接按目标 `spec` 视角发码; 运行时不得再做候选 `spec` 搜索、试探转换或回退。
@@ -98,12 +116,14 @@ spec B: A {}
 分为「必须、禁止、建议」。
 
 - [必须] 在 `spec Foo: Bar, Baz {}` 中,冒号右侧必须是一个或多个 `spec`,并使用逗号分隔。
+- [必须] 在 `type Foo: Bar, Baz {}` 或契约适配 `fit Foo: Bar, Baz` 中,冒号右侧每一项都必须是 object-form `spec`。
 - [必须] 判断 `type` 是否满足 `spec` 时,字段匹配采用“名称 + 绑定方式（`let` 或 `var`，即字段是否可变） + 类型完全一致”规则。
 - [必须] 判断 `type` 是否满足 `spec` 时,方法匹配采用“名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”规则。
 - [必须] 当同一个 `type` 同时满足多个 `spec` 时,若出现“方法名相同,且参数个数、参数类型和参数顺序一致,但返回值类型不一致”的方法签名,必须视为冲突。
 - [必须] 若某个列出的 `spec` 还要求满足其他 `spec`,则该 `type` 也必须同时满足这些额外 `spec` 的全部要求。
 - [禁止] `spec` 循环声明满足; `spec` 之间形成直接或间接循环满足关系时禁止通过。
 - [禁止] 同一声明头中的 `spec` 列表重复列出同一个 `spec`。
+- [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
 - [禁止] 对象形状的 `spec` 不得标记 `@fixed`、`@union` 或任何调用方式注解; `@fixed` 仅适用于具体 `type` 与可调用形状的 `spec`。
 - [必须] 对象形状 `spec` 的显式转换只允许两类向上转换: 具体 `type` 到其已满足的 object-form `spec`,以及子 object-form `spec` 到其父 object-form `spec`。
@@ -116,6 +136,7 @@ spec B: A {}
 ## 6 编译期
 
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
+- 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。

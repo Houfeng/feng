@@ -122,6 +122,8 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 
 因此，union-form 与 object-form 应当是并列 form，而不是“object-form 的另一种 parent 列表写法”。
 
+进一步说，union-form 也不是“具体 `type` 可以在声明头或 `fit` 中声明满足的契约目标”；`type A: UnionSpec` 与 `fit A: UnionSpec` 都应非法。具体值进入 union-form 只发生在赋值、初始化、传参、返回等值流站点，并按 union member 选择规则处理。
+
 ### 3.5 union-form 的成员访问必须先收窄
 
 本次讨论已确认：
@@ -455,6 +457,7 @@ spec Display: Named | string;
   - 相等性规则；
   - narrowing / pattern matching 的收窄规则。
 - union-form 还需要保证：
+  - union-form 不得作为 `type A: B` 声明头或契约适配 `fit A: B` 的目标；具体值进入 union-form 只能发生在赋值、初始化、传参、返回等值流站点；
   - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
