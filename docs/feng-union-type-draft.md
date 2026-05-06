@@ -7,6 +7,7 @@
 ## 1 目标
 
 - 在**不引入新关键字**的前提下，为 Feng 增加联合类型能力。
+- Feng 的目标是**高性能静态语言**；union-form 的成员选择、收窄与相关 `spec` 转换资格应尽可能在编译期确定，避免引入额外的运行时搜索、回退或二次判别开销。
 - 保持 `spec` 关键字的一词多用设计，不把 `spec` 绑定到单一运行时结构。
 - 保持运行时顶层值模型的抽象完备性：任何新类型最终都必须落入既有三类之一，而不是新增第四类顶层运行时结构。
 
@@ -160,6 +161,7 @@ if v is int {
 - 在短路逻辑表达式中，左侧 `is` 所得到的收窄结果应继续作用到右侧表达式。
 - `is` 收窄既可服务于编译期已知情形，也可服务于运行时基于 `tag` 的判别情形。
 - `v is FooSpec` 不承担“判断当前 concrete member 是否满足 `FooSpec` 并自动转换”的职责；它只用于判断当前 active member 是否就是 `FooSpec`。
+- 当目标 member 本身是 object-form `spec` 时，收窄到该 member 后，分支内值直接取得该 `spec` 视角，并可按该 `spec` 的既有规则访问成员与发起调用。
 - 若当前已收窄到某个具体类型，且当前可见契约闭包可证明该具体类型满足某个 object-form `spec`，则允许通过显式转换把该值转换到目标 `spec` 视角；该能力与 `is` 收窄分离。
 
 例如：
@@ -171,6 +173,16 @@ if v is UserType && v == userType {
 ```
 
 上例中，`v == userType` 合法，是因为左侧 `v is UserType` 已经先把 `v` 收窄为 `UserType`；该收窄结果会沿短路求值顺序继续传递到右侧子表达式。
+
+若 `Named` 本身是 union member，则收窄到 `Named` 后应可直接按 `Named` 视角操作。例如：
+
+```feng
+if v is Named {
+  return v.display();
+}
+```
+
+上例成立的前提是 `Named` 本身就是该 union-form 的归一化 member；这里不是在运行时检查某个 concrete type 是否“也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
 
 若需要把已收窄到具体类型的值转成其所满足的 object-form `spec`，应显式写出转换，而不是通过 `is` 隐式完成。例如：
 
@@ -365,6 +377,7 @@ spec Display: Named | string;
 
 - active variant 的判别信息；
 - 基于判别信息的路径分派。
+- 值进入 union-form 时的 member 选择在语义层尽可能编译期确定；运行时不得为此重新搜索“某对象还满足哪些 `spec`”。
 
 ## 6 对 parser / AST / 语义层的直接要求
 
@@ -398,9 +411,13 @@ spec Display: Named | string;
   - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
+  - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
+  - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
+  - 上述冲突站点禁止隐式选择 active member，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form；
   - 重叠 member 的最终歧义判定不在 union-form 声明点完成，而应在当前可见契约闭包固定后，于值进入 union-form 的具体站点执行；
   - `==` / `!=` 也必须先收窄到确定 member；
   - 未收窄时禁止成员访问；
+  - 当 `spec` 本身是 union member 时，收窄到该 `spec` 后，分支内值直接按该 `spec` 视角操作；
   - 已收窄到具体类型后，若当前可见契约闭包可证明其满足某个 object-form `spec`，则允许显式转换到该 `spec`；
   - `is` 只负责对 union-form 当前 active member 做判别与收窄，不负责基于满足关系做自动转换；
   - 可编译期收窄时优先编译期收窄；
@@ -445,6 +462,7 @@ spec Display: Named | string;
 - 在短路逻辑表达式中，左侧 `is` 的收窄结果应继续作用到右侧子表达式。
 - `else` 分支在剩余 member 可唯一确定时，应自动收窄为该唯一剩余类型。
 - `is` 只判断当前 active member 是否为目标 member，不承担“满足某个 object-form spec 即自动转换”的语义。
+- 当目标 member 本身是 object-form `spec` 时，收窄到该 member 后，分支内值直接按该 `spec` 视角操作。
 - 已收窄到具体类型后，若当前可见契约闭包能证明其满足某个 object-form `spec`，则应通过显式转换进入该 `spec` 视角。
 - 仍待明确：
   - 是否引入 union member 解构。
@@ -468,11 +486,24 @@ spec Display: Named | string;
 
 - 由于契约关系可能在后续声明中补全，且包内孤儿契约也会影响当前可见语义，重叠 member 的最终歧义判定不适合在 union-form 声明点完成。
 - 相关判定应延后到当前可见契约闭包固定后，并在值进入 union-form 的具体站点执行。
+- 若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足某个 `spec` member，也不构成歧义。
+- 因此，在 `UserType | Named` 这类组合中，`UserType` 值进入 union-form 时应按 `UserType` member 进入；`UserType` 满足 `Named` 本身不构成冲突。
+- 真正的进入冲突只发生在不存在精确 member 命中，而两个或多个 `spec` member 同时可通过编译期可证的向上转换接纳同一源值时，例如两个重叠 `spec`，或父/子 `spec` 同时出现且源值可同时进入二者。
+- 这类冲突站点禁止隐式选择 active variant，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form。
+- 显式转换资格本身仍按 `spec` 的向上转换规则在编译期确定，不引入运行时满足关系搜索。
 
-仍待明确：
+示意上，可理解为：
 
-- 当某个进入站点上有多个 member 同时匹配时，是否直接报歧义错误。
-- 或是否按归一化后的声明顺序选择 active variant。
+```feng
+spec Display: Named | Identified;
+
+let a: Display = (Named)user;
+let b: Display = (Identified)user;
+```
+
+上例中，若 `user` 同时满足 `Named` 与 `Identified`，则 `let x: Display = user;` 应报错，而不是隐式选择其中之一。
+
+当前阶段无剩余未决项。
 
 ## 8 若后续采纳，需要更新的主规范
 
