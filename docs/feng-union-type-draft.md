@@ -168,6 +168,7 @@ if v {
 当前已确认的语义要点：
 
 - 单个 member 分支表示“当前 active member 就是该 member”；分支内的值收窄为该确定 member。
+- union 值在进入 union-form 的具体站点时，active member 就已经被确定；后续 `if 目标值 { ... }` 条件匹配只针对这个已确定的 active member 做判别，不会先把当前 member 向上转换到别的 `spec` 后再尝试匹配。
 - 多个 member 可在同一分支中以逗号罗列；这类分支只把值收窄到“被列出的 member 子集”，而不是某个单一确定类型。
 - `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
 - 当分支内收窄结果仍包含多个 member 时，值依然处于 union 视角，只是 member 集合变小；此时仍不允许直接做成员访问、方法调用或 `==` / `!=` 比较。
@@ -186,6 +187,18 @@ if v {
 ```
 
 上例成立的前提是 `Named` 本身就是该 union-form 的归一化 member；这里不是在运行时检查某个 concrete type 是否“也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
+
+同理，若某个值在进入 union-form 时是按 `UserType` member 进入，则后续：
+
+```feng
+if v {
+  Named {
+    // 不会因为当前 active member `UserType` 恰好满足 `Named` 就自动命中
+  }
+}
+```
+
+上例中，`Named` 分支只有在 `Named` 本身就是当前 active member 时才会命中；不会因为 `UserType` 可显式向上转换到 `Named`，就在条件匹配阶段自动完成这次转换后再匹配。
 
 若分支一次罗列多个 member，则该分支只得到更小的 union 子集。例如：
 
@@ -209,6 +222,21 @@ if v {
 ```
 
 上例中，`UserType` 分支只负责把 `v` 收窄为 `UserType`；后续 `(Named)v` 是否成立，取决于当前可见契约闭包中 `UserType` 是否满足 `Named`。若不满足，则该显式转换应报错。
+
+需要额外明确的是：当前阶段**不支持**把仍处于 union 视角的值直接投影到一个共同 `spec`，即使该 union 的全部 member 都满足该 `spec`。例如：
+
+```feng
+spec U: UserType1 | UserType2;
+
+let u: U = ...;
+let x = (Named)u;   // 当前阶段不支持
+```
+
+原因不是编译期无法证明 `UserType1` 与 `UserType2` 都满足 `Named`，而是 `union -> common spec` 不再是“确定源类型上的普通向上转换”，而是一次从 union 视角到共同 `spec` 视角的投影。
+
+对 object-form `spec` 而言，目标值不仅包含 `subject`，还需要对应的目标 witness。若 `UserType1` 与 `UserType2` 各自进入 `Named` 时使用不同 witness，则一般需要先根据 union 当前 active member 选择正确的那一条投影路径。也就是说，这类投影在一般情形下**可能需要一次基于 `tag` 的运行时选择**，然后才能构造目标 `Named` 值。
+
+出于 Feng 当前“高性能静态语言”的目标，以及“普通向上转换资格与发码路径应尽可能在编译期定死”的约束，本草案当前阶段不把这种 `union -> common spec` 投影纳入普通显式转换规则。若后续需要支持，应作为单独能力设计，而不是并入当前的向上转换语义。
 
 ### 3.7 union-form 的成员允许包含基础类型、用户定义类型与其他 `spec`
 
@@ -428,6 +456,7 @@ spec Display: Named | string;
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
   - union-form 的成员收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；
+  - union 值一旦在进入站点选定 active member，后续条件匹配只按该已选定 member 判别；不会在匹配阶段再依据其可向上转换到的 `spec` 重新解释当前值；
   - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
   - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
   - 上述冲突站点禁止隐式选择 active member，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form；
@@ -438,6 +467,7 @@ spec Display: Named | string;
   - 单个 member 分支收窄到确定 member；多个 member 罗列分支只收窄到对应子集，若子集大小大于 1，则分支内仍保持 union 视角；
   - 当 `spec` 本身是 union member 时，收窄到该 `spec` 后，分支内值直接按该 `spec` 视角操作；
   - 已收窄到具体类型后，若当前可见契约闭包可证明其满足某个 object-form `spec`，则允许显式转换到该 `spec`；
+  - 即使某个 union 或 union 子集的全部可能 member 都满足同一个 object-form `spec`，当前阶段也不允许直接把该 union 视角值显式转换到该共同 `spec`；若放开此能力，一般可能需要一次基于 `tag` 的运行时投影，因此应单独设计；
   - 可编译期收窄时优先编译期收窄；
   - 运行时收窄时，分支内后续访问按确定 member 直接发码。
 
@@ -474,6 +504,7 @@ spec Display: Named | string;
 当前讨论已确认基础收窄语义：
 
 - 基础收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
+- union 值在进入站点选定 active member 后，后续条件匹配只按该 active member 本身判别；不会在匹配阶段自动向上转换后再命中别的 `spec` branch。
 - union-form 的成员访问必须先收窄到确定 member。
 - 可编译期完成的收窄应优先在编译期完成。
 - 运行时收窄的基本成本应收敛为一次 `tag` 判别，而不是每次成员访问重复判别。
@@ -483,6 +514,7 @@ spec Display: Named | string;
 - `else` 分支收窄为剩余 member 集合；若剩余集合可唯一确定，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
 - 当目标 member 本身是 object-form `spec` 且该分支只命中这一个 member 时，分支内值直接按该 `spec` 视角操作。
 - 已收窄到具体类型后，若当前可见契约闭包能证明其满足某个 object-form `spec`，则应通过显式转换进入该 `spec` 视角。
+- 即使某个 union 视角值的全部可能 member 都满足同一个 object-form `spec`，当前阶段也不支持直接把该 union 视角值显式转换到该共同 `spec`；这类能力一般可能需要一次基于 `tag` 的运行时投影，因此暂不纳入本轮设计。
 - 当前阶段无剩余未决项。
 
 ### 7.4 aggregate union 的条件性槽位
@@ -510,6 +542,7 @@ spec Display: Named | string;
 - 显式转换资格本身仍按 `spec` 的向上转换规则在编译期确定，不引入运行时满足关系搜索。
 - 一旦目标 `spec` member 由显式转换确定，进入 union-form 的语义等价于“先得到该 `spec` 值，再写入 union-form”；实现可直接融合这两步，但不得额外引入运行时成员选择、满足关系搜索、候选比较或回退。
 - 这里比较的是“转换资格判定与 union member 选择”的额外成本；union 自身固有的 `tag` / payload 写入，以及赋值、传参、返回等站点本来就需要承担的值搬运规则，不属于该条额外成本。
+- 与此相对，若允许 `union -> common spec` 投影，例如 `spec U: UserType1 | UserType2; let x = (Named)u;`，则一般可能需要先依据 `u` 的 `tag` 选择 `UserType1 -> Named` 或 `UserType2 -> Named` 的那条固定投影路径。该能力当前阶段暂不支持，也不并入“普通向上转换”规则。
 
 示意上，可理解为：
 
