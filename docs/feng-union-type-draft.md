@@ -414,6 +414,7 @@ spec Display: Named | string;
   - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
   - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
   - 上述冲突站点禁止隐式选择 active member，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form；
+  - 当开发者已通过显式向上转换选定某个 `spec` member 时，其语义等价于“先构造该目标 `spec` 值，再按该 `spec` member 进入 union-form”；实现可融合发码，但不得高于这条显式两步路径的额外运行时开销；
   - 重叠 member 的最终歧义判定不在 union-form 声明点完成，而应在当前可见契约闭包固定后，于值进入 union-form 的具体站点执行；
   - `==` / `!=` 也必须先收窄到确定 member；
   - 未收窄时禁止成员访问；
@@ -491,6 +492,8 @@ spec Display: Named | string;
 - 真正的进入冲突只发生在不存在精确 member 命中，而两个或多个 `spec` member 同时可通过编译期可证的向上转换接纳同一源值时，例如两个重叠 `spec`，或父/子 `spec` 同时出现且源值可同时进入二者。
 - 这类冲突站点禁止隐式选择 active variant，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form。
 - 显式转换资格本身仍按 `spec` 的向上转换规则在编译期确定，不引入运行时满足关系搜索。
+- 一旦目标 `spec` member 由显式转换确定，进入 union-form 的语义等价于“先得到该 `spec` 值，再写入 union-form”；实现可直接融合这两步，但不得额外引入运行时成员选择、满足关系搜索、候选比较或回退。
+- 这里比较的是“转换资格判定与 union member 选择”的额外成本；union 自身固有的 `tag` / payload 写入，以及赋值、传参、返回等站点本来就需要承担的值搬运规则，不属于该条额外成本。
 
 示意上，可理解为：
 
@@ -502,6 +505,15 @@ let b: Display = (Identified)user;
 ```
 
 上例中，若 `user` 同时满足 `Named` 与 `Identified`，则 `let x: Display = user;` 应报错，而不是隐式选择其中之一。
+
+其成本基线可理解为：
+
+```feng
+let s: Named = user;
+let t: Display = s;
+```
+
+直接写成 `let t: Display = (Named)user;` 时，发码不得高于这条显式两步路径的额外成本；实现可融合中间临时值，但不得增加动态判定或回退开销。
 
 当前阶段无剩余未决项。
 
