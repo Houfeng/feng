@@ -9165,6 +9165,33 @@ static bool append_completion_item(FengLspString *json,
     return string_append_cstr(json, "}");
 }
 
+static bool completion_json_contains_label(const FengLspString *json,
+                                           FengSlice label,
+                                           bool *contains) {
+    FengLspString needle = {0};
+    char *label_text;
+    bool ok;
+
+    *contains = false;
+    if (json == NULL || json->data == NULL) {
+        return true;
+    }
+    label_text = dup_range(label.data, label.data + label.length);
+    if (label_text == NULL) {
+        return false;
+    }
+        ok = string_append_cstr(&needle, "{\"label\":") &&
+            string_append_json_string(&needle, label_text);
+    free(label_text);
+    if (!ok) {
+        string_dispose(&needle);
+        return false;
+    }
+    *contains = strstr(json->data, needle.data) != NULL;
+    string_dispose(&needle);
+    return true;
+}
+
 static bool append_decl_completion_item(FengLspString *json,
                                         bool *first,
                                         const FengDecl *decl,
@@ -10095,25 +10122,11 @@ static bool append_bundle_imported_completion_items(FengLspString *json,
                                                     const FengProgram *program) {
     FengSymbolProvider *provider = NULL;
     FengSymbolError symbol_error = {0};
-    bool needs_provider = false;
     bool ok = true;
     size_t index;
 
     if (json == NULL || first == NULL || session == NULL || program == NULL ||
         session->bundle_count == 0U || program->use_count == 0U) {
-        return true;
-    }
-    for (index = 0U; index < program->use_count; ++index) {
-        const FengUseDecl *use_decl = &program->uses[index];
-
-        if (!use_decl->has_alias &&
-            find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count) == NULL &&
-            !session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
-            needs_provider = true;
-            break;
-        }
-    }
-    if (!needs_provider) {
         return true;
     }
     if (!feng_symbol_provider_create(&provider, &symbol_error)) {
@@ -10131,9 +10144,7 @@ static bool append_bundle_imported_completion_items(FengLspString *json,
         const FengSymbolImportedModule *module;
         size_t decl_index;
 
-        if (use_decl->has_alias ||
-            find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count) != NULL ||
-            session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
+        if (use_decl->has_alias) {
             continue;
         }
         module = feng_symbol_provider_find_module(provider, use_decl->segments, use_decl->segment_count);
@@ -10142,8 +10153,16 @@ static bool append_bundle_imported_completion_items(FengLspString *json,
         }
         for (decl_index = 0U; decl_index < feng_symbol_module_public_decl_count(module); ++decl_index) {
             const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(module, decl_index);
+            bool has_label = false;
 
             if (!symbol_decl_is_completion_decl(decl)) {
+                continue;
+            }
+            if (!completion_json_contains_label(json, feng_symbol_decl_name(decl), &has_label)) {
+                ok = false;
+                break;
+            }
+            if (has_label) {
                 continue;
             }
             if (!append_symbol_decl_completion_item(json, first, decl, NULL, -1)) {
@@ -10815,6 +10834,12 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             string_dispose(&json);
         }
     }
+    if (can_repair_completion && build_repaired_completion_json(runtime, document, offset, &json)) {
+        free(uri);
+        ok = send_json_response(output, id, json.data);
+        string_dispose(&json);
+        return ok;
+    }
     if (build_single_parse_session(document, &session)) {
         program = find_program(&session, document->path);
         if (program != NULL) {
@@ -10846,12 +10871,6 @@ static bool handle_completion_request(FengLspRuntime *runtime,
         return ok;
     }
     string_dispose(&json);
-    if (can_repair_completion && build_repaired_completion_json(runtime, document, offset, &json)) {
-        free(uri);
-        ok = send_json_response(output, id, json.data);
-        string_dispose(&json);
-        return ok;
-    }
     free(uri);
     string_dispose(&json);
     return send_json_response(output, id, "[]");
