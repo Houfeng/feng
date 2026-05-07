@@ -2,8 +2,8 @@ pu mod std.collections;
 
 /**
  * A map is a collection of key-value pairs
- * @param <K, V> K - the type of the keys in the map
- * @param <K, V> V - the type of the values in the map
+ * @param <K> - the type of the keys in the map
+ * @param <V> - the type of the values in the map
  */
 pu type Map<K, V> {
   pu fn getValue(key: K): V {
