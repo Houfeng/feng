@@ -9,10 +9,16 @@ use feng.examples.loop as lp;
 @cdecl("libc")
 extern fn puts(msg: string): int;
 
+fn test<T> (x: T): T {
+  puts("test");
+  return x;
+}
+
 /**
  * The main function.
  */
 fn main(args: string[]) {
   puts("hello, examples");
   // lp.loop_example([""]);
+  test(1);
 }

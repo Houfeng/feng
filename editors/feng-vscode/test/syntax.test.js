@@ -74,4 +74,93 @@ assert(tagRegex.test('@return'), 'tag pattern should match @return');
 assert(tagRegex.test('@throws'), 'tag pattern should match @throws');
 assert(tagRegex.test('@deprecated'), 'tag pattern should match @deprecated');
 
+// --- generic syntax tests ---
+
+function findGenericTypeParams() {
+    return grammar.repository && grammar.repository.genericTypeParams;
+}
+
+function findExplicitGenericCall() {
+    return grammar.repository && grammar.repository.explicitGenericCall;
+}
+
+function findFunctionDefinitionPatterns() {
+    const fd = grammar.repository && grammar.repository.functionDefinitions;
+    return (fd && Array.isArray(fd.patterns)) ? fd.patterns : [];
+}
+
+function findTypeDefinitionPatterns() {
+    const td = grammar.repository && grammar.repository.typeDefinitions;
+    return (td && Array.isArray(td.patterns)) ? td.patterns : [];
+}
+
+function findSpecDefinitionPatterns() {
+    const sd = grammar.repository && grammar.repository.specDefinitions;
+    return (sd && Array.isArray(sd.patterns)) ? sd.patterns : [];
+}
+
+// 1. genericTypeParams rule exists and has type parameter name pattern
+const genericTypeParams = findGenericTypeParams();
+assert(genericTypeParams, 'expected genericTypeParams rule in grammar repository');
+const genericPatterns = Array.isArray(genericTypeParams.patterns) ? genericTypeParams.patterns : [];
+const typeParamNamePattern = genericPatterns.find(
+    p => p.name === 'entity.name.type.parameter.feng'
+);
+assert(typeParamNamePattern, 'expected entity.name.type.parameter.feng pattern in genericTypeParams');
+
+// 2. explicitGenericCall rule exists for :< syntax
+const explicitGenericCall = findExplicitGenericCall();
+assert(explicitGenericCall, 'expected explicitGenericCall rule in grammar repository');
+const explicitPatterns = Array.isArray(explicitGenericCall.patterns) ? explicitGenericCall.patterns : [];
+const colonAnglePattern = explicitPatterns.find(
+    p => p.name === 'punctuation.definition.generic.begin.feng'
+);
+assert(colonAnglePattern, 'expected punctuation.definition.generic.begin.feng for :< syntax');
+const colonAngleRegex = new RegExp(colonAnglePattern.match);
+assert(colonAngleRegex.test(':<'), 'explicit generic call pattern should match :<');
+
+// 3. functionDefinitions has a begin/end pattern with type-param support
+const fnPatterns = findFunctionDefinitionPatterns();
+const fnGenericPattern = fnPatterns.find(p => p.begin && p.begin.includes('<'));
+assert(fnGenericPattern, 'expected a begin/end pattern in functionDefinitions for generic functions');
+assert(fnGenericPattern.beginCaptures && fnGenericPattern.beginCaptures['1'], 'fn generic pattern should capture group 1 (fn keyword)');
+assert.strictEqual(
+    fnGenericPattern.beginCaptures['1'].name,
+    'keyword.declaration.function.feng',
+    'fn keyword should have scope keyword.declaration.function.feng'
+);
+assert.strictEqual(
+    fnGenericPattern.beginCaptures['3'].name,
+    'entity.name.function.feng',
+    'fn name should have scope entity.name.function.feng'
+);
+
+// 4. typeDefinitions has a begin/end pattern with type-param support
+const typePatterns = findTypeDefinitionPatterns();
+const typeGenericPattern = typePatterns.find(p => p.begin && p.begin.includes('<'));
+assert(typeGenericPattern, 'expected a begin/end pattern in typeDefinitions for generic types');
+assert.strictEqual(
+    typeGenericPattern.beginCaptures['1'].name,
+    'keyword.declaration.type.feng',
+    'type keyword should have scope keyword.declaration.type.feng'
+);
+
+// 5. specDefinitions has a begin/end pattern with type-param support
+const specPatterns = findSpecDefinitionPatterns();
+const specGenericPattern = specPatterns.find(p => p.begin && p.begin.includes('<'));
+assert(specGenericPattern, 'expected a begin/end pattern in specDefinitions for generic specs');
+assert.strictEqual(
+    specGenericPattern.beginCaptures['1'].name,
+    'keyword.declaration.spec.feng',
+    'spec keyword should have scope keyword.declaration.spec.feng'
+);
+
+// 6. Top-level patterns include explicitGenericCall
+const topPatterns = grammar.patterns;
+assert(Array.isArray(topPatterns), 'grammar should have top-level patterns array');
+const hasExplicitGenericCallInclude = topPatterns.some(
+    p => p.include === '#explicitGenericCall'
+);
+assert(hasExplicitGenericCallInclude, 'top-level patterns should include #explicitGenericCall');
+
 console.log('syntax tests passed');

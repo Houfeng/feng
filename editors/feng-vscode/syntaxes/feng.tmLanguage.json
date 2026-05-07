@@ -51,6 +51,9 @@
       "include": "#typeNames"
     },
     {
+      "include": "#explicitGenericCall"
+    },
+    {
       "include": "#operators"
     }
   ],
@@ -112,14 +115,25 @@
     "functionDefinitions": {
       "patterns": [
         {
+          "begin": "\\b(fn)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)(<)",
+          "end": ">",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.function.feng" },
+            "3": { "name": "entity.name.function.feng" },
+            "4": { "name": "punctuation.definition.typeparams.begin.feng" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.typeparams.end.feng" }
+          },
+          "patterns": [
+            { "include": "#genericTypeParams" }
+          ]
+        },
+        {
           "match": "\\b(fn)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": {
-              "name": "keyword.declaration.function.feng"
-            },
-            "3": {
-              "name": "entity.name.function.feng"
-            }
+            "1": { "name": "keyword.declaration.function.feng" },
+            "3": { "name": "entity.name.function.feng" }
           }
         }
       ]
@@ -127,14 +141,25 @@
     "typeDefinitions": {
       "patterns": [
         {
+          "begin": "\\b(type)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(<)",
+          "end": ">",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.type.feng" },
+            "3": { "name": "entity.name.type.feng" },
+            "4": { "name": "punctuation.definition.typeparams.begin.feng" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.typeparams.end.feng" }
+          },
+          "patterns": [
+            { "include": "#genericTypeParams" }
+          ]
+        },
+        {
           "match": "\\b(type)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": {
-              "name": "keyword.declaration.type.feng"
-            },
-            "3": {
-              "name": "entity.name.type.feng"
-            }
+            "1": { "name": "keyword.declaration.type.feng" },
+            "3": { "name": "entity.name.type.feng" }
           }
         }
       ]
@@ -142,11 +167,24 @@
     "specDefinitions": {
       "patterns": [
         {
+          "begin": "\\b(spec)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(<)",
+          "end": ">",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.spec.feng" },
+            "3": { "name": "entity.name.type.feng" },
+            "4": { "name": "punctuation.definition.typeparams.begin.feng" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.typeparams.end.feng" }
+          },
+          "patterns": [
+            { "include": "#genericTypeParams" }
+          ]
+        },
+        {
           "match": "\\b(spec)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": {
-              "name": "keyword.declaration.spec.feng"
-            },
+            "1": { "name": "keyword.declaration.spec.feng" },
             "3": {
               "name": "entity.name.type.feng"
             }
@@ -284,6 +322,34 @@
         {
           "name": "punctuation.section.block.end.feng",
           "match": "[\\}\\)\\]]"
+        }
+      ]
+    },
+    "genericTypeParams": {
+      "patterns": [
+        {
+          "match": "([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.parameter.feng" },
+            "2": { "name": "punctuation.separator.feng" },
+            "3": { "name": "entity.name.type.feng" }
+          }
+        },
+        {
+          "name": "entity.name.type.parameter.feng",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "punctuation.separator.feng",
+          "match": ","
+        }
+      ]
+    },
+    "explicitGenericCall": {
+      "patterns": [
+        {
+          "match": ":<",
+          "name": "punctuation.definition.generic.begin.feng"
         }
       ]
     }

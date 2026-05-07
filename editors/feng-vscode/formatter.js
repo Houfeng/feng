@@ -293,6 +293,12 @@ function tokenize(source) {
             continue;
         }
 
+        if (current === ':' && next === '<') {
+            tokens.push({ type: 'punctuation', value: ':<' });
+            index += 2;
+            continue;
+        }
+
         if (MULTI_CHAR_OPERATORS.has(twoChars)) {
             tokens.push(classifySymbol(twoChars));
             index += 2;
@@ -400,10 +406,6 @@ function needsSpaceBetween(previousEmittedToken,
         return true;
     }
 
-    if (isOperator(previousSignificantToken) && previousEmittedToken === previousSignificantToken) {
-        return !isPrefixOperator(previousSignificantToken, tokenBeforePreviousSignificant);
-    }
-
     if (currentToken.value === '.' || previousEmittedToken.value === '.') {
         return false;
     }
@@ -412,8 +414,22 @@ function needsSpaceBetween(previousEmittedToken,
         return false;
     }
 
+    /* Explicit generic call marker: no space before :<  */
+    if (currentToken.type === 'punctuation' && currentToken.value === ':<') {
+        return false;
+    }
+
+    if (isOperator(previousSignificantToken) && previousEmittedToken === previousSignificantToken) {
+        return !isPrefixOperator(previousSignificantToken, tokenBeforePreviousSignificant);
+    }
+
     if (previousEmittedToken.value === ',' || previousEmittedToken.value === ':') {
         return true;
+    }
+
+    /* No space after :< — the generic open < is handled by genericDepth in formatLineTokens */
+    if (previousEmittedToken.type === 'punctuation' && previousEmittedToken.value === ':<') {
+        return false;
     }
 
     if (previousEmittedToken.value === ';') {
@@ -505,22 +521,81 @@ function updateDelimiterStack(delimiterStack, tokens) {
     }
 }
 
+function isUppercaseIdentifier(token) {
+    return token != null &&
+        token.type === 'identifier' &&
+        token.value.length > 0 &&
+        token.value[0] >= 'A' &&
+        token.value[0] <= 'Z';
+}
+
 function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     let result = '';
     let previousEmittedToken = null;
     let previousSignificantToken = previousSignificantTokenBeforeLine;
     let tokenBeforePreviousSignificant = null;
     let lastLineSignificantToken = null;
+    let genericDepth = 0;
+    let lastEmittedWasGenericOpen = false;   /* just emitted a generic < or :< */
+    let lastEmittedWasGenericClose = false;  /* just emitted a generic > */
 
     for (const token of tokens) {
-        if (needsSpaceBetween(previousEmittedToken,
-            previousSignificantToken,
-            tokenBeforePreviousSignificant,
-            token)) {
-            result += ' ';
+        const isGenericOpen = token.type === 'operator' && token.value === '<' &&
+            (isUppercaseIdentifier(previousSignificantToken) ||
+             (previousSignificantToken != null &&
+              previousSignificantToken.type === 'identifier' &&
+              tokenBeforePreviousSignificant != null &&
+              tokenBeforePreviousSignificant.type === 'keyword' &&
+              (tokenBeforePreviousSignificant.value === 'fn' ||
+               tokenBeforePreviousSignificant.value === 'type' ||
+               tokenBeforePreviousSignificant.value === 'spec')) ||
+             (previousEmittedToken != null && previousEmittedToken.type === 'punctuation' && previousEmittedToken.value === ':<'));
+        const isGenericClose = token.type === 'operator' && token.value === '>' && genericDepth > 0;
+        const isExplicitGenericMarker = token.type === 'punctuation' && token.value === ':<';
+
+        if (isExplicitGenericMarker) {
+            if (needsSpaceBetween(previousEmittedToken,
+                previousSignificantToken,
+                tokenBeforePreviousSignificant,
+                token)) {
+                result += ' ';
+            }
+            result += token.value;
+            genericDepth += 1;
+            lastEmittedWasGenericOpen = true;
+            lastEmittedWasGenericClose = false;
+        } else if (isGenericOpen) {
+            result += token.value;
+            genericDepth += 1;
+            lastEmittedWasGenericOpen = true;
+            lastEmittedWasGenericClose = false;
+        } else if (isGenericClose) {
+            result += token.value;
+            genericDepth -= 1;
+            lastEmittedWasGenericOpen = false;
+            lastEmittedWasGenericClose = true;
+        } else if (genericDepth > 0 &&
+                   token.type === 'punctuation' && token.value === ',') {
+            result += token.value;
+            lastEmittedWasGenericOpen = false;
+            lastEmittedWasGenericClose = false;
+        } else {
+            /* After generic open <: no space before first type arg.
+             * After generic close >: no space before ( (param list attaches directly). */
+            const suppressSpace = lastEmittedWasGenericOpen ||
+                (lastEmittedWasGenericClose && token.value === '(');
+
+            if (!suppressSpace && needsSpaceBetween(previousEmittedToken,
+                previousSignificantToken,
+                tokenBeforePreviousSignificant,
+                token)) {
+                result += ' ';
+            }
+            result += token.value;
+            lastEmittedWasGenericOpen = false;
+            lastEmittedWasGenericClose = false;
         }
 
-        result += token.value;
         previousEmittedToken = token;
 
         if (token.type !== 'comment') {

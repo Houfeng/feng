@@ -83,4 +83,36 @@ runCase(
     '/**\n * Summary line\n *\n * @return result\n */\nfn get(): int {}\n'
 );
 
+// --- generic syntax formatting tests ---
+
+runCase(
+    'preserves angle brackets in generic function declaration without spaces',
+    'fn foo<T>(x:T):T {\nreturn x;\n}\n',
+    'fn foo<T>(x: T): T {\n    return x;\n}\n'
+);
+
+runCase(
+    'preserves angle brackets in generic type with two params without spaces',
+    'type Map<K,V> {\nlet key:K;\nlet value:V;\n}\n',
+    'type Map<K, V> {\n    let key: K;\n    let value: V;\n}\n'
+);
+
+runCase(
+    'formats explicit generic call :< without extra spaces',
+    'fn main():void {\nlet x=identity:<int>(42);\n}\n',
+    'fn main(): void {\n    let x = identity:<int>(42);\n}\n'
+);
+
+runCase(
+    'formats generic type references in variable declarations',
+    'fn main():void {\nlet m:Map<string,int>;\n}\n',
+    'fn main(): void {\n    let m: Map<string, int>;\n}\n'
+);
+
+runCase(
+    'preserves comparison operators with spaces (not confused with generics)',
+    'fn check(n:int):bool {\nreturn n<10;\n}\n',
+    'fn check(n: int): bool {\n    return n < 10;\n}\n'
+);
+
 console.log('formatter tests passed');
