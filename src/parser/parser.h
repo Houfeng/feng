@@ -158,7 +158,8 @@ typedef enum FengExprKind {
     FENG_EXPR_LAMBDA,
     FENG_EXPR_CAST,
     FENG_EXPR_IF,
-    FENG_EXPR_MATCH
+    FENG_EXPR_MATCH,
+    FENG_EXPR_ARRAY_NEW
 } FengExprKind;
 
 struct FengExpr {
@@ -233,6 +234,11 @@ struct FengExpr {
             size_t branch_count;
             FengBlock *else_block;
         } match_expr;
+        struct {
+            FengTypeRef *element_type;  /* the element type, e.g. MapEntry<K,V> */
+            FengExpr    *size;          /* the size expression n */
+            bool         element_writable; /* true when trailing ! is present */
+        } array_new;
     } as;
 };
 

@@ -283,6 +283,10 @@ typedef struct UserType {
     UserMethod *methods;
     size_t      method_count;
     const FengDecl *decl;
+    bool is_generic_instance;
+    const FengDecl *generic_origin_decl;
+    FengTypeRef **generic_type_args;
+    size_t generic_type_arg_count;
     /* Owning program — set when the type shell is registered while emitting
      * that program. Used by cg_find_user_type to enforce per-program
      * (module / `use`) visibility so two distinct types that happen to share
@@ -522,6 +526,11 @@ typedef struct GenericFn {
     const FengProgram *owner_program;
 } GenericFn;
 
+typedef struct GenericTypeDecl {
+    const FengDecl    *decl;
+    const FengProgram *owner_program;
+} GenericTypeDecl;
+
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
@@ -623,8 +632,9 @@ typedef struct CG {
     GenericFn *generic_fns;
     size_t     generic_fn_count;
     size_t     generic_fn_capacity;
-    /* Registry: generic type declarations (skipped from user_types[]). */
-    const FengDecl **generic_type_decls;
+    /* Registry: open generic type declarations (concrete instances are
+     * registered into user_types[] once their type arguments are known). */
+    GenericTypeDecl *generic_type_decls;
     size_t           generic_type_decl_count;
     size_t           generic_type_decl_capacity;
     /* Per-function emission state when inside a generic function body.
@@ -1059,7 +1069,426 @@ static bool cg_register_generic_type_decl(CG *cg, const FengDecl *decl) {
         cg->generic_type_decls = p;
         cg->generic_type_decl_capacity = cap;
     }
-    cg->generic_type_decls[cg->generic_type_decl_count++] = decl;
+    cg->generic_type_decls[cg->generic_type_decl_count].decl = decl;
+    cg->generic_type_decls[cg->generic_type_decl_count].owner_program = cg->cur_program;
+    cg->generic_type_decl_count++;
+    return true;
+}
+
+typedef struct CGTypeParamScope {
+    const FengTypeParam *first;
+    size_t first_count;
+    const FengTypeParam *second;
+    size_t second_count;
+} CGTypeParamScope;
+
+static bool cg_type_param_scope_contains(const CGTypeParamScope *scope,
+                                         FengSlice name) {
+    if (scope == NULL) return false;
+    for (size_t i = 0; i < scope->first_count; ++i) {
+        if (cg_module_segments_equal(&scope->first[i].name, 1U, &name, 1U)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < scope->second_count; ++i) {
+        if (cg_module_segments_equal(&scope->second[i].name, 1U, &name, 1U)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool cg_type_ref_contains_type_param(const FengTypeRef *ref,
+                                            const CGTypeParamScope *scope) {
+    if (ref == NULL || scope == NULL) return false;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (ref->as.named.segment_count == 1U &&
+                ref->as.named.type_arg_count == 0U &&
+                cg_type_param_scope_contains(scope, ref->as.named.segments[0])) {
+                return true;
+            }
+            for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                if (cg_type_ref_contains_type_param(ref->as.named.type_args[i], scope)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return cg_type_ref_contains_type_param(ref->as.inner, scope);
+    }
+    return false;
+}
+
+static FengTypeRef *cg_type_ref_clone(const FengTypeRef *ref) {
+    if (ref == NULL) return NULL;
+    FengTypeRef *clone = calloc(1U, sizeof *clone);
+    if (!clone) return NULL;
+    clone->token = ref->token;
+    clone->kind = ref->kind;
+    clone->array_element_writable = ref->array_element_writable;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            clone->as.named.segment_count = ref->as.named.segment_count;
+            clone->as.named.type_arg_count = ref->as.named.type_arg_count;
+            if (ref->as.named.segment_count > 0U) {
+                clone->as.named.segments = malloc(sizeof(FengSlice) * ref->as.named.segment_count);
+                if (!clone->as.named.segments) { free(clone); return NULL; }
+                memcpy(clone->as.named.segments, ref->as.named.segments,
+                       sizeof(FengSlice) * ref->as.named.segment_count);
+            }
+            if (ref->as.named.type_arg_count > 0U) {
+                clone->as.named.type_args = calloc(ref->as.named.type_arg_count,
+                                                   sizeof(FengTypeRef *));
+                if (!clone->as.named.type_args) {
+                    free(clone->as.named.segments);
+                    free(clone);
+                    return NULL;
+                }
+                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                    clone->as.named.type_args[i] = cg_type_ref_clone(ref->as.named.type_args[i]);
+                    if (!clone->as.named.type_args[i]) {
+                        for (size_t j = 0; j < i; ++j) free(clone->as.named.type_args[j]);
+                        free(clone->as.named.type_args);
+                        free(clone->as.named.segments);
+                        free(clone);
+                        return NULL;
+                    }
+                }
+            }
+            return clone;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            clone->as.inner = cg_type_ref_clone(ref->as.inner);
+            if (!clone->as.inner) { free(clone); return NULL; }
+            return clone;
+    }
+    free(clone);
+    return NULL;
+}
+
+static void cg_type_ref_free(FengTypeRef *ref) {
+    if (ref == NULL) return;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                cg_type_ref_free(ref->as.named.type_args[i]);
+            }
+            free(ref->as.named.type_args);
+            free(ref->as.named.segments);
+            break;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            cg_type_ref_free(ref->as.inner);
+            break;
+    }
+    free(ref);
+}
+
+static FengTypeRef *cg_type_ref_substitute(const FengTypeRef *ref,
+                                           const FengTypeParam *type_params,
+                                           size_t type_param_count,
+                                           FengTypeRef *const *type_args) {
+    if (ref == NULL) return NULL;
+    if (ref->kind == FENG_TYPE_REF_NAMED &&
+        ref->as.named.segment_count == 1U &&
+        ref->as.named.type_arg_count == 0U) {
+        for (size_t i = 0; i < type_param_count; ++i) {
+            if (cg_module_segments_equal(&ref->as.named.segments[0], 1U,
+                                         &type_params[i].name, 1U)) {
+                return cg_type_ref_clone(type_args[i]);
+            }
+        }
+    }
+
+    FengTypeRef *clone = cg_type_ref_clone(ref);
+    if (!clone) return NULL;
+    if (clone->kind == FENG_TYPE_REF_NAMED) {
+        for (size_t i = 0; i < clone->as.named.type_arg_count; ++i) {
+            FengTypeRef *sub = cg_type_ref_substitute(ref->as.named.type_args[i],
+                                                      type_params,
+                                                      type_param_count,
+                                                      type_args);
+            if (!sub) { cg_type_ref_free(clone); return NULL; }
+            cg_type_ref_free(clone->as.named.type_args[i]);
+            clone->as.named.type_args[i] = sub;
+        }
+    } else if (clone->kind == FENG_TYPE_REF_POINTER ||
+               clone->kind == FENG_TYPE_REF_ARRAY) {
+        FengTypeRef *sub = cg_type_ref_substitute(ref->as.inner,
+                                                  type_params,
+                                                  type_param_count,
+                                                  type_args);
+        if (!sub) { cg_type_ref_free(clone); return NULL; }
+        cg_type_ref_free(clone->as.inner);
+        clone->as.inner = sub;
+    }
+    return clone;
+}
+
+static bool cg_type_ref_equal(const FengTypeRef *left, const FengTypeRef *right) {
+    if (left == right) return true;
+    if (left == NULL || right == NULL || left->kind != right->kind) return false;
+    if (left->kind == FENG_TYPE_REF_ARRAY &&
+        left->array_element_writable != right->array_element_writable) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (left->as.named.segment_count != right->as.named.segment_count ||
+                left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t i = 0; i < left->as.named.segment_count; ++i) {
+                if (!cg_module_segments_equal(&left->as.named.segments[i], 1U,
+                                              &right->as.named.segments[i], 1U)) {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < left->as.named.type_arg_count; ++i) {
+                if (!cg_type_ref_equal(left->as.named.type_args[i],
+                                       right->as.named.type_args[i])) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return cg_type_ref_equal(left->as.inner, right->as.inner);
+    }
+    return false;
+}
+
+static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {
+    if (ref == NULL) { buf_append_cstr(out, "<unknown>"); return; }
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            for (size_t i = 0; i < ref->as.named.segment_count; ++i) {
+                if (i) buf_append_cstr(out, ".");
+                buf_append(out, ref->as.named.segments[i].data,
+                           ref->as.named.segments[i].length);
+            }
+            if (ref->as.named.type_arg_count > 0U) {
+                buf_append_cstr(out, "<");
+                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                    if (i) buf_append_cstr(out, ", ");
+                    cg_append_type_ref_display(out, ref->as.named.type_args[i]);
+                }
+                buf_append_cstr(out, ">");
+            }
+            break;
+        case FENG_TYPE_REF_POINTER:
+            cg_append_type_ref_display(out, ref->as.inner);
+            buf_append_cstr(out, "*");
+            break;
+        case FENG_TYPE_REF_ARRAY:
+            cg_append_type_ref_display(out, ref->as.inner);
+            buf_append_cstr(out, "[]");
+            if (ref->array_element_writable) buf_append_cstr(out, "!");
+            break;
+    }
+}
+
+static bool cg_append_type_ref_symbol(Buf *out, const FengTypeRef *ref) {
+    if (ref == NULL) return false;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            for (size_t i = 0; i < ref->as.named.segment_count; ++i) {
+                char *san = cg_sanitize(ref->as.named.segments[i].data,
+                                        ref->as.named.segments[i].length);
+                if (!san) return false;
+                if (i) buf_append_cstr(out, "__");
+                buf_append_cstr(out, san);
+                free(san);
+            }
+            if (ref->as.named.type_arg_count > 0U) {
+                buf_append_cstr(out, "__G");
+                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                    buf_append_cstr(out, "__");
+                    if (!cg_append_type_ref_symbol(out, ref->as.named.type_args[i])) return false;
+                }
+            }
+            return true;
+        case FENG_TYPE_REF_POINTER:
+            buf_append_cstr(out, "P__");
+            return cg_append_type_ref_symbol(out, ref->as.inner);
+        case FENG_TYPE_REF_ARRAY:
+            buf_append_cstr(out, ref->array_element_writable ? "AW__" : "A__");
+            return cg_append_type_ref_symbol(out, ref->as.inner);
+    }
+    return false;
+}
+
+static const GenericTypeDecl *cg_find_generic_type_decl(CG *cg,
+                                                        const FengTypeRef *ref) {
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U) {
+        return NULL;
+    }
+    const FengSlice name = ref->as.named.segments[0];
+    const GenericTypeDecl *visible = NULL;
+    for (size_t i = 0; i < cg->generic_type_decl_count; ++i) {
+        const GenericTypeDecl *entry = &cg->generic_type_decls[i];
+        const FengDecl *decl = entry->decl;
+        if (decl == NULL || decl->kind != FENG_DECL_TYPE) continue;
+        if (!cg_module_segments_equal(&decl->as.type_decl.name, 1U, &name, 1U)) continue;
+        if (cg->cur_program != NULL && entry->owner_program == cg->cur_program) {
+            return entry;
+        }
+        if (!cg->cur_program || cg_program_can_see(cg->cur_program, entry->owner_program)) {
+            if (visible == NULL) visible = entry;
+        }
+    }
+    return visible;
+}
+
+static const GenericTypeDecl *cg_find_generic_type_decl_by_decl(CG *cg,
+                                                                const FengDecl *decl) {
+    for (size_t i = 0; i < cg->generic_type_decl_count; ++i) {
+        if (cg->generic_type_decls[i].decl == decl) {
+            return &cg->generic_type_decls[i];
+        }
+    }
+    return NULL;
+}
+
+static UserType *cg_find_generic_instance_user_type(CG *cg,
+                                                    const FengDecl *origin_decl,
+                                                    FengTypeRef *const *type_args,
+                                                    size_t type_arg_count) {
+    for (size_t i = 0; i < cg->user_type_count; ++i) {
+        UserType *ut = &cg->user_types[i];
+        if (!ut->is_generic_instance || ut->generic_origin_decl != origin_decl ||
+            ut->generic_type_arg_count != type_arg_count) {
+            continue;
+        }
+        bool same = true;
+        for (size_t arg_index = 0; same && arg_index < type_arg_count; ++arg_index) {
+            same = cg_type_ref_equal(ut->generic_type_args[arg_index],
+                                     type_args[arg_index]);
+        }
+        if (same) return ut;
+    }
+    return NULL;
+}
+
+static UserType *cg_find_generic_instance_user_type_for_ref(CG *cg,
+                                                            const FengTypeRef *ref) {
+    const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
+    if (generic_decl == NULL) return NULL;
+    return cg_find_generic_instance_user_type(cg,
+                                             generic_decl->decl,
+                                             ref->as.named.type_args,
+                                             ref->as.named.type_arg_count);
+}
+
+static bool cg_collect_generic_instances_from_type_ref(CG *cg,
+                                                       const FengTypeRef *ref,
+                                                       CGTypeParamScope scope);
+
+static bool cg_register_generic_type_instance_shell(CG *cg,
+                                                    const GenericTypeDecl *generic_decl,
+                                                    FengTypeRef *const *type_args,
+                                                    size_t type_arg_count,
+                                                    FengToken blame) {
+    if (generic_decl == NULL || generic_decl->decl == NULL) return true;
+    const FengDecl *decl = generic_decl->decl;
+    if (decl->kind != FENG_DECL_TYPE) return true;
+    if (type_arg_count != decl->as.type_decl.type_param_count) {
+        return cg_fail(cg, blame,
+                       "codegen: generic type '%.*s' expects %zu type argument(s), got %zu",
+                       (int)decl->as.type_decl.name.length,
+                       decl->as.type_decl.name.data,
+                       decl->as.type_decl.type_param_count,
+                       type_arg_count);
+    }
+    if (cg_find_generic_instance_user_type(cg, decl, type_args, type_arg_count) != NULL) {
+        return true;
+    }
+    if (cg->user_type_count + 1 > cg->user_type_capacity) {
+        size_t cap = cg->user_type_capacity ? cg->user_type_capacity * 2 : 4;
+        void *p = realloc(cg->user_types, cap * sizeof *cg->user_types);
+        if (!p) return false;
+        cg->user_types = p;
+        cg->user_type_capacity = cap;
+    }
+
+    UserType *t = &cg->user_types[cg->user_type_count++];
+    memset(t, 0, sizeof *t);
+    t->owner_program = generic_decl->owner_program;
+    t->decl = decl;
+    t->is_generic_instance = true;
+    t->generic_origin_decl = decl;
+    t->generic_type_arg_count = type_arg_count;
+    t->generic_type_args = type_arg_count ? calloc(type_arg_count, sizeof(FengTypeRef *)) : NULL;
+    if (type_arg_count && !t->generic_type_args) return false;
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        t->generic_type_args[i] = cg_type_ref_clone(type_args[i]);
+        if (!t->generic_type_args[i]) return false;
+    }
+
+    Buf display; buf_init(&display);
+    buf_append(&display, decl->as.type_decl.name.data, decl->as.type_decl.name.length);
+    buf_append_cstr(&display, "<");
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        if (i) buf_append_cstr(&display, ", ");
+        cg_append_type_ref_display(&display, type_args[i]);
+    }
+    buf_append_cstr(&display, ">");
+    t->feng_name = display.data;
+
+    Buf symbol; buf_init(&symbol);
+    char *base_san = cg_sanitize(decl->as.type_decl.name.data,
+                                 decl->as.type_decl.name.length);
+    if (!base_san) return false;
+    buf_append_cstr(&symbol, base_san);
+    buf_append_cstr(&symbol, "__G");
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        buf_append_cstr(&symbol, "__");
+        if (!cg_append_type_ref_symbol(&symbol, type_args[i])) {
+            free(base_san);
+            buf_free(&symbol);
+            return false;
+        }
+    }
+
+    Buf struct_name; buf_init(&struct_name);
+    char *owner_mangle = cg_module_mangle(generic_decl->owner_program->module_segments,
+                                          generic_decl->owner_program->module_segment_count);
+    if (!owner_mangle) { free(base_san); buf_free(&symbol); return false; }
+    buf_append_fmt(&struct_name, "Feng__%s__%s", owner_mangle, symbol.data);
+    t->c_struct_name = struct_name.data;
+
+    Buf desc_name; buf_init(&desc_name);
+    buf_append_fmt(&desc_name, "FengTypeDesc__%s__%s", owner_mangle, symbol.data);
+    t->c_desc_name = desc_name.data;
+
+    Buf zero_name; buf_init(&zero_name);
+    buf_append_fmt(&zero_name, "%s__default_zero", t->c_struct_name);
+    t->c_default_zero_name = zero_name.data;
+
+    free(owner_mangle);
+    free(base_san);
+    buf_free(&symbol);
+    if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name) {
+        return false;
+    }
+
+    CGTypeParamScope empty_scope = {0};
+    for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *member = decl->as.type_decl.members[i];
+        if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+            FengTypeRef *sub = cg_type_ref_substitute(member->as.field.type,
+                                                      decl->as.type_decl.type_params,
+                                                      decl->as.type_decl.type_param_count,
+                                                      type_args);
+            if (!sub) return false;
+            bool ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+            cg_type_ref_free(sub);
+            if (!ok) return false;
+        }
+    }
     return true;
 }
 
@@ -1076,6 +1505,19 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 "codegen: qualified type names not supported in Phase 1A");
         }
         const FengSlice *seg = &ref->as.named.segments[0];
+        if (ref->as.named.type_arg_count > 0U) {
+            UserType *generic_instance = cg_find_generic_instance_user_type_for_ref(cg, ref);
+            if (generic_instance != NULL) {
+                CGType *t = cgtype_new(CG_TYPE_OBJECT);
+                if (!t) return false;
+                t->user = generic_instance;
+                *out_type = t;
+                return true;
+            }
+            return cg_fail(cg, ref->token,
+                "codegen: generic type instance '%.*s<...>' was not registered",
+                (int)seg->length, seg->data);
+        }
         /* G6: when inside a generic function body, check type parameter names
          * first so they shadow any same-named types in scope. */
         if (cg->in_generic_fn && ref->as.named.type_arg_count == 0) {
@@ -1132,6 +1574,25 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
     }
     return cg_fail(cg, ref->token,
         "codegen: pointer types not supported in Phase 1A");
+}
+
+static bool cg_resolve_type_for_user_type_member(CG *cg,
+                                                 const UserType *owner,
+                                                 const FengTypeRef *ref,
+                                                 const FengToken *fallback,
+                                                 CGType **out_type) {
+    if (owner == NULL || !owner->is_generic_instance) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+    FengTypeRef *substituted = cg_type_ref_substitute(
+        ref,
+        owner->generic_origin_decl->as.type_decl.type_params,
+        owner->generic_origin_decl->as.type_decl.type_param_count,
+        owner->generic_type_args);
+    if (!substituted) return false;
+    bool ok = cg_resolve_type(cg, substituted, fallback, out_type);
+    cg_type_ref_free(substituted);
+    return ok;
 }
 
 /* ===================== string literal cache ===================== */
@@ -1346,7 +1807,8 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
             uf->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
             uf->c_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
             if (!uf->feng_name || !uf->c_name) return false;
-            if (!cg_resolve_type(cg, m->as.field.type, &m->token, &uf->type)) return false;
+            if (!cg_resolve_type_for_user_type_member(cg, t, m->as.field.type,
+                                                      &m->token, &uf->type)) return false;
             if (m->as.field.initializer) {
                 return cg_fail(cg, m->token,
                     "codegen: field default initializers not yet supported in Phase 1A");
@@ -1366,12 +1828,15 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
             um->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
             um->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
             for (size_t pi = 0; pi < sig->param_count; pi++) {
-                if (!cg_resolve_type(cg, sig->params[pi].type, &sig->params[pi].token,
-                                     &um->param_types[pi])) return false;
+                if (!cg_resolve_type_for_user_type_member(cg, t,
+                                                          sig->params[pi].type,
+                                                          &sig->params[pi].token,
+                                                          &um->param_types[pi])) return false;
                 um->param_names[pi] = strndup(sig->params[pi].name.data,
                                               sig->params[pi].name.length);
             }
-            if (!cg_resolve_type(cg, sig->return_type, &sig->token, &um->return_type)) {
+            if (!cg_resolve_type_for_user_type_member(cg, t, sig->return_type,
+                                                      &sig->token, &um->return_type)) {
                 return false;
             }
             um->c_name = cg_append_param_suffix(um->c_name,
@@ -2639,6 +3104,37 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     const FengSlice name = e->as.call.callee->as.identifier;
 
+    if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
+        rc->owner_type_decl != NULL &&
+        rc->owner_type_decl->kind == FENG_DECL_TYPE &&
+        rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
+        UserType *ut = cg_find_generic_instance_user_type(
+            cg,
+            rc->owner_type_decl,
+            e->as.call.explicit_type_args,
+            e->as.call.explicit_type_arg_count);
+        if (ut == NULL) {
+            return cg_fail(cg, e->token,
+                "codegen: generic type constructor instance for '%.*s' was not registered",
+                (int)name.length, name.data);
+        }
+        if (e->as.call.arg_count != 0) {
+            return cg_fail(cg, e->token,
+                "codegen: type '%s' has no user-defined constructor; use object literal syntax",
+                ut->feng_name);
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b,
+            "((struct %s *)feng_object_new(&%s))",
+            ut->c_struct_name, ut->c_desc_name);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_OBJECT);
+        if (!out->c_expr || !out->type) return false;
+        out->type->user = ut;
+        out->owns_ref = true;
+        return true;
+    }
+
     /* Default no-arg constructor for a user type: T() */
     {
         const UserType *ut = cg_find_user_type(cg, name.data, name.length);
@@ -3010,6 +3506,97 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
 
 static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     return cg_emit_array_literal_typed(cg, e, NULL, out);
+}
+
+static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+    /* Resolve element type. */
+    CGType *elem = NULL;
+    if (!cg_resolve_type(cg, e->as.array_new.element_type, &e->token, &elem)) return false;
+
+    /* Emit size expression. */
+    ExprResult size_res;
+    if (!cg_emit_expr(cg, e->as.array_new.size, &size_res)) {
+        cgtype_free(elem);
+        return false;
+    }
+    /* Materialise size into a size_t local so it is evaluated once. */
+    char *size_tmp = cg_fresh_temp(cg, "_n");
+    if (!size_tmp) {
+        er_free(&size_res); cgtype_free(elem);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    buf_append_fmt(cg->cur_body,
+        "    size_t %s = (size_t)(%s);\n", size_tmp, size_res.c_expr);
+    er_free(&size_res);
+
+    char *arr_tmp  = cg_fresh_temp(cg, "_arr");
+    char *elem_cty = cg_ctype_dup(elem);
+    char *desc_expr = cg_array_element_descriptor(elem);
+    if (!arr_tmp || !elem_cty || !desc_expr) {
+        free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+        cgtype_free(elem);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+
+    bool elem_managed   = cgtype_is_managed(elem);
+    bool elem_aggregate = cgtype_is_aggregate(elem);
+    const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+    if (elem_aggregate && agg_desc == NULL) {
+        free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+        cgtype_free(elem);
+        return cg_fail(cg, e->token,
+            "codegen: missing aggregate descriptor for array-new element type");
+    }
+
+    if (elem_aggregate) {
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new_kinded("
+            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), %s);\n",
+            arr_tmp, agg_desc, elem_cty, size_tmp);
+    } else if (elem_managed && elem->kind == CG_TYPE_OBJECT && elem->user &&
+               elem->user->c_default_zero_name) {
+        /* Managed object element: allocate the array of pointers, then
+         * fill each slot with a freshly default-zero'd object so that
+         * out-of-bounds / uninitialized access fails visibly rather than
+         * silently dereferencing NULL. */
+        char *slots_tmp = cg_fresh_temp(cg, "_slots");
+        char *idx_tmp   = cg_fresh_temp(cg, "_i");
+        if (!slots_tmp || !idx_tmp) {
+            free(slots_tmp); free(idx_tmp);
+            free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+            cgtype_free(elem);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
+            arr_tmp, desc_expr, elem_cty,
+            elem_managed ? "true" : "false", size_tmp);
+        buf_append_fmt(cg->cur_body,
+            "    %s *%s = (%s *)feng_array_data(%s);\n",
+            elem_cty, slots_tmp, elem_cty, arr_tmp);
+        buf_append_fmt(cg->cur_body,
+            "    for (size_t %s = 0; %s < %s; ++%s) "
+            "%s[%s] = %s();\n",
+            idx_tmp, idx_tmp, size_tmp, idx_tmp,
+            slots_tmp, idx_tmp, elem->user->c_default_zero_name);
+        free(slots_tmp); free(idx_tmp);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
+            arr_tmp, desc_expr, elem_cty,
+            elem_managed ? "true" : "false", size_tmp);
+    }
+
+    free(size_tmp); free(elem_cty); free(desc_expr);
+
+    out->c_expr = strdup(arr_tmp);
+    free(arr_tmp);
+    out->type = cgtype_new(CG_TYPE_ARRAY);
+    if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
+    out->type->element = elem;
+    out->owns_ref = true;
+    return true;
 }
 
 static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -3500,6 +4087,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_MEMBER:        ok = cg_emit_member(cg, e, out); break;
         case FENG_EXPR_OBJECT_LITERAL:ok = cg_emit_object_literal(cg, e, out); break;
         case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
+        case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
         case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
         case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
@@ -6296,6 +6884,404 @@ static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
     return true;
 }
 
+static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
+                                                   CGTypeParamScope scope);
+static bool cg_collect_generic_instances_from_stmt(CG *cg, const FengStmt *stmt,
+                                                   CGTypeParamScope scope);
+static bool cg_collect_generic_instances_from_block(CG *cg, const FengBlock *block,
+                                                    CGTypeParamScope scope);
+
+static bool cg_collect_generic_instances_from_type_ref(CG *cg,
+                                                       const FengTypeRef *ref,
+                                                       CGTypeParamScope scope) {
+    if (ref == NULL) return true;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                               ref->as.named.type_args[i],
+                                                               scope)) {
+                    return false;
+                }
+            }
+            if (ref->as.named.type_arg_count > 0U &&
+                !cg_type_ref_contains_type_param(ref, &scope)) {
+                const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
+                if (generic_decl != NULL) {
+                    return cg_register_generic_type_instance_shell(cg,
+                                                                  generic_decl,
+                                                                  ref->as.named.type_args,
+                                                                  ref->as.named.type_arg_count,
+                                                                  ref->token);
+                }
+            }
+            return true;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return cg_collect_generic_instances_from_type_ref(cg, ref->as.inner, scope);
+    }
+    return true;
+}
+
+static bool cg_collect_generic_instances_from_binding(CG *cg,
+                                                      const FengBinding *binding,
+                                                      CGTypeParamScope scope) {
+    return cg_collect_generic_instances_from_type_ref(cg, binding->type, scope) &&
+           cg_collect_generic_instances_from_expr(cg, binding->initializer, scope);
+}
+
+static bool cg_collect_generic_instances_from_callable(CG *cg,
+                                                       const FengCallableSignature *callable,
+                                                       CGTypeParamScope outer_scope) {
+    CGTypeParamScope scope = outer_scope;
+    scope.second = callable->type_params;
+    scope.second_count = callable->type_param_count;
+    for (size_t i = 0; i < callable->param_count; ++i) {
+        if (!cg_collect_generic_instances_from_type_ref(cg, callable->params[i].type, scope)) {
+            return false;
+        }
+    }
+    return cg_collect_generic_instances_from_type_ref(cg, callable->return_type, scope) &&
+           cg_collect_generic_instances_from_block(cg, callable->body, scope);
+}
+
+static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
+                                                   CGTypeParamScope scope) {
+    if (expr == NULL) return true;
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (size_t i = 0; i < expr->as.array_literal.count; ++i) {
+                if (!cg_collect_generic_instances_from_expr(cg,
+                                                           expr->as.array_literal.items[i],
+                                                           scope)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!cg_collect_generic_instances_from_expr(cg, expr->as.object_literal.target, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.object_literal.field_count; ++i) {
+                if (!cg_collect_generic_instances_from_expr(cg,
+                                                           expr->as.object_literal.fields[i].value,
+                                                           scope)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_CALL:
+            if (expr->as.call.has_explicit_type_args) {
+                for (size_t i = 0; i < expr->as.call.explicit_type_arg_count; ++i) {
+                    if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                                   expr->as.call.explicit_type_args[i],
+                                                                   scope)) {
+                        return false;
+                    }
+                }
+            }
+            if (expr->as.call.resolved_callable.kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
+                expr->as.call.resolved_callable.owner_type_decl != NULL &&
+                expr->as.call.resolved_callable.owner_type_decl->kind == FENG_DECL_TYPE &&
+                expr->as.call.resolved_callable.owner_type_decl->as.type_decl.type_param_count > 0U &&
+                expr->as.call.has_explicit_type_args) {
+                const GenericTypeDecl *generic_decl =
+                    cg_find_generic_type_decl_by_decl(cg,
+                        expr->as.call.resolved_callable.owner_type_decl);
+                FengTypeRef temp_ref;
+                FengSlice temp_segment;
+                memset(&temp_ref, 0, sizeof temp_ref);
+                if (expr->as.call.callee != NULL &&
+                    expr->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
+                    temp_segment = expr->as.call.callee->as.identifier;
+                } else {
+                    temp_segment = expr->as.call.resolved_callable.owner_type_decl->as.type_decl.name;
+                }
+                temp_ref.token = expr->token;
+                temp_ref.kind = FENG_TYPE_REF_NAMED;
+                temp_ref.as.named.segments = &temp_segment;
+                temp_ref.as.named.segment_count = 1U;
+                temp_ref.as.named.type_args = expr->as.call.explicit_type_args;
+                temp_ref.as.named.type_arg_count = expr->as.call.explicit_type_arg_count;
+                if (!cg_type_ref_contains_type_param(&temp_ref, &scope) && generic_decl != NULL) {
+                    if (!cg_register_generic_type_instance_shell(cg,
+                                                                generic_decl,
+                                                                expr->as.call.explicit_type_args,
+                                                                expr->as.call.explicit_type_arg_count,
+                                                                expr->token)) {
+                        return false;
+                    }
+                }
+            }
+            if (!cg_collect_generic_instances_from_expr(cg, expr->as.call.callee, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.call.arg_count; ++i) {
+                if (!cg_collect_generic_instances_from_expr(cg, expr->as.call.args[i], scope)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_MEMBER:
+            return cg_collect_generic_instances_from_expr(cg, expr->as.member.object, scope);
+        case FENG_EXPR_INDEX:
+            return cg_collect_generic_instances_from_expr(cg, expr->as.index.object, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, expr->as.index.index, scope);
+        case FENG_EXPR_UNARY:
+            return cg_collect_generic_instances_from_expr(cg, expr->as.unary.operand, scope);
+        case FENG_EXPR_BINARY:
+            return cg_collect_generic_instances_from_expr(cg, expr->as.binary.left, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, expr->as.binary.right, scope);
+        case FENG_EXPR_LAMBDA:
+            for (size_t i = 0; i < expr->as.lambda.param_count; ++i) {
+                if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                               expr->as.lambda.params[i].type,
+                                                               scope)) {
+                    return false;
+                }
+            }
+            return expr->as.lambda.is_block_body
+                       ? cg_collect_generic_instances_from_block(cg, expr->as.lambda.body_block, scope)
+                       : cg_collect_generic_instances_from_expr(cg, expr->as.lambda.body, scope);
+        case FENG_EXPR_CAST:
+            return cg_collect_generic_instances_from_type_ref(cg, expr->as.cast.type, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, expr->as.cast.value, scope);
+        case FENG_EXPR_IF:
+            return cg_collect_generic_instances_from_expr(cg, expr->as.if_expr.condition, scope) &&
+                   cg_collect_generic_instances_from_block(cg, expr->as.if_expr.then_block, scope) &&
+                   cg_collect_generic_instances_from_block(cg, expr->as.if_expr.else_block, scope);
+        case FENG_EXPR_MATCH:
+            if (!cg_collect_generic_instances_from_expr(cg, expr->as.match_expr.target, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.match_expr.branch_count; ++i) {
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[i];
+                for (size_t j = 0; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_collect_generic_instances_from_expr(cg, label->value, scope) ||
+                        !cg_collect_generic_instances_from_expr(cg, label->range_low, scope) ||
+                        !cg_collect_generic_instances_from_expr(cg, label->range_high, scope)) {
+                        return false;
+                    }
+                }
+                if (!cg_collect_generic_instances_from_block(cg, branch->body, scope)) {
+                    return false;
+                }
+            }
+            return cg_collect_generic_instances_from_block(cg, expr->as.match_expr.else_block, scope);
+        case FENG_EXPR_ARRAY_NEW:
+            return cg_collect_generic_instances_from_type_ref(cg,
+                                                             expr->as.array_new.element_type,
+                                                             scope) &&
+                   cg_collect_generic_instances_from_expr(cg, expr->as.array_new.size, scope);
+    }
+    return true;
+}
+
+static bool cg_collect_generic_instances_from_stmt(CG *cg, const FengStmt *stmt,
+                                                   CGTypeParamScope scope) {
+    if (stmt == NULL) return true;
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return cg_collect_generic_instances_from_block(cg, stmt->as.block, scope);
+        case FENG_STMT_BINDING:
+            return cg_collect_generic_instances_from_binding(cg, &stmt->as.binding, scope);
+        case FENG_STMT_ASSIGN:
+            return cg_collect_generic_instances_from_expr(cg, stmt->as.assign.target, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, stmt->as.assign.value, scope);
+        case FENG_STMT_EXPR:
+            return cg_collect_generic_instances_from_expr(cg, stmt->as.expr, scope);
+        case FENG_STMT_IF:
+            for (size_t i = 0; i < stmt->as.if_stmt.clause_count; ++i) {
+                if (!cg_collect_generic_instances_from_expr(cg,
+                                                           stmt->as.if_stmt.clauses[i].condition,
+                                                           scope) ||
+                    !cg_collect_generic_instances_from_block(cg,
+                                                            stmt->as.if_stmt.clauses[i].block,
+                                                            scope)) {
+                    return false;
+                }
+            }
+            return cg_collect_generic_instances_from_block(cg, stmt->as.if_stmt.else_block, scope);
+        case FENG_STMT_MATCH:
+            if (!cg_collect_generic_instances_from_expr(cg, stmt->as.match_stmt.target, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < stmt->as.match_stmt.branch_count; ++i) {
+                const FengMatchBranch *branch = &stmt->as.match_stmt.branches[i];
+                for (size_t j = 0; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_collect_generic_instances_from_expr(cg, label->value, scope) ||
+                        !cg_collect_generic_instances_from_expr(cg, label->range_low, scope) ||
+                        !cg_collect_generic_instances_from_expr(cg, label->range_high, scope)) {
+                        return false;
+                    }
+                }
+                if (!cg_collect_generic_instances_from_block(cg, branch->body, scope)) return false;
+            }
+            return cg_collect_generic_instances_from_block(cg, stmt->as.match_stmt.else_block, scope);
+        case FENG_STMT_WHILE:
+            return cg_collect_generic_instances_from_expr(cg, stmt->as.while_stmt.condition, scope) &&
+                   cg_collect_generic_instances_from_block(cg, stmt->as.while_stmt.body, scope);
+        case FENG_STMT_FOR:
+            return cg_collect_generic_instances_from_stmt(cg, stmt->as.for_stmt.init, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, stmt->as.for_stmt.condition, scope) &&
+                   cg_collect_generic_instances_from_stmt(cg, stmt->as.for_stmt.update, scope) &&
+                   cg_collect_generic_instances_from_binding(cg, &stmt->as.for_stmt.iter_binding, scope) &&
+                   cg_collect_generic_instances_from_expr(cg, stmt->as.for_stmt.iter_expr, scope) &&
+                   cg_collect_generic_instances_from_block(cg, stmt->as.for_stmt.body, scope);
+        case FENG_STMT_TRY:
+            return cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.try_block, scope) &&
+                   cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.catch_block, scope) &&
+                   cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.finally_block, scope);
+        case FENG_STMT_RETURN:
+            return cg_collect_generic_instances_from_expr(cg, stmt->as.return_value, scope);
+        case FENG_STMT_THROW:
+            return cg_collect_generic_instances_from_expr(cg, stmt->as.throw_value, scope);
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+    return true;
+}
+
+static bool cg_collect_generic_instances_from_block(CG *cg, const FengBlock *block,
+                                                    CGTypeParamScope scope) {
+    if (block == NULL) return true;
+    for (size_t i = 0; i < block->statement_count; ++i) {
+        if (!cg_collect_generic_instances_from_stmt(cg, block->statements[i], scope)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *prog) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
+    for (size_t i = 0; i < prog->declaration_count; ++i) {
+        const FengDecl *decl = prog->declarations[i];
+        CGTypeParamScope scope = {0};
+        switch (decl->kind) {
+            case FENG_DECL_GLOBAL_BINDING:
+                if (!cg_collect_generic_instances_from_binding(cg, &decl->as.binding, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
+                break;
+            case FENG_DECL_TYPE:
+                scope.first = decl->as.type_decl.type_params;
+                scope.first_count = decl->as.type_decl.type_param_count;
+                for (size_t spec_index = 0; spec_index < decl->as.type_decl.declared_spec_count; ++spec_index) {
+                    if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                                   decl->as.type_decl.declared_specs[spec_index],
+                                                                   scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
+                }
+                for (size_t member_index = 0; member_index < decl->as.type_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = decl->as.type_decl.members[member_index];
+                    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                        if (!cg_collect_generic_instances_from_type_ref(cg, member->as.field.type, scope) ||
+                            !cg_collect_generic_instances_from_expr(cg, member->as.field.initializer, scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
+                               member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                        if (!cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    }
+                }
+                break;
+            case FENG_DECL_SPEC:
+                scope.first = decl->as.spec_decl.type_params;
+                scope.first_count = decl->as.spec_decl.type_param_count;
+                for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
+                    if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                                   decl->as.spec_decl.parent_specs[parent_index],
+                                                                   scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
+                }
+                if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                    for (size_t member_index = 0; member_index < decl->as.spec_decl.as.object.member_count; ++member_index) {
+                        const FengTypeMember *member = decl->as.spec_decl.as.object.members[member_index];
+                        if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                            if (!cg_collect_generic_instances_from_type_ref(cg, member->as.field.type, scope)) {
+                                cg->cur_program = NULL;
+                                return false;
+                            }
+                        } else if (member->kind == FENG_TYPE_MEMBER_METHOD) {
+                            if (!cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
+                                cg->cur_program = NULL;
+                                return false;
+                            }
+                        }
+                    }
+                } else {
+                    for (size_t param_index = 0; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
+                        if (!cg_collect_generic_instances_from_type_ref(cg,
+                            decl->as.spec_decl.as.callable.params[param_index].type,
+                            scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    }
+                    if (!cg_collect_generic_instances_from_type_ref(cg,
+                        decl->as.spec_decl.as.callable.return_type,
+                        scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
+                }
+                break;
+            case FENG_DECL_FIT:
+                if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.target, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
+                for (size_t spec_index = 0; spec_index < decl->as.fit_decl.spec_count; ++spec_index) {
+                    if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.specs[spec_index], scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
+                }
+                for (size_t member_index = 0; member_index < decl->as.fit_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+                    if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                        !cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
+                }
+                break;
+            case FENG_DECL_FUNCTION:
+                if (!cg_collect_generic_instances_from_callable(cg, &decl->as.function_decl, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
+                break;
+        }
+    }
+    cg->cur_program = NULL;
+    return true;
+}
+
 static bool cg_pass_register_fit_shells(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
@@ -6437,6 +7423,11 @@ static bool cg_emit_all_programs(CG *cg,
     /* Pass 1 + 1.5: register type and spec shells per program. */
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_register_type_shells(cg, programs[p])) return false;
+    }
+    /* Pass 1.7: collect concrete generic type instances referenced by source
+     * types and expressions, then register them as normal UserType shells. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_collect_generic_type_instances(cg, programs[p])) return false;
     }
     /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
      * every shell, regardless of owning program). cur_program is pinned to
@@ -7260,6 +8251,10 @@ static void cg_dispose(CG *cg) {
         free(ut->c_release_children_name);
         free(ut->c_finalizer_name);
         free(ut->c_default_zero_name);
+        for (size_t j = 0; j < ut->generic_type_arg_count; ++j) {
+            cg_type_ref_free(ut->generic_type_args[j]);
+        }
+        free(ut->generic_type_args);
         for (size_t j = 0; j < ut->field_count; j++) {
             free(ut->fields[j].feng_name);
             free(ut->fields[j].c_name);

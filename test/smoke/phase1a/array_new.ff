@@ -1,0 +1,30 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+/* Simple non-generic aggregate type. */
+type Counter {
+    var value: i32;
+}
+
+fn main(args: string[]) {
+    /* Non-generic array-new: Counter[n]! allocates n zero-initialized Counters. */
+    let counters: Counter[]! = Counter[3]!;
+
+    counters[0].value = 10;
+    counters[1].value = 20;
+
+    if counters[0].value == 10 {
+        puts("counter-0-ok");
+    } else {
+        puts("counter-0-bad");
+    }
+    if counters[1].value == 20 {
+        puts("counter-1-ok");
+    } else {
+        puts("counter-1-bad");
+    }
+
+    puts("array-new-ok");
+}

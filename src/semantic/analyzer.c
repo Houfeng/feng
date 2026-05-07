@@ -371,8 +371,12 @@ static void free_synthetic_type_ref(FengTypeRef *type_ref) {
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
+            for (size_t arg_index = 0U;
+                 arg_index < type_ref->as.named.type_arg_count;
+                 ++arg_index) {
+                free_synthetic_type_ref(type_ref->as.named.type_args[arg_index]);
+            }
             free(type_ref->as.named.segments);
-            /* synthetic type refs never carry type_args, but free defensively */
             free(type_ref->as.named.type_args);
             break;
 
@@ -643,9 +647,78 @@ static char *format_type_ref_name(const FengTypeRef *type_ref) {
     }
 
     switch (type_ref->kind) {
-        case FENG_TYPE_REF_NAMED:
-            return format_module_name(type_ref->as.named.segments,
-                                      type_ref->as.named.segment_count);
+        case FENG_TYPE_REF_NAMED: {
+            char *base_name = format_module_name(type_ref->as.named.segments,
+                                                 type_ref->as.named.segment_count);
+            char **arg_names;
+            size_t total_length;
+            size_t offset;
+            if (base_name == NULL) {
+                return NULL;
+            }
+            if (type_ref->as.named.type_arg_count == 0U) {
+                return base_name;
+            }
+
+            arg_names = (char **)calloc(type_ref->as.named.type_arg_count,
+                                        sizeof(char *));
+            if (arg_names == NULL) {
+                free(base_name);
+                return NULL;
+            }
+            total_length = strlen(base_name) + 2U;
+            for (size_t arg_index = 0U;
+                 arg_index < type_ref->as.named.type_arg_count;
+                 ++arg_index) {
+                if (arg_index > 0U) {
+                    total_length += 2U;
+                }
+                arg_names[arg_index] =
+                    format_type_ref_name(type_ref->as.named.type_args[arg_index]);
+                if (arg_names[arg_index] == NULL) {
+                    for (size_t free_index = 0U; free_index < arg_index; ++free_index) {
+                        free(arg_names[free_index]);
+                    }
+                    free(arg_names);
+                    free(base_name);
+                    return NULL;
+                }
+                total_length += strlen(arg_names[arg_index]);
+            }
+            buffer = (char *)malloc(total_length + 1U);
+            if (buffer == NULL) {
+                for (size_t free_index = 0U;
+                     free_index < type_ref->as.named.type_arg_count;
+                     ++free_index) {
+                    free(arg_names[free_index]);
+                }
+                free(arg_names);
+                free(base_name);
+                return NULL;
+            }
+            offset = 0U;
+            inner_length = strlen(base_name);
+            memcpy(buffer + offset, base_name, inner_length);
+            offset += inner_length;
+            buffer[offset++] = '<';
+            for (size_t arg_index = 0U;
+                 arg_index < type_ref->as.named.type_arg_count;
+                 ++arg_index) {
+                if (arg_index > 0U) {
+                    buffer[offset++] = ',';
+                    buffer[offset++] = ' ';
+                }
+                inner_length = strlen(arg_names[arg_index]);
+                memcpy(buffer + offset, arg_names[arg_index], inner_length);
+                offset += inner_length;
+                free(arg_names[arg_index]);
+            }
+            buffer[offset++] = '>';
+            buffer[offset] = '\0';
+            free(arg_names);
+            free(base_name);
+            return buffer;
+        }
 
         case FENG_TYPE_REF_POINTER:
             inner_name = format_type_ref_name(type_ref->as.inner);
@@ -794,8 +867,17 @@ static bool type_ref_equals(const FengTypeRef *left, const FengTypeRef *right) {
             if (left->as.named.segment_count != right->as.named.segment_count) {
                 return false;
             }
+            if (left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
             for (index = 0U; index < left->as.named.segment_count; ++index) {
                 if (!slice_equals(left->as.named.segments[index], right->as.named.segments[index])) {
+                    return false;
+                }
+            }
+            for (index = 0U; index < left->as.named.type_arg_count; ++index) {
+                if (!type_ref_equals(left->as.named.type_args[index],
+                                     right->as.named.type_args[index])) {
                     return false;
                 }
             }
@@ -1758,19 +1840,37 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             clone->as.named.segment_count = type_ref->as.named.segment_count;
-            if (type_ref->as.named.segment_count == 0U) {
-                return clone;
+            clone->as.named.type_arg_count = type_ref->as.named.type_arg_count;
+            if (type_ref->as.named.segment_count > 0U) {
+                clone->as.named.segments =
+                    (FengSlice *)malloc(sizeof(FengSlice) * type_ref->as.named.segment_count);
+                if (clone->as.named.segments == NULL) {
+                    free(clone);
+                    return NULL;
+                }
+                memcpy(clone->as.named.segments,
+                       type_ref->as.named.segments,
+                       sizeof(FengSlice) * type_ref->as.named.segment_count);
             }
-
-            clone->as.named.segments =
-                (FengSlice *)malloc(sizeof(FengSlice) * type_ref->as.named.segment_count);
-            if (clone->as.named.segments == NULL) {
-                free(clone);
-                return NULL;
+            if (type_ref->as.named.type_arg_count > 0U) {
+                clone->as.named.type_args =
+                    (FengTypeRef **)calloc(type_ref->as.named.type_arg_count,
+                                           sizeof(FengTypeRef *));
+                if (clone->as.named.type_args == NULL) {
+                    free_synthetic_type_ref(clone);
+                    return NULL;
+                }
+                for (size_t arg_index = 0U;
+                     arg_index < type_ref->as.named.type_arg_count;
+                     ++arg_index) {
+                    clone->as.named.type_args[arg_index] =
+                        clone_type_ref_for_inference(type_ref->as.named.type_args[arg_index]);
+                    if (clone->as.named.type_args[arg_index] == NULL) {
+                        free_synthetic_type_ref(clone);
+                        return NULL;
+                    }
+                }
             }
-            memcpy(clone->as.named.segments,
-                   type_ref->as.named.segments,
-                   sizeof(FengSlice) * type_ref->as.named.segment_count);
             return clone;
 
         case FENG_TYPE_REF_POINTER:
@@ -1786,6 +1886,129 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
 
     free(clone);
     return NULL;
+}
+
+static FengTypeRef *clone_type_ref_substituting_type_params(
+    const FengTypeRef *type_ref,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    FengTypeRef *const *type_args) {
+    FengTypeRef *clone;
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+
+    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U &&
+        type_ref->as.named.type_arg_count == 0U) {
+        for (size_t param_index = 0U;
+             param_index < type_param_count;
+             ++param_index) {
+            if (slice_equals(type_ref->as.named.segments[0],
+                             type_params[param_index].name)) {
+                return clone_type_ref_for_inference(type_args[param_index]);
+            }
+        }
+    }
+
+    clone = (FengTypeRef *)calloc(1U, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->token = type_ref->token;
+    clone->kind = type_ref->kind;
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            clone->as.named.segment_count = type_ref->as.named.segment_count;
+            clone->as.named.type_arg_count = type_ref->as.named.type_arg_count;
+            if (type_ref->as.named.segment_count > 0U) {
+                clone->as.named.segments =
+                    (FengSlice *)malloc(sizeof(FengSlice) * type_ref->as.named.segment_count);
+                if (clone->as.named.segments == NULL) {
+                    free(clone);
+                    return NULL;
+                }
+                memcpy(clone->as.named.segments,
+                       type_ref->as.named.segments,
+                       sizeof(FengSlice) * type_ref->as.named.segment_count);
+            }
+            if (type_ref->as.named.type_arg_count > 0U) {
+                clone->as.named.type_args =
+                    (FengTypeRef **)calloc(type_ref->as.named.type_arg_count,
+                                           sizeof(FengTypeRef *));
+                if (clone->as.named.type_args == NULL) {
+                    free_synthetic_type_ref(clone);
+                    return NULL;
+                }
+                for (size_t arg_index = 0U;
+                     arg_index < type_ref->as.named.type_arg_count;
+                     ++arg_index) {
+                    clone->as.named.type_args[arg_index] =
+                        clone_type_ref_substituting_type_params(
+                            type_ref->as.named.type_args[arg_index],
+                            type_params,
+                            type_param_count,
+                            type_args);
+                    if (clone->as.named.type_args[arg_index] == NULL) {
+                        free_synthetic_type_ref(clone);
+                        return NULL;
+                    }
+                }
+            }
+            return clone;
+
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            clone->array_element_writable = type_ref->array_element_writable;
+            clone->as.inner = clone_type_ref_substituting_type_params(
+                type_ref->as.inner,
+                type_params,
+                type_param_count,
+                type_args);
+            if (clone->as.inner == NULL) {
+                free(clone);
+                return NULL;
+            }
+            return clone;
+    }
+
+    free(clone);
+    return NULL;
+}
+
+static const FengTypeRef *substitute_type_ref_for_owner_instance(
+    ResolveContext *context,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type,
+    const FengTypeRef *member_type_ref) {
+    FengTypeRef *substituted;
+
+    if (context == NULL || owner_type_decl == NULL ||
+        owner_type_decl->kind != FENG_DECL_TYPE ||
+        owner_type_decl->as.type_decl.type_param_count == 0U ||
+        owner_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        owner_type.type_ref == NULL ||
+        owner_type.type_ref->kind != FENG_TYPE_REF_NAMED ||
+        owner_type.type_ref->as.named.type_arg_count !=
+            owner_type_decl->as.type_decl.type_param_count) {
+        return member_type_ref;
+    }
+
+    substituted = clone_type_ref_substituting_type_params(
+        member_type_ref,
+        owner_type_decl->as.type_decl.type_params,
+        owner_type_decl->as.type_decl.type_param_count,
+        owner_type.type_ref->as.named.type_args);
+    if (substituted == NULL) {
+        return member_type_ref;
+    }
+    if (!resolver_track_synthetic_type_ref(context, substituted)) {
+        free_synthetic_type_ref(substituted);
+        return member_type_ref;
+    }
+    return substituted;
 }
 
 static FengTypeRef *create_named_type_ref_for_inference(FengToken token,
@@ -2042,6 +2265,7 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
         case FENG_TYPE_REF_NAMED: {
             const char *left_builtin = type_ref_builtin_canonical_name(left);
             const char *right_builtin = type_ref_builtin_canonical_name(right);
+            bool base_matches = false;
 
             if (left_builtin != NULL || right_builtin != NULL) {
                 return left_builtin != NULL && right_builtin != NULL &&
@@ -2053,11 +2277,32 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
                 const FengDecl *right_decl = resolve_type_ref_decl(context, right);
 
                 if (left_decl != NULL || right_decl != NULL) {
-                    return left_decl != NULL && left_decl == right_decl;
+                    base_matches = left_decl != NULL && left_decl == right_decl;
+                } else {
+                    base_matches = left->as.named.segment_count == right->as.named.segment_count;
+                    for (size_t segment_index = 0U;
+                         base_matches && segment_index < left->as.named.segment_count;
+                         ++segment_index) {
+                        base_matches = slice_equals(left->as.named.segments[segment_index],
+                                                    right->as.named.segments[segment_index]);
+                    }
                 }
             }
 
-            return type_ref_equals(left, right);
+            if (!base_matches ||
+                left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t arg_index = 0U;
+                 arg_index < left->as.named.type_arg_count;
+                 ++arg_index) {
+                if (!type_refs_semantically_equal(context,
+                                                  left->as.named.type_args[arg_index],
+                                                  right->as.named.type_args[arg_index])) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         case FENG_TYPE_REF_POINTER:
@@ -5307,6 +5552,44 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
     callee = expr->as.call.callee;
     target = resolve_type_target_expr(context, callee, false);
     if (target.type_decl != NULL) {
+        if (target.type_decl->kind == FENG_DECL_TYPE &&
+            target.type_decl->as.type_decl.type_param_count > 0U &&
+            expr->as.call.has_explicit_type_args &&
+            expr->as.call.explicit_type_arg_count ==
+                target.type_decl->as.type_decl.type_param_count) {
+            FengTypeRef *instance_ref = (FengTypeRef *)calloc(1U, sizeof(*instance_ref));
+            if (instance_ref != NULL) {
+                instance_ref->token = expr->token;
+                instance_ref->kind = FENG_TYPE_REF_NAMED;
+                instance_ref->as.named.segment_count = 1U;
+                instance_ref->as.named.segments = (FengSlice *)malloc(sizeof(FengSlice));
+                instance_ref->as.named.type_arg_count = expr->as.call.explicit_type_arg_count;
+                instance_ref->as.named.type_args =
+                    (FengTypeRef **)calloc(expr->as.call.explicit_type_arg_count,
+                                           sizeof(FengTypeRef *));
+                if (instance_ref->as.named.segments != NULL &&
+                    (expr->as.call.explicit_type_arg_count == 0U ||
+                     instance_ref->as.named.type_args != NULL)) {
+                    bool ok = true;
+                    instance_ref->as.named.segments[0] = target.type_decl->as.type_decl.name;
+                    for (size_t arg_index = 0U;
+                         arg_index < expr->as.call.explicit_type_arg_count;
+                         ++arg_index) {
+                        instance_ref->as.named.type_args[arg_index] =
+                            clone_type_ref_for_inference(
+                                expr->as.call.explicit_type_args[arg_index]);
+                        if (instance_ref->as.named.type_args[arg_index] == NULL) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok && resolver_track_synthetic_type_ref(context, instance_ref)) {
+                        return inferred_expr_type_from_type_ref(instance_ref);
+                    }
+                }
+                free_synthetic_type_ref(instance_ref);
+            }
+        }
         return inferred_expr_type_from_decl(target.type_decl);
     }
     if (callee == NULL) {
@@ -5515,6 +5798,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                 }
             }
             return false;
+
+        case FENG_EXPR_ARRAY_NEW:
+            return expr_type_inference_is_pending(context, expr->as.array_new.size);
 
         case FENG_EXPR_OBJECT_LITERAL:
             if (expr_type_inference_is_pending(context, expr->as.object_literal.target)) {
@@ -6339,8 +6625,9 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         }
     }
 
+    InferredExprType owner_type = infer_expr_type(context, expr->as.member.object);
     const FengDecl *owner_type_decl =
-        resolve_inferred_expr_type_decl(context, infer_expr_type(context, expr->as.member.object));
+        resolve_inferred_expr_type_decl(context, owner_type);
     const FengTypeMember *field_member;
 
     if (owner_type_decl == NULL) {
@@ -6360,7 +6647,11 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         return inferred_expr_type_unknown();
     }
 
-    return inferred_expr_type_from_type_ref(field_member->as.field.type);
+    return inferred_expr_type_from_type_ref(
+        substitute_type_ref_for_owner_instance(context,
+                                               owner_type_decl,
+                                               owner_type,
+                                               field_member->as.field.type));
 }
 
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr) {
@@ -6393,6 +6684,20 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
         case FENG_EXPR_ARRAY_LITERAL:
             return infer_array_literal_expr_type(context, expr);
+
+        case FENG_EXPR_ARRAY_NEW: {
+            const FengTypeRef *elem_ref = expr->as.array_new.element_type;
+            if (elem_ref == NULL) {
+                return inferred_expr_type_unknown();
+            }
+            InferredExprType elem_type = inferred_expr_type_from_type_ref(elem_ref);
+            const FengTypeRef *arr_ref = synthesize_array_type_ref(
+                context, &elem_type,
+                expr->as.array_new.element_writable,
+                expr->token);
+            return arr_ref != NULL ? inferred_expr_type_from_type_ref(arr_ref)
+                                   : inferred_expr_type_unknown();
+        }
 
         case FENG_EXPR_LAMBDA:
             return inferred_expr_type_is_known(infer_lambda_body_type(context, expr))
@@ -9827,6 +10132,23 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 }
             }
             return validate_array_literal_expr(context, expr);
+
+        case FENG_EXPR_ARRAY_NEW: {
+            if (!resolve_type_ref(context, expr->as.array_new.element_type, false)) {
+                return false;
+            }
+            /* Validate size expression is an integer expression. */
+            if (!resolve_expr(context, expr->as.array_new.size, allow_self)) {
+                return false;
+            }
+            InferredExprType size_type = infer_expr_type(context, expr->as.array_new.size);
+            if (inferred_expr_type_is_known(size_type) &&
+                !inferred_expr_type_is_integer(size_type)) {
+                return resolver_append_error(context, expr->as.array_new.size->token,
+                    format_message("array size must be an integer expression"));
+            }
+            return true;
+        }
 
         case FENG_EXPR_OBJECT_LITERAL:
             {

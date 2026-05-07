@@ -264,6 +264,15 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             dump_indent(stream, indent);
             fputc('}', stream);
             break;
+        case FENG_EXPR_ARRAY_NEW:
+            dump_type_ref(stream, expr->as.array_new.element_type);
+            fputc('[', stream);
+            dump_expr(stream, expr->as.array_new.size, 0);
+            fputc(']', stream);
+            if (expr->as.array_new.element_writable) {
+                fputc('!', stream);
+            }
+            break;
     }
 }
 

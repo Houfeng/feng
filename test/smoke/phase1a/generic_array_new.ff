@@ -1,0 +1,19 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type Pair<A, B> {
+    var left: A;
+    var right: B;
+}
+
+fn main(args: string[]) {
+    let pairs: Pair<i32, i32>[]! = Pair:<i32, i32>[2]!;
+    pairs[0].left = 10;
+    pairs[0].right = 20;
+
+    if pairs[0].left == 10 && pairs[0].right == 20 {
+        puts("generic array-new ok");
+    }
+}

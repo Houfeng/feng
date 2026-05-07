@@ -6788,6 +6788,10 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
                 }
             }
             return false;
+        case FENG_EXPR_ARRAY_NEW:
+            return resolve_object_field_target_expr(session, program,
+                                                    expr->as.array_new.size,
+                                                    offset, locals, target);
         case FENG_EXPR_OBJECT_LITERAL: {
             FengLspResolvedTarget owner_target = {0};
 
@@ -7370,6 +7374,10 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                 }
             }
             return true;
+        case FENG_EXPR_ARRAY_NEW:
+            return collect_references_in_expr(session, program, source, owner_decl,
+                                              owner_member, expr->as.array_new.size,
+                                              target, references);
         case FENG_EXPR_OBJECT_LITERAL:
         {
             FengLspResolvedTarget owner_target = {0};
