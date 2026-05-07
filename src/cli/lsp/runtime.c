@@ -18,6 +18,7 @@
 #include "parser/parser.h"
 #include "semantic/semantic.h"
 #include "symbol/provider.h"
+#include "symbol/imported_module.h"
 
 typedef enum FengLspParseStatus {
     FENG_LSP_PARSE_OK = 0,
@@ -96,6 +97,11 @@ typedef struct FengLspAnalysisSession {
     char *manifest_path;
     bool is_project;
     int exit_code;
+    /* Keeps the imported-module cache alive for the entire session lifetime so
+     * that analysis->modules entries for external package types remain valid.
+     * Without this, the cache is freed at the end of frontend_run_with_overlays
+     * and every external-package module pointer becomes dangling. */
+    FengSymbolImportedModuleCache *imported_module_cache;
 } FengLspAnalysisSession;
 
 typedef enum FengLspLocalKind {
@@ -1241,6 +1247,7 @@ static void session_dispose(FengLspAnalysisSession *session) {
         free(session->owned_source_paths);
     }
     free(session->manifest_path);
+    feng_symbol_imported_module_cache_free(session->imported_module_cache);
     memset(session, 0, sizeof(*session));
 }
 
@@ -1450,6 +1457,7 @@ static bool build_standalone_session(const FengLspRuntime *runtime,
     outputs.out_source_count = &session->source_count;
     outputs.out_bundle_paths = &session->bundle_paths;
     outputs.out_bundle_count = &session->bundle_count;
+    outputs.out_imported_module_cache = &session->imported_module_cache;
 
     session->exit_code = feng_cli_frontend_run_with_overlays(&input,
                                                              overlays,
@@ -1524,6 +1532,7 @@ static bool build_project_session(const FengLspRuntime *runtime,
     outputs.out_source_count = &session->source_count;
     outputs.out_bundle_paths = &session->bundle_paths;
     outputs.out_bundle_count = &session->bundle_count;
+    outputs.out_imported_module_cache = &session->imported_module_cache;
 
     session->manifest_path = dup_cstr(manifest_path);
     session->is_project = true;
@@ -1600,9 +1609,6 @@ static bool build_cache_query_context(const FengLspDocument *document,
         goto cleanup;
     }
     symbols_root = path_join(project.out_root, "obj/symbols");
-    if (symbols_root == NULL || !path_is_directory(symbols_root)) {
-        goto cleanup;
-    }
     if (!feng_parse_source(document->text,
                            strlen(document->text),
                            document->path,
@@ -1610,12 +1616,18 @@ static bool build_cache_query_context(const FengLspDocument *document,
                            &parse_error)) {
         goto cleanup;
     }
-    if (!feng_symbol_provider_create(&context->provider, &symbol_error) ||
-        !feng_symbol_provider_add_ft_root(context->provider,
-                                          symbols_root,
-                                          FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
-                                          &symbol_error)) {
+    if (!feng_symbol_provider_create(&context->provider, &symbol_error)) {
         goto cleanup;
+    }
+    /* Add workspace symbol cache when available; it is optional — bundle
+     * symbols are still accessible without it. */
+    if (symbols_root != NULL && path_is_directory(symbols_root)) {
+        if (!feng_symbol_provider_add_ft_root(context->provider,
+                                              symbols_root,
+                                              FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
+                                              &symbol_error)) {
+            goto cleanup;
+        }
     }
     if (feng_cli_deps_resolve_for_manifest("feng",
                                            project.manifest_path,
@@ -1637,7 +1649,10 @@ static bool build_cache_query_context(const FengLspDocument *document,
                                                                context->program->module_segments,
                                                                context->program->module_segment_count);
     context->source_text = document->text;
-    ok = context->current_module != NULL;
+    /* The context is useful even when current_module is NULL: bundle symbols
+     * are still accessible via the provider for hover and go-to-definition of
+     * external package types. */
+    ok = true;
 
 cleanup:
     if (!ok) {
@@ -9557,6 +9572,57 @@ static bool append_use_path_completion_items(FengLspString *json,
         }
         if (!append_completion_item(json, first, next_seg, "module", 9)) {
             return false;
+        }
+    }
+    /* Also enumerate imported-package modules from the analysis so that
+     * bundle modules appear as use-path completion candidates. */
+    if (session->analysis != NULL) {
+        size_t mod_index;
+        for (mod_index = 0U; mod_index < session->analysis->module_count; ++mod_index) {
+            const FengSemanticModule *sem_mod = &session->analysis->modules[mod_index];
+            FengSlice next_seg;
+            size_t i;
+            bool already_seen;
+
+            if (sem_mod->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                continue;
+            }
+            if (sem_mod->segment_count <= prefix_count) {
+                continue;
+            }
+            /* Check that the first `prefix_count` segments match. */
+            for (i = 0U; i < prefix_count; ++i) {
+                if (!slice_equals(sem_mod->segments[i], prefix_segments[i])) {
+                    break;
+                }
+            }
+            if (i < prefix_count) {
+                continue;
+            }
+            next_seg = sem_mod->segments[prefix_count];
+            /* Filter by partial prefix. */
+            if (partial.length > 0U &&
+                (next_seg.length < partial.length ||
+                 memcmp(next_seg.data, partial.data, partial.length) != 0)) {
+                continue;
+            }
+            /* Deduplicate against already-seen entries. */
+            already_seen = false;
+            for (i = 0U; i < seen_count; ++i) {
+                if (slice_equals(seen[i], next_seg)) {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if (already_seen) {
+                continue;
+            }
+            if (seen_count < 64U) {
+                seen[seen_count++] = next_seg;
+            }
+            if (!append_completion_item(json, first, next_seg, "module", 9)) {
+                return false;
+            }
         }
     }
     return true;

@@ -9897,13 +9897,22 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                            rc->member != NULL) {
                     callable_type_param_count =
                         rc->member->as.callable.type_param_count;
+                } else if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
+                           rc->owner_type_decl != NULL &&
+                           rc->owner_type_decl->kind == FENG_DECL_TYPE) {
+                    /* Type:<T1, T2>(...) constructor syntax: validate arity
+                     * against the type declaration's type parameters. */
+                    callable_type_param_count =
+                        rc->owner_type_decl->as.type_decl.type_param_count;
                 }
                 if (expr->as.call.explicit_type_arg_count != callable_type_param_count) {
                     return resolver_append_error(
                         context,
                         expr->token,
                         format_message(
-                            "function expects %zu type argument(s) but %zu were provided",
+                            rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR
+                                ? "type expects %zu type argument(s) but %zu were provided"
+                                : "function expects %zu type argument(s) but %zu were provided",
                             callable_type_param_count,
                             expr->as.call.explicit_type_arg_count));
                 }

@@ -1239,6 +1239,40 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (rc == 0) {
             const char *ar = getenv("AR");
             if (ar == NULL || ar[0] == '\0') ar = "ar";
+#if defined(__APPLE__)
+            /* On macOS, 'ar rcs' implicitly runs ranlib which emits
+             *   "the table of contents is empty"
+             * when the object contains no exported C symbols (e.g. an
+             * archive of empty-body generic stubs).  Use 'ar rc' (no
+             * implicit ranlib) followed by an explicit
+             * 'ranlib -no_warning_for_no_symbols' invocation that
+             * silences that diagnostic while still updating the table. */
+            if (!argv_push(&av, ar)) { ok = false; }
+            if (ok && !argv_push(&av, "rc")) { ok = false; }
+            if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
+            if (ok && !argv_push(&av, object_path)) { ok = false; }
+            if (!ok) {
+                fprintf(stderr, "error: out of memory building archive argv\n");
+                rc = 1;
+            } else {
+                rc = spawn_and_wait(av.items);
+            }
+            argv_free(&av);
+            if (rc == 0) {
+                const char *ranlib = getenv("RANLIB");
+                if (ranlib == NULL || ranlib[0] == '\0') ranlib = "ranlib";
+                if (!argv_push(&av, ranlib)) { ok = false; }
+                if (ok && !argv_push(&av, "-no_warning_for_no_symbols")) { ok = false; }
+                if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
+                if (!ok) {
+                    fprintf(stderr, "error: out of memory building ranlib argv\n");
+                    rc = 1;
+                } else {
+                    rc = spawn_and_wait(av.items);
+                }
+                argv_free(&av);
+            }
+#else
             if (!argv_push(&av, ar)) { ok = false; }
             if (ok && !argv_push(&av, "rcs")) { ok = false; }
             if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
@@ -1250,6 +1284,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 rc = spawn_and_wait(av.items);
             }
             argv_free(&av);
+#endif
         }
     }
 

@@ -1063,6 +1063,33 @@ static void test_explicit_generic_call_multi_type_args(void) {
 
 /* G7 parser additions */
 
+static void test_explicit_generic_type_constructor_call(void) {
+    /* 正确语法六-b: Type:<T1, T2>() generic type constructor call. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    Map:<string, int>();\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengExpr *call;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_ctor.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_EXPR);
+    call = stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.has_explicit_type_args);
+    ASSERT(call->as.call.explicit_type_arg_count == 2U);
+    ASSERT(call->as.call.arg_count == 0U);
+
+    feng_program_free(program);
+}
+
 static void test_generic_method_uses_both_outer_and_method_type_params(void) {
     /* 正确语法二: method in generic type uses outer type param T and own param U. */
     const char *source =
@@ -1198,6 +1225,7 @@ int main(void) {
     test_generic_type_ref_nested();
     test_explicit_generic_call();
     test_explicit_generic_call_multi_type_args();
+    test_explicit_generic_type_constructor_call();
     test_generic_method_uses_both_outer_and_method_type_params();
     test_generic_parse_error_colon_angle_in_type_position();
     test_generic_parse_error_nested_colon_angle_in_type_arg();

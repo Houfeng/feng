@@ -8878,6 +8878,55 @@ static void test_generic_explicit_type_args_arity_mismatch(void) {
     feng_program_free(program);
 }
 
+static void test_generic_type_constructor_explicit_type_args_ok(void) {
+    /* Type:<T>() constructor with correct arity must be accepted (G4-13b). */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let b = Box:<int>();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_ctor_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_type_constructor_explicit_type_args_arity_mismatch(void) {
+    /* Type:<T1, T2>() on a 1-param type must be rejected with an arity error. */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let b = Box:<int, string>();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_ctor_bad.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "type argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_generic_method_type_param_collides_with_type_param(void) {
     /* A method may not reuse the same type parameter name as its enclosing
      * type (G4-14 collision check). */
@@ -9326,6 +9375,8 @@ int main(void) {
     test_generic_non_generic_type_with_type_args_rejected();
     test_generic_type_with_finalizer_rejected();
     test_generic_explicit_type_args_arity_mismatch();
+    test_generic_type_constructor_explicit_type_args_ok();
+    test_generic_type_constructor_explicit_type_args_arity_mismatch();
     test_generic_method_type_param_collides_with_type_param();
     test_generic_function_two_type_params_ok();
     test_generic_spec_generic_parent_forwarding_ok();
