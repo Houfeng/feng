@@ -2,6 +2,7 @@ mod feng.examples;
 
 use feng.examples.loop;
 use feng.examples.loop as lp;
+use std.collections;
 
 /**
  * Prints a message to the console.
@@ -21,4 +22,5 @@ fn main(args: string[]) {
   puts("hello, examples");
   // lp.loop_example([""]);
   test(1);
+  let map = Map<string, int>();
 }
