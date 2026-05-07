@@ -154,6 +154,19 @@ static void free_synthetic_parameters(FengParameter *params, size_t param_count)
     free(params);
 }
 
+static void free_synthetic_type_params(FengTypeParam *params, size_t count) {
+    size_t index;
+
+    if (params == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        free((void *)params[index].name.data);
+        /* constraint is always NULL for synthesized type params */
+    }
+    free(params);
+}
+
 static void free_synthetic_type_member(FengTypeMember *member) {
     if (member == NULL) {
         return;
@@ -164,6 +177,7 @@ static void free_synthetic_type_member(FengTypeMember *member) {
         free_synthetic_type_ref(member->as.field.type);
     } else {
         free((void *)member->as.callable.name.data);
+        free_synthetic_type_params(member->as.callable.type_params, member->as.callable.type_param_count);
         free_synthetic_parameters(member->as.callable.params, member->as.callable.param_count);
         free_synthetic_type_ref(member->as.callable.return_type);
     }
@@ -183,6 +197,7 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
             free_synthetic_type_ref(decl->as.binding.type);
             break;
         case FENG_DECL_TYPE:
+            free_synthetic_type_params(decl->as.type_decl.type_params, decl->as.type_decl.type_param_count);
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 free_synthetic_type_member(decl->as.type_decl.members[index]);
             }
@@ -193,6 +208,7 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
             free(decl->as.type_decl.declared_specs);
             break;
         case FENG_DECL_SPEC:
+            free_synthetic_type_params(decl->as.spec_decl.type_params, decl->as.spec_decl.type_param_count);
             for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
                 free_synthetic_type_ref(decl->as.spec_decl.parent_specs[index]);
             }
@@ -220,6 +236,7 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
             free(decl->as.fit_decl.members);
             break;
         case FENG_DECL_FUNCTION:
+            free_synthetic_type_params(decl->as.function_decl.type_params, decl->as.function_decl.type_param_count);
             free_synthetic_parameters(decl->as.function_decl.params,
                                       decl->as.function_decl.param_count);
             free_synthetic_type_ref(decl->as.function_decl.return_type);
@@ -415,6 +432,46 @@ static FengParameter *synthesize_parameters(const FengSymbolDeclView *symbol_dec
     return params;
 }
 
+static FengTypeParam *synthesize_type_params(const FengSymbolDeclView *symbol_decl,
+                                             size_t *out_count) {
+    FengTypeParam *params;
+    size_t fill;
+    size_t index;
+
+    if (out_count == NULL) {
+        return NULL;
+    }
+    *out_count = 0U;
+    if (symbol_decl == NULL || symbol_decl->type_param_count == 0U) {
+        return NULL;
+    }
+
+    params = (FengTypeParam *)calloc(symbol_decl->type_param_count, sizeof(*params));
+    if (params == NULL) {
+        return NULL;
+    }
+    fill = 0U;
+    for (index = 0U; index < symbol_decl->member_count; ++index) {
+        const FengSymbolDeclView *member = symbol_decl->members[index];
+
+        if (member == NULL || member->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        if (fill >= symbol_decl->type_param_count) {
+            break;
+        }
+        params[fill].token = member->token;
+        if (!clone_cstr_as_slice(member->name, &params[fill].name)) {
+            free_synthetic_type_params(params, fill);
+            return NULL;
+        }
+        params[fill].constraint = NULL;
+        ++fill;
+    }
+    *out_count = fill;
+    return params;
+}
+
 static FengTypeRef **synthesize_type_ref_list(FengSymbolTypeView *const *types,
                                               size_t type_count) {
     FengTypeRef **refs;
@@ -446,12 +503,22 @@ static bool synthesize_callable_signature(FengCallableSignature *signature,
                                           FengSlice name) {
     signature->token = symbol_decl->token;
     signature->name = name;
+    signature->type_params = synthesize_type_params(symbol_decl, &signature->type_param_count);
+    if (symbol_decl->type_param_count > 0U && signature->type_params == NULL) {
+        return false;
+    }
     signature->params = synthesize_parameters(symbol_decl, &signature->param_count);
     if (symbol_decl->param_count > 0U && signature->params == NULL) {
+        free_synthetic_type_params(signature->type_params, signature->type_param_count);
+        signature->type_params = NULL;
+        signature->type_param_count = 0U;
         return false;
     }
     signature->return_type = synthesize_type_ref(symbol_decl->return_type);
     if (symbol_decl->return_type != NULL && signature->return_type == NULL) {
+        free_synthetic_type_params(signature->type_params, signature->type_param_count);
+        signature->type_params = NULL;
+        signature->type_param_count = 0U;
         free_synthetic_parameters(signature->params, signature->param_count);
         signature->params = NULL;
         signature->param_count = 0U;
@@ -592,7 +659,12 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
         case FENG_SYMBOL_DECL_KIND_TYPE:
             synth_decl->decl.kind = FENG_DECL_TYPE;
             synth_decl->decl.as.type_decl.name = name;
-            synth_decl->decl.as.type_decl.type_param_count = symbol_decl->type_param_count;
+            synth_decl->decl.as.type_decl.type_params =
+                synthesize_type_params(symbol_decl, &synth_decl->decl.as.type_decl.type_param_count);
+            if (symbol_decl->type_param_count > 0U &&
+                synth_decl->decl.as.type_decl.type_params == NULL) {
+                break;
+            }
             synth_decl->decl.as.type_decl.members =
                 synthesize_type_members(symbol_decl, &synth_decl->decl.as.type_decl.member_count);
             if (symbol_decl->member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
@@ -611,7 +683,12 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
         case FENG_SYMBOL_DECL_KIND_SPEC:
             synth_decl->decl.kind = FENG_DECL_SPEC;
             synth_decl->decl.as.spec_decl.name = name;
-            synth_decl->decl.as.spec_decl.type_param_count = symbol_decl->type_param_count;
+            synth_decl->decl.as.spec_decl.type_params =
+                synthesize_type_params(symbol_decl, &synth_decl->decl.as.spec_decl.type_param_count);
+            if (symbol_decl->type_param_count > 0U &&
+                synth_decl->decl.as.spec_decl.type_params == NULL) {
+                break;
+            }
             synth_decl->decl.as.spec_decl.parent_specs =
                 synthesize_type_ref_list(symbol_decl->declared_specs,
                                          symbol_decl->declared_spec_count);
@@ -650,7 +727,6 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
 
         case FENG_SYMBOL_DECL_KIND_FUNCTION:
             synth_decl->decl.kind = FENG_DECL_FUNCTION;
-            synth_decl->decl.as.function_decl.type_param_count = symbol_decl->type_param_count;
             if (!synthesize_callable_signature(&synth_decl->decl.as.function_decl,
                                                symbol_decl,
                                                name)) {

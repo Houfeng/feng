@@ -5060,6 +5060,12 @@ static bool append_decl_type_params(FengLspString *buffer,
     if (count == 0U) {
         return true;
     }
+    /* Defensive guard: params should always be non-NULL when count > 0, but
+     * synthesized declarations may have count set without a params array if
+     * synthesis fails or the decl is from an older cache. Skip gracefully. */
+    if (params == NULL) {
+        return true;
+    }
     if (!string_append_cstr(buffer, "<")) {
         return false;
     }
