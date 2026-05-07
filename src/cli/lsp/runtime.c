@@ -10551,9 +10551,31 @@ static bool completion_context_is_member_access(const char *text, size_t offset)
     return completion_context_from_text(text, offset, &context) && context.is_member;
 }
 
+static bool completion_repair_has_expression_tail(const char *text, size_t offset) {
+    size_t cursor;
+    char ch;
+
+    if (text == NULL || offset == 0U) {
+        return false;
+    }
+    cursor = offset;
+    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+        --cursor;
+    }
+    if (cursor == 0U) {
+        return false;
+    }
+    ch = text[cursor - 1U];
+    if (ch == '.') {
+        return completion_context_is_member_dot(text, offset);
+    }
+    return completion_identifier_continue(ch) || ch == ')' || ch == ']' || ch == '"';
+}
+
 static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
     size_t length;
     size_t cursor;
+    bool has_expression_tail;
 
     if (text == NULL) {
         return false;
@@ -10562,20 +10584,25 @@ static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
     if (offset > length) {
         return false;
     }
+    has_expression_tail = completion_repair_has_expression_tail(text, offset);
+    if (!has_expression_tail) {
+        return false;
+    }
     cursor = offset;
     while (cursor < length && isspace((unsigned char)text[cursor])) {
         ++cursor;
     }
     if (cursor >= length) {
-        return false;
+        return true;
     }
     switch (text[cursor]) {
         case ';':
         case ',':
         case ')':
         case ']':
-        case '}':
             return false;
+        case '}':
+            return true;
         default:
             return true;
     }

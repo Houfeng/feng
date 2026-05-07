@@ -6195,7 +6195,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "use test.lsp.pkg.collections;\n"
         "\n"
         "fn run(): void {\n"
-        "    let value = Ma\n"
+        "    let value = M\n"
         "}\n";
     static const char *kMemberCompletionSource =
         "mod test.lsp.pkgconsumer.memberedit;\n"
@@ -6222,6 +6222,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     char *use_completion_output;
     char *type_completion_output;
     char *ctor_completion_output;
+    char *local_dep_ctor_completion_output;
     char *member_completion_output;
     char *remove_error = NULL;
 
@@ -6294,14 +6295,30 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                    kCtorCompletionSource,
                                                                    kInitialize,
                                                                    "textDocument/completion",
-                                                                   "    let value = Ma",
-                                                                   strlen("    let value = Ma"));
+                                                                   "    let value = M",
+                                                                   strlen("    let value = M"));
     member_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                      kMemberCompletionSource,
                                                                      kInitialize,
                                                                      "textDocument/completion",
                                                                      "    return map.;",
                                                                      strlen("    return map."));
+    write_text_file(consumer_manifest_path,
+                    "[package]\n"
+                    "name: \"lsp_pkgconsumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "lsp_pkgdocs: \"../pkgdocs\"\n");
+    local_dep_ctor_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                             kCtorCompletionSource,
+                                                                             kInitialize,
+                                                                             "textDocument/completion",
+                                                                             "    let value = M",
+                                                                             strlen("    let value = M"));
 
     ASSERT(strstr(hover_type_output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(hover_type_output, "type Map<K, V>") != NULL);
@@ -6317,12 +6334,16 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\"") != NULL);
     ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(local_dep_ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\"") != NULL);
+    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(member_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"count\"") != NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"K\"") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"V\"") == NULL);
 
     free(member_completion_output);
+    free(local_dep_ctor_completion_output);
     free(ctor_completion_output);
     free(type_completion_output);
     free(use_completion_output);
