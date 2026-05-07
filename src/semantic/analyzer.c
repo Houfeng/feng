@@ -5650,9 +5650,10 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
         {
             const FengDecl *owner_type_decl = NULL;
             const FengSemanticModule *provider_module = NULL;
+            InferredExprType owner_type;
             FunctionCallResolution resolution;
 
-            resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+            owner_type = resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
             resolution = resolve_accessible_method_overload(context,
                                                             owner_type_decl,
                                                             provider_module,
@@ -5661,8 +5662,19 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             expr->as.call.arg_count);
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                InferredExprType return_type =
-                    callable_effective_return_type(context, resolution.callable);
+                InferredExprType return_type;
+
+                if (resolution.callable->return_type != NULL) {
+                    const FengTypeRef *return_type_ref =
+                        substitute_type_ref_for_owner_instance(context,
+                                                               owner_type_decl,
+                                                               owner_type,
+                                                               resolution.callable->return_type);
+
+                    return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
+                } else {
+                    return_type = callable_effective_return_type(context, resolution.callable);
+                }
 
                 if (inferred_expr_type_is_known(return_type)) {
                     return return_type;
@@ -10153,6 +10165,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         case FENG_EXPR_OBJECT_LITERAL:
             {
                 ResolvedTypeTarget target;
+                InferredExprType target_expr_type;
 
                 if (!resolve_expr(context, expr->as.object_literal.target, allow_self)) {
                     return false;
@@ -10162,18 +10175,26 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 }
 
                 target = resolve_type_target_expr(context, expr->as.object_literal.target, true);
+                target_expr_type = infer_expr_type(context, expr->as.object_literal.target);
                 for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
                     const FengObjectFieldInit *field = &expr->as.object_literal.fields[index];
                     const FengTypeMember *field_member =
                         target.type_decl != NULL ? find_type_field_member(target.type_decl, field->name) : NULL;
+                    const FengTypeRef *field_type =
+                        field_member != NULL
+                            ? substitute_type_ref_for_owner_instance(context,
+                                                                     target.type_decl,
+                                                                     target_expr_type,
+                                                                     field_member->as.field.type)
+                            : NULL;
 
                     if (!resolve_expr(context, field->value, allow_self)) {
                         return false;
                     }
-                    if (field_member != NULL &&
+                    if (field_type != NULL &&
                         !validate_expr_against_expected_type(context,
                                                             field->value,
-                                                            field_member->as.field.type)) {
+                                                            field_type)) {
                         return false;
                     }
                 }

@@ -3064,6 +3064,12 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 ut->feng_name,
                 (int)ma->as.member.member.length, ma->as.member.member.data);
         }
+        if (ut->is_generic_instance) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: generic type method '%s.%s' requires the shared generic method ABI",
+                ut->feng_name, um->feng_name);
+        }
         if (e->as.call.arg_count != um->param_count) {
             er_free(&recv);
             return cg_fail(cg, e->token,
@@ -3124,9 +3130,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 ut->feng_name);
         }
         Buf b; buf_init(&b);
-        buf_append_fmt(&b,
-            "((struct %s *)feng_object_new(&%s))",
-            ut->c_struct_name, ut->c_desc_name);
+        buf_append_fmt(&b, "%s()", ut->c_default_zero_name);
         out->c_expr = b.data;
         out->type = cgtype_new(CG_TYPE_OBJECT);
         if (!out->c_expr || !out->type) return false;
@@ -3145,9 +3149,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     ut->feng_name);
             }
             Buf b; buf_init(&b);
-            buf_append_fmt(&b,
-                "((struct %s *)feng_object_new(&%s))",
-                ut->c_struct_name, ut->c_desc_name);
+            buf_append_fmt(&b, "%s()", ut->c_default_zero_name);
             out->c_expr = b.data;
             out->type = cgtype_new(CG_TYPE_OBJECT);
             if (!out->c_expr || !out->type) return false;
@@ -3228,18 +3230,80 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr && out->type;
 }
 
-static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
-    er_init(out);
-    if (e->as.object_literal.target->kind != FENG_EXPR_IDENTIFIER) {
-        return cg_fail(cg, e->token,
-            "codegen: only single-segment type names supported for object literals");
+static bool cg_resolve_object_literal_target_user_type(CG *cg,
+                                                       const FengExpr *target,
+                                                       const UserType **out) {
+    if (out != NULL) *out = NULL;
+    if (target == NULL) {
+        return cg_fail(cg, (FengToken){0},
+            "codegen: missing object literal target");
     }
-    const FengSlice tn = e->as.object_literal.target->as.identifier;
-    const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
-    if (!ut) {
-        return cg_fail(cg, e->token,
-            "codegen: unknown type '%.*s' in object literal",
-            (int)tn.length, tn.data);
+
+    if (target->kind == FENG_EXPR_IDENTIFIER) {
+        const FengSlice tn = target->as.identifier;
+        const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
+        if (!ut) {
+            return cg_fail(cg, target->token,
+                "codegen: unknown type '%.*s' in object literal",
+                (int)tn.length, tn.data);
+        }
+        if (out != NULL) *out = ut;
+        return true;
+    }
+
+    if (target->kind == FENG_EXPR_CALL && target->as.call.callee != NULL &&
+        target->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
+        const FengExpr *callee = target->as.call.callee;
+        const FengSlice tn = callee->as.identifier;
+        const FengResolvedCallable *rc = &target->as.call.resolved_callable;
+
+        if (target->as.call.arg_count != 0U) {
+            return cg_fail(cg, target->token,
+                "codegen: object literal constructor arguments are not yet supported");
+        }
+
+        if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
+            rc->owner_type_decl != NULL &&
+            rc->owner_type_decl->kind == FENG_DECL_TYPE &&
+            rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
+            UserType *ut = cg_find_generic_instance_user_type(
+                cg,
+                rc->owner_type_decl,
+                target->as.call.explicit_type_args,
+                target->as.call.explicit_type_arg_count);
+            if (ut == NULL) {
+                return cg_fail(cg, target->token,
+                    "codegen: generic type object literal instance for '%.*s' was not registered",
+                    (int)tn.length, tn.data);
+            }
+            if (out != NULL) *out = ut;
+            return true;
+        }
+
+        {
+            const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
+            if (!ut) {
+                return cg_fail(cg, target->token,
+                    "codegen: unknown type '%.*s' in object literal",
+                    (int)tn.length, tn.data);
+            }
+            if (out != NULL) *out = ut;
+            return true;
+        }
+    }
+
+    return cg_fail(cg, target->token,
+        "codegen: only direct type constructor targets are supported for object literals");
+}
+
+static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+    const UserType *ut = NULL;
+
+    er_init(out);
+    if (!cg_resolve_object_literal_target_user_type(cg,
+                                                   e->as.object_literal.target,
+                                                   &ut)) {
+        return false;
     }
     /* Allocate, then assign each field. We open an inline statement block in
      * the body to compute argument expressions and then reference the result.
