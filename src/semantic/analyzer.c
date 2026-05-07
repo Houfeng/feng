@@ -4395,6 +4395,38 @@ static bool callable_parameters_match_args(ResolveContext *context,
     return true;
 }
 
+static bool callable_parameters_match_args_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t arg_index;
+
+    if (callable->param_count != arg_count) {
+        return false;
+    }
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengTypeRef *param_type = callable->params[arg_index].type;
+
+        if (param_type_is_type_param_ref(callable, param_type)) {
+            continue;
+        }
+
+        param_type = substitute_type_ref_for_owner_instance(context,
+                                                            owner_type_decl,
+                                                            owner_type,
+                                                            param_type);
+        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool current_stmt_is_inside_finally(const ResolveContext *context) {
     return context != NULL && context->finally_depth > 0U;
 }
@@ -5073,6 +5105,7 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
 typedef struct FitOverloadResolveCtx {
     ResolveContext *context;
     const FengDecl *owner_type_decl;
+    InferredExprType owner_type;
     FengExpr *const *args;
     size_t arg_count;
     FunctionCallResolution result;
@@ -5085,8 +5118,12 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
 
     (void)fit_module;
-    if (!callable_parameters_match_args(st->context, &member->as.callable,
-                                        st->args, st->arg_count)) {
+    if (!callable_parameters_match_args_for_owner_instance(st->context,
+                                                           &member->as.callable,
+                                                           st->owner_type_decl,
+                                                           st->owner_type,
+                                                           st->args,
+                                                           st->arg_count)) {
         return true;
     }
     if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
@@ -5110,6 +5147,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
     ResolveContext *context,
     const FengDecl *type_decl,
     const FengSemanticModule *provider_module,
+    InferredExprType owner_type,
     FengSlice name,
     FengExpr *const *args,
     size_t arg_count) {
@@ -5179,7 +5217,12 @@ static FunctionCallResolution resolve_accessible_method_overload(
             !slice_equals(member->as.callable.name, name) ||
             !type_member_is_accessible_from(context, provider_module, member) ||
             fit_body_blocks_private_access(context, type_decl, member) ||
-            !callable_parameters_match_args(context, &member->as.callable, args, arg_count)) {
+            !callable_parameters_match_args_for_owner_instance(context,
+                                                               &member->as.callable,
+                                                               type_decl,
+                                                               owner_type,
+                                                               args,
+                                                               arg_count)) {
             continue;
         }
 
@@ -5200,6 +5243,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
 
     st.context = context;
     st.owner_type_decl = type_decl;
+    st.owner_type = owner_type;
     st.args = args;
     st.arg_count = arg_count;
     st.result = result;
@@ -5657,6 +5701,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
             resolution = resolve_accessible_method_overload(context,
                                                             owner_type_decl,
                                                             provider_module,
+                                                            owner_type,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count);
@@ -5780,12 +5825,14 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                 {
                     const FengDecl *owner_type_decl = NULL;
                     const FengSemanticModule *provider_module = NULL;
+                    InferredExprType owner_type;
                     FunctionCallResolution resolution;
 
-                    resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+                    owner_type = resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
                     resolution = resolve_accessible_method_overload(context,
                                                                     owner_type_decl,
                                                                     provider_module,
+                                                                    owner_type,
                                                                     callee->as.member.member,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count);
@@ -7873,6 +7920,29 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
     }
 }
 
+static void record_object_arg_coercion_sites_for_owner_instance(
+    ResolveContext *context,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengParameter *params,
+    size_t param_count,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type) {
+    size_t i;
+
+    if (params == NULL || args == NULL || param_count != arg_count) {
+        return;
+    }
+    for (i = 0U; i < arg_count; ++i) {
+        const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
+            context,
+            owner_type_decl,
+            owner_type,
+            params[i].type);
+        record_object_spec_coercion_site_if_applicable(context, args[i], param_type);
+    }
+}
+
 static FengSpecCoercionCallableSource classify_callable_source(
         const ResolveContext *context, const FengExpr *expr) {
     if (expr == NULL) {
@@ -9031,6 +9101,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
         const FengExpr *object = callee->as.member.object;
         const FengDecl *owner_type_decl = NULL;
         const FengSemanticModule *provider_module = NULL;
+        InferredExprType owner_type;
         FunctionCallResolution resolution;
 
         if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
@@ -9083,7 +9154,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             }
         }
 
-        resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+        owner_type = resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
         if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_TYPE) {
             const FengTypeMember *accessible_method =
                 find_accessible_type_method_member(context,
@@ -9101,6 +9172,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             resolution = resolve_accessible_method_overload(context,
                                                             owner_type_decl,
                                                             provider_module,
+                                                            owner_type,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count);
@@ -9108,11 +9180,13 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 note_callable_exception_escape(context, resolution.callable);
                 record_resolved_callable_from_resolution(expr, &resolution);
-                record_object_arg_coercion_sites(context,
-                                                 expr->as.call.args,
-                                                 expr->as.call.arg_count,
-                                                 resolution.callable->params,
-                                                 resolution.callable->param_count);
+                record_object_arg_coercion_sites_for_owner_instance(context,
+                                                                    expr->as.call.args,
+                                                                    expr->as.call.arg_count,
+                                                                    resolution.callable->params,
+                                                                    resolution.callable->param_count,
+                                                                    owner_type_decl,
+                                                                    owner_type);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
