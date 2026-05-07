@@ -1,0 +1,14 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+/* Generic void function — accepts any T and discards it. */
+fn discard<T>(x: T) {}
+
+fn main(args: string[]) {
+    discard(1);
+    discard("hello");
+    discard(true);
+    puts("generic void ok");
+}

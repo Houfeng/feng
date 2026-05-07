@@ -1061,6 +1061,67 @@ static void test_explicit_generic_call_multi_type_args(void) {
     feng_program_free(program);
 }
 
+/* G7 parser additions */
+
+static void test_generic_method_uses_both_outer_and_method_type_params(void) {
+    /* 正确语法二: method in generic type uses outer type param T and own param U. */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    pu let value: T;\n"
+        "    fn map<U>(x: U): T {\n"
+        "        return self.value;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *type_decl;
+    const FengTypeMember *method;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_method.f", &program, &error));
+    ASSERT(program != NULL);
+    type_decl = program->declarations[0];
+    ASSERT(type_decl->kind == FENG_DECL_TYPE);
+    ASSERT(type_decl->as.type_decl.type_param_count == 1U);
+    /* Second member (index 1) is the method `map`. */
+    method = type_decl->as.type_decl.members[1];
+    ASSERT(method->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(method->as.callable.type_param_count == 1U);
+    assert_slice_text(method->as.callable.type_params[0].name, "U");
+
+    feng_program_free(program);
+}
+
+static void test_generic_parse_error_colon_angle_in_type_position(void) {
+    /* 错误语法八: `:<T>` in non-call position (type declaration head) must fail. */
+    const char *source =
+        "mod demo.main;\n"
+        "type Box:<T> {\n"
+        "    pu let value: int;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "generic_err_colon.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+}
+
+static void test_generic_parse_error_nested_colon_angle_in_type_arg(void) {
+    /* 错误语法七: `foo:<Map:<int>>(x)` — nested `:<` inside type arg list must fail. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    foo:<Map:<int>>(x);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "generic_err_nested.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+}
+
 static void test_generic_parse_error_missing_closing_gt(void) {
     /* type Box<T { ... } — missing `>` */
     const char *source =
@@ -1137,6 +1198,9 @@ int main(void) {
     test_generic_type_ref_nested();
     test_explicit_generic_call();
     test_explicit_generic_call_multi_type_args();
+    test_generic_method_uses_both_outer_and_method_type_params();
+    test_generic_parse_error_colon_angle_in_type_position();
+    test_generic_parse_error_nested_colon_angle_in_type_arg();
     test_generic_parse_error_missing_closing_gt();
     test_generic_parse_error_missing_type_param_name();
     puts("parser tests passed");

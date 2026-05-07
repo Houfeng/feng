@@ -8902,6 +8902,105 @@ static void test_generic_method_type_param_collides_with_type_param(void) {
     feng_program_free(program);
 }
 
+/* G7 semantic additions */
+
+static void test_generic_function_two_type_params_ok(void) {
+    /* 正确语法七: fn pair<T, U>(a: T, b: U) infers both params from args. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn pair<T, U>(a: T, b: U): void {}\n"
+        "fn check(): void {\n"
+        "    pair(1, \"hello\");\n"
+        "    pair(true, 42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_pair.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_spec_generic_parent_forwarding_ok(void) {
+    /* 正确语法四 (simplified): spec MyList: List<int> — using concrete type arg
+     * in parent spec is valid. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Sequence<T> {\n"
+        "    fn size(): int;\n"
+        "}\n"
+        "spec IntSequence: Sequence<int> {\n"
+        "    fn size(): int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_parent_fwd.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_duplicate_fn_by_type_param_name_only_rejected(void) {
+    /* 错误语法五: fn foo<T>() and fn foo<U>() differ only in type param name —
+     * they have identical effective signatures and must be rejected.
+     * Verified as ambiguous (or duplicate) at call site. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn foo<T>(): void {}\n"
+        "fn foo<U>(): void {}\n"
+        "fn check(): void {\n"
+        "    foo();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_dup_fn.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    /* Both overloads match with 0 args → ambiguous. */
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_same_name_same_arity_different_constraint_rejected(void) {
+    /* 错误语法十二: type Foo<T: SpecA> and type Foo<T: SpecB> share the same
+     * identity (name + arity) and must be rejected as duplicate declarations. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec SpecA {}\n"
+        "spec SpecB {}\n"
+        "type Foo<T: SpecA> { pu let value: int; }\n"
+        "type Foo<T: SpecB> { pu let value: int; }\n";
+    FengProgram *program = parse_program_or_die("gen_dup_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -9228,6 +9327,10 @@ int main(void) {
     test_generic_type_with_finalizer_rejected();
     test_generic_explicit_type_args_arity_mismatch();
     test_generic_method_type_param_collides_with_type_param();
+    test_generic_function_two_type_params_ok();
+    test_generic_spec_generic_parent_forwarding_ok();
+    test_generic_duplicate_fn_by_type_param_name_only_rejected();
+    test_generic_same_name_same_arity_different_constraint_rejected();
 
     puts("semantic tests passed");
     return 0;
