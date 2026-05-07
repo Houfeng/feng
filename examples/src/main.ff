@@ -9,7 +9,7 @@ use feng.examples.loop as lp;
 @cdecl("libc")
 extern fn puts(msg: string): int;
 
-fn test<T> (x: T): T {
+fn test<T>(x: T): T {
   puts("test");
   return x;
 }
