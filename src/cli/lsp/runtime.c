@@ -3317,6 +3317,32 @@ static bool symbol_decl_is_type(const FengSymbolDeclView *decl) {
     return kind == FENG_SYMBOL_DECL_KIND_TYPE || kind == FENG_SYMBOL_DECL_KIND_SPEC;
 }
 
+static bool symbol_decl_is_completion_decl(const FengSymbolDeclView *decl) {
+    FengSymbolDeclKind kind;
+
+    if (decl == NULL) {
+        return false;
+    }
+    kind = feng_symbol_decl_kind(decl);
+    return kind == FENG_SYMBOL_DECL_KIND_BINDING ||
+           kind == FENG_SYMBOL_DECL_KIND_FUNCTION ||
+           kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+           kind == FENG_SYMBOL_DECL_KIND_SPEC;
+}
+
+static bool symbol_decl_is_instance_member(const FengSymbolDeclView *decl) {
+    FengSymbolDeclKind kind;
+
+    if (decl == NULL) {
+        return false;
+    }
+    kind = feng_symbol_decl_kind(decl);
+    return kind == FENG_SYMBOL_DECL_KIND_FIELD ||
+           kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+           kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+           kind == FENG_SYMBOL_DECL_KIND_FINALIZER;
+}
+
 static bool symbol_decl_matches_ast_decl_kind(const FengSymbolDeclView *decl,
                                               const FengDecl *ast_decl) {
     if (decl == NULL || ast_decl == NULL) {
@@ -3401,14 +3427,14 @@ static const FengSymbolDeclView *find_symbol_decl_member_by_name(const FengSymbo
     if (owner == NULL) {
         return NULL;
     }
-    if (public_only) {
-        return feng_symbol_decl_find_public_member(owner, name);
-    }
     count = feng_symbol_decl_member_count(owner);
     for (index = 0U; index < count; ++index) {
         const FengSymbolDeclView *member = feng_symbol_decl_member_at(owner, index);
 
-        if (member != NULL && slice_equals(feng_symbol_decl_name(member), name)) {
+        if (member != NULL &&
+            symbol_decl_is_instance_member(member) &&
+            (!public_only || feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PUBLIC) &&
+            slice_equals(feng_symbol_decl_name(member), name)) {
             return member;
         }
     }
@@ -9192,7 +9218,7 @@ static bool append_symbol_decl_completion_item(FengLspString *json,
     int kind;
     bool ok;
 
-    if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
+    if (!symbol_decl_is_completion_decl(decl)) {
         return true;
     }
     kind = feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FUNCTION ? 3 : 6;
@@ -9215,7 +9241,7 @@ static bool append_symbol_member_completion_item(FengLspString *json,
     int kind;
     bool ok;
 
-    if (member == NULL) {
+    if (!symbol_decl_is_instance_member(member)) {
         return true;
     }
     kind = feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_FIELD ? 5 : 2;
@@ -10063,6 +10089,74 @@ static bool append_project_imported_completion_items(FengLspString *json,
     return ok;
 }
 
+static bool append_bundle_imported_completion_items(FengLspString *json,
+                                                    bool *first,
+                                                    const FengLspAnalysisSession *session,
+                                                    const FengProgram *program) {
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError symbol_error = {0};
+    bool needs_provider = false;
+    bool ok = true;
+    size_t index;
+
+    if (json == NULL || first == NULL || session == NULL || program == NULL ||
+        session->bundle_count == 0U || program->use_count == 0U) {
+        return true;
+    }
+    for (index = 0U; index < program->use_count; ++index) {
+        const FengUseDecl *use_decl = &program->uses[index];
+
+        if (!use_decl->has_alias &&
+            find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count) == NULL &&
+            !session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
+            needs_provider = true;
+            break;
+        }
+    }
+    if (!needs_provider) {
+        return true;
+    }
+    if (!feng_symbol_provider_create(&provider, &symbol_error)) {
+        feng_symbol_error_free(&symbol_error);
+        return false;
+    }
+    for (index = 0U; index < session->bundle_count; ++index) {
+        if (!feng_symbol_provider_add_bundle(provider, session->bundle_paths[index], &symbol_error)) {
+            ok = false;
+            break;
+        }
+    }
+    for (index = 0U; ok && index < program->use_count; ++index) {
+        const FengUseDecl *use_decl = &program->uses[index];
+        const FengSymbolImportedModule *module;
+        size_t decl_index;
+
+        if (use_decl->has_alias ||
+            find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count) != NULL ||
+            session_contains_module_program(session, use_decl->segments, use_decl->segment_count)) {
+            continue;
+        }
+        module = feng_symbol_provider_find_module(provider, use_decl->segments, use_decl->segment_count);
+        if (module == NULL) {
+            continue;
+        }
+        for (decl_index = 0U; decl_index < feng_symbol_module_public_decl_count(module); ++decl_index) {
+            const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(module, decl_index);
+
+            if (!symbol_decl_is_completion_decl(decl)) {
+                continue;
+            }
+            if (!append_symbol_decl_completion_item(json, first, decl, NULL, -1)) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    return ok;
+}
+
 static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysisSession *session,
                                                            const FengProgram *program,
                                                            FengSlice object_name,
@@ -10260,6 +10354,10 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
             local_list_dispose(&locals);
             return false;
         }
+        if (!append_bundle_imported_completion_items(json, &first, session, program)) {
+            local_list_dispose(&locals);
+            return false;
+        }
     }
     local_list_dispose(&locals);
     return string_append_cstr(json, "]");
@@ -10340,7 +10438,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
             for (index = 0U; index < feng_symbol_module_public_decl_count(alias_module); ++index) {
                 const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(alias_module, index);
 
-                if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
+                if (!symbol_decl_is_completion_decl(decl)) {
                     continue;
                 }
                 if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
@@ -10357,6 +10455,9 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 for (index = 0U; index < feng_symbol_decl_member_count(owner_decl); ++index) {
                     const FengSymbolDeclView *member = feng_symbol_decl_member_at(owner_decl, index);
 
+                    if (!symbol_decl_is_instance_member(member)) {
+                        continue;
+                    }
                     if (!append_symbol_member_completion_item(json, &first, member)) {
                         local_list_dispose(&locals);
                         return false;
@@ -10381,7 +10482,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
             for (index = 0U; index < feng_symbol_module_decl_count(context->current_module); ++index) {
                 const FengSymbolDeclView *decl = feng_symbol_module_decl_at(context->current_module, index);
 
-                if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
+                if (!symbol_decl_is_completion_decl(decl)) {
                     continue;
                 }
                 if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
@@ -10411,7 +10512,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 for (decl_index = 0U; decl_index < feng_symbol_module_public_decl_count(module); ++decl_index) {
                     const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(module, decl_index);
 
-                    if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
+                    if (!symbol_decl_is_completion_decl(decl)) {
                         continue;
                     }
                     if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {

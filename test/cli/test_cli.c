@@ -6190,6 +6190,20 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "fn run(): void {\n"
         "    let value: Ma\n"
         "}\n";
+    static const char *kCtorCompletionSource =
+        "mod test.lsp.pkgconsumer.ctoredit;\n"
+        "use test.lsp.pkg.collections;\n"
+        "\n"
+        "fn run(): void {\n"
+        "    let value = Ma\n"
+        "}\n";
+    static const char *kMemberCompletionSource =
+        "mod test.lsp.pkgconsumer.memberedit;\n"
+        "use test.lsp.pkg.collections;\n"
+        "\n"
+        "fn consume(map: Map<string, int>): int {\n"
+        "    return map.;\n"
+        "}\n";
     static const char *kInitialize =
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     char template_path[] = "/tmp/feng_lsp_external_pkg_XXXXXX";
@@ -6207,6 +6221,8 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     char *hover_member_output;
     char *use_completion_output;
     char *type_completion_output;
+    char *ctor_completion_output;
+    char *member_completion_output;
     char *remove_error = NULL;
 
     workspace_dir = mkdtemp(template_path);
@@ -6274,6 +6290,18 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                    "textDocument/completion",
                                                                    "    let value: Ma",
                                                                    strlen("    let value: Ma"));
+    ctor_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                   kCtorCompletionSource,
+                                                                   kInitialize,
+                                                                   "textDocument/completion",
+                                                                   "    let value = Ma",
+                                                                   strlen("    let value = Ma"));
+    member_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                     kMemberCompletionSource,
+                                                                     kInitialize,
+                                                                     "textDocument/completion",
+                                                                     "    return map.;",
+                                                                     strlen("    return map."));
 
     ASSERT(strstr(hover_type_output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(hover_type_output, "type Map<K, V>") != NULL);
@@ -6286,7 +6314,16 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(type_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(type_completion_output, "\"label\":\"Map\"") != NULL);
     ASSERT(strstr(type_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\"") != NULL);
+    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(member_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(member_completion_output, "\"label\":\"count\"") != NULL);
+    ASSERT(strstr(member_completion_output, "\"label\":\"K\"") == NULL);
+    ASSERT(strstr(member_completion_output, "\"label\":\"V\"") == NULL);
 
+    free(member_completion_output);
+    free(ctor_completion_output);
     free(type_completion_output);
     free(use_completion_output);
     free(hover_member_output);
