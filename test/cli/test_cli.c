@@ -2178,6 +2178,55 @@ static char *capture_lsp_hover_response(const char *source,
     return output;
 }
 
+static char *capture_lsp_position_response_at_path(const char *source_path,
+                                                   const char *source,
+                                                   const char *initialize,
+                                                   const char *method,
+                                                   const char *needle,
+                                                   size_t char_offset) {
+    char *uri;
+    char *escaped_text;
+    char *did_open;
+    char *request;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int line;
+    unsigned int character;
+
+    find_line_character(source, needle, char_offset, &line, &character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    request = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"%s\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                         method,
+                         uri,
+                         line,
+                         character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, request);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    free(shutdown);
+    free(request);
+    free(did_open);
+    free(escaped_text);
+    free(uri);
+    return output;
+}
+
 static void test_lsp_hover_uses_markdown_when_supported(void) {
     static const char *kSource =
         "mod test.lsp.markdown;\n"
@@ -6109,6 +6158,152 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     free(remove_error);
 }
 
+static void test_lsp_external_package_hover_docs_and_completion(void) {
+    static const char *kPackageSource =
+        "pu mod test.lsp.pkg.collections;\n"
+        "\n"
+        "/**\n"
+        " * Package map docs.\n"
+        " */\n"
+        "pu type Map<K, V> {\n"
+        "    /**\n"
+        "     * Number of stored entries.\n"
+        "     */\n"
+        "    pu let count: int;\n"
+        "}\n";
+    static const char *kHoverSource =
+        "mod test.lsp.pkgconsumer.main;\n"
+        "use test.lsp.pkg.collections;\n"
+        "\n"
+        "fn consume(map: Map<string, int>): int {\n"
+        "    return map.count;\n"
+        "}\n";
+    static const char *kUsePathSource =
+        "mod test.lsp.pkgconsumer.useedit;\n"
+        "use test.lsp.pkg.\n"
+        "\n"
+        "fn run(): void {}\n";
+    static const char *kTypeCompletionSource =
+        "mod test.lsp.pkgconsumer.typeedit;\n"
+        "use test.lsp.pkg.collections;\n"
+        "\n"
+        "fn run(): void {\n"
+        "    let value: Ma\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "/tmp/feng_lsp_external_pkg_XXXXXX";
+    char *workspace_dir;
+    char *pkg_project_dir;
+    char *pkg_manifest_path;
+    char *pkg_src_dir;
+    char *pkg_source_path;
+    char *bundle_path;
+    char *consumer_project_dir;
+    char *consumer_manifest_path;
+    char *consumer_src_dir;
+    char *main_path;
+    char *hover_type_output;
+    char *hover_member_output;
+    char *use_completion_output;
+    char *type_completion_output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    pkg_project_dir = path_join(workspace_dir, "pkgdocs");
+    pkg_manifest_path = path_join(pkg_project_dir, "feng.fm");
+    pkg_src_dir = path_join(pkg_project_dir, "src");
+    pkg_source_path = path_join(pkg_src_dir, "collections.ff");
+    bundle_path = path_join(pkg_project_dir, "build/lsp_pkgdocs-0.1.0.fb");
+    consumer_project_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest_path = path_join(consumer_project_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_project_dir, "src");
+    main_path = path_join(consumer_src_dir, "main.ff");
+
+    mkdir_p(pkg_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(pkg_manifest_path,
+                    "[package]\n"
+                    "name: \"lsp_pkgdocs\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(pkg_source_path, kPackageSource);
+    {
+        char *argv[] = { pkg_project_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(bundle_path));
+
+    write_text_file(consumer_manifest_path,
+                    "[package]\n"
+                    "name: \"lsp_pkgconsumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "lsp_pkgdocs: \"../pkgdocs/build/lsp_pkgdocs-0.1.0.fb\"\n");
+    write_text_file(main_path, kHoverSource);
+
+    hover_type_output = capture_lsp_position_response_at_path(main_path,
+                                                              kHoverSource,
+                                                              kInitialize,
+                                                              "textDocument/hover",
+                                                              "fn consume(map: Map<string, int>): int {",
+                                                              strlen("fn consume(map: "));
+    hover_member_output = capture_lsp_position_response_at_path(main_path,
+                                                                kHoverSource,
+                                                                kInitialize,
+                                                                "textDocument/hover",
+                                                                "    return map.count;",
+                                                                strlen("    return map."));
+    use_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                  kUsePathSource,
+                                                                  kInitialize,
+                                                                  "textDocument/completion",
+                                                                  "use test.lsp.pkg.",
+                                                                  strlen("use test.lsp.pkg."));
+    type_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                   kTypeCompletionSource,
+                                                                   kInitialize,
+                                                                   "textDocument/completion",
+                                                                   "    let value: Ma",
+                                                                   strlen("    let value: Ma"));
+
+    ASSERT(strstr(hover_type_output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(hover_type_output, "type Map<K, V>") != NULL);
+    ASSERT(strstr(hover_type_output, "Package map docs.") != NULL);
+    ASSERT(strstr(hover_member_output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(hover_member_output, "let count: i32") != NULL);
+    ASSERT(strstr(hover_member_output, "Number of stored entries.") != NULL);
+    ASSERT(strstr(use_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(use_completion_output, "\"label\":\"collections\"") != NULL);
+    ASSERT(strstr(type_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(type_completion_output, "\"label\":\"Map\"") != NULL);
+    ASSERT(strstr(type_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+
+    free(type_completion_output);
+    free(use_completion_output);
+    free(hover_member_output);
+    free(hover_type_output);
+    free(main_path);
+    free(consumer_src_dir);
+    free(consumer_manifest_path);
+    free(consumer_project_dir);
+    free(bundle_path);
+    free(pkg_source_path);
+    free(pkg_src_dir);
+    free(pkg_manifest_path);
+    free(pkg_project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 int main(void) {
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
@@ -6163,6 +6358,7 @@ int main(void) {
     test_lsp_imported_type_completion_after_use();
     test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
+    test_lsp_external_package_hover_docs_and_completion();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();

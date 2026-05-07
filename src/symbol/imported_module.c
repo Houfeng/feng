@@ -118,6 +118,26 @@ static bool clone_cstr_as_slice(const char *text, FengSlice *out_slice) {
     return true;
 }
 
+static bool clone_slice_as_slice(FengSlice source, FengSlice *out_slice) {
+    char *dup;
+
+    if (out_slice == NULL) {
+        return false;
+    }
+    out_slice->data = NULL;
+    out_slice->length = 0U;
+    if (source.data == NULL || source.length == 0U) {
+        return true;
+    }
+    dup = dup_bytes(source.data, source.length);
+    if (dup == NULL) {
+        return false;
+    }
+    out_slice->data = dup;
+    out_slice->length = source.length;
+    return true;
+}
+
 static void free_synthetic_type_ref(FengTypeRef *type_ref) {
     size_t index;
 
@@ -172,6 +192,8 @@ static void free_synthetic_type_member(FengTypeMember *member) {
         return;
     }
 
+    free((void *)member->doc_comment.data);
+
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         free((void *)member->as.field.name.data);
         free_synthetic_type_ref(member->as.field.type);
@@ -191,6 +213,8 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
     if (decl == NULL) {
         return;
     }
+
+    free((void *)decl->doc_comment.data);
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
@@ -542,6 +566,10 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
     }
     member->token = member_decl->token;
     member->visibility = member_decl->visibility;
+    if (!clone_slice_as_slice(feng_symbol_decl_doc(member_decl), &member->doc_comment)) {
+        free_synthetic_type_member(member);
+        return NULL;
+    }
 
     switch (member_decl->kind) {
         case FENG_SYMBOL_DECL_KIND_FIELD:
@@ -654,6 +682,11 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
     synth_decl->decl.token = symbol_decl->token;
     synth_decl->decl.visibility = symbol_decl->visibility;
     synth_decl->decl.is_extern = symbol_decl->is_extern;
+    if (!clone_slice_as_slice(feng_symbol_decl_doc(symbol_decl), &synth_decl->decl.doc_comment)) {
+        free(synth_decl->name_buf);
+        memset(synth_decl, 0, sizeof(*synth_decl));
+        return false;
+    }
 
     switch (symbol_decl->kind) {
         case FENG_SYMBOL_DECL_KIND_TYPE:

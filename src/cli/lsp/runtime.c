@@ -1586,8 +1586,10 @@ static void cache_query_context_dispose(FengLspCacheQueryContext *context) {
     memset(context, 0, sizeof(*context));
 }
 
-static bool build_cache_query_context(const FengLspDocument *document,
-                                      FengLspCacheQueryContext *context) {
+static bool build_cache_query_context_for_text(const FengLspDocument *document,
+                                               const char *source_text,
+                                               bool include_workspace_cache,
+                                               FengLspCacheQueryContext *context) {
     char *manifest_path = NULL;
     char *symbols_root = NULL;
     FengCliProjectContext project = {0};
@@ -1598,7 +1600,10 @@ static bool build_cache_query_context(const FengLspDocument *document,
     bool ok = false;
 
     memset(context, 0, sizeof(*context));
-    if (document == NULL || document->text == NULL || !document_matches_disk(document)) {
+    if (document == NULL || source_text == NULL) {
+        return false;
+    }
+    if (include_workspace_cache && !document_matches_disk(document)) {
         return false;
     }
     if (!feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
@@ -1609,8 +1614,8 @@ static bool build_cache_query_context(const FengLspDocument *document,
         goto cleanup;
     }
     symbols_root = path_join(project.out_root, "obj/symbols");
-    if (!feng_parse_source(document->text,
-                           strlen(document->text),
+    if (!feng_parse_source(source_text,
+                           strlen(source_text),
                            document->path,
                            &context->program,
                            &parse_error)) {
@@ -1621,7 +1626,7 @@ static bool build_cache_query_context(const FengLspDocument *document,
     }
     /* Add workspace symbol cache when available; it is optional — bundle
      * symbols are still accessible without it. */
-    if (symbols_root != NULL && path_is_directory(symbols_root)) {
+    if (include_workspace_cache && symbols_root != NULL && path_is_directory(symbols_root)) {
         if (!feng_symbol_provider_add_ft_root(context->provider,
                                               symbols_root,
                                               FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
@@ -1648,7 +1653,7 @@ static bool build_cache_query_context(const FengLspDocument *document,
     context->current_module = feng_symbol_provider_find_module(context->provider,
                                                                context->program->module_segments,
                                                                context->program->module_segment_count);
-    context->source_text = document->text;
+    context->source_text = source_text;
     /* The context is useful even when current_module is NULL: bundle symbols
      * are still accessible via the provider for hover and go-to-definition of
      * external package types. */
@@ -1665,6 +1670,14 @@ cleanup:
     free(symbols_root);
     free(manifest_path);
     return ok;
+}
+
+static bool build_cache_query_context(const FengLspDocument *document,
+                                      FengLspCacheQueryContext *context) {
+    return build_cache_query_context_for_text(document,
+                                              document != NULL ? document->text : NULL,
+                                              true,
+                                              context);
 }
 
 static bool diagnostics_json_for_path(const FengLspDiagnosticCollector *collector,
@@ -5179,8 +5192,11 @@ static char *normalize_doc_comment(FengSlice raw) {
     const char *end;
     bool first_line = true;
 
-    if (raw.data == NULL || raw.length < 5U || strncmp(raw.data, "/**", 3U) != 0) {
+    if (raw.data == NULL || raw.length == 0U) {
         return NULL;
+    }
+    if (raw.length < 5U || strncmp(raw.data, "/**", 3U) != 0) {
+        return dup_range(raw.data, raw.data + raw.length);
     }
     cursor = raw.data + 3U;
     end = raw.data + raw.length - 2U;
@@ -9517,6 +9533,118 @@ static bool extract_use_path_context(const char *text,
     return true;
 }
 
+static bool append_seen_module_completion_item(FengLspString *json,
+                                               bool *first,
+                                               FengSlice *seen,
+                                               size_t *seen_count,
+                                               size_t seen_capacity,
+                                               FengSlice next_seg) {
+    size_t index;
+
+    for (index = 0U; index < *seen_count; ++index) {
+        if (slice_equals(seen[index], next_seg)) {
+            return true;
+        }
+    }
+    if (*seen_count < seen_capacity) {
+        seen[(*seen_count)++] = next_seg;
+    }
+    return append_completion_item(json, first, next_seg, "module", 9);
+}
+
+static bool append_provider_use_path_completion_items(FengLspString *json,
+                                                      bool *first,
+                                                      const FengSymbolProvider *provider,
+                                                      const FengSlice *prefix_segments,
+                                                      size_t prefix_count,
+                                                      FengSlice partial,
+                                                      FengSlice *seen,
+                                                      size_t *seen_count,
+                                                      size_t seen_capacity) {
+    size_t module_index;
+
+    if (provider == NULL) {
+        return true;
+    }
+    for (module_index = 0U; module_index < feng_symbol_provider_module_count(provider); ++module_index) {
+        const FengSymbolImportedModule *module = feng_symbol_provider_module_at(provider, module_index);
+        size_t segment_count = feng_symbol_module_segment_count(module);
+        FengSlice next_seg;
+        size_t index;
+
+        if (segment_count <= prefix_count) {
+            continue;
+        }
+        for (index = 0U; index < prefix_count; ++index) {
+            if (!slice_equals(feng_symbol_module_segment_at(module, index), prefix_segments[index])) {
+                break;
+            }
+        }
+        if (index < prefix_count) {
+            continue;
+        }
+        next_seg = feng_symbol_module_segment_at(module, prefix_count);
+        if (partial.length > 0U &&
+            (next_seg.length < partial.length ||
+             memcmp(next_seg.data, partial.data, partial.length) != 0)) {
+            continue;
+        }
+        if (!append_seen_module_completion_item(json,
+                                                first,
+                                                seen,
+                                                seen_count,
+                                                seen_capacity,
+                                                next_seg)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool append_bundle_use_path_completion_items(FengLspString *json,
+                                                    bool *first,
+                                                    char *const *bundle_paths,
+                                                    size_t bundle_count,
+                                                    const FengSlice *prefix_segments,
+                                                    size_t prefix_count,
+                                                    FengSlice partial,
+                                                    FengSlice *seen,
+                                                    size_t *seen_count,
+                                                    size_t seen_capacity) {
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError symbol_error = {0};
+    size_t bundle_index;
+    bool ok = true;
+
+    if (bundle_count == 0U) {
+        return true;
+    }
+    if (!feng_symbol_provider_create(&provider, &symbol_error)) {
+        feng_symbol_error_free(&symbol_error);
+        return false;
+    }
+    for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        if (!feng_symbol_provider_add_bundle(provider, bundle_paths[bundle_index], &symbol_error)) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        ok = append_provider_use_path_completion_items(json,
+                                                       first,
+                                                       provider,
+                                                       prefix_segments,
+                                                       prefix_count,
+                                                       partial,
+                                                       seen,
+                                                       seen_count,
+                                                       seen_capacity);
+    }
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    return ok;
+}
+
 /* Emits completion items for the next segment of a use-path.  All loaded
  * source files whose module path starts with `prefix_segments[0..n-1]` are
  * examined; for each one the segment at index `n` (if it starts with
@@ -9529,7 +9657,6 @@ static bool append_use_path_completion_items(FengLspString *json,
                                              size_t prefix_count,
                                              FengSlice partial) {
     size_t source_index;
-    /* Simple seen-list to suppress duplicates (up to 64 unique segments). */
     FengSlice seen[64];
     size_t seen_count = 0U;
 
@@ -9540,7 +9667,6 @@ static bool append_use_path_completion_items(FengLspString *json,
         const FengProgram *prog = session->sources[source_index].program;
         FengSlice next_seg;
         size_t i;
-        bool already_seen;
 
         if (prog == NULL || prog->module_segment_count <= prefix_count) {
             continue;
@@ -9562,21 +9688,7 @@ static bool append_use_path_completion_items(FengLspString *json,
              memcmp(next_seg.data, partial.data, partial.length) != 0)) {
             continue;
         }
-        /* Deduplicate. */
-        already_seen = false;
-        for (i = 0U; i < seen_count; ++i) {
-            if (slice_equals(seen[i], next_seg)) {
-                already_seen = true;
-                break;
-            }
-        }
-        if (already_seen) {
-            continue;
-        }
-        if (seen_count < 64U) {
-            seen[seen_count++] = next_seg;
-        }
-        if (!append_completion_item(json, first, next_seg, "module", 9)) {
+        if (!append_seen_module_completion_item(json, first, seen, &seen_count, 64U, next_seg)) {
             return false;
         }
     }
@@ -9588,7 +9700,6 @@ static bool append_use_path_completion_items(FengLspString *json,
             const FengSemanticModule *sem_mod = &session->analysis->modules[mod_index];
             FengSlice next_seg;
             size_t i;
-            bool already_seen;
 
             if (sem_mod->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                 continue;
@@ -9612,26 +9723,21 @@ static bool append_use_path_completion_items(FengLspString *json,
                  memcmp(next_seg.data, partial.data, partial.length) != 0)) {
                 continue;
             }
-            /* Deduplicate against already-seen entries. */
-            already_seen = false;
-            for (i = 0U; i < seen_count; ++i) {
-                if (slice_equals(seen[i], next_seg)) {
-                    already_seen = true;
-                    break;
-                }
-            }
-            if (already_seen) {
-                continue;
-            }
-            if (seen_count < 64U) {
-                seen[seen_count++] = next_seg;
-            }
-            if (!append_completion_item(json, first, next_seg, "module", 9)) {
+            if (!append_seen_module_completion_item(json, first, seen, &seen_count, 64U, next_seg)) {
                 return false;
             }
         }
     }
-    return true;
+    return append_bundle_use_path_completion_items(json,
+                                                   first,
+                                                   session->bundle_paths,
+                                                   session->bundle_count,
+                                                   prefix_segments,
+                                                   prefix_count,
+                                                   partial,
+                                                   seen,
+                                                   &seen_count,
+                                                   64U);
 }
 
 /* Scans every source file in the project (except the document being edited)
@@ -9757,6 +9863,93 @@ static bool append_use_path_items_by_project_scan(const FengLspRuntime *runtime,
         free(seen_storage[i]);
     }
     return ok;
+}
+
+static bool append_use_path_items_by_dependency_bundles(const FengLspDocument *document,
+                                                        const FengSlice *prefix_segments,
+                                                        size_t prefix_count,
+                                                        FengSlice partial,
+                                                        FengLspString *json,
+                                                        bool *first,
+                                                        FengSlice *seen,
+                                                        size_t *seen_count,
+                                                        size_t seen_capacity) {
+    char *manifest_path = NULL;
+    FengCliProjectError error = {0};
+    FengCliDepsResolved resolved = {0};
+    bool ok = true;
+
+    if (document == NULL || !document->is_file || !file_exists(document->path)) {
+        return true;
+    }
+    if (!feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
+        feng_cli_project_error_dispose(&error);
+        return true;
+    }
+    feng_cli_project_error_dispose(&error);
+    if (feng_cli_deps_resolve_for_manifest("feng",
+                                           manifest_path,
+                                           false,
+                                           false,
+                                           &resolved,
+                                           &error)) {
+        ok = append_bundle_use_path_completion_items(json,
+                                                     first,
+                                                     resolved.package_paths,
+                                                     resolved.package_count,
+                                                     prefix_segments,
+                                                     prefix_count,
+                                                     partial,
+                                                     seen,
+                                                     seen_count,
+                                                     seen_capacity);
+    }
+    feng_cli_deps_resolved_dispose(&resolved);
+    feng_cli_project_error_dispose(&error);
+    free(manifest_path);
+    return ok;
+}
+
+static bool build_use_path_fallback_completion_json(const FengLspRuntime *runtime,
+                                                    const FengLspDocument *document,
+                                                    size_t offset,
+                                                    FengLspString *json) {
+    FengSlice use_prefix[16];
+    size_t use_prefix_count = 0U;
+    FengSlice use_partial = {0};
+    FengSlice seen[64];
+    size_t seen_count = 0U;
+    bool first = true;
+
+    if (!extract_use_path_context(document != NULL ? document->text : NULL,
+                                  offset,
+                                  use_prefix,
+                                  &use_prefix_count,
+                                  16U,
+                                  &use_partial)) {
+        return false;
+    }
+    if (!string_append_cstr(json, "[") ||
+        !append_use_path_items_by_dependency_bundles(document,
+                                                     use_prefix,
+                                                     use_prefix_count,
+                                                     use_partial,
+                                                     json,
+                                                     &first,
+                                                     seen,
+                                                     &seen_count,
+                                                     64U) ||
+        !append_use_path_items_by_project_scan(runtime,
+                                               document,
+                                               use_prefix,
+                                               use_prefix_count,
+                                               use_partial,
+                                               json,
+                                               &first) ||
+        !string_append_cstr(json, "]")) {
+        return false;
+    }
+    return json->length > 2U;
 }
 
 static bool session_contains_module_program(const FengLspAnalysisSession *session,
@@ -10100,6 +10293,38 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         local_list_dispose(&locals);
         return false;
     }
+    {
+        FengSlice use_prefix[16];
+        size_t use_prefix_count = 0U;
+        FengSlice use_partial = {0};
+
+        if (extract_use_path_context(context->source_text,
+                                     offset,
+                                     use_prefix,
+                                     &use_prefix_count,
+                                     16U,
+                                     &use_partial)) {
+            FengSlice seen[64];
+            size_t seen_count = 0U;
+            bool ok = append_provider_use_path_completion_items(json,
+                                                                &first,
+                                                                context->provider,
+                                                                use_prefix,
+                                                                use_prefix_count,
+                                                                use_partial,
+                                                                seen,
+                                                                &seen_count,
+                                                                64U) &&
+                      string_append_cstr(json, "]");
+
+            local_list_dispose(&locals);
+            if (!ok) {
+                return false;
+            }
+            *out_item_count = first ? 0U : 1U;
+            return true;
+        }
+    }
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
     if (expr != NULL && expr->kind == FENG_EXPR_MEMBER) {
         const FengSymbolImportedModule *alias_module = NULL;
@@ -10334,6 +10559,7 @@ static bool build_repaired_completion_json(const FengLspRuntime *runtime,
                                            FengLspString *json) {
     FengLspDocument repaired;
     FengLspAnalysisSession session = {0};
+    FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
     bool ok = false;
 
@@ -10350,6 +10576,17 @@ static bool build_repaired_completion_json(const FengLspRuntime *runtime,
         ok = program != NULL && build_completion_json(&session, program, repaired.text, offset, json);
     }
     session_dispose(&session);
+    if (!completion_json_has_items(json)) {
+        string_dispose(json);
+        ok = false;
+        if (build_cache_query_context_for_text(document, repaired.text, false, &cache)) {
+            size_t cache_item_count = 0U;
+
+            ok = build_cached_completion_json(&cache, offset, json, &cache_item_count) &&
+                 cache_item_count > 0U;
+            cache_query_context_dispose(&cache);
+        }
+    }
     if (!completion_json_has_items(json)) {
         string_dispose(json);
         ok = false;
@@ -10441,31 +10678,13 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             string_dispose(&json);
         } else {
             session_dispose(&session);
-            /* The current file failed to parse (e.g. an incomplete `use` path).
-             * For use-path completions, scan other project source files
-             * individually so we can still discover available module segments. */
-            {
-                FengSlice use_prefix[16];
-                size_t use_prefix_count = 0U;
-                FengSlice use_partial = {0};
-                bool use_first = true;
-
-                if (extract_use_path_context(document->text, offset,
-                                             use_prefix, &use_prefix_count,
-                                             16U, &use_partial) &&
-                    string_append_cstr(&json, "[") &&
-                    append_use_path_items_by_project_scan(runtime, document,
-                                                          use_prefix, use_prefix_count,
-                                                          use_partial, &json, &use_first) &&
-                    string_append_cstr(&json, "]") &&
-                    completion_json_has_items(&json)) {
-                    free(uri);
-                    ok = send_json_response(output, id, json.data);
-                    string_dispose(&json);
-                    return ok;
-                }
+            if (build_use_path_fallback_completion_json(runtime, document, offset, &json)) {
+                free(uri);
+                ok = send_json_response(output, id, json.data);
                 string_dispose(&json);
+                return ok;
             }
+            string_dispose(&json);
         }
     }
     if (build_single_parse_session(document, &session)) {
@@ -10492,6 +10711,13 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             session_dispose(&session);
         }
     }
+    if (build_use_path_fallback_completion_json(runtime, document, offset, &json)) {
+        free(uri);
+        ok = send_json_response(output, id, json.data);
+        string_dispose(&json);
+        return ok;
+    }
+    string_dispose(&json);
     if (can_repair_completion && build_repaired_completion_json(runtime, document, offset, &json)) {
         free(uri);
         ok = send_json_response(output, id, json.data);

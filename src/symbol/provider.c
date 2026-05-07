@@ -799,6 +799,19 @@ const FengSymbolImportedModule *feng_symbol_provider_find_module(
     return NULL;
 }
 
+size_t feng_symbol_provider_module_count(const FengSymbolProvider *provider) {
+    return provider != NULL ? provider->module_count : 0U;
+}
+
+const FengSymbolImportedModule *feng_symbol_provider_module_at(
+    const FengSymbolProvider *provider,
+    size_t index) {
+    if (provider == NULL || index >= provider->module_count) {
+        return NULL;
+    }
+    return &provider->modules[index];
+}
+
 const FengSymbolDeclView *feng_symbol_module_find_public_type(
     const FengSymbolImportedModule *module,
     FengSlice name) {

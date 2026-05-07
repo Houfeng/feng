@@ -36,6 +36,12 @@ const FengSymbolImportedModule *feng_symbol_provider_find_module(
     const FengSlice *segments,
     size_t segment_count);
 
+size_t feng_symbol_provider_module_count(const FengSymbolProvider *provider);
+
+const FengSymbolImportedModule *feng_symbol_provider_module_at(
+    const FengSymbolProvider *provider,
+    size_t index);
+
 const FengSymbolDeclView *feng_symbol_module_find_public_type(
     const FengSymbolImportedModule *module,
     FengSlice name);
