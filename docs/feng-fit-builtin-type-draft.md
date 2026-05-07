@@ -1,0 +1,123 @@
+# Feng `fit` 支持内建类型草案
+
+> **状态**: 草案。
+> 本文档只定义“内建类型作为 `fit` 左侧目标”的补充规则。
+> `fit` 的通用语法、通用语义、通用冲突判定、通用可见性、导出与孤儿适配规则统一见 [feng-fit.md](./feng-fit.md)。
+> 内建类型本体语义统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
+> 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。> 开发指导见 [dev/feng-fit-optimize-pending.md](../dev/feng-fit-optimize-pending.md)。
+## 1 职责
+
+- 定义哪些内建类型可以作为 `fit` 左侧目标。
+- 定义内建类型进入 `fit` 后, `self` 的补充语义。
+- 定义内建类型进入 `fit` 后的编译期与运行时补充约束。
+- 明确哪些类型仍然不属于 `fit` 内建目标范围。
+
+## 2 适用范围
+
+本草案支持以下内建类型作为 `fit` 左侧目标:
+
+- 标量内建类型: `i8`、`i16`、`i32`、`i64`、`u8`、`u16`、`u32`、`u64`、`f32`、`f64`、`bool`
+- `string`
+- 数组目标形式 `T[]` 与 `T[]!`
+
+内建类型别名按 [feng-builtin-type.md](./feng-builtin-type.md) 的现有规则处理。例如 `int` 视为 `i32`、`float` 视为 `f32`。`fit int` 与 `fit i32` 指向同一个语言类型目标, 编译器必须按规范化后的内建类型名处理。
+
+数组目标形式 `T[]` 与 `T[]!` 的数组层级、逐层 `!` 语义、元素类型规则与数组本体语义统一遵循 [feng-builtin-type.md](./feng-builtin-type.md)。本文只补充“数组可作为 `fit` 左侧目标”这一规则, 不重复定义数组语义本体。
+
+其中 `T[]` 与 `T[]!` 中的 `T` 表示数组元素类型引用。`T` 可以是具体类型；当写作单个类型参数名时, 该类型参数由数组目标形式引入, 其作用域覆盖整个 `fit` 声明。
+
+以下类型不在本草案范围内:
+
+- C 指针类型。
+
+## 3 语义
+
+在 [feng-fit.md](./feng-fit.md) 已定义的 `fit` 通用语义基础上, 本草案增加以下补充语义:
+
+- `fit` 左侧目标除了用户定义的具体 `type`, 还可以是本草案 §2 列出的内建类型。
+- 内建类型上的 `fit` 与用户 `type` 上的 `fit` 在用户可见行为上保持一致。用户仍然通过同一套 `fit` 语法与普通方法调用语法使用这些能力。
+- 内建类型上的 `self` 仍由编译器隐式提供, 仍表示“当前实例”。其中, 标量内建类型中的 `self` 是当前值本身, `string` 中的 `self` 是当前字符串值, 数组目标中的 `self` 是当前数组值。
+- 在孤儿适配判定中, 所有内建类型目标都按外部类型处理, 包括标量、`string` 与数组目标形式 `T[]`、`T[]!`。因此, 当目标 `spec` 定义在当前包内时, `pu fit` 可以公开导出该关系声明；当目标 `spec` 也定义在当前包外时, `pu fit` 必须按 [feng-fit.md](./feng-fit.md) 的孤儿规则移除导出并输出肯定式提示。
+
+以下写法应合法:
+
+```feng
+fit i32 {
+  fn double(): i32 {
+    return self * 2;
+  }
+}
+
+fit T[] {
+  fn same(): T[] {
+    return self;
+  }
+}
+
+fit T[]! {
+  fn readonly(): T[] {
+    return (T[])self;
+  }
+}
+```
+
+以下写法继续非法:
+
+```feng
+fit *byte {
+  fn hash(): u64 {
+    return 0;
+  }
+}
+```
+
+## 4 规则
+
+分为「必须、禁止、说明」。本节只列出内建类型进入 `fit` 后新增的补充规则。未在此列出的通用规则全部继续遵循 [feng-fit.md](./feng-fit.md)。
+
+- [必须] `fit` 左侧使用内建类型时, 目标类型必须属于本草案 §2 列出的范围。
+- [必须] `fit` 左侧使用内建类型别名时, 编译器必须按 [feng-builtin-type.md](./feng-builtin-type.md) 的既有别名规则将其归并到同一个规范化内建类型目标。
+- [必须] `fit` 左侧使用数组目标形式时, 只允许 `T[]` 与 `T[]!` 两类形态；其数组层级与逐层 `!` 语义统一遵循 [feng-builtin-type.md](./feng-builtin-type.md)。
+- [必须] `fit T[]` 或 `fit T[]!` 中, `T` 必须表示数组元素类型引用；当 `T` 由数组目标形式引入时, 其作用域必须覆盖整个 `fit` 声明。
+- [必须] 在孤儿适配判定中, 内建类型目标一律按外部类型处理；当目标 `spec` 在当前包内时, `pu fit` 可公开导出关系声明；当目标 `spec` 也在当前包外时, `pu fit` 不得导出。
+- [必须] 内建类型上的 `fit` 在用户可见层面不得引入区别于用户 `type` 的独立调用规则或独立语义模型。
+- [必须] 内建类型上的 `fit` 方法继续通过普通方法调用语法使用, 不得引入第二种用户可见调用方式。
+- [禁止] 将 C 指针类型作为 `fit` 左侧目标。
+- [说明] 对方法重载、方法冲突、块体成员限制、私有成员访问、可见性与导出等通用规则, 统一直接适用 [feng-fit.md](./feng-fit.md), 本文不重复定义。
+
+## 5 编译期
+
+- 编译器必须允许 [feng-fit.md](./feng-fit.md) 中的 `fit` 通用语法以本草案 §2 列出的内建类型作为左侧目标。
+- 编译器必须允许数组目标形式 `T[]` 与 `T[]!` 出现在 `fit` 左侧, 并按 [feng-builtin-type.md](./feng-builtin-type.md) 的数组类型规则解析其元素类型、数组层级与逐层 `!` 语义。
+- 编译器必须在 `fit T[]` 或 `fit T[]!` 中把 `T` 解析为数组元素类型引用；当 `T` 由数组目标形式引入时, 编译器必须建立覆盖整个 `fit` 声明的类型参数作用域。
+- 编译器必须在语义分析阶段拒绝 C 指针类型出现在 `fit` 左侧目标位置。
+- 编译器必须在解析 `fit` 左侧目标时, 先按现有规则尝试解析用户 `type`, 未命中时再按 [feng-builtin-type.md](./feng-builtin-type.md) 的内建类型规则识别标量、`string` 与数组目标。
+- 编译器必须把内建类型别名规范化为同一个 canonical builtin target, 不得把 `fit int` 与 `fit i32` 视为两个不同目标。
+- 编译器必须在内建类型的 `fit` 块中把 `self` 解析为对应的内建类型表达式。不得把 `self` 伪装成对象类型, 也不得要求额外用户可见载体。
+- 编译器必须允许内建类型通过 `fit` 建立 object-form `spec` 契约关系, 并继续遵循现有 `spec` 满足性、冲突检测与 witness materialization 主路径。
+- 编译器必须在孤儿适配导出判定中把内建类型目标视为外部类型；因此当目标 `spec` 在当前包外时, `pu fit` 必须移除导出, 当目标 `spec` 在当前包内时则允许公开导出关系声明。
+- 编译器必须按 [feng-symbol-table.md](./feng-symbol-table.md) 的既有类型节点规则导出内建类型 fit 目标: 标量与 `string` 使用 BUILTIN type node, 数组目标使用 ARRAY type node。不得把数组 fit target 错导为 builtin type node, 也不得把任何内建 fit target 错导为普通 named type。
+
+## 6 运行时
+
+### 6.1 直接调用
+
+- 对所有具体直接 `fit` 方法调用（无论用户类型还是内建类型），编译器必须在编译期完成静态分派，生成以目标既有表示直接传递 `self` 的静态函数调用。不得为此引入 boxing、wrapper object、额外 carrier struct 或额外 heap allocation。
+- 具体直接调用的运行时开销不得大于等价的自由函数调用。即 `it.some()` 的调用成本不得高于 `some(it)`。
+- 对标量内建类型, `fit` 方法的 `self` 必须按该标量类型的原生值表示传递。
+- 对 `string` 与数组, `fit` 方法的 `self` 必须按其现有受管引用表示传递。对用户仍表现为普通 `string` 值或普通数组值。
+- 编译器不得在具体直接调用的调用路径中插入任何运行时类型查询、方法选择或 witness 解析逻辑。
+
+### 6.2 spec 视角调用与 witness
+
+- 当内建类型按 `spec` 视角被使用时, 运行时继续沿用现有 witness 间接调用模型。这一层间接调用只用于抽象 `spec` 调用, 不得外溢到具体直接调用。
+- witness 表必须在编译期静态确定。编译器不得为 witness 表解析生成任何运行时散列查找、动态分发或 JIT 路径。
+- 内建类型进入 witness 路径时, subject 必须携带实际值、实际字符串引用或实际数组引用。不得出现“只有 witness、subject 为空”的运行时模型。
+- builtin witness thunk 只允许执行一次按目标既有表示的取值或取指针, 然后直接调用对应的内建 `fit` 方法实现。不得通过 boxing 构造新的运行时对象。
+
+## 7 关联
+
+- [feng-fit.md](./feng-fit.md): `fit` 的通用语法、通用语义、通用规则、导出与孤儿适配。
+- [feng-builtin-type.md](./feng-builtin-type.md): 内建类型集合、别名规则、`string` 与数组语义。
+- [feng-spec.md](./feng-spec.md): object-form `spec` 的匹配、冲突与运行时约束。
+- [feng-symbol-table.md](./feng-symbol-table.md): `.ft` 中 BUILTIN / ARRAY type node 与 fit 目标导出格式。
