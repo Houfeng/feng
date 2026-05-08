@@ -1,0 +1,31 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Cloneable<T> {
+    fn cloneValue(): T;
+}
+
+type Key: Cloneable<Key> {
+    var id: int;
+
+    fn cloneValue(): Key {
+        return Key{id: self.id};
+    }
+}
+
+type Copier<K: Cloneable<K>> {
+    fn copy(key: K): K {
+        return key.cloneValue();
+    }
+}
+
+fn main(args: string[]) {
+    let key: Key = Key{id: 7};
+    let copier: Copier<Key> = Copier:<Key>();
+    let copied: Key = copier.copy(key);
+    if copied.id == 7 {
+        puts("self constraint return ok");
+    }
+}

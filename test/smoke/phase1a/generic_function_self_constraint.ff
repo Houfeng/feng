@@ -1,0 +1,28 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Eq<T> {
+    fn same(other: T): bool;
+}
+
+type Key: Eq<Key> {
+    var id: int;
+
+    fn same(other: Key): bool {
+        return self.id == other.id;
+    }
+}
+
+fn sameAs<U: Eq<U>>(left: U, right: U): bool {
+    return left.same(right);
+}
+
+fn main(args: string[]) {
+    let a: Key = Key{id: 7};
+    let b: Key = Key{id: 7};
+    if sameAs(a, b) {
+        puts("function self constraint ok");
+    }
+}

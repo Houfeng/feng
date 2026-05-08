@@ -347,6 +347,8 @@ typedef struct UserSpec {
     char   *c_closure_desc_name;           /* callable-form only */
     UserSpecMember *members;
     size_t          member_count;
+    bool            members_registered;
+    bool            members_registering;
     CGType         *callable_return_type;
     CGType        **callable_param_types;
     size_t          callable_param_count;
@@ -3378,6 +3380,72 @@ static const char *cg_string_literal_var(CG *cg, const char *content, size_t len
     return cv;
 }
 
+static bool cg_ensure_user_spec_members_registered(CG *cg, UserSpec *s);
+
+static bool cg_user_spec_member_name_equals(const UserSpecMember *sm,
+                                            const char *name,
+                                            size_t len) {
+    return sm != NULL && sm->feng_name != NULL &&
+           strlen(sm->feng_name) == len &&
+           memcmp(sm->feng_name, name, len) == 0;
+}
+
+static bool cg_user_spec_has_member_name(const UserSpec *s,
+                                         const char *name,
+                                         size_t len) {
+    if (s == NULL || name == NULL) return false;
+    for (size_t i = 0; i < s->member_count; ++i) {
+        if (cg_user_spec_member_name_equals(&s->members[i], name, len)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool cg_user_spec_append_member_slot(UserSpec *s, UserSpecMember **out_slot) {
+    size_t count = s->member_count;
+    UserSpecMember *grown = realloc(s->members, (count + 1U) * sizeof *s->members);
+    if (grown == NULL) return false;
+    s->members = grown;
+    *out_slot = &s->members[count];
+    memset(*out_slot, 0, sizeof **out_slot);
+    s->member_count = count + 1U;
+    return true;
+}
+
+static bool cg_user_spec_clone_inherited_member(UserSpec *s,
+                                                const UserSpecMember *src) {
+    UserSpecMember *dst = NULL;
+    if (src == NULL || src->feng_name == NULL) return true;
+    if (cg_user_spec_has_member_name(s, src->feng_name, strlen(src->feng_name))) {
+        return true;
+    }
+    if (!cg_user_spec_append_member_slot(s, &dst)) return false;
+    dst->kind = src->kind;
+    dst->type = cgtype_clone(src->type);
+    dst->is_var = src->is_var;
+    dst->param_count = src->param_count;
+    dst->member = src->member;
+    dst->feng_name = strdup(src->feng_name);
+    dst->c_field_name = strdup(src->c_field_name);
+    if (src->type != NULL && dst->type == NULL) return false;
+    if (dst->feng_name == NULL || dst->c_field_name == NULL) return false;
+    if (src->param_count > 0U) {
+        dst->param_types = calloc(src->param_count, sizeof *dst->param_types);
+        dst->param_names = calloc(src->param_count, sizeof *dst->param_names);
+        if (dst->param_types == NULL || dst->param_names == NULL) return false;
+        for (size_t i = 0; i < src->param_count; ++i) {
+            dst->param_types[i] = cgtype_clone(src->param_types[i]);
+            dst->param_names[i] = strdup(src->param_names[i]);
+            if ((src->param_types[i] != NULL && dst->param_types[i] == NULL) ||
+                dst->param_names[i] == NULL) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* ===================== symbol tables ===================== */
 
 static bool cg_register_extern(CG *cg, const FengDecl *decl) {
@@ -3750,19 +3818,11 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         }
         return true;
     }
-    /* Phase 4b-α rejects parent_specs to keep witness composition out of
-     * scope; per dev/feng-value-model-delivered.md the closure is intended
-     * for 4b-β/γ. */
-    if (decl->as.spec_decl.parent_spec_count > 0) {
-        return cg_fail(cg, decl->token,
-            "codegen: spec parent_specs not yet supported in Step 4b-α");
-    }
     size_t mc = decl->as.spec_decl.as.object.member_count;
-    s->members = mc ? calloc(mc, sizeof *s->members) : NULL;
-    if (mc && !s->members) return false;
     for (size_t i = 0; i < mc; i++) {
         const FengTypeMember *m = decl->as.spec_decl.as.object.members[i];
-        UserSpecMember *sm = &s->members[i];
+        UserSpecMember *sm = NULL;
+        if (!cg_user_spec_append_member_slot(s, &sm)) return false;
         sm->member = m;
         if (m->kind == FENG_TYPE_MEMBER_FIELD) {
             sm->kind = USM_KIND_FIELD;
@@ -3806,8 +3866,55 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         }
         if (!sm->feng_name || !sm->c_field_name) return false;
     }
-    s->member_count = mc;
+    for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
+        CGType *parent_type = NULL;
+        UserSpec *parent_spec = NULL;
+        if (!cg_resolve_type_for_user_spec_member(cg,
+                                                  s,
+                                                  decl->as.spec_decl.parent_specs[parent_index],
+                                                  &decl->token,
+                                                  &parent_type)) {
+            return false;
+        }
+        if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC || parent_type->user_spec == NULL) {
+            cgtype_free(parent_type);
+            return cg_fail(cg, decl->token,
+                "codegen: spec parent did not resolve to an object-form spec");
+        }
+        parent_spec = (UserSpec *)parent_type->user_spec;
+        if (!cg_ensure_user_spec_members_registered(cg, parent_spec)) {
+            cgtype_free(parent_type);
+            return false;
+        }
+        for (size_t member_index = 0; member_index < parent_spec->member_count; ++member_index) {
+            if (!cg_user_spec_clone_inherited_member(s, &parent_spec->members[member_index])) {
+                cgtype_free(parent_type);
+                return false;
+            }
+        }
+        cgtype_free(parent_type);
+    }
     return true;
+}
+
+static bool cg_ensure_user_spec_members_registered(CG *cg, UserSpec *s) {
+    const FengProgram *saved_program;
+    bool ok;
+
+    if (s == NULL) return true;
+    if (s->members_registered) return true;
+    if (s->members_registering) {
+        return cg_fail(cg, s->decl->token,
+            "codegen: recursive spec parent registration detected");
+    }
+    s->members_registering = true;
+    saved_program = cg->cur_program;
+    cg->cur_program = s->owner_program;
+    ok = cg_register_user_spec_members(cg, s);
+    cg->cur_program = saved_program;
+    s->members_registering = false;
+    if (ok) s->members_registered = true;
+    return ok;
 }
 
 static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
@@ -4024,11 +4131,18 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_METHOD) {
             buf_append_cstr(td, "    ");
-            cg_emit_c_type(td, sm->type);
-            buf_append_fmt(td, " (*%s)(void *_subject", sm->c_field_name);
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_fmt(td, "void (*%s)(void *_subject", sm->c_field_name);
+            } else {
+                cg_emit_c_type(td, sm->type);
+                buf_append_fmt(td, " (*%s)(void *_subject", sm->c_field_name);
+            }
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(td, ", ");
                 cg_emit_c_type(td, sm->param_types[pi]);
+            }
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_cstr(td, ", void *_out");
             }
             buf_append_cstr(td, ");\n");
             emitted++;
@@ -4054,6 +4168,10 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_append_cstr(td, "    char _padding;\n");
     }
     buf_append_cstr(td, "};\n\n");
+
+    if (s->generic_context_type_param_count > 0U) {
+        return;
+    }
 
     /* ---- Value-model aggregate descriptor (dev/feng-value-model-delivered.md
      * §3, §7.2, §8.2). For object-form specs the value layout is
@@ -6519,7 +6637,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     cg_materialize_to_local(cg, &ar, "_t");
                 }
                 buf_append_cstr(&args_buf, ", ");
-                buf_append_cstr(&args_buf, ar.c_expr);
+                if (i < sm->param_count &&
+                    sm->param_types[i] != NULL &&
+                    sm->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+                    buf_append_fmt(&args_buf, "(void *)(%s)", ar.c_expr);
+                } else {
+                    buf_append_cstr(&args_buf, ar.c_expr);
+                }
                 er_free(&ar);
             }
             if (!ok) {
@@ -6527,6 +6651,43 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 buf_free(&args_buf);
                 er_free(&recv);
                 return false;
+            }
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                const char *ret_desc = cg_generic_param_desc_name(cg, sm->type->generic_param_index);
+                char *ret_storage = cg_fresh_temp(cg, "_spec_ret_storage");
+                char *ret_slot = cg_fresh_temp(cg, "_spec_ret");
+                if (ret_desc == NULL || ret_storage == NULL || ret_slot == NULL) {
+                    free(ret_storage);
+                    free(ret_slot);
+                    free(subject_expr);
+                    buf_free(&args_buf);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                        "codegen: missing descriptor for generic spec method return");
+                }
+                buf_append_fmt(cg->cur_body,
+                    "    max_align_t %s[(%s->size + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                    "    void *%s = (void *)%s;\n"
+                    "    ((const struct %s *)%s->witness)->%s(%s%s, %s);\n",
+                    ret_storage,
+                    ret_desc,
+                    ret_slot,
+                    ret_storage,
+                    us->c_witness_struct_name,
+                    desc_name,
+                    sm->c_field_name,
+                    subject_expr,
+                    args_buf.data ? args_buf.data : "",
+                    ret_slot);
+                out->c_expr = strdup(ret_slot);
+                out->type = cgtype_clone(sm->type);
+                out->owns_ref = true;
+                free(ret_storage);
+                free(ret_slot);
+                free(subject_expr);
+                buf_free(&args_buf);
+                er_free(&recv);
+                return out->c_expr != NULL && out->type != NULL;
             }
             Buf b; buf_init(&b);
             buf_append_fmt(&b, "((const struct %s *)%s->witness)->%s(%s%s)",
@@ -10465,11 +10626,21 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     /* ---- Step 3: build descriptor expressions for each type param ---- */
     char **desc_exprs = calloc(tp_count + 1, sizeof *desc_exprs);
     if (!desc_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; goto bail; }
+    bool saved_constraint_in_generic_fn = cg->in_generic_fn;
+    size_t saved_constraint_tp_count = cg->generic_fn_type_param_count;
+    char **saved_constraint_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_constraint_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_constraint_tp_descs = cg->generic_fn_type_param_descs;
     for (size_t i = 0; i < tp_count && ok; i++) {
         FengToken _etok = e->token;
         const UserSpec *constraint_spec = NULL;
         if (i < sig->type_param_count && sig->type_params[i].constraint) {
             CGType *constraint_type = NULL;
+            cg->in_generic_fn = true;
+            cg->generic_fn_type_param_count = tp_count;
+            cg->generic_fn_type_param_names = gfn->type_param_names;
+            cg->generic_fn_type_param_constraints = NULL;
+            cg->generic_fn_type_param_descs = NULL;
             if (!cg_resolve_type(cg, sig->type_params[i].constraint,
                                  &sig->type_params[i].token, &constraint_type)) {
                 ok = false;
@@ -10477,6 +10648,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 constraint_spec = constraint_type ? constraint_type->user_spec : NULL;
                 cgtype_free(constraint_type);
             }
+            cg->in_generic_fn = saved_constraint_in_generic_fn;
+            cg->generic_fn_type_param_count = saved_constraint_tp_count;
+            cg->generic_fn_type_param_names = saved_constraint_tp_names;
+            cg->generic_fn_type_param_constraints = saved_constraint_tp_constraints;
+            cg->generic_fn_type_param_descs = saved_constraint_tp_descs;
         }
         if (ok && !cg_generic_descriptor_expr(cg, type_args[i], constraint_spec,
                                               &_etok, &desc_exprs[i])) {
@@ -11324,10 +11500,44 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                     sm->feng_name, t->feng_name);
             }
             if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_free(&prefix); free(t_san); free(s_san);
-                return cg_fail(cg, blame,
-                    "codegen: spec method '%s' returning an open generic parameter is not yet supported in witness adaptation",
-                    sm->feng_name);
+                Buf *fp = &cg->fn_protos;
+                buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    buf_append_cstr(fp, ", ");
+                    cg_emit_c_type(fp, sm->param_types[pi]);
+                    buf_append_fmt(fp, " p%zu", pi);
+                }
+                buf_append_cstr(fp, ", void *_out);\n");
+
+                Buf *fd = &cg->witness_defs;
+                buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    buf_append_cstr(fd, ", ");
+                    cg_emit_c_type(fd, sm->param_types[pi]);
+                    buf_append_fmt(fd, " p%zu", pi);
+                }
+                buf_append_cstr(fd, ", void *_out) {\n    ");
+                cg_emit_c_type(fd, fm->return_type);
+                buf_append_fmt(fd, " _ret = %s((struct %s *)_subject",
+                               fm->c_name, t->c_struct_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    char pname[32];
+                    snprintf(pname, sizeof pname, "p%zu", pi);
+                    buf_append_cstr(fd, ", ");
+                    if (!cg_append_witness_forward_arg(cg,
+                                                       fd,
+                                                       sm->param_types[pi],
+                                                       fm->param_types[pi],
+                                                       pname,
+                                                       blame)) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return false;
+                    }
+                }
+                buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                continue;
             }
             Buf *fp = &cg->fn_protos;
             buf_append_cstr(fp, "static ");
@@ -11388,10 +11598,44 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                     t->feng_name, sm->feng_name, s->feng_name);
             }
             if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_free(&prefix); free(t_san); free(s_san);
-                return cg_fail(cg, blame,
-                    "codegen: spec method '%s' returning an open generic parameter is not yet supported in witness adaptation",
-                    sm->feng_name);
+                Buf *fp = &cg->fn_protos;
+                buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    buf_append_cstr(fp, ", ");
+                    cg_emit_c_type(fp, sm->param_types[pi]);
+                    buf_append_fmt(fp, " p%zu", pi);
+                }
+                buf_append_cstr(fp, ", void *_out);\n");
+
+                Buf *fd = &cg->witness_defs;
+                buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    buf_append_cstr(fd, ", ");
+                    cg_emit_c_type(fd, sm->param_types[pi]);
+                    buf_append_fmt(fd, " p%zu", pi);
+                }
+                buf_append_cstr(fd, ", void *_out) {\n    ");
+                cg_emit_c_type(fd, um->return_type);
+                buf_append_fmt(fd, " _ret = %s((struct %s *)_subject",
+                               um->c_name, t->c_struct_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    char pname[32];
+                    snprintf(pname, sizeof pname, "p%zu", pi);
+                    buf_append_cstr(fd, ", ");
+                    if (!cg_append_witness_forward_arg(cg,
+                                                       fd,
+                                                       sm->param_types[pi],
+                                                       um->param_types[pi],
+                                                       pname,
+                                                       blame)) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return false;
+                    }
+                }
+                buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                continue;
             }
             /* Forward declaration — body is emitted in cg_emit_user_method. */
             Buf *fp = &cg->fn_protos;
@@ -12221,7 +12465,7 @@ static bool cg_emit_all_programs(CG *cg,
     /* Pass 2.5: register spec members. */
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         cg->cur_program = cg->user_specs[i].owner_program;
-        bool ok = cg_register_user_spec_members(cg, &cg->user_specs[i]);
+        bool ok = cg_ensure_user_spec_members_registered(cg, &cg->user_specs[i]);
         cg->cur_program = NULL;
         if (!ok) return false;
     }
