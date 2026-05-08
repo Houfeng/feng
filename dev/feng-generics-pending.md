@@ -10,7 +10,7 @@
 
 ## Todo List
 
-> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 generic spec parent codegen 均已闭环。由于 union-form `spec` 仍处于语法草案阶段，本轮继续限定为**不含 union-form**的既有语言形态；`std Map` 应在全量回归通过后进入实现。
+> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 concrete generic spec parent codegen 均已闭环。但 2026-05-09 通过最小 probe 复查后，当前仍存在约束面向上转发、open generic spec parent 替换，以及泛型 fit 三个既有语言形态内的缺口，不能认定为泛型 100% 完整。由于 union-form `spec` 仍处于语法草案阶段，本轮继续限定为**不含 union-form**的既有语言形态；`std Map` 应等待这些当前缺口收口后再进入实现。
 
 - [x] **Phase 5.5**：符号表结构重构（G5 前置，见 [feng-plan.md](./feng-plan.md) §Phase 5.5）
 - [x] **G0**：所有设计决策收口（Q1–Q5 全部已决策，见 [§G0](#g0-规则收口前置于一切编码)）
@@ -19,8 +19,8 @@
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
 - [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面按 union 语法落地后另行收口，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion，以及 generic-type generic-method 基础路径已完成；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
-- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 generic spec parent codegen；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion，以及 generic-type generic-method 基础路径已完成；仍需补齐约束面向上转发、open generic spec parent 替换与泛型 fit；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
+- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 concrete generic spec parent codegen；仍缺约束面向上转发、open generic spec parent 替换与泛型 fit 的成功 smoke；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
 
 ---
 
@@ -35,6 +35,14 @@
 1. 函数级自引用约束：`fn sameAs<U: Eq<U>>(...)` 与类型级 `type MiniMap<K: Eq<K>, V>` 使用同一套 open generic spec instance 注册与 descriptor 解析机制。
 2. open generic 返回值 witness adapter：`spec Cloneable<T> { fn cloneValue(): T; }` 这类约束方法返回 open generic parameter 时，witness thunk 通过 `_out`/slot ABI 把 concrete 返回值写回 erased slot。
 3. generic spec parent codegen：`spec IntSequence: Sequence<int>` 这类语义层已接受的 generic spec parent，会在 codegen 注册与 witness 结构中按子优先、同名跳过的规则展开父 spec 成员。
+
+### 2026-05-09 复查新增缺口
+
+本次复查不只看文档，按现有 smoke、代码生成护栏与最小 probe 反查，确认以下缺口仍属于当前既有语言形态内的问题：
+
+1. 约束面向上转发未完成：`fn useLabelled<U: Labelled>(value: U) { useNamed:<U>(value); }` 在 `Labelled: Named` 已成立时仍触发 `forwarding a generic type argument across a different constraint surface is not yet supported (G6)`。
+2. open generic spec parent 替换未完成：`spec Collection<T>: Sequence<T>` 与 `type IntBag: Collection<int>` 组合下，语义层仍以未替换的父 `Sequence<T>` 签名检查实现方法，最小 probe 报 `method 'first' signature does not match spec 'Sequence'`。
+3. 泛型 fit 未完成：`fit Box<T>: Reader<T>` 中左侧 `<T>` 仍未进入目标泛型 type 参数作用域，最小 probe 报 `unknown type 'T'`；这与 [feng-fit.md](../docs/feng-fit.md) 已定义的泛型 fit 语法不一致。
 
 ### 一、当前已经验证可工作的范围
 
