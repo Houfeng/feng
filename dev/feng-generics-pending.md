@@ -4,22 +4,371 @@
 > 语言规范权威来源：[docs/feng-generics-draft.md](../docs/feng-generics-draft.md)
 > 符号表规范权威来源：[docs/feng-symbol-table.md](../docs/feng-symbol-table.md)
 > 前置任务（Phase 5.5 符号表重构）见 [dev/feng-plan.md](./feng-plan.md)。
+> **当前阶段优先级调整（2026-05-08）**：暂停 [dev/feng-fit-optimize-pending.md](./feng-fit-optimize-pending.md) 中的“fit 值类型”推进，先把泛型本身补齐到可支撑标准库 `Map`、约束调用、值类型与各类契约场景的完整状态；fit 值类型工作在泛型完整后继续。
 
 ---
 
 ## Todo List
 
-> G1/G2/G3/G4/G6 可立即推进；G5 需等 Phase 5.5 符号表重构完成后再开始。
+> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的“第一阶段实现”已经完成，但“泛型已完整”这一目标尚未达到，必须继续收口。
 
 - [x] **Phase 5.5**：符号表结构重构（G5 前置，见 [feng-plan.md](./feng-plan.md) §Phase 5.5）
 - [x] **G0**：所有设计决策收口（Q1–Q5 全部已决策，见 [§G0](#g0-规则收口前置于一切编码)）
 - [x] **G1**：词法分析确认与测试（见 [§G1](#g1-词法分析)）
 - [x] **G2**：AST 结构扩展（见 [§G2](#g2-ast-扩展)）
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
-- [x] **G4**：语义分析扩展（G4-1 ~ G4-20，见 [§G4](#g4-语义分析扩展)）
+- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；受约束类型参数的成员/方法调用闭环仍未完成，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [x] **G6**：代码生成（布局单态化 + 方法共享，见 [§G6](#g6-代码生成)）
-- [x] **G7**：端到端测试与全量回归（见 [§G7](#g7-测试与验证)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，但类型覆盖与约束 lowering 未完成，见 [§G6](#g6-代码生成)）
+- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 能证明基础路径，但不足以证明“泛型完整”，见 [§G7](#g7-测试与验证)）
+
+---
+
+## 当前问题总表
+
+本节只记录**已经通过当前代码与 smoke/最小样例验证过**的问题，用于指导下一阶段工作。这里的“问题”是“泛型尚未完整”的事实，不代表 Q1 路线错误；相反，当前问题大多是 Q1 路线尚未收口完毕。
+
+### 一、当前已经验证可工作的范围
+
+- 泛型声明、类型引用、显式类型实参、基本推导、名称与 arity 校验，已经具备可用基础。
+- 泛型类型上的**非泛型方法**，当参数/返回仅使用外层类型参数，且具体类型实参属于当前已支持类别时，可以正确编译运行。
+- 当前 smoke 已验证 `Box<T>` 的 `setValue(next: T)` / `readValue(): T` 路径可工作，覆盖了 `i32` 与 `string` 两类实例。
+- 共享泛型主体的基本 ABI 已经落地：`void *self` / `const void *param` / `T` 的隐藏描述参数 / `void *_out` 这条路线是当前继续完善的基础，不再推翻；完整态将该隐藏参数统一收口为 `FengGenericParamDescriptor *T`。
+
+### 二、当前已经验证未完成的问题
+
+#### P1. `spec` / 聚合值 作为泛型类型实参仍未支持
+
+- 当前 `MyType:<Spec1, int>()` 会直接在 codegen 阶段失败，错误为 `aggregate/spec type as generic type argument not yet supported (G6)`。
+- 这说明当前泛型并未覆盖 object-form spec value 这类聚合值，也不能宣称“已覆盖所有值类型”。
+- 影响范围包括：`spec` 作为泛型参数位置的值、未来 tuple / 其他按值聚合类型，以及任何依赖 `FengAggregateValueDescriptor` 的按值泛型场景。
+
+#### P2. 泛型函数/共享主体中的聚合值返回仍未支持
+
+- 当前 codegen 仍保留 `aggregate return inside generic function not yet supported (G6)` 的显式失败分支。
+- 这意味着即使参数位置将来支持了聚合值，返回路径仍未闭合。
+
+#### P3. 受约束类型参数的成员/方法调用没有形成完整闭环
+
+- 语义层已经支持“类型参数约束必须是 spec”的基础校验，也允许在规范层声明 `T: SomeSpec`。
+- 但当前并没有把“`T` 在约束下具备 `SomeSpec` 能力”完整 lower 到共享泛型主体。
+- 现状上，`Map<K: Hashable, V>` 这类真正依赖约束能力调用的泛型，尚不能正确编译与运行。
+- 这不是某个单点 bug，而是从语义到 codegen 的闭环未完成：语义层没有把受约束类型参数统一收口成稳定的“能力可调用面”；codegen 层当前只会处理“具体 object receiver”或“一等 spec 值 receiver”，不会处理“generic receiver + 约束能力调用”。
+
+#### P4. 泛型类型上的泛型方法仍未支持
+
+- 当前 `type Box<T> { fn map<U>(...) { ... } }` 这类“泛型类型 + 方法级泛型参数”的组合仍未完成。
+- 代码里保留了明确错误：`generic methods on generic types are not yet supported`。
+
+#### P5. 测试覆盖不足以证明“泛型完整”
+
+- 现有 smoke 主要证明了：标量值类型（如 `i32`）、托管指针类型（如 `string`），以及泛型类型上的基础读写与返回。
+- 现有 smoke 尚未证明：`spec` / 聚合值作为泛型实参、受约束类型参数的行为调用、泛型函数/方法的聚合值返回、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
+
+#### P6. callable-form `spec` 与 union-form `spec` 的泛型覆盖仍未闭合
+
+- 当前源码中的 `spec` form 枚举仍只有 object-form / callable-form 两类；源码尚未把 union-form 纳入同一条泛型实现路径。
+- 语义 value-kind 已经把 callable-form `spec` 归类为 managed pointer，但 codegen 仍保留 `callable-form specs not yet supported` 的未完成分支。
+- 因此，当前实现距离“所有形态 Spec 都可作为泛型实参/约束”还有明确差距。
+
+### 三、当前类型覆盖矩阵
+
+| 类型类别 | 当前状态 | 说明 |
+| --- | --- | --- |
+| 内建标量值类型（`bool` / 整数 / 浮点） | **已支持基础路径** | 走 `FENG_VALUE_TRIVIAL` |
+| 托管指针类型（`UserType` / `string` / `T[]`） | **已支持基础路径** | 走 `FENG_VALUE_MANAGED_POINTER` |
+| object-form spec value | **未完成** | 当前仍被归入 aggregate，generic arg 不支持 |
+| callable-form spec value | **未完成** | value-kind 已有落点，但 codegen 尚未闭合 |
+| union-form spec value | **未完成** | 当前源码未进入统一泛型路径 |
+| 未来 tuple / 其他按值聚合类型 | **未完成** | 与 aggregate 支持同一闭环 |
+| 受约束类型参数上的行为调用 | **未完成** | 契约/能力 lowering 未闭环 |
+
+### 四、当前契约覆盖矩阵
+
+| 场景 | 当前状态 | 说明 |
+| --- | --- | --- |
+| 无约束类型参数声明/传参/返回 | **已支持基础路径** | 限制操作面仍成立 |
+| 无约束类型参数禁止成员访问 | **语义规则已存在** | 需继续以测试锁死 |
+| 泛型约束声明与解析 | **已支持基础路径** | 允许 `T: Spec`、允许泛型 spec 实例约束 |
+| object-form `spec` 约束下的成员/方法行为调用 | **未完成** | 这是 `Map` 当前最大阻塞 |
+| callable-form `spec` 约束下的直接调用 | **未完成** | 需要单独的 invoke lowering |
+| union-form `spec` 约束下的收窄/成员可见性 | **未完成** | 需要复用 union 既有规则，不可另开特判 |
+| 一等 spec 值与泛型约束共享一套 lowering | **不应继续混用** | 需要在实现上显式区分 |
+
+---
+
+## 目标收口（2026-05-08 版）
+
+本节是对“当前实现骨架”与“最终完整态目标”的重新收口。Q1 节保留的是当前已落地的基础路线；本节给出**完整态**要求，后续 G4/G6/G7 以本节为准补齐。
+
+### 一、六项目标
+
+1. 支持 `UserType`、所有内建类型（包括值类型、引用类型、和值语义的引用类型），以及所有形态 `spec` 作为泛型实参。
+2. 支持所有形态 `spec` 作为泛型约束；`spec` 的主要设计目标就是契约，而泛型约束本质上就是一个重要的契约场景。
+3. 支持“泛型类型 + 泛型方法”、泛型函数、泛型 `spec` 声明契约。
+4. 支持任意多个泛型参数；实现不能把 ABI 写死为单参数或双参数特例。
+5. 运行时开销极小：
+    - 非契约路径不增加运行时查表；
+    - 契约路径至多一次间接调用，或在可专门化场景下零间接调用；
+    - 禁止任何基于 `(type, spec)` 的运行时查表。
+6. 值类型不能产生托管堆分配；泛型路径不得以装箱作为通路前提。
+
+### 二、完整态总原则
+
+1. 保留 Q1 的“布局单态化 + 方法共享”主路线，不推翻当前共享主体 ABI。
+2. 泛型架构的抽象单位不是 G6-1/G6-2 这类功能点，而是稳定抽象输入。完整态至少要把四类输入定死：泛型参数描述、宿主布局输入、约束面 witness 生成规则、统一泛型环境展开规则。
+3. 泛型完整态必须把“如何操作 `T` 的值”和“如何使用 `T` 满足约束后的能力”统一收进同一个参数 ABI：`FengGenericParamDescriptor` 负责值模型字段，`witness` 指向该约束面的静态见证实例。
+4. `FengGenericParamDescriptor` 不是值载体，也不是一等 `spec` 载体；具体值始终位于单态化结构字段、局部临时或普通实参槽中。
+5. 共享主体不得把具体布局写死进实现；字段访问只能依赖宿主布局输入，而不能依赖“当前这个类型恰好只有一个字段”之类的偶然事实。
+6. 契约分发必须通过 `FengGenericParamDescriptor.witness` 进入共享主体；禁止为同一类型参数再平行追加运行时描述参数，也禁止按 `type/spec` 做字典、哈希表、注册表或字符串查找。
+7. 对值类型，泛型路径一律使用“字段内联 + 局部临时 + `_out` 返回 + 按值 thunk 参数”方案；不得为满足泛型或契约调用而分配托管对象。
+8. 所有形态 `spec` 都必须能进入泛型约束体系；不能把 callable-form、union-form 等 form 视为“非主路径”，因为 `spec` 的核心职责就是契约，而泛型约束正是契约的关键使用面。
+9. 泛型核心必须遵循开闭原则：共享主体只依赖稳定抽象输入，而不依赖“当前已知有哪些具体类型/契约 form”。未来新增类型或新增契约 form 时，应通过编译器补齐对应 `FengGenericParamDescriptor` 实例与对应 witness 实例接入；泛型共享主体本身不应因此改动控制流或分发逻辑。
+
+### 三、完整态 ABI 设计
+
+#### 1. 泛型参数 ABI
+
+- 每个类型参数 `T` 都有且仅有一个 `const FengGenericParamDescriptor *_T`。
+- 该描述符直接回答四个问题：
+  - `sizeof(T)` 是多少；
+  - `T` 属于 trivial / managed pointer / aggregate 哪一类；
+  - 若是 aggregate，使用哪一个 `FengAggregateValueDescriptor`。
+    - 若 `T` 声明了 `spec` 约束，复用哪一个编译期已经生成好的 witness 实例；否则 `witness == NULL`。
+- 这条 ABI 已有实现基础，后续工作是把类型覆盖补齐，而不是重写。
+- 当前实现里的 `FengGenericValueDescriptor` 是这条 ABI 的值模型前身；完整态直接将其重命名为 `FengGenericParamDescriptor` 并增加 `witness`，而不是再引入一层平行 wrapper。
+- `FengGenericParamDescriptor` 的设计目标必须是“泛型参数使用契约”，而不是“把值本体或一等 `spec` 载体塞进 descriptor”。未来新增类型时，只要编译器能为该类型生成正确的 `FengGenericParamDescriptor`（必要时连同已有 aggregate 描述符体系与 witness 实例一起接入），泛型共享主体就不应改动。
+- 共享主体只通过 `_T` 操作值、通过 `_T->witness` 使用约束；具体值本体始终在单态化字段、局部临时或普通实参里。
+
+#### 2. 宿主布局输入
+
+- 泛型共享主体不得把具体字段偏移硬编码进共享实现。
+- 共享主体只按字段序消费由编译器提供的布局输入；最小形态可以是 `const size_t *field_offsets`，未来若收口为具名 layout descriptor，也不应改变共享主体的控制流。
+- 未来新增类型、字段布局策略或对象承载形态时，只要编译器能提供正确的布局输入，泛型共享主体就不应改动。
+
+#### 3. witness ABI（约束 ABI）
+
+- `FengGenericParamDescriptor.witness` 不是运行时 `spec` 载体；它只是共享主体里复用编译期已经生成好的静态 witness instance。
+- 这里“复用 witness”指复用同一套编译期 witness 生成机制与同一约束面的静态 slot 形状；不要求所有调用路径无条件共用同一个最终 witness instance。
+- 对每个类型参数，按声明顺序只展开一个隐藏 `const FengGenericParamDescriptor *_T`；共享主体需要约束能力时，从 `_T->witness` 取对应 witness。
+- `witness` 的静态解释在生成共享主体时就固定，不允许运行时枚举或查表。
+- `FengNamedWitness` / `FengHandlerWitness` / `FengValueWitness` 只是三种示例，不是“全语言只固定这三种 witness 结构”。
+- **固定的是生成规则**：object-form 生成字段/方法槽位；callable-form 生成 `invoke` 槽位；future union-form 生成 `test__Case` / `project__Case` 槽位。
+- **变化的是 witness type**：按“约束面”生成不同的 witness 结构。
+- **再变化的是 witness instance**：按“具体类型如何满足该约束面”生成不同实例。
+- 因此，泛型核心不是依赖“只有三种 witness 类型”，而是依赖“任意约束面都能按固定规则生成 witness type 与 witness instance”。
+- 在泛型共享主体里，传给 witness thunk 的 `subject` / `callee` / `value` 指针直接指向单态化结构字段、局部临时或普通实参槽；witness 只描述“怎么用这个值满足约束”，不承载值本身。
+- 在一等 `spec` 值路径里，当前 object-form `spec` 仍沿用 fat value `{ void *subject; const Witness *witness; }`，调用形态是 `recv.witness->slot(recv.subject, ...)`。
+
+**最小可实现定义**：
+
+```c
+/* object-form spec Named {
+ *   let name: string;
+ *   fn rename(next: string): void;
+ * }
+ */
+typedef struct FengNamedWitness {
+    void (*get__name)(const void *subject, void *_out);
+    void (*set__name)(void *subject, const void *value);   /* 只对可写字段生成 */
+    void (*call__rename)(void *subject, const void *arg_next, void *_out);
+} FengNamedWitness;
+
+/* callable-form spec Handler(x: int): bool; */
+typedef struct FengHandlerWitness {
+    void (*invoke)(const void *callee, const void *arg_x, void *_out);
+} FengHandlerWitness;
+
+/* future union-form spec Value: int | string; */
+typedef struct FengValueWitness {
+    bool (*test__int)(const void *subject);
+    void (*project__int)(const void *subject, void *_out);
+    bool (*test__string)(const void *subject);
+    void (*project__string)(const void *subject, void *_out);
+} FengValueWitness;
+```
+
+- 上面不是“运行时通用反射表”，而是**编译器按约束面直接生成的静态 witness 结构**。
+- runtime 不需要理解这些 witness 结构的语义；runtime 继续只承载值模型与生命周期。约束 ABI 由 semantic/codegen 决定、声明和传递。
+- object-form `spec` 的 slot 命名规则固定为：
+  - 字段读：`get__FieldName`
+  - 字段写：`set__FieldName`
+  - 方法调用：`call__MethodName`
+- callable-form `spec` 固定为单槽 `invoke`。
+- future union-form 固定为成对槽位：`test__CaseName` + `project__CaseName`。
+
+**witness type 与 witness instance 的边界**：
+
+```c
+/* 同一个约束面：共用一个 witness type */
+typedef struct FengNamedWitness FengNamedWitness;
+
+/* 不同满足者：各自生成不同 instance */
+extern const FengNamedWitness feng_witness__User__Named;
+extern const FengNamedWitness feng_witness__Admin__Named;
+```
+
+- `Named`、`Hashable`、`Reader<int>`、`Reader<string>` 这类**不同约束面**，都应生成各自独立的 witness type。
+- `User: Named`、`Admin: Named`、`fit Box<string>: Named` 这类**不同满足路径**，共用 `FengNamedWitness` 这个 type，但各自拥有不同 instance。
+- 对泛型 `spec`，基线规则应按“完成类型实参替换后的约束面”生成 witness type；不要把“不同约束面偶然长得像”当成语义前提。若未来要做 ABI identical 的合并，也只能是优化，不得成为正确性前提。
+- 绝不能退化成“一个通用 witness descriptor + slot 数组 + 名字查找”；那会把当前静态槽位 ABI 重新拉回运行时反射表，与本方案目标冲突。
+
+**同一份 witness 的复用边界**：
+
+- witness 能否被两个调用路径**字面上复用为同一个 instance**，取决于它们是否向 thunk 传入同一种 receiver 表示。
+- 对 `UserType`、`string`、closure 等托管指针类型，泛型路径与一等 `spec` 路径都可以把具体对象指针作为 `subject` 传入，因此可以直接复用同一个 witness instance。
+- 对值类型，泛型路径天然作用于值槽地址；若未来一等 `spec` 值路径为了生命周期管理仍以 subject carrier / 箱对象指针承载，则两条路径的 receiver 表示不同，**不能直接共用同一个 witness instance**。
+- 这不是契约语义问题，而是 receiver ABI 问题。
+- 完整态应把“无装箱值槽表示”作为泛型 witness 的规范 receiver ABI；一等 `spec` 值若需要 subject carrier，则应为 `spec` 路径生成一个静态 adapter witness，其 thunk 先解 carrier，再转发到同一约束面的值槽实现。
+- 因此，泛型调用与 `spec` 调用共享的是同一约束面的 witness family、slot 契约与编译期静态生成机制；对值类型不强求共享同一个最终 instance。
+
+**实例化点生成规则**：
+
+```c
+static void FengUser__Named__get__name(const void *subject, void *_out) {
+    const FengUser *self = (const FengUser *)subject;
+    *(FengString **)_out = (FengString *)feng_retain(self->name);
+}
+
+static void FengUser__Named__set__name(void *subject, const void *value) {
+    FengUser *self = (FengUser *)subject;
+    feng_assign((void **)&self->name, *(void *const *)value);
+}
+
+static void FengUser__Named__call__rename(void *subject,
+                                          const void *arg_next,
+                                          void *_out) {
+    FengUser *self = (FengUser *)subject;
+    FengUser__rename(self, *(FengString *const *)arg_next);
+    (void)_out;
+}
+
+static const FengNamedWitness feng_witness__User__Named = {
+    .get__name = FengUser__Named__get__name,
+    .set__name = FengUser__Named__set__name,
+    .call__rename = FengUser__Named__call__rename,
+};
+```
+
+- 编译器在“具体类型 `User` 满足 `Named`”的实例化点生成或选取对应 witness 实例。
+- 泛型共享主体签名中隐藏参数只保留 `const FengGenericParamDescriptor *_T` 这一层抽象；共享主体需要约束能力时，再把 `_T->witness` 解释为 `const FengNamedWitness *`。共享主体既不关心 thunk 名字，也不关心它们来自 `fit` 还是直接满足。
+
+**共享主体中的最终形态**：
+
+```c
+typedef struct FengHashableWitness {
+     void (*call__hash)(const void *subject, void *_out);
+     void (*call__equals)(const void *subject, const void *arg_other, void *_out);
+} FengHashableWitness;
+
+void FengMap__has__shared(
+     void *_self,
+     const size_t *_field_offsets,
+     const FengGenericParamDescriptor *_K,
+     const FengGenericParamDescriptor *_V,
+     const void *_p_key,
+     void *_out);
+```
+
+- 共享主体对 `K.hash()` 的 lowering 直接变成：
+
+```c
+const FengHashableWitness *_K_Hashable =
+    (const FengHashableWitness *)_K->witness;
+uint64_t _tmp_hash;
+_K_Hashable->call__hash(_p_key, &_tmp_hash);
+```
+
+- 共享主体对 `K.equals(other)` 的 lowering 直接变成：
+
+```c
+const FengHashableWitness *_K_Hashable =
+    (const FengHashableWitness *)_K->witness;
+bool _tmp_eq;
+_K_Hashable->call__equals(entry_key_ptr, _p_key, &_tmp_eq);
+```
+
+- object-form `T.name` 的 lowering 直接变成 `((const FengNamedWitness *)_T->witness)->get__name(t_ptr, out)`。
+- object-form `T.name = x` 的 lowering 直接变成 `((const FengNamedWitness *)_T->witness)->set__name(t_ptr, x_ptr)`。
+- callable-form `F(x)` 的 lowering 直接变成 `((const FengHandlerWitness *)_F->witness)->invoke(f_ptr, x_ptr, out)`。
+- future union-form 收窄直接变成：
+
+```c
+const FengValueWitness *_V_Value =
+    (const FengValueWitness *)_V->witness;
+
+if (_V_Value->test__int(v_ptr)) {
+    int64_t _tmp;
+    _V_Value->project__int(v_ptr, &_tmp);
+    /* ... */
+}
+```
+
+- 该路径没有运行时查表，只有编译期静态确定的 `witness` 槽位读取与最多一次间接调用。
+
+#### 4. 外层泛型参数与方法级泛型参数统一展开
+
+- 泛型类型上的泛型方法，不应再被视为特殊情况。
+- ABI 统一规则如下。
+- 先展开外层类型参数描述符。
+- 再展开方法级类型参数描述符。
+- 再展开显式普通参数。
+- 最后是可选 `_out`。
+- 这样天然支持任意多个泛型参数，也支持“泛型类型 + 泛型方法”。
+
+### 四、所有类型的统一落点
+
+| 类型类别 | 完整态 generic arg 落点 | 约束 |
+| --- | --- | --- |
+| `bool` / 整数 / 浮点 | `FENG_VALUE_TRIVIAL` | 不分配托管堆对象 |
+| `string` | `FENG_VALUE_MANAGED_POINTER` | 复用现有字符串运行时 |
+| `T[]` / `T[]!` | `FENG_VALUE_MANAGED_POINTER` | 复用现有数组运行时 |
+| `UserType` | `FENG_VALUE_MANAGED_POINTER` | 复用现有对象运行时 |
+| object-form `spec` value | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | 复用 fat value + aggregate descriptor |
+| callable-form `spec` value | `FENG_VALUE_MANAGED_POINTER` | 复用 closure pointer 路径 |
+| union-form `spec` value | 复用 union 自身 carrier 的值模型 | generic 层不单独发明第四类 |
+| tuple / 其他按值聚合类型 | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | 统一走 aggregate 描述符 |
+
+说明：`void` 仍按既有语义处理，不作为普通字段/实参/返回值的可存储泛型值类型。
+
+### 五、所有契约的统一落点
+
+约束位置只接受 `spec` 引用，不接受具体 `type` 等值约束。Feng 当前没有继承/子类型层级；把类型参数约束写成“必须精确等于某具体类型”不会提供新的契约能力，也不构成有意义的泛型抽象，因此完整态不保留这一路径。
+
+#### 1. object-form `spec` 约束
+
+- 语义层提供固定成员面。
+- codegen 生成 witness 结构，其中包含：
+  - 字段 getter/setter thunk；
+  - 方法 thunk；
+  - 必要时父 `spec` 继承闭包展平后的成员槽位。
+- `t.field` / `t.method()` 在共享主体中都应通过 `_T->witness` 上的固定槽位 lowering。
+
+#### 2. callable-form `spec` 约束
+
+- 语义层把 `T(...)` 解释为对 callable-form 契约的直接调用。
+- codegen 为该约束生成单独 invoke witness，例如 `call(const void *callee, ..., void *_out)`。
+- 共享主体调用时至多一次间接调用；不得先物化成 object-form `spec` 或做运行时匹配。
+
+#### 3. union-form `spec` 约束
+
+- 语义层继续复用 union 既有规则：先收窄，再访问允许的 member。
+- codegen 必须通过固定 witness / carrier 操作进入 union lowering；generic 层不得重造一套独立的 union 运行时。
+- 即使当前源码尚未把 union-form 纳入同一条 code path，完整态设计也必须按这条原则保留 ABI。
+
+### 六、性能与零分配要求
+
+1. 非契约泛型路径只允许 descriptor 分支与必要的 retain/release；不得引入额外间接调用。
+2. 契约路径最多一次间接调用；允许的间接仅来自静态 witness thunk。
+3. 禁止运行时查表，包括但不限于：
+    - `(type, spec)` -> witness 字典
+    - 字符串或符号 ID 查找
+    - 运行时枚举 witness 数组再匹配目标
+4. 值类型不得因为泛型或契约调用而产生托管堆分配。
+5. object-form `spec` 的一等值语义与泛型约束调用必须分离：
+    - 一等 spec 值走既有 spec value 语义；
+    - 泛型约束调用走 `FengGenericParamDescriptor.witness` ABI；
+    - 泛型路径不得依赖未来的 fit 值类型装箱方案。
 
 ---
 
@@ -34,10 +383,22 @@
 
 **决策**：**布局单态化 + 方法共享**，现有非泛型发码路径零改动。
 
-**核心思路**：值在结构体字段里，方法通过描述符了解字段的类型性质。两件事分别处理：
+**核心思路**：值在结构体字段里，方法通过描述符了解字段的类型性质。完整态按三层拆分：
 
 - **struct 布局**：按具体 T 在使用点单态化生成，字段大小由 T 决定
-- **方法体**：只编译一份，通过 `void *self` + `FengGenericValueDescriptor *T` + `void *out` 操作
+- **方法 wrapper**：按具体实例单态化生成，负责组装 `FengGenericParamDescriptor`、布局输入与其他常量，并转发到共享主体
+- **共享主体**：只编译一份，通过 `void *self` + `FengGenericParamDescriptor *T` + `void *out` 操作
+
+Q1 的抽象目标不是“先把当前已知类型跑通”，而是让共享主体只依赖稳定抽象输入。对未来新类型，编译器应优先通过补齐该类型的 `FengGenericParamDescriptor`（以及必要时复用既有 aggregate 描述符与 witness 实例）完成接入；泛型主体本身不应因为类型扩展而改写控制流。这是泛型方案必须满足的开闭原则。
+
+Q1 的架构单位不是功能点，而是四类稳定抽象输入：
+
+1. **泛型参数描述**：`FengGenericParamDescriptor` 负责告诉共享主体如何复制、保活、返回值，并在 `witness` 非空时暴露约束见证。
+2. **宿主布局输入**：共享主体只按字段序读布局输入，不直接依赖具体实例布局如何算出。
+3. **约束面 witness 生成规则**：所有受约束操作都走 `_T->witness` 的固定槽位，不借道一等 `spec` 值。
+4. **统一泛型环境展开规则**：外层类型参数、方法类型参数、对应 descriptor 的顺序一旦定义，就不再随场景漂移。
+
+G6-1 ~ G6-6 只是把具体类型、具体约束、具体场景映射进这四类稳定输入；它们不是架构本身。只要映射关系成立，泛型共享主体就不应为新增类型或未来 form 扩展而改写核心控制流。
 
 **struct 布局单态化**（编译器在使用点自动生成，用户无感知）：
 
@@ -54,12 +415,13 @@ typedef struct { FengManagedHeader _hdr; struct FengSpecValue__Widget value; } F
 typedef struct { FengManagedHeader _hdr; int64_t value_0; double value_1; } FengBox__tuple_i64_f64;
 ```
 
-**方法体只编译一份**（泛型专有发码，`void *self` + `FengGenericValueDescriptor *T` + out 参数）：
+**共享主体只编译一份**（泛型专有发码，依赖宿主布局输入 + `FengGenericParamDescriptor *T` + out 参数）：
 
 ```c
 // fn get(): T
-void FengBox__get(void *self, const FengGenericValueDescriptor *T, void *out) {
-    void *fp = (char *)self + sizeof(FengManagedHeader);   // 字段固定在 header 之后
+void FengBox__get__shared(void *self, const size_t *field_offsets,
+                         const FengGenericParamDescriptor *T, void *out) {
+    void *fp = (char *)self + field_offsets[0];
     switch (T->kind) {
         case FENG_VALUE_TRIVIAL:                           break;
         case FENG_VALUE_MANAGED_POINTER:                   feng_retain(*(void **)fp); break;
@@ -69,72 +431,102 @@ void FengBox__get(void *self, const FengGenericValueDescriptor *T, void *out) {
 }
 ```
 
-**调用点**（编译器静态已知 T，直接写入目标变量或引入临时变量）：
+**单态 wrapper**（编译器在实例化点生成，负责绑定常量并转发）：
+
+```c
+static void FengBox__get__int(FengBox__int *self, void *out) {
+    static const size_t _layout[] = { offsetof(FengBox__int, value) };
+    static const FengGenericParamDescriptor _T =
+        { .size=8, .kind=FENG_VALUE_TRIVIAL, .aggregate=NULL, .witness=NULL };
+    FengBox__get__shared(self, _layout, &_T, out);
+}
+
+static void FengBox__get__Widget(FengBox__Widget *self, void *out) {
+    static const size_t _layout[] = { offsetof(FengBox__Widget, value) };
+    static const FengGenericParamDescriptor _T = {
+        .size      = sizeof(struct FengSpecValue__Widget),
+        .kind      = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+        .aggregate = &FengSpecAgg__Widget,
+        .witness   = NULL,
+    };
+    FengBox__get__shared(self, _layout, &_T, out);
+}
+```
+
+**调用点**（源码层调用 wrapper；wrapper 再转发到共享主体）：
 
 ```c
 // Box<int>.get()
 int64_t x;
-FengBox__get(box, &feng_generic_trivial8_desc, &x);
+FengBox__get__int(box, &x);
 
 // Box<Widget>.get()
 struct FengSpecValue__Widget w;
-FengBox__get(box, &feng_generic_Widget_desc, &w);
+FengBox__get__Widget(box, &w);
 
 // 子表达式场景：let y = b.get() + 1
 int64_t _tmp;
-FengBox__get(box, &feng_generic_trivial8_desc, &_tmp);
+FengBox__get__int(box, &_tmp);
 int64_t y = _tmp + 1;
 ```
 
-**`FengGenericValueDescriptor`（新增运行时结构）**：
+**`FengGenericParamDescriptor`（完整态运行时结构）**：
 
 ```c
-typedef struct FengGenericValueDescriptor {
+typedef struct FengGenericParamDescriptor {
     size_t          size;        /* T 占用的字节数（8/16/N×8） */
     FengValueKind   kind;        /* TRIVIAL / MANAGED_POINTER / AGGREGATE */
     const FengAggregateValueDescriptor *aggregate;  /* 仅 AGGREGATE 时非 NULL */
-} FengGenericValueDescriptor;
+    const void     *witness;     /* 无约束时为 NULL；spec 约束时指向静态 witness */
+} FengGenericParamDescriptor;
 ```
 
 各类 T 的静态实例（codegen 在使用点生成）：
 
 ```c
 // 所有值类型（int/bool/float）共用一个实例
-const FengGenericValueDescriptor feng_generic_trivial8_desc =
-    { .size=8, .kind=FENG_VALUE_TRIVIAL, .aggregate=NULL };
+const FengGenericParamDescriptor feng_generic_trivial8_param =
+    { .size=8, .kind=FENG_VALUE_TRIVIAL, .aggregate=NULL, .witness=NULL };
 
 // UserType — managed pointer，编译器为每个 T 生成
-const FengGenericValueDescriptor feng_generic_Foo_desc =
-    { .size=8, .kind=FENG_VALUE_MANAGED_POINTER, .aggregate=NULL };
+const FengGenericParamDescriptor feng_generic_Foo_param =
+    { .size=8, .kind=FENG_VALUE_MANAGED_POINTER, .aggregate=NULL, .witness=NULL };
 
 // spec value — aggregate，复用已有 FengAggregateValueDescriptor，零重复
-const FengGenericValueDescriptor feng_generic_Widget_desc = {
+const FengGenericParamDescriptor feng_generic_Widget_param = {
     .size      = sizeof(struct FengSpecValue__Widget),
     .kind      = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
-    .aggregate = &FengSpecAgg__Widget    // 直接引用现有结构，无重复数据
+    .aggregate = &FengSpecAgg__Widget,   // 直接引用现有结构，无重复数据
+    .witness   = NULL
 };
 ```
+
+若 `K: Hashable`，则对应实例只需把 `.witness` 指向编译期现成的 `feng_witness__K__Hashable`；共享主体仍然只接收一个 `_K`。
+
+若 `K` 是值类型且一等 `spec` 值路径未来仍使用 subject carrier，则 `FengGenericParamDescriptor.witness` 应指向“值槽 ABI”的 witness；`spec` coercion 路径再生成自己的静态 adapter witness。泛型路径不得为了复用 `spec` 路径 witness 而引入装箱。
 
 **与现有运行时结构的关系**：
 
 | 结构 | 描述对象 | 是否改动 |
-|---|---|---|
+| --- | --- | --- |
 | `FengTypeDescriptor` | 堆上托管对象（有 header），用于 `feng_object_new`、ARC、Phase 1B GC | **零改动** |
 | `FengAggregateValueDescriptor` | 栈上聚合值（无 header），用于 spec value ARC | **零改动，直接复用** |
-| `FengGenericValueDescriptor` | 泛型参数位置上的值的操作描述 | **新增，约 10 行** |
+| `FengGenericParamDescriptor` | 泛型参数位置上的统一使用契约；同时给出值模型字段与可选 witness | **由当前 `FengGenericValueDescriptor` 重命名并扩展** |
 
 **运行时开销**（vs 非泛型、vs spec dispatch）：
 
-- 方法调用：**直接 call**（< spec dispatch 的 vtable 间接跳转）
+- 方法调用：调用点先 **direct call wrapper**，wrapper 再 **direct call 共享主体**；同包场景下 wrapper 可被内联
 - 字段操作：`memcpy(T->size)`，对 8 字节值被 C 编译器折叠为单条 MOV
 - ARC：switch 三分支，trivial 分支立即跳出；分支预测友好
-- 整体：比非泛型多约 1 store + 1 load（栈上 out 参数），比 spec dispatch **更快**
+- 整体：跨包共享主体路径比非泛型多一个很薄的 wrapper 转发与 out 参数；约束调用仍只多一次 witness 间接调用，比运行时查表或动态派发更可控
 
 **对现有代码的改动**：
+
 - 现有 `cg_register_user_type`、`cg_emit_user_method`、`cg_emit_function` 等：**零改动**
 - 新增 `cg_emit_generic_type_instance`（使用点触发，生成 struct 定义）
-- 新增 `cg_emit_generic_method`、`cg_emit_generic_fn`、`cg_emit_generic_call`
-- 运行时新增 `FengGenericValueDescriptor` 结构定义 + `feng_generic_trivial8_desc` 实例
+- 新增 `cg_emit_generic_method_wrapper`、`cg_emit_generic_fn_wrapper`
+- 新增 `cg_emit_generic_shared_method`、`cg_emit_generic_shared_fn`、`cg_emit_generic_call`
+- 运行时把当前 `FengGenericValueDescriptor` 重命名并扩展为 `FengGenericParamDescriptor`，并提供 `feng_generic_trivial8_param` 等实例
 - `.fb` 分发：共享方法体预编译进 `lib/`，struct 定义在消费方生成，支持闭源分发
 
 **两阶段发码架构（进阶优化预留）**：
@@ -142,8 +534,8 @@ const FengGenericValueDescriptor feng_generic_Widget_desc = {
 `cg_emit_generic_xxx` 是泛型发码的统一 API 层，内部策略可以独立演进：
 
 | 阶段 | 策略 | 适用场景 | 方法编译份数 |
-|---|---|---|---|
-| 当前实现（通用） | **布局单态化 + 方法共享** | 所有场景，含跨包闭源 `.fb` | 1 份（共享） |
+| --- | --- | --- | --- |
+| 当前实现（通用） | **布局单态化 + wrapper 单态化 + 方法共享** | 所有场景，含跨包闭源 `.fb` | 1 份共享主体 + N 个薄 wrapper |
 | 进阶优化（可选） | **源码全单态化** | 同包泛型，源码可见 | 每个具体 T 一份 |
 
 进阶优化时，`cg_emit_generic_xxx` 的**调用接口不变**，只在内部按可见性分流：
@@ -154,33 +546,34 @@ static void cg_emit_generic_method(CG *cg, ...) {
     if (cg_generic_source_visible(cg, generic_type)) {
         cg_emit_generic_method_monomorphized(cg, ...);  // 全单态化：生成具体类型函数
     } else {
-        cg_emit_generic_method_shared(cg, ...);         // 方法共享：void* + T + out
+        cg_emit_generic_method_shared(cg, ...);         // wrapper + 共享主体：void* + T + out
     }
 }
 ```
 
-**结论**：现在只实现方法共享路径，接口设计预留分流点；未来加全单态化时不改接口、只加实现，两条路径并存互不影响。
+**结论**：当前方案本身就位于“全单态化”和“动态派发”之间：布局与 wrapper 是单态的，主体语义是共享的，契约调用走静态 witness 槽位而不是运行时反射。未来若对本包源码可见实例追加更激进的全单态化，只需要在 wrapper / 发码策略层分流，不需要推翻共享主体 ABI。
 
 **规范更新**：`docs/feng-generics-draft.md` §7 需要按此方案重写（详见 G0-1）。
 
 ---
 
-### Q2 约束目标是否可以是泛型 spec 实例
+### Q2 泛型约束是否可以写泛型 spec 实例
 
-**决策**：**允许**。约束目标可以是任何可解析的 spec 引用，包括泛型 spec 的具体实例。
+**决策**：**允许**。泛型约束可以是任何可解析的 spec 引用，包括泛型 spec 的具体实例。
 
 ```feng
 spec Reader<T> {
   fn get(): T;
 }
 
-type Box<T: Reader<int>> {   // 合法：约束目标是泛型 spec 的具体实例
+type Box<T: Reader<int>> {   // 合法：泛型约束是泛型 spec 的具体实例
   ...
 }
 ```
 
 **影响实现**：
-- 语义分析中约束目标解析逻辑：约束目标按普通类型引用解析，支持 `NAMED_GENERIC` 节点（即带类型实参的 spec 引用）
+
+- 语义分析中泛型约束解析逻辑：泛型约束按普通类型引用解析，支持 `NAMED_GENERIC` 节点（即带类型实参的 spec 引用）
 - 父 spec 约束检查中，`spec Child<T>: Parent<int>` 的 `Parent<int>` 同样是泛型 spec 实例，按同样规则处理
 - `.ft` 中 type_param 的约束 TYPS 节点可以是 `FT_TYPE_KIND_NAMED_GENERIC` 节点
 
@@ -199,6 +592,7 @@ let b: Box<int>;   // 合法：value 取 int 零值（0），b 是 Box<int> 的�
 ```
 
 **影响实现**：
+
 - 语义分析中的零值推导逻辑：将类型参数替换为实际类型实参后，按现有字段递推规则判断
 - 若某字段的实际类型本身无零值（如某些带约束的 spec 类型），仍须显式初始化，诊断规则不变
 
@@ -232,6 +626,7 @@ pair(1, "x");
 ```
 
 **规则细化**：
+
 - 推导优先级：接收者静态类型（若有）> 实参列表从左到右 > 上下文目标类型（如赋值期望类型）
 - 若所有信息都不足以确定某个类型参数，则在整个调用表达式处报"无法推导类型参数 T"
 - 若某位置推导出的类型与已确定结论冲突，则在该不匹配的实参位置报错
@@ -251,8 +646,8 @@ pair(1, "x");
 | 编号 | 任务 | 产出 | 备注 |
 | --- | --- | --- | --- |
 | G0-1 | 决策 Q1 代码生成策略，写入 `docs/feng-generics-draft.md` §7 | 规范更新 | ✓ 已决策，参见 Q1 节；阻塞 G6 已解除 |
-| G0-2 | 决策 Q2 约束目标是否可以是泛型 spec 实例，更新规范 §4 和 §5 | 规范更新 | ✓ 已决策，参见 Q2 节 |
-| G0-3 | 决策 Q3 泛型 type 默认零值规则，更新 `docs/feng-type.md` | 规范更新 | ✓ 已决策，参见 Q3 节（原阻塞 G4-19）|
+| G0-2 | 决策 Q2 泛型约束是否可以写泛型 spec 实例，更新规范 §4 和 §5 | 规范更新 | ✓ 已决策，参见 Q2 节 |
+| G0-3 | 决策 Q3 泛型 type 默认零值规则，更新 `docs/feng-type.md` | 规范更新 | ✓ 已决策，参见 Q3 节（原阻塞 G4-19） |
 | G0-4 | 决策 Q4 `>>` token 处理策略 | 规范更新 | ✓ 已决策，参见 Q4 节；G1-2 可删除 |
 
 ---
@@ -282,7 +677,7 @@ Parser 的 AST 数据结构当前完全没有泛型信息，需要系统性扩�
 typedef struct FengTypeParam {
     FengToken token;
     FengSlice name;          /* 参数名 */
-    FengTypeRef *constraint; /* 约束目标（NULL = 无约束） */
+    FengTypeRef *constraint; /* 泛型约束（NULL = 无约束） */
 } FengTypeParam;
 ```
 
@@ -353,6 +748,7 @@ struct {
 | G3-9 | Parser 单元测试：泛型声明、类型实例化引用、显式泛型调用、嵌套泛型、错误语法拒绝 | `test/parser/` |
 
 **Parser 关键边界**（不能越界）：
+
 - Parser 不得依赖语义判断某个 `<...>` 是否是泛型调用；只有 `:<...>` 才标记为显式泛型调用
 - `foo<T>(...)`、`pkg.foo<T>(...)` 不得被 Parser 解析为显式泛型调用
 
@@ -362,18 +758,20 @@ struct {
 
 这是实现量最大、最复杂的一环。
 
+> **当前复查结论**：G4 中“声明、作用域、推导、identity、约束声明合法性”已经落地；但 G4-8 的“约束体内成员访问”和 G4-12 之后真正进入 codegen 的调用闭环没有完成，因此本阶段不能视为结束。
+
 | 编号 | 任务 | 说明 | 依赖 |
 | --- | --- | --- | --- |
 | G4-1 | **类型参数作用域**：为每个泛型声明建立类型参数作用域，把类型参数名注册为可解析名字 | `src/semantic/analyzer.c` | — |
 | G4-2 | **类型参数引用解析**：在类型位置解析时，区分"具名类型引用"和"类型参数引用" | `src/semantic/analyzer.c` | G4-1 |
-| G4-3 | **约束目标解析与记录**：解析每个类型参数的约束目标（无约束 / type 约束 / spec 约束） | `src/semantic/analyzer.c` | G4-1 |
-| G4-4 | **约束目标是泛型 spec 实例时的处理**（G0-2 已决策：允许，约束目标按 `NAMED_GENERIC` 节点解析） | `src/semantic/analyzer.c` | — |
+| G4-3 | **泛型约束解析与记录**：解析每个类型参数的泛型约束（无约束 / spec 约束） | `src/semantic/analyzer.c` | G4-1 |
+| G4-4 | **泛型约束是泛型 spec 实例时的处理**（G0-2 已决策：允许，泛型约束按 `NAMED_GENERIC` 节点解析） | `src/semantic/analyzer.c` | — |
 | G4-5 | **泛型声明 identity 注册**：按"名称 + 泛型参数数量"注册具名泛型 type/spec；冲突检查 | `src/semantic/analyzer.c` | — |
 | G4-6 | **泛型实例类型匹配**：按不变规则（invariance）检查泛型实例兼容性；类型参数不同的实例不兼容 | `src/semantic/analyzer.c` | — |
 | G4-7 | **泛型具名 type/spec 的使用解析**：按"名称 + 泛型参数数量"精确解析；实参数量不匹配时报错 | `src/semantic/analyzer.c` | G4-5 |
-| G4-8 | **约束体内成员访问**：若约束目标是 object-form spec，按 spec 成员集提供访问；callable-form 按签名调用；union-form 复用收窄规则 | `src/semantic/spec_member_accesses.c` | G4-3 |
+| G4-8 | **约束体内成员访问**：若泛型约束是 object-form spec，按 spec 成员集提供访问并收口到 witness 槽位；callable-form 按签名调用；union-form 复用收窄规则 | `src/semantic/spec_member_accesses.c` | G4-3 |
 | G4-9 | **无约束类型参数的成员访问禁止**：无约束类型参数不得访问成员、做关系/逻辑运算 | `src/semantic/analyzer.c` | G4-1 |
-| G4-10 | **泛型重载扩展**：在现有重载规则基础上，把"泛型参数数量"并入重载签名；约束目标不参与 | `src/semantic/analyzer.c` | G4-5 |
+| G4-10 | **泛型重载扩展**：在现有重载规则基础上，把"泛型参数数量"并入重载签名；泛型约束不参与 | `src/semantic/analyzer.c` | G4-5 |
 | G4-11 | **非泛型优先**：当精确具体类型候选和泛型候选同时可匹配时，优先非泛型 | `src/semantic/analyzer.c` | G4-10 |
 | G4-12 | **泛型推导**：省略显式类型实参时，从实参类型、接收者静态类型、上下文目标类型推导类型参数；不唯一时报错 | `src/semantic/analyzer.c` | G4-7 |
 | G4-13 | **显式泛型调用验证**：`:<...>` 只允许在泛型可调用目标上；对非泛型函数写 `:<...>` 报错；实参数量必须与类型参数个数一致 | `src/semantic/analyzer.c` | G4-7 |
@@ -384,6 +782,16 @@ struct {
 | G4-18 | **终结器泛型参数拒绝**：泛型 type 内的终结器不允许携带类型参数 | `src/semantic/analyzer.c` | — |
 | G4-19 | **默认零值泛型扩展**（G0-3 已决策：按字段递推，类型参数替换后与非泛型规则一致） | `src/semantic/analyzer.c` | — |
 | G4-20 | **语义分析单元测试**：所有正确语法通过；所有错误语法（错误语法 1-12）报错 | `test/semantic/` | — |
+
+**G4 当前补齐重点**：
+
+1. 受约束类型参数在语义层必须形成稳定的“能力视图”，而不是只停留在“约束存在”。
+2. `T: SomeSpec` 下的 `t.some()`，必须在语义信息中明确区分：
+   - 这不是普通 object method call；
+   - 这也不等同于强制先物化成一等 spec 值。
+3. callable-form `spec` 约束下的直接调用必须有独立的 resolved callable 形态。
+4. union-form `spec` 约束必须继续复用 union 收窄规则，不能在泛型里另起一套访问语义。
+5. `Map<K: Hashable, V>` 要求的 `hash` / `equals` 场景，必须先在语义层具备稳定的 resolved callable / witness 槽位形态，然后才能进入 G6。
 
 ---
 
@@ -406,14 +814,71 @@ struct {
 
 ### G6 代码生成
 
-**依赖 G0-1 决策**。以下任务内容会根据决策方向调整，当前为占位说明。
+**依赖 G0-1 决策**。Q1 路线已经确定，不再重开。当前 G6 的核心不是重选路线，而是把“共享主体 + 描述符”的第一阶段实现补齐到完整状态。
 
 | 编号 | 任务 | 说明 |
 | --- | --- | --- |
-| G6-1 | 确定泛型调用点的 C 发码形态（依赖 Q1 决策） | `src/codegen/codegen.c` |
-| G6-2 | 泛型函数/方法的 C 函数声明形态 | `src/codegen/codegen.c` |
-| G6-3 | 泛型实例化时 retain/release 的 ARC 处理（泛型参数类型的生命周期管理） | `src/codegen/codegen.c` |
-| G6-4 | 代码生成单元测试 | `test/codegen/` |
+| G6-1 | **完成所有 generic arg 类型覆盖**：内建值类型、`string`、数组、`UserType`、object-form `spec`、callable-form `spec`、未来 union-form / tuple / aggregate 全部进入统一 generic ABI | `src/codegen/codegen.c` |
+| G6-2 | **完成 aggregate 返回支持**：共享泛型函数/方法返回 object-form `spec` / tuple / 其他 aggregate 时，`_out` 路径必须闭环 | `src/codegen/codegen.c` |
+| G6-3 | **完成 object-form `spec` 约束的 witness lowering**：字段 getter/setter 与方法 thunk 全部进入静态 witness 结构 | `src/codegen/codegen.c` |
+| G6-4 | **完成 callable-form `spec` 约束的 invoke lowering**：共享主体可直接调用 callable-form 契约 | `src/codegen/codegen.c` |
+| G6-5 | **为 union-form `spec` 预留统一 generic ABI**：复用 union runtime/value model，不在 generic 层新增第四类分发机制 | `src/codegen/codegen.c` |
+| G6-6 | **完成泛型类型上的泛型方法**：外层类型参数与方法类型参数统一进入共享 ABI | `src/codegen/codegen.c` |
+| G6-7 | **补齐代码生成单元测试与 smoke** | `test/codegen/` |
+
+**G6 当前必须坚持的实现原则**：
+
+1. **不推翻 Q1**：继续采用“布局单态化 + 方法共享”，不回退到“所有场景全单态化”。
+2. **先 correctness，后优化**：先把各类值与契约路径跑通，再做更激进的专门化。
+3. **值类型要按类别收口，不做点状特判**：
+   - trivial 值类型：走 `FENG_VALUE_TRIVIAL`
+   - managed pointer：走 `FENG_VALUE_MANAGED_POINTER`
+   - aggregate value：走 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`
+4. **泛型约束调用与一等 spec 值分离**：
+   - 一等 spec 值是用户可见值语义；
+   - 泛型约束调用是共享主体内部 ABI 语义；
+   - 两者不能继续混成同一条 lowering。
+5. **禁止运行时查表**：所有 witness 读取都必须经由 `FengGenericParamDescriptor.witness` 的静态解释进入共享主体。
+6. **值类型零堆分配**：泛型路径不得引入任何为了契约或多态而存在的托管堆分配。
+
+**G6 后续优化思路**：
+
+#### O1. 用 `FengGenericParamDescriptor.witness` 收口受约束类型参数
+
+- 共享泛型主体对每个类型参数只接收一个 `FengGenericParamDescriptor`，约束能力统一从 `witness` 读取。
+- `Map<K: Hashable, V>` 中的 `K.hash()` / `K.equals()` 应 lower 为 witness 调用，而不是先物化 object-form spec 值。
+- 这条路线的收益：
+  - 避免在热路径上构造一等 spec 值；
+  - 避免为标量值类型/普通值类型引入额外装箱；
+  - 更符合 `.fb` 分发下共享主体 ABI 的长期稳定性。
+
+#### O1-a. object-form / callable-form / union-form 约束必须各自有稳定 witness 族
+
+- object-form `spec`：成员访问与方法调用走固定 witness 槽位。
+- callable-form `spec`：直接调用走 invoke witness。
+- union-form `spec`：收窄与 member 进入走 union witness / carrier 操作。
+- 三类约束不能再混成“都先变成一等 spec 值”。
+
+#### O2. aggregate 泛型路径直接复用已有 aggregate 描述符体系
+
+- object-form spec value、未来 tuple、其他聚合值，不应各走各的特殊通道。
+- 统一通过 `FengAggregateValueDescriptor` 进入泛型复制、retain、release、assign、return 路径。
+
+#### O2-a. callable-form `spec` 不进入 aggregate 通道
+
+- callable-form `spec` 的值模型是 managed pointer；完整态必须直接复用 closure pointer 路径。
+- 不能把“所有 spec 都是 fat aggregate”写死到 generic 实现里。
+
+#### O3. 保留“源码可见时可追加全单态化”的后续优化口子
+
+- 当前先把共享主体路径补齐。
+- 等 correctness 完成后，再决定是否在“源码可见 / 同包 / 热点场景”增加全单态化发码。
+- 该优化只能是附加优化，不能破坏共享主体 ABI。
+
+#### O4. 用真实标准库场景驱动 smoke，而不是只靠最小盒子样例
+
+- `Box<T>` 只适合验证存取语义。
+- 后续泛型 smoke 应以 `Map<K: Hashable, V>`、`List<T>`、受约束算法函数等真实场景作为主验证对象。
 
 ---
 
@@ -422,10 +887,26 @@ struct {
 | 编号 | 任务 |
 | --- | --- |
 | G7-1 | Parser 测试：全量覆盖 `docs/feng-generics-draft.md` 中正确语法 1-9 和错误语法 1-12 |
-| G7-2 | 语义分析测试：泛型声明、重载、推导、约束访问、invariance 各场景 |
+| G7-2 | 语义分析测试：泛型声明、重载、推导、object-form / callable-form / union-form 约束访问、invariance 各场景 |
 | G7-3 | 符号表测试：泛型声明导出 / 跨包读取后语义等价验证 |
-| G7-4 | 代码生成 smoke 测试：`hello world` 升级为泛型函数调用；Box<T> + fit + spec 端到端 |
-| G7-5 | 全量回归测试：确保既有非泛型功能无回归 |
+| G7-4 | 代码生成 smoke：基础 `Box<T>`、`MyType<T, V>`、任意多个类型参数、泛型类型上的泛型方法 |
+| G7-5 | 类型覆盖 smoke：内建标量、`string`、数组、`UserType`、object-form `spec`、callable-form `spec`、aggregate 返回 |
+| G7-6 | 契约 smoke：`Map<K: Hashable, V>`、受约束算法函数、object-form / callable-form / union-form 约束场景 |
+| G7-7 | 全量回归测试：确保既有非泛型功能无回归 |
+
+**G7 当前补齐原则**：
+
+1. 不再把“`Box<T>` 的基础 smoke 通过”当作“泛型完整”的证明。
+2. 每补齐一种类型类别，就必须补对应 smoke：
+   - 标量值类型
+   - 托管指针类型
+   - 聚合值类型
+3. 每补齐一种契约能力，就必须补对应 smoke：
+   - 无约束
+   - `T: Spec`
+   - 泛型 spec 实例约束
+4. `Map<K: Hashable, V>` 必须成为泛型完成判定的准入用例，而不是完成之后才顺手补的示例。
+5. “所有形态 spec + 所有内建类型 + 任意多个类型参数 + 值类型零堆分配”这四项必须一起通过，才算泛型完整。
 
 ---
 
@@ -433,7 +914,7 @@ struct {
 
 ```text
 G0-1(代码生成策略) ─────────────────────────────────────────────── G6
-G0-2(约束目标是否可为泛型实例) ─────────────────────────────────── G4-4
+G0-2(泛型约束是否可写泛型实例) ─────────────────────────────────── G4-4
 G0-3(默认零值规则) ──────────────────────────────────────────────── G4-19
 G0-4(>>歧义处理) ────────────────────────────────────────────────── G1-2 → G3-3
 
@@ -463,17 +944,21 @@ G4-16(泛型 fit 左侧) → G4-17
 5. G4-1 ~ G4-14（语义分析主体）+ G4-20（语义测试）
 6. G4-15 ~ G4-18（父 spec 约束、fit、终结器）
 7. G5（符号表导出）+ G5-8（符号表测试）
-8. G6（代码生成，依赖 Q1 决策）+ G7-4（smoke）
-9. G7-5（全量回归）
+8. **当前补齐阶段 A**：完成 aggregate 泛型实参与 aggregate 返回（G6-1 / G6-2）
+9. **当前补齐阶段 B**：完成 callable-form `spec` / object-form `spec` / union-form `spec` 的统一契约 lowering（G4 收口 + G6-3 / G6-4 / G6-5）
+10. **当前补齐阶段 C**：完成泛型类型上的泛型方法（G6-6）
+11. **当前补齐阶段 D**：补齐真实 smoke 与回归（G7-4 / G7-5 / G7-6 / G7-7）
+12. 泛型完整后，再恢复 fit 值类型工作
 
 ### 关于当前代码库基础
 
-当前 Parser AST（`src/parser/parser.h`）完全没有泛型信息：
+泛型的 Parser / AST / 符号表基础已经不是空白状态；当前主要缺口已经从“语法/结构缺失”转移到“语义闭环 + codegen 类型覆盖 + 约束 lowering”。
 
-- `FengTypeRef.named` 无 `type_args`
-- `FengDecl.type_decl` / `spec_decl` 无 `type_params`
-- `FengCallableSignature` 无 `type_params`
-- `FengExpr.call` 无 `explicit_type_args`
-- `FengSpecForm` 无 `UNION` form（union-form spec 也暂未实现）
+当前已知基础事实：
 
-因此 G2 AST 扩展是整个实现的起点，规模不大但牵动面广。
+- 当前代码实现里已经有以 `FengGenericValueDescriptor` 为核心的共享主体 ABI；完整态将其收口为 `FengGenericParamDescriptor`（重命名并增加 `witness`）。
+- `Box<T>` 的基础 smoke 已通过，证明“外层类型参数参与参数/返回/字段读写”这条最小路径可工作。
+- 语义 value-kind 已经给出一条可用总分类：标量 builtin 是 trivial，`UserType` 与 callable-form `spec` 是 managed pointer，object-form `spec` 是 aggregate。
+- 当前主要问题集中在：aggregate 泛型实参、callable-form / union-form `spec` 覆盖、受约束类型参数调用，以及泛型类型上的泛型方法。
+
+因此，当前阶段不再从 G2/G3 重新起步，而是直接针对 G4/G6/G7 的剩余缺口收口。
