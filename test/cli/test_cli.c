@@ -290,6 +290,102 @@ static void write_library_bundle_or_die(const char *bundle_path,
     free(error_message);
 }
 
+static char *run_binary_capture_stdout_or_die(const char *binary_path);
+
+static char *build_single_source_package_bundle(const char *workspace_dir,
+                                                const char *package_name,
+                                                const char *source_text) {
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *dep_out_dir;
+    char *dep_library_path;
+    char *dep_mod_root;
+    char *bundle_path;
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    dep_library_path = dup_printf("%s/lib/lib%s.a", dep_out_dir, package_name);
+    dep_mod_root = path_join(dep_out_dir, "mod");
+    bundle_path = dup_printf("%s/%s.fb", workspace_dir, package_name);
+
+    mkdir_p(dep_src_dir);
+    write_text_file(dep_source_path, source_text);
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *name_opt = dup_printf("--name=%s", package_name);
+        char *argv[] = {
+            dep_source_path,
+            "--target=lib",
+            out_opt,
+            name_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(name_opt);
+        free(out_opt);
+    }
+    ASSERT(path_exists(dep_library_path));
+    ASSERT(path_exists(dep_mod_root));
+    write_library_bundle_or_die(bundle_path,
+                                package_name,
+                                "0.1.0",
+                                dep_library_path,
+                                dep_mod_root);
+
+    free(dep_mod_root);
+    free(dep_library_path);
+    free(dep_out_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    return bundle_path;
+}
+
+static void compile_consumer_with_package_and_expect_stdout(const char *workspace_dir,
+                                                            const char *bundle_path,
+                                                            const char *source_text,
+                                                            const char *binary_name,
+                                                            const char *expected_stdout) {
+    char *main_src_dir;
+    char *main_source_path;
+    char *main_out_dir;
+    char *main_binary_path;
+    char *stdout_text;
+
+    main_src_dir = path_join(workspace_dir, "main/src");
+    main_source_path = path_join(main_src_dir, "main.ff");
+    main_out_dir = path_join(workspace_dir, "main/build");
+    main_binary_path = dup_printf("%s/bin/%s", main_out_dir, binary_name);
+
+    mkdir_p(main_src_dir);
+    write_text_file(main_source_path, source_text);
+    {
+        char *out_opt = make_out_option(main_out_dir);
+        char *name_opt = dup_printf("--name=%s", binary_name);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            main_source_path,
+            "--target=bin",
+            out_opt,
+            name_opt,
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(name_opt);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(main_binary_path));
+    stdout_text = run_binary_capture_stdout_or_die(main_binary_path);
+    ASSERT(strcmp(stdout_text, expected_stdout) == 0);
+
+    free(stdout_text);
+    free(main_binary_path);
+    free(main_out_dir);
+    free(main_source_path);
+    free(main_src_dir);
+}
+
 static char *run_binary_capture_stdout_or_die(const char *binary_path) {
     char template_path[] = "/tmp/feng_cli_run_output_XXXXXX";
     char *output_dir;
@@ -1161,6 +1257,130 @@ static void test_project_pack_bundle_can_be_consumed(void) {
     free(lib_src_dir);
     free(lib_manifest_path);
     free(lib_project_dir);
+}
+
+static void test_direct_build_consumes_package_generic_function(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_generic_fn_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkggenericfn",
+        "pu mod test.cli.pkggenericfn;\n"
+        "pu fn identity<T>(value: T): T {\n"
+        "  return value;\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkggenericfnmain;\n"
+        "use test.cli.pkggenericfn;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "fn main(args: string[]) {\n"
+        "  if identity(7) == 7 { puts(\"generic fn ok\"); }\n"
+        "}\n",
+        "generic_fn_main",
+        "generic fn ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+static void test_direct_build_consumes_package_generic_type(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_generic_type_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkggenerictype",
+        "pu mod test.cli.pkggenerictype;\n"
+        "pu type Box<T> {\n"
+        "  var value: T;\n"
+        "  pu fn setValue(next: T) {\n"
+        "    self.value = next;\n"
+        "  }\n"
+        "  pu fn readValue(): T {\n"
+        "    return self.value;\n"
+        "  }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkggenerictypemain;\n"
+        "use test.cli.pkggenerictype;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "fn main(args: string[]) {\n"
+        "  let box: Box<int> = Box:<int>();\n"
+        "  box.setValue(11);\n"
+        "  if box.readValue() == 11 { puts(\"generic type ok\"); }\n"
+        "}\n",
+        "generic_type_main",
+        "generic type ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+static void test_direct_build_consumes_package_generic_spec_constraint(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_generic_spec_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkggenericspec",
+        "pu mod test.cli.pkggenericspec;\n"
+        "pu spec Eq<T> {\n"
+        "  fn same(other: T): bool;\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkggenericspecmain;\n"
+        "use test.cli.pkggenericspec;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "type Key: Eq<Key> {\n"
+        "  var id: int;\n"
+        "  fn same(other: Key): bool {\n"
+        "    return self.id == other.id;\n"
+        "  }\n"
+        "}\n"
+        "fn sameLocal<T: Eq<T>>(left: T, right: T): bool {\n"
+        "  return left.same(right);\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "  let a = Key{id: 3};\n"
+        "  let b = Key{id: 3};\n"
+        "  if sameLocal(a, b) { puts(\"generic spec ok\"); }\n"
+        "}\n",
+        "generic_spec_main",
+        "generic spec ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
 }
 
 static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
@@ -6452,6 +6672,9 @@ int main(void) {
     test_direct_build_links_library_from_package_bundle();
     test_direct_build_sorts_package_libraries_by_dependency();
     test_project_pack_bundle_can_be_consumed();
+    test_direct_build_consumes_package_generic_function();
+    test_direct_build_consumes_package_generic_type();
+    test_direct_build_consumes_package_generic_spec_constraint();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_frontend_outputs_absolute_bundle_paths();

@@ -1786,11 +1786,15 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                              const FengTypeMember *member,
                                              FengSymbolError *out_error) {
     FengSymbolDeclView *decl = NULL;
+    FengVisibility member_visibility =
+        owner_source_decl != NULL && owner_source_decl->kind == FENG_DECL_SPEC
+            ? FENG_VISIBILITY_PUBLIC
+            : member->visibility;
 
     switch (member->kind) {
         case FENG_TYPE_MEMBER_FIELD:
             decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_FIELD,
-                                       member->visibility,
+                                       member_visibility,
                                        member->as.field.mutability,
                                        member->as.field.name,
                                        path,
@@ -1840,7 +1844,7 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                            : member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR
                                                  ? FENG_SYMBOL_DECL_KIND_CONSTRUCTOR
                                                  : FENG_SYMBOL_DECL_KIND_FINALIZER,
-                                       member->visibility,
+                                       member_visibility,
                                        FENG_MUTABILITY_LET,
                                        member->as.callable.name,
                                        path,

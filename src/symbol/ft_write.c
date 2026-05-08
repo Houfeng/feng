@@ -556,7 +556,9 @@ static uint32_t writer_find_decl_id(const WriterContext *ctx, const FengSymbolDe
 
 static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbolDeclView *decl) {
     return profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE ||
-           (decl != NULL && decl->visibility == FENG_VISIBILITY_PUBLIC);
+           (decl != NULL &&
+            (decl->visibility == FENG_VISIBILITY_PUBLIC ||
+             decl->kind == FENG_SYMBOL_DECL_KIND_FIELD));
 }
 
 static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {

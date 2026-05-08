@@ -44,6 +44,16 @@
 2. open generic spec parent 替换：`spec Collection<T>: Sequence<T>` 与 `type IntBag: Collection<int>` 组合下，语义层与 codegen 均以 `Sequence<int>` 检查和注册 parent spec instance。
 3. 泛型 fit：`fit Box<T>: Reader<T>` 中左侧 `<T>` 进入目标泛型 type 参数作用域，满足性检查、符号导出与 codegen 均按 concrete target instance 替换 `T`。
 
+### 2026-05-09 跨包泛型消费缺口
+
+本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `use` 消费”。该路径必须满足 [feng-package.md](../docs/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `fn` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
+
+已用最小 probe 复现的缺口如下，本轮修复必须同时补回归：
+
+1. 外部包公开泛型顶层函数后，consumer 调用时不能在 codegen 中丢失函数级类型参数引用。
+2. 外部包公开泛型类型后，consumer 构造具体实例并调用成员方法时，必须正确生成实例类型、默认零值构造符声明/实现引用以及对应成员方法符号。
+3. 外部包公开泛型 `spec` 后，consumer 必须能通过 `use` 引入该 spec，实现 `type Key: Eq<Key>`，并把 imported generic spec 作为本地泛型约束使用。
+
 ### 一、当前已经验证可工作的范围
 
 - 泛型声明、类型引用、显式类型实参、基本推导、名称与 arity 校验，已经具备可用基础。
