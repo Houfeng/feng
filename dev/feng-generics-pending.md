@@ -130,11 +130,13 @@
 #### 1. 泛型参数 ABI
 
 - 每个类型参数 `T` 都有且仅有一个 `const FengGenericParamDescriptor *_T`。
+- 共享主体按**泛型环境**完整展开隐藏描述符参数：每个类型参数一份描述符；若同一主体同时涉及 `T`、`U`、`V`，则签名中必须显式出现 `_T`、`_U`、`_V` 三个隐藏参数，且顺序与声明顺序一致。
 - 该描述符直接回答四个问题：
   - `sizeof(T)` 是多少；
   - `T` 属于 trivial / managed pointer / aggregate 哪一类；
   - 若是 aggregate，使用哪一个 `FengAggregateValueDescriptor`。
     - 若 `T` 声明了 `spec` 约束，复用哪一个编译期已经生成好的 witness 实例；否则 `witness == NULL`。
+- 对 `T` 的**值语义操作**（复制、assign、retain/release、按值传参、按值返回、字段内联大小判断）只读取 `size` / `kind` / `aggregate`；只有 `T` 上的**契约能力操作**（object-form 成员访问、object-form 方法调用、callable-form 调用、union-form 收窄/投影）才读取 `witness`。
 - 这条 ABI 已有实现基础，后续工作是把类型覆盖补齐，而不是重写。
 - 当前实现里的 `FengGenericValueDescriptor` 是这条 ABI 的值模型前身；完整态直接将其重命名为 `FengGenericParamDescriptor` 并增加 `witness`，而不是再引入一层平行 wrapper。
 - `FengGenericParamDescriptor` 的设计目标必须是“泛型参数使用契约”，而不是“把值本体或一等 `spec` 载体塞进 descriptor”。未来新增类型时，只要编译器能为该类型生成正确的 `FengGenericParamDescriptor`（必要时连同已有 aggregate 描述符体系与 witness 实例一起接入），泛型共享主体就不应改动。
@@ -221,6 +223,69 @@ extern const FengNamedWitness feng_witness__Admin__Named;
 - 这不是契约语义问题，而是 receiver ABI 问题。
 - 完整态应把“无装箱值槽表示”作为泛型 witness 的规范 receiver ABI；一等 `spec` 值若需要 subject carrier，则应为 `spec` 路径生成一个静态 adapter witness，其 thunk 先解 carrier，再转发到同一约束面的值槽实现。
 - 因此，泛型调用与 `spec` 调用共享的是同一约束面的 witness family、slot 契约与编译期静态生成机制；对值类型不强求共享同一个最终 instance。
+
+**值类型 witness 的规范解法**：
+
+- 对每个“值类型 `V` 满足约束面 `C`”的组合，编译器必须先生成一份**值槽 witness**，其所有 thunk 都以 `V` 的内联值槽地址作为 receiver ABI。
+- `FengGenericParamDescriptor.witness` 在值类型场景下**只能**指向这份值槽 witness；共享主体不得改指向 `spec` 路径的 carrier witness。
+- 若 object-form `spec` 的一等值路径仍要求 `subject` 指向 carrier / 箱对象，则编译器必须再生成一份**spec 路径适配 witness**；其 thunk 先把 `subject` 解释为 carrier，再把 carrier 中的 `V` 值槽地址转发给值槽 witness。
+- 泛型路径与 `spec` 路径共享的是同一约束面的 slot 形状和底层实现逻辑，不共享同一个最终 witness instance。
+
+```c
+typedef struct FengPoint__Named__SpecCarrier {
+    /* 实际 carrier 若需要 header / ARC 字段，按 carrier 自身规则补齐 */
+    FengPoint value;
+} FengPoint__Named__SpecCarrier;
+
+static void FengPoint__Named__get__name__slot(const void *subject, void *_out) {
+    const FengPoint *self = (const FengPoint *)subject;
+    *(FengString **)_out = (FengString *)feng_retain(self->name);
+}
+
+static void FengPoint__Named__call__rename__slot(void *subject,
+                                                 const void *arg_next,
+                                                 void *_out) {
+    FengPoint *self = (FengPoint *)subject;
+    FengPoint__rename(self, *(FengString *const *)arg_next);
+    (void)_out;
+}
+
+static const FengNamedWitness feng_witness__Point__Named__slot = {
+    .get__name = FengPoint__Named__get__name__slot,
+    .set__name = NULL,
+    .call__rename = FengPoint__Named__call__rename__slot,
+};
+
+static void FengPoint__Named__get__name__spec(const void *subject, void *_out) {
+    const FengPoint__Named__SpecCarrier *carrier =
+        (const FengPoint__Named__SpecCarrier *)subject;
+    feng_witness__Point__Named__slot.get__name(&carrier->value, _out);
+}
+
+static void FengPoint__Named__call__rename__spec(void *subject,
+                                                 const void *arg_next,
+                                                 void *_out) {
+    FengPoint__Named__SpecCarrier *carrier =
+        (FengPoint__Named__SpecCarrier *)subject;
+    feng_witness__Point__Named__slot.call__rename(&carrier->value, arg_next, _out);
+}
+
+static const FengNamedWitness feng_witness__Point__Named__spec = {
+    .get__name = FengPoint__Named__get__name__spec,
+    .set__name = NULL,
+    .call__rename = FengPoint__Named__call__rename__spec,
+};
+
+static const FengGenericParamDescriptor feng_generic_Point__Named = {
+    .size      = sizeof(FengPoint),
+    .kind      = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+    .aggregate = &FengPointAgg,
+    .witness   = &feng_witness__Point__Named__slot,
+};
+```
+
+- 上例中，泛型共享主体永远读取 `feng_generic_Point__Named.witness`，因此永远拿到值槽 ABI 的 witness。
+- 一等 `spec` 值形成时，若 `subject` 必须是 carrier 指针，则 fat value 必须绑定 `feng_witness__Point__Named__spec`，而不是偷用 `feng_witness__Point__Named__slot`。
 
 **实例化点生成规则**：
 
@@ -315,6 +380,29 @@ if (_V_Value->test__int(v_ptr)) {
 - 再展开显式普通参数。
 - 最后是可选 `_out`。
 - 这样天然支持任意多个泛型参数，也支持“泛型类型 + 泛型方法”。
+- 对泛型 `type` 的共享方法，完整签名顺序固定为：`self` -> 宿主布局输入 -> 外层类型参数描述符（按声明顺序） -> 方法类型参数描述符（按声明顺序） -> 显式普通参数 -> 可选 `_out`。
+- 对顶层泛型函数，完整签名顺序固定为：类型参数描述符（按声明顺序） -> 显式普通参数 -> 可选 `_out`。
+- 这一顺序属于共享主体 ABI 的一部分；后续优化可以内联 wrapper、裁剪未使用局部，但不能改变主体签名展开顺序。
+
+```c
+/* type PairMap<K: Hashable, V> { fn merge<U>(key: K, value: V, extra: U): void } */
+void FengPairMap__merge__shared(
+    void *_self,
+    const size_t *_field_offsets,
+    const FengGenericParamDescriptor *_K,
+    const FengGenericParamDescriptor *_V,
+    const FengGenericParamDescriptor *_U,
+    const void *_p_key,
+    const void *_p_value,
+    const void *_p_extra,
+    void *_out);
+
+/* fn clone<T>(value: T): T */
+void FengClone__shared(
+    const FengGenericParamDescriptor *_T,
+    const void *_p_value,
+    void *_out);
+```
 
 ### 四、所有类型的统一落点
 
@@ -383,11 +471,11 @@ if (_V_Value->test__int(v_ptr)) {
 
 **决策**：**布局单态化 + 方法共享**，现有非泛型发码路径零改动。
 
-**核心思路**：值在结构体字段里，方法通过描述符了解字段的类型性质。完整态按三层拆分：
+**核心思路**：值在结构体字段里，方法/顶层泛型函数都通过描述符了解类型参数的类型性质。完整态按三层拆分：
 
 - **struct 布局**：按具体 T 在使用点单态化生成，字段大小由 T 决定
-- **方法 wrapper**：按具体实例单态化生成，负责组装 `FengGenericParamDescriptor`、布局输入与其他常量，并转发到共享主体
-- **共享主体**：只编译一份，通过 `void *self` + `FengGenericParamDescriptor *T` + `void *out` 操作
+- **wrapper**：按具体实例单态化生成；对成员方法负责组装 `self`、布局输入、`FengGenericParamDescriptor` 与其他常量，对顶层泛型函数负责组装类型参数描述符与其他常量，然后转发到共享主体
+- **共享主体**：只编译一份；成员方法通过 `void *self` + 布局输入 + 多个 `FengGenericParamDescriptor *` + 显式参数 + 可选 `_out` 操作，顶层泛型函数则省去 `self`/布局输入段
 
 Q1 的抽象目标不是“先把当前已知类型跑通”，而是让共享主体只依赖稳定抽象输入。对未来新类型，编译器应优先通过补齐该类型的 `FengGenericParamDescriptor`（以及必要时复用既有 aggregate 描述符与 witness 实例）完成接入；泛型主体本身不应因为类型扩展而改写控制流。这是泛型方案必须满足的开闭原则。
 
@@ -415,7 +503,7 @@ typedef struct { FengManagedHeader _hdr; struct FengSpecValue__Widget value; } F
 typedef struct { FengManagedHeader _hdr; int64_t value_0; double value_1; } FengBox__tuple_i64_f64;
 ```
 
-**共享主体只编译一份**（泛型专有发码，依赖宿主布局输入 + `FengGenericParamDescriptor *T` + out 参数）：
+**共享主体只编译一份**（泛型专有发码，依赖宿主布局输入 + 按顺序展开的 `FengGenericParamDescriptor *` + 显式参数 + out 参数）：
 
 ```c
 // fn get(): T
@@ -470,6 +558,37 @@ FengBox__get__int(box, &_tmp);
 int64_t y = _tmp + 1;
 ```
 
+**顶层泛型函数也生成单态 wrapper**（与成员方法同一路线，只是不含 `self` / 布局输入）：
+
+```c
+/* fn clone<T>(value: T): T */
+void FengClone__shared(const FengGenericParamDescriptor *T,
+                      const void *p_value,
+                      void *out) {
+    switch (T->kind) {
+        case FENG_VALUE_TRIVIAL:                           break;
+        case FENG_VALUE_MANAGED_POINTER:                   feng_retain(*(void *const *)p_value); break;
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:      feng_aggregate_retain(p_value, T->aggregate); break;
+    }
+    memcpy(out, p_value, T->size);
+}
+
+static void FengClone__int(const int64_t *p_value, void *out) {
+    static const FengGenericParamDescriptor _T =
+        { .size=8, .kind=FENG_VALUE_TRIVIAL, .aggregate=NULL, .witness=NULL };
+    FengClone__shared(&_T, p_value, out);
+}
+
+static void FengClone__string(FengString *const *p_value, void *out) {
+    static const FengGenericParamDescriptor _T =
+        { .size=8, .kind=FENG_VALUE_MANAGED_POINTER, .aggregate=NULL, .witness=NULL };
+    FengClone__shared(&_T, p_value, out);
+}
+```
+
+- 因此，顶层泛型函数与泛型方法在非单态主路径下都必须有编译期单态 wrapper；区别只在于前者没有 `self` / 布局输入。
+- wrapper 的命名是编译器内部稳定名字问题，`FengClone__int`、`foo__int`、`foo_int` 都可以作为实现细节；不变的是“共享主体 1 份 + 每个具体实例 1 个薄 wrapper”这个结构。
+
 **`FengGenericParamDescriptor`（完整态运行时结构）**：
 
 ```c
@@ -501,7 +620,7 @@ const FengGenericParamDescriptor feng_generic_Widget_param = {
 };
 ```
 
-若 `K: Hashable`，则对应实例只需把 `.witness` 指向编译期现成的 `feng_witness__K__Hashable`；共享主体仍然只接收一个 `_K`。
+若 `K: Hashable`，则对应实例只需把 `.witness` 指向编译期现成的 `feng_witness__K__Hashable`；共享主体仍然只接收一个 `_K`。若同一主体还同时涉及 `V`、`U` 等其他类型参数，则它们各自拥有 `_V`、`_U` 描述符，并按 ABI 规则一并传入。
 
 若 `K` 是值类型且一等 `spec` 值路径未来仍使用 subject carrier，则 `FengGenericParamDescriptor.witness` 应指向“值槽 ABI”的 witness；`spec` coercion 路径再生成自己的静态 adapter witness。泛型路径不得为了复用 `spec` 路径 witness 而引入装箱。
 
