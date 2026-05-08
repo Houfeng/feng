@@ -158,6 +158,12 @@ typedef struct FengSpecCoercionSite {
     const FengDecl *src_type_decl;
     /* The target spec / function-type decl. Always non-NULL. */
     const FengDecl *target_spec_decl;
+    /* The concrete target spec type ref at the coercion site. For generic
+     * spec instances this preserves the instantiated surface (e.g.
+     * `Box<int>` rather than only the open `Box` decl). The pointer is
+     * borrowed from the AST or from the resolver-owned synthetic type-ref
+     * set, so it remains stable until analysis teardown. */
+    const FengTypeRef *target_spec_type_ref;
     /* OBJECT form only: the SpecRelation entry that justifies this coercion.
      * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
      * before recording). NULL for FORM_CALLABLE per §8.4. */
@@ -315,6 +321,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     const FengExpr *expr,
     const FengDecl *src_type_decl,
     const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
     const FengSpecRelation *relation);
 
 /* Record a callable-form coercion site. `target_spec_decl` is the
@@ -327,6 +334,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr,
     const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
     FengSpecCoercionCallableSource callable_source,
     const FengDecl *callable_decl,
     const FengTypeMember *callable_member,

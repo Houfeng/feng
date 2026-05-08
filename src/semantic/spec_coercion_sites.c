@@ -63,9 +63,10 @@ bool feng_semantic_record_object_spec_coercion_site(
         const FengExpr *expr,
         const FengDecl *src_type_decl,
         const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
         const FengSpecRelation *relation) {
     if (analysis_const == NULL || expr == NULL || src_type_decl == NULL ||
-        target_spec_decl == NULL || relation == NULL) {
+        target_spec_decl == NULL || target_spec_type_ref == NULL || relation == NULL) {
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
@@ -77,6 +78,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     slot->form = FENG_SPEC_COERCION_FORM_OBJECT;
     slot->src_type_decl = src_type_decl;
     slot->target_spec_decl = target_spec_decl;
+    slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = relation;
     slot->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER; /* unused */
     return true;
@@ -86,13 +88,15 @@ bool feng_semantic_record_callable_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
         const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
     FengSpecCoercionCallableSource callable_source,
     const FengDecl *callable_decl,
     const FengTypeMember *callable_member,
     const FengDecl *callable_owner_type_decl,
     const FengDecl *callable_fit_decl,
     const FengExpr *callable_lambda_expr) {
-    if (analysis_const == NULL || expr == NULL || target_spec_decl == NULL) {
+    if (analysis_const == NULL || expr == NULL || target_spec_decl == NULL ||
+        target_spec_type_ref == NULL) {
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
@@ -104,6 +108,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     slot->form = FENG_SPEC_COERCION_FORM_CALLABLE;
     slot->src_type_decl = NULL;
     slot->target_spec_decl = target_spec_decl;
+    slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = NULL;
     slot->callable_source = callable_source;
     slot->callable_decl = callable_decl;

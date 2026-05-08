@@ -952,6 +952,98 @@ static void test_generic_callable_spec_instance_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericObjectSpecCoercionSrc =
+    "mod feng.codegen.gs3;\n"
+    "spec Box<T> {\n"
+    "    fn fetch(): T;\n"
+    "}\n"
+    "type IntBox: Box<int> {\n"
+    "    fn fetch(): int {\n"
+    "        return 7;\n"
+    "    }\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let box: Box<int> = IntBox();\n"
+    "    return box.fetch();\n"
+    "}\n";
+
+static void test_generic_object_spec_coercion_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericObjectSpecCoercionSrc, "gs3.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic object spec coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs3__Box__G__int") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_int_") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericCallableSpecCoercionSrc =
+    "mod feng.codegen.gs4;\n"
+    "spec Mapper<T>(x: T): T;\n"
+    "fn add1(x: int): int {\n"
+    "    return x + 1;\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let mapper: Mapper<int> = add1;\n"
+    "    return mapper(41);\n"
+    "}\n";
+
+static void test_generic_callable_spec_coercion_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericCallableSpecCoercionSrc, "gs4.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic callable spec coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs4__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "FengCallableValue__FengClosure__feng__codegen__gs4__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedSpecValueSrc =
     "mod feng.codegen.gf7;\n"
     "spec Named {\n"
@@ -1075,6 +1167,8 @@ int main(void) {
     test_generic_callable_constraint_codegen();
     test_generic_object_spec_instance_codegen();
     test_generic_callable_spec_instance_codegen();
+    test_generic_object_spec_coercion_codegen();
+    test_generic_callable_spec_coercion_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();

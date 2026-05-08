@@ -1132,6 +1132,36 @@ static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *d
     return NULL;
 }
 
+static bool cg_resolve_coercion_target_user_spec(CG *cg,
+                                                 const FengSpecCoercionSite *cs,
+                                                 FengToken blame,
+                                                 const UserSpec **out_spec) {
+    CGType *target_type = NULL;
+
+    *out_spec = NULL;
+    if (cg == NULL || cs == NULL) {
+        return false;
+    }
+    if (cs->target_spec_type_ref != NULL) {
+        if (!cg_resolve_type(cg, cs->target_spec_type_ref, &blame, &target_type)) {
+            return false;
+        }
+        if (target_type == NULL ||
+            (target_type->kind != CG_TYPE_SPEC && target_type->kind != CG_TYPE_CALLABLE) ||
+            target_type->user_spec == NULL) {
+            cgtype_free(target_type);
+            return cg_fail(cg, blame,
+                "codegen: coercion target did not resolve to a concrete spec instance");
+        }
+        *out_spec = target_type->user_spec;
+        cgtype_free(target_type);
+        return true;
+    }
+
+    *out_spec = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+    return *out_spec != NULL;
+}
+
 static const UserFit *cg_find_user_fit_by_decl(const CG *cg, const FengDecl *decl) {
     for (size_t i = 0; i < cg->user_fit_count; i++) {
         if (cg->user_fits[i].decl == decl) return &cg->user_fits[i];
@@ -3496,10 +3526,13 @@ static bool cg_emit_callable_function_coercion(CG *cg,
                                                const FengExpr *e,
                                                const FengSpecCoercionSite *cs,
                                                ExprResult *out) {
-    const UserSpec *target_spec = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+    const UserSpec *target_spec = NULL;
     const char *callable_var = NULL;
 
     er_init(out);
+    if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
+        return false;
+    }
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
             "codegen: callable coercion target was not registered as a callable-form spec");
@@ -3535,7 +3568,10 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
         return cg_emit_callable_function_coercion(cg, e, cs, out);
     }
     if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER) {
-        const UserSpec *target_spec = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+        const UserSpec *target_spec = NULL;
+        if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
+            return false;
+        }
         if (!cg_emit_expr_raw(cg, e, out)) {
             return false;
         }
@@ -5219,7 +5255,10 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 "codegen: spec coercion source must be an object value");
         }
         const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_type_decl);
-        const UserSpec *tgt_s = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+        const UserSpec *tgt_s = NULL;
+        if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &tgt_s)) {
+            return false;
+        }
         if (!src_t || !tgt_s) {
             return cg_fail(cg, e->token,
                 "codegen: spec coercion references decl outside current module (Step 4b-α only handles single-module)");
