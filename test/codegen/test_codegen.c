@@ -1091,6 +1091,97 @@ static void test_callable_spec_method_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kCallableSpecLambdaLocalCaptureSrc =
+    "mod feng.codegen.gs6;\n"
+    "spec Mapper(x: int): int;\n"
+    "fn use_it(): int {\n"
+    "    var base: int = 1;\n"
+    "    let mapper: Mapper = (x: int) -> x + base;\n"
+    "    base = 2;\n"
+    "    return mapper(40);\n"
+    "}\n";
+
+static void test_callable_spec_lambda_local_capture_codegen(void) {
+    FengProgram *program = parse_or_die(kCallableSpecLambdaLocalCaptureSrc, "gs6.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (callable spec lambda local capture): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengLambda__feng__codegen__gs6") != NULL);
+    ASSERT(strstr(out.c_source, "FengCaptureCell__feng__codegen__gs6") != NULL);
+    ASSERT(strstr(out.c_source, "feng_assign((void **)&_lambda") != NULL);
+    ASSERT(strstr(out.c_source, "->value") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kCallableSpecLambdaSelfCaptureSrc =
+    "mod feng.codegen.gs7;\n"
+    "spec Reader(): int;\n"
+    "type Box {\n"
+    "    var n: int;\n"
+    "    fn read(): int {\n"
+    "        let reader: Reader = () -> self.n;\n"
+    "        return reader();\n"
+    "    }\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    return Box().read();\n"
+    "}\n";
+
+static void test_callable_spec_lambda_self_capture_codegen(void) {
+    FengProgram *program = parse_or_die(kCallableSpecLambdaSelfCaptureSrc, "gs7.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (callable spec lambda self capture): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengLambda__feng__codegen__gs7") != NULL);
+    ASSERT(strstr(out.c_source, "FengCaptureCell__feng__codegen__gs7") != NULL);
+    ASSERT(strstr(out.c_source, "->n") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedSpecValueSrc =
     "mod feng.codegen.gf7;\n"
     "spec Named {\n"
@@ -1217,6 +1308,8 @@ int main(void) {
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
+    test_callable_spec_lambda_local_capture_codegen();
+    test_callable_spec_lambda_self_capture_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();

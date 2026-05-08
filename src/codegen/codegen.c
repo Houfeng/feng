@@ -427,6 +427,9 @@ typedef struct Local {
     char     *c_name;   /* mangled C identifier, unique within the function */
     CGType   *type;
     bool      is_param; /* parameters are not released by the frame (caller owns) */
+    char     *capture_cell_c_name;
+    char     *capture_cell_struct_name;
+    char     *capture_cell_desc_name;
 } Local;
 
 typedef struct Scope {
@@ -463,6 +466,9 @@ static void scope_pop_free(Scope *s) {
     for (size_t i = 0; i < s->count; i++) {
         free(s->items[i].name);
         free(s->items[i].c_name);
+        free(s->items[i].capture_cell_c_name);
+        free(s->items[i].capture_cell_struct_name);
+        free(s->items[i].capture_cell_desc_name);
         cgtype_free(s->items[i].type);
     }
     free(s->items);
@@ -483,6 +489,9 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->c_name = strdup(c_name);
     l->type = type;
     l->is_param = is_param;
+    l->capture_cell_c_name = NULL;
+    l->capture_cell_struct_name = NULL;
+    l->capture_cell_desc_name = NULL;
     return l->name && l->c_name;
 }
 
@@ -563,6 +572,8 @@ typedef struct CG {
     Scope    *cur_scope;
     int       tmp_counter;
     int       label_counter;
+    size_t    lambda_counter;
+    size_t    capture_cell_counter;
     int       loop_depth;
     bool      in_loop_with_break;
     CGType   *cur_return_type;
@@ -690,6 +701,9 @@ typedef struct CG {
     bool         in_generic_type_method;
     const FengDecl *generic_type_method_decl;
     const char  *generic_type_method_field_offsets_name;
+    char       **captured_binding_names;
+    size_t       captured_binding_name_count;
+    bool         current_callable_captures_self;
 } CG;
 
 /* Forward decls. */
@@ -713,6 +727,7 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
+static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg, const char *cname);
 static const char *cg_aggregate_field_desc_name(const CGType *t);
@@ -720,6 +735,43 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
 static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
+static bool cg_current_callable_captures_name(const CG *cg,
+                                              const char *name,
+                                              size_t len);
+static bool cg_compute_capture_requirements_in_block(const FengBlock *block,
+                                                     char ***out_names,
+                                                     size_t *out_count,
+                                                     bool *out_captures_self);
+static bool cg_emit_capture_cell_type(CG *cg,
+                                      const CGType *value_type,
+                                      FengToken blame,
+                                      char **out_struct_name,
+                                      char **out_desc_name);
+static bool cg_scope_add_capture_alias(Scope *scope,
+                                       FengSlice name,
+                                       const char *value_expr,
+                                       const char *cell_expr,
+                                       const char *cell_struct_name,
+                                       const char *cell_desc_name,
+                                       const CGType *value_type);
+static bool cg_emit_capture_cell_init_from_expr(CG *cg,
+                                                const char *cell_expr,
+                                                const char *value_expr,
+                                                const CGType *value_type,
+                                                FengToken blame,
+                                                bool owns_ref);
+static bool cg_emit_capture_cell_default_init(CG *cg,
+                                              const char *cell_expr,
+                                              const CGType *value_type,
+                                              FengToken blame);
+static bool cg_scope_bind_capture_cell(CG *cg,
+                                       Scope *scope,
+                                       FengSlice name,
+                                       const CGType *value_type,
+                                       FengToken blame,
+                                       const char *source_expr,
+                                       bool has_source,
+                                       bool source_owns_ref);
 static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl);
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
@@ -1000,6 +1052,761 @@ static char *cg_fresh_temp(CG *cg, const char *prefix) {
     Buf b; buf_init(&b);
     buf_append_fmt(&b, "%s%d", prefix, cg->tmp_counter++);
     return b.data;
+}
+
+static bool cg_capture_name_list_add(char ***items,
+                                     size_t *count,
+                                     size_t *capacity,
+                                     FengSlice name) {
+    for (size_t i = 0; i < *count; ++i) {
+        if (strlen((*items)[i]) == name.length &&
+            memcmp((*items)[i], name.data, name.length) == 0) {
+            return true;
+        }
+    }
+    if (*count + 1 > *capacity) {
+        size_t next = *capacity ? *capacity * 2 : 8;
+        char **grown = realloc(*items, next * sizeof **items);
+        if (grown == NULL) {
+            return false;
+        }
+        *items = grown;
+        *capacity = next;
+    }
+    (*items)[*count] = strndup(name.data, name.length);
+    if ((*items)[*count] == NULL) {
+        return false;
+    }
+    *count += 1;
+    return true;
+}
+
+static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
+                                                    char ***out_names,
+                                                    size_t *out_count,
+                                                    size_t *out_capacity,
+                                                    bool *out_captures_self);
+
+static bool cg_collect_capture_requirements_in_block_inner(const FengBlock *block,
+                                                           char ***out_names,
+                                                           size_t *out_count,
+                                                           size_t *out_capacity,
+                                                           bool *out_captures_self);
+
+static bool cg_collect_capture_requirements_in_stmt(const FengStmt *stmt,
+                                                    char ***out_names,
+                                                    size_t *out_count,
+                                                    size_t *out_capacity,
+                                                    bool *out_captures_self) {
+    if (stmt == NULL) return true;
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return cg_collect_capture_requirements_in_block_inner(
+                stmt->as.block, out_names, out_count, out_capacity, out_captures_self);
+        case FENG_STMT_BINDING:
+            if (!cg_collect_capture_requirements_in_expr(stmt->as.binding.initializer,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            return true;
+        case FENG_STMT_ASSIGN:
+            return cg_collect_capture_requirements_in_expr(stmt->as.assign.target,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_expr(stmt->as.assign.value,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_STMT_EXPR:
+            return cg_collect_capture_requirements_in_expr(stmt->as.expr,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_STMT_IF:
+            for (size_t i = 0; i < stmt->as.if_stmt.clause_count; ++i) {
+                const FengIfClause *clause = &stmt->as.if_stmt.clauses[i];
+                if (!cg_collect_capture_requirements_in_expr(clause->condition,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self) ||
+                    !cg_collect_capture_requirements_in_block_inner(clause->block,
+                                                                    out_names,
+                                                                    out_count,
+                                                                    out_capacity,
+                                                                    out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_collect_capture_requirements_in_block_inner(stmt->as.if_stmt.else_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_STMT_MATCH:
+            if (!cg_collect_capture_requirements_in_expr(stmt->as.match_stmt.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < stmt->as.match_stmt.branch_count; ++i) {
+                const FengMatchBranch *branch = &stmt->as.match_stmt.branches[i];
+                for (size_t j = 0; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_collect_capture_requirements_in_expr(label->value,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self) ||
+                        !cg_collect_capture_requirements_in_expr(label->range_low,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self) ||
+                        !cg_collect_capture_requirements_in_expr(label->range_high,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self)) {
+                        return false;
+                    }
+                }
+                if (!cg_collect_capture_requirements_in_block_inner(branch->body,
+                                                                    out_names,
+                                                                    out_count,
+                                                                    out_capacity,
+                                                                    out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_collect_capture_requirements_in_block_inner(stmt->as.match_stmt.else_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_STMT_WHILE:
+            return cg_collect_capture_requirements_in_expr(stmt->as.while_stmt.condition,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(stmt->as.while_stmt.body,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                return cg_collect_capture_requirements_in_expr(stmt->as.for_stmt.iter_expr,
+                                                               out_names,
+                                                               out_count,
+                                                               out_capacity,
+                                                               out_captures_self) &&
+                       cg_collect_capture_requirements_in_expr(stmt->as.for_stmt.iter_binding.initializer,
+                                                               out_names,
+                                                               out_count,
+                                                               out_capacity,
+                                                               out_captures_self) &&
+                       cg_collect_capture_requirements_in_block_inner(stmt->as.for_stmt.body,
+                                                                      out_names,
+                                                                      out_count,
+                                                                      out_capacity,
+                                                                      out_captures_self);
+            }
+            return cg_collect_capture_requirements_in_stmt(stmt->as.for_stmt.init,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_expr(stmt->as.for_stmt.condition,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_stmt(stmt->as.for_stmt.update,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(stmt->as.for_stmt.body,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_STMT_TRY:
+            return cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.try_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.catch_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.finally_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_STMT_RETURN:
+            return cg_collect_capture_requirements_in_expr(stmt->as.return_value,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_STMT_THROW:
+            return cg_collect_capture_requirements_in_expr(stmt->as.throw_value,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+    return true;
+}
+
+static bool cg_collect_capture_requirements_in_block_inner(const FengBlock *block,
+                                                           char ***out_names,
+                                                           size_t *out_count,
+                                                           size_t *out_capacity,
+                                                           bool *out_captures_self) {
+    if (block == NULL) return true;
+    for (size_t i = 0; i < block->statement_count; ++i) {
+        if (!cg_collect_capture_requirements_in_stmt(block->statements[i],
+                                                     out_names,
+                                                     out_count,
+                                                     out_capacity,
+                                                     out_captures_self)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
+                                                    char ***out_names,
+                                                    size_t *out_count,
+                                                    size_t *out_capacity,
+                                                    bool *out_captures_self) {
+    if (expr == NULL) return true;
+    switch (expr->kind) {
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (size_t i = 0; i < expr->as.array_literal.count; ++i) {
+                if (!cg_collect_capture_requirements_in_expr(expr->as.array_literal.items[i],
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!cg_collect_capture_requirements_in_expr(expr->as.object_literal.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.object_literal.field_count; ++i) {
+                if (!cg_collect_capture_requirements_in_expr(expr->as.object_literal.fields[i].value,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_CALL:
+            if (!cg_collect_capture_requirements_in_expr(expr->as.call.callee,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.call.arg_count; ++i) {
+                if (!cg_collect_capture_requirements_in_expr(expr->as.call.args[i],
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_MEMBER:
+            return cg_collect_capture_requirements_in_expr(expr->as.member.object,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_INDEX:
+            return cg_collect_capture_requirements_in_expr(expr->as.index.object,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_expr(expr->as.index.index,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_UNARY:
+            return cg_collect_capture_requirements_in_expr(expr->as.unary.operand,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_BINARY:
+            return cg_collect_capture_requirements_in_expr(expr->as.binary.left,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_expr(expr->as.binary.right,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_LAMBDA:
+            for (size_t i = 0; i < expr->as.lambda.capture_count; ++i) {
+                if (expr->as.lambda.captures[i].kind != FENG_LAMBDA_CAPTURE_LOCAL) {
+                    continue;
+                }
+                if (!cg_capture_name_list_add(out_names,
+                                              out_count,
+                                              out_capacity,
+                                              expr->as.lambda.captures[i].name)) {
+                    return false;
+                }
+            }
+            if (expr->as.lambda.captures_self) {
+                *out_captures_self = true;
+            }
+            return true;
+        case FENG_EXPR_CAST:
+            return cg_collect_capture_requirements_in_expr(expr->as.cast.value,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_IF:
+            return cg_collect_capture_requirements_in_expr(expr->as.if_expr.condition,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(expr->as.if_expr.then_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self) &&
+                   cg_collect_capture_requirements_in_block_inner(expr->as.if_expr.else_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_EXPR_MATCH:
+            if (!cg_collect_capture_requirements_in_expr(expr->as.match_expr.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.match_expr.branch_count; ++i) {
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[i];
+                for (size_t j = 0; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_collect_capture_requirements_in_expr(label->value,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self) ||
+                        !cg_collect_capture_requirements_in_expr(label->range_low,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self) ||
+                        !cg_collect_capture_requirements_in_expr(label->range_high,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity,
+                                                                 out_captures_self)) {
+                        return false;
+                    }
+                }
+                if (!cg_collect_capture_requirements_in_block_inner(branch->body,
+                                                                    out_names,
+                                                                    out_count,
+                                                                    out_capacity,
+                                                                    out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_collect_capture_requirements_in_block_inner(expr->as.match_expr.else_block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity,
+                                                                  out_captures_self);
+        case FENG_EXPR_ARRAY_NEW:
+            return cg_collect_capture_requirements_in_expr(expr->as.array_new.size,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+    }
+    return true;
+}
+
+static bool cg_current_callable_captures_name(const CG *cg,
+                                              const char *name,
+                                              size_t len) {
+    if (cg == NULL || name == NULL) return false;
+    for (size_t i = 0; i < cg->captured_binding_name_count; ++i) {
+        if (strlen(cg->captured_binding_names[i]) == len &&
+            memcmp(cg->captured_binding_names[i], name, len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool cg_compute_capture_requirements_in_block(const FengBlock *block,
+                                                     char ***out_names,
+                                                     size_t *out_count,
+                                                     bool *out_captures_self) {
+    size_t capacity = 0U;
+
+    *out_names = NULL;
+    *out_count = 0U;
+    *out_captures_self = false;
+    if (!cg_collect_capture_requirements_in_block_inner(block,
+                                                        out_names,
+                                                        out_count,
+                                                        &capacity,
+                                                        out_captures_self)) {
+        if (*out_names != NULL) {
+            for (size_t i = 0; i < *out_count; ++i) free((*out_names)[i]);
+            free(*out_names);
+        }
+        *out_names = NULL;
+        *out_count = 0U;
+        *out_captures_self = false;
+        return false;
+    }
+    return true;
+}
+
+static bool cg_emit_capture_cell_type(CG *cg,
+                                      const CGType *value_type,
+                                      FengToken blame,
+                                      char **out_struct_name,
+                                      char **out_desc_name) {
+    Buf sb;
+    Buf db;
+    Buf *td = &cg->type_defs;
+    bool any_nontrivial = false;
+
+    buf_init(&sb);
+    buf_init(&db);
+    buf_append_fmt(&sb, "FengCaptureCell__%s__%zu",
+                   cg->module_mangle ? cg->module_mangle : "mod",
+                   cg->capture_cell_counter);
+    buf_append_fmt(&db, "FengCaptureCellDesc__%s__%zu",
+                   cg->module_mangle ? cg->module_mangle : "mod",
+                   cg->capture_cell_counter);
+    cg->capture_cell_counter += 1;
+    if (sb.data == NULL || db.data == NULL) {
+        buf_free(&sb);
+        buf_free(&db);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    buf_append_fmt(td, "struct %s {\n", sb.data);
+    buf_append_cstr(td, "    FengManagedHeader _hdr;\n    ");
+    cg_emit_c_type(td, value_type);
+    buf_append_cstr(td, " value;\n};\n\n");
+
+    any_nontrivial = cgtype_value_kind(value_type) != CG_VK_TRIVIAL;
+    if (any_nontrivial) {
+        buf_append_fmt(td,
+            "static void %s__release_children(void *_self) {\n"
+            "    struct %s *_o = (struct %s *)_self;\n",
+            db.data,
+            sb.data,
+            sb.data);
+        if (!cg_emit_field_release(cg, td, "value", value_type, blame)) {
+            free(sb.data);
+            free(db.data);
+            return false;
+        }
+        buf_append_cstr(td, "}\n\n");
+
+        buf_append_fmt(td,
+            "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
+            db.data);
+        if (!cg_emit_field_managed_descriptors(cg, td, sb.data, "value", value_type, blame)) {
+            free(sb.data);
+            free(db.data);
+            return false;
+        }
+        buf_append_cstr(td, "};\n\n");
+    }
+
+    if (any_nontrivial) {
+        size_t managed_count = cg_field_managed_descriptor_count(cg, value_type, blame);
+        if (cg->failed) {
+            free(sb.data);
+            free(db.data);
+            return false;
+        }
+        buf_append_fmt(td,
+            "static const FengTypeDescriptor %s = {\n"
+            "    \"%s\",\n"
+            "    sizeof(struct %s),\n"
+            "    NULL,\n"
+            "    %s__release_children,\n"
+            "    true,\n"
+            "    %zu,\n"
+            "    %s__managed_fields\n"
+            "};\n\n",
+            db.data,
+            sb.data,
+            sb.data,
+            db.data,
+            managed_count,
+            db.data);
+    } else {
+        buf_append_fmt(td,
+            "static const FengTypeDescriptor %s = {\n"
+            "    \"%s\",\n"
+            "    sizeof(struct %s),\n"
+            "    NULL,\n"
+            "    NULL,\n"
+            "    false,\n"
+            "    0,\n"
+            "    NULL\n"
+            "};\n\n",
+            db.data,
+            sb.data,
+            sb.data);
+    }
+
+    *out_struct_name = sb.data;
+    *out_desc_name = db.data;
+    return true;
+}
+
+static bool cg_scope_add_capture_alias(Scope *scope,
+                                       FengSlice name,
+                                       const char *value_expr,
+                                       const char *cell_expr,
+                                       const char *cell_struct_name,
+                                       const char *cell_desc_name,
+                                       const CGType *value_type) {
+    CGType *alias_type = cgtype_clone(value_type);
+    if (alias_type == NULL ||
+        !scope_add(scope, "__capture_alias__", value_expr, alias_type, true)) {
+        cgtype_free(alias_type);
+        return false;
+    }
+    Local *added = &scope->items[scope->count - 1U];
+    free(added->name);
+    added->name = strndup(name.data, name.length);
+    added->capture_cell_c_name = strdup(cell_expr);
+    added->capture_cell_struct_name = strdup(cell_struct_name);
+    added->capture_cell_desc_name = strdup(cell_desc_name);
+    return added->name != NULL &&
+           added->capture_cell_c_name != NULL &&
+           added->capture_cell_struct_name != NULL &&
+           added->capture_cell_desc_name != NULL;
+}
+
+static bool cg_emit_capture_cell_init_from_expr(CG *cg,
+                                                const char *cell_expr,
+                                                const char *value_expr,
+                                                const CGType *value_type,
+                                                FengToken blame,
+                                                bool owns_ref) {
+    if (cgtype_is_managed(value_type)) {
+        if (owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s->value = %s;\n", cell_expr, value_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s->value = %s; feng_retain(%s->value);\n",
+                           cell_expr,
+                           value_expr,
+                           cell_expr);
+        }
+        return true;
+    }
+    if (cgtype_is_aggregate(value_type)) {
+        if (owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s->value = %s;\n", cell_expr, value_expr);
+        } else {
+            const char *desc = cg_aggregate_field_desc_name(value_type);
+            if (desc == NULL) {
+                return cg_fail(cg, blame,
+                    "codegen: missing aggregate descriptor for capture cell");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "    %s->value = %s; feng_aggregate_retain(&%s->value, &%s);\n",
+                           cell_expr,
+                           value_expr,
+                           cell_expr,
+                           desc);
+        }
+        return true;
+    }
+    {
+        char *cty = cg_ctype_dup(value_type);
+        if (cty == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    %s->value = (%s)(%s);\n",
+                       cell_expr,
+                       cty,
+                       value_expr);
+        free(cty);
+    }
+    return true;
+}
+
+static bool cg_emit_capture_cell_default_init(CG *cg,
+                                              const char *cell_expr,
+                                              const CGType *value_type,
+                                              FengToken blame) {
+    if (cgtype_is_aggregate(value_type)) {
+        const char *desc = cg_aggregate_field_desc_name(value_type);
+        if (desc == NULL) {
+            return cg_fail(cg, blame,
+                "codegen: missing aggregate descriptor for capture cell default-init");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    feng_aggregate_default_init(&%s->value, &%s);\n",
+                       cell_expr,
+                       desc);
+        return true;
+    }
+    {
+        char *def_expr = NULL;
+        if (!cg_default_value_expr(cg, value_type, &blame, &def_expr)) {
+            return false;
+        }
+        buf_append_fmt(cg->cur_body, "    %s->value = %s;\n", cell_expr, def_expr);
+        free(def_expr);
+    }
+    return true;
+}
+
+static bool cg_scope_bind_capture_cell(CG *cg,
+                                       Scope *scope,
+                                       FengSlice name,
+                                       const CGType *value_type,
+                                       FengToken blame,
+                                       const char *source_expr,
+                                       bool has_source,
+                                       bool source_owns_ref) {
+    char *cell_struct_name = NULL;
+    char *cell_desc_name = NULL;
+    char *cell_var = NULL;
+    char *value_expr = NULL;
+    CGType *cell_type = NULL;
+    bool ok = false;
+
+    if (!cg_emit_capture_cell_type(cg,
+                                   value_type,
+                                   blame,
+                                   &cell_struct_name,
+                                   &cell_desc_name)) {
+        return false;
+    }
+    cell_var = cg_local_cname(cg, name.data, name.length);
+    if (cell_var == NULL) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+
+    buf_append_fmt(cg->cur_body,
+                   "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+                   cell_struct_name,
+                   cell_var,
+                   cell_struct_name,
+                   cell_desc_name);
+    if (has_source) {
+        if (!cg_emit_capture_cell_init_from_expr(cg,
+                                                 cell_var,
+                                                 source_expr,
+                                                 value_type,
+                                                 blame,
+                                                 source_owns_ref)) {
+            goto cleanup;
+        }
+    } else if (!cg_emit_capture_cell_default_init(cg, cell_var, value_type, blame)) {
+        goto cleanup;
+    }
+
+    cell_type = cgtype_new(CG_TYPE_OBJECT);
+    if (cell_type == NULL ||
+        !scope_add(scope, "__capture_cell__", cell_var, cell_type, false)) {
+        cgtype_free(cell_type);
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+    cell_type = NULL;
+    cg_emit_cleanup_push_for_managed_local(cg, cell_var);
+
+    {
+        Buf value_buf;
+        buf_init(&value_buf);
+        buf_append_fmt(&value_buf, "(%s->value)", cell_var);
+        value_expr = value_buf.data;
+    }
+    if (value_expr == NULL ||
+        !cg_scope_add_capture_alias(scope,
+                                    name,
+                                    value_expr,
+                                    cell_var,
+                                    cell_struct_name,
+                                    cell_desc_name,
+                                    value_type)) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+
+    ok = true;
+
+cleanup:
+    free(cell_struct_name);
+    free(cell_desc_name);
+    free(cell_var);
+    free(value_expr);
+    cgtype_free(cell_type);
+    return ok;
 }
 
 /* ===================== type resolution ===================== */
@@ -3331,6 +4138,115 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     return tmp;
 }
 
+static bool cg_emit_return_expr_result(CG *cg,
+                                       FengToken blame,
+                                       ExprResult *r) {
+    if (cgtype_is_managed(r->type)) {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        char *cty = cg_ctype_dup(r->type);
+        if (tmp == NULL || cty == NULL) {
+            free(tmp);
+            free(cty);
+            er_free(r);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        if (!r->owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                           cty, tmp, r->c_expr, tmp);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
+        }
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
+        free(tmp);
+    } else if (cgtype_is_aggregate(r->type)) {
+        const char *desc = cg_aggregate_field_desc_name(r->type);
+        if (!desc) {
+            er_free(r);
+            return cg_fail(cg, blame,
+                "codegen: missing aggregate descriptor for spec return");
+        }
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        char *cty = cg_ctype_dup(r->type);
+        if (tmp == NULL || cty == NULL) {
+            free(tmp);
+            free(cty);
+            er_free(r);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        if (!r->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                cty, tmp, r->c_expr, tmp, desc);
+        } else {
+            cg_materialize_to_local(cg, r, "_t");
+            buf_append_fmt(cg->cur_body,
+                "    %s %s; memset(&%s, 0, sizeof %s);"
+                " feng_aggregate_take(&%s, &%s, &%s);\n",
+                cty, tmp, tmp, tmp, tmp, r->c_expr, desc);
+        }
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
+        free(tmp);
+    } else {
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        char *cty = cg_ctype_dup(r->type);
+        if (tmp == NULL || cty == NULL) {
+            free(tmp);
+            free(cty);
+            er_free(r);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                       cty, tmp, cty, r->c_expr);
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
+        free(tmp);
+    }
+    er_free(r);
+    return true;
+}
+
+static bool cg_compute_capture_requirements_in_lambda_body(const FengExpr *lambda_expr,
+                                                           char ***out_names,
+                                                           size_t *out_count,
+                                                           bool *out_captures_self) {
+    size_t capacity = 0U;
+
+    *out_names = NULL;
+    *out_count = 0U;
+    *out_captures_self = false;
+    if (lambda_expr == NULL || lambda_expr->kind != FENG_EXPR_LAMBDA) {
+        return true;
+    }
+
+    bool ok = lambda_expr->as.lambda.is_block_body
+        ? cg_collect_capture_requirements_in_block_inner(lambda_expr->as.lambda.body_block,
+                                                         out_names,
+                                                         out_count,
+                                                         &capacity,
+                                                         out_captures_self)
+        : cg_collect_capture_requirements_in_expr(lambda_expr->as.lambda.body,
+                                                  out_names,
+                                                  out_count,
+                                                  &capacity,
+                                                  out_captures_self);
+    if (!ok) {
+        if (*out_names != NULL) {
+            for (size_t i = 0; i < *out_count; ++i) free((*out_names)[i]);
+            free(*out_names);
+        }
+        *out_names = NULL;
+        *out_count = 0U;
+        *out_captures_self = false;
+        return false;
+    }
+    return true;
+}
+
 static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     if (e->kind == FENG_EXPR_BOOL) {
@@ -3648,6 +4564,481 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr && out->type;
 }
 
+static bool cg_emit_lambda_closure_type(CG *cg,
+                                        const UserSpec *spec,
+                                        const char *closure_struct_name,
+                                        const char *closure_desc_name,
+                                        const Local *const *captures,
+                                        char *const *capture_field_names,
+                                        size_t capture_count,
+                                        FengToken blame) {
+    Buf *td = &cg->type_defs;
+
+    buf_append_fmt(td, "struct %s {\n", closure_struct_name);
+    buf_append_cstr(td, "    FengManagedHeader _hdr;\n    void *_self;\n    ");
+    cg_emit_c_type(td, spec->callable_return_type);
+    buf_append_cstr(td, " (*invoke)(void *_closure");
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(td, ", ");
+        cg_emit_c_type(td, spec->callable_param_types[i]);
+    }
+    buf_append_cstr(td, ");\n");
+    for (size_t i = 0; i < capture_count; ++i) {
+        if (captures[i]->capture_cell_struct_name == NULL) {
+            return cg_fail(cg, blame,
+                "codegen: lambda capture was not lowered to a capture cell");
+        }
+        buf_append_fmt(td, "    struct %s *%s;\n",
+                       captures[i]->capture_cell_struct_name,
+                       capture_field_names[i]);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    buf_append_fmt(td,
+        "static void %s__release_children(void *_self) {\n"
+        "    struct %s *_o = (struct %s *)_self;\n"
+        "    feng_release(_o->_self);\n"
+        "    _o->_self = NULL;\n",
+        closure_desc_name,
+        closure_struct_name,
+        closure_struct_name);
+    for (size_t i = 0; i < capture_count; ++i) {
+        buf_append_fmt(td,
+            "    feng_release(_o->%s);\n"
+            "    _o->%s = NULL;\n",
+            capture_field_names[i],
+            capture_field_names[i]);
+    }
+    buf_append_cstr(td, "}\n\n");
+
+    buf_append_fmt(td,
+        "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n"
+        "    { offsetof(struct %s, _self), NULL },\n",
+        closure_desc_name,
+        closure_struct_name);
+    for (size_t i = 0; i < capture_count; ++i) {
+        buf_append_fmt(td, "    { offsetof(struct %s, %s), NULL },\n",
+                       closure_struct_name,
+                       capture_field_names[i]);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    buf_append_fmt(td,
+        "static const FengTypeDescriptor %s = {\n"
+        "    \"%s\",\n"
+        "    sizeof(struct %s),\n"
+        "    NULL,\n"
+        "    %s__release_children,\n"
+        "    true,\n"
+        "    %zu,\n"
+        "    %s__managed_fields\n"
+        "};\n\n",
+        closure_desc_name,
+        closure_struct_name,
+        closure_struct_name,
+        closure_desc_name,
+        capture_count + 1U,
+        closure_desc_name);
+    return true;
+}
+
+static void cg_emit_lambda_invoke_proto(CG *cg,
+                                        const UserSpec *spec,
+                                        const char *invoke_name) {
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_c_type(&cg->headers, spec->callable_return_type);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", invoke_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_c_type(&cg->headers, spec->callable_param_types[i]);
+        buf_append_fmt(&cg->headers, " _arg%zu", i);
+    }
+    buf_append_cstr(&cg->headers, ");\n");
+}
+
+static bool cg_emit_lambda_invoke_function(CG *cg,
+                                           const UserSpec *spec,
+                                           const FengExpr *lambda_expr,
+                                           const char *closure_struct_name,
+                                           const char *invoke_name,
+                                           const Local *const *captures,
+                                           FengSlice const *capture_names,
+                                           char *const *capture_field_names,
+                                           size_t capture_count,
+                                           FengToken blame) {
+    Buf fn;
+    Buf *saved_body = cg->cur_body;
+    Scope *saved_scope = cg->cur_scope;
+    int saved_tmp_counter = cg->tmp_counter;
+    int saved_loop_depth = cg->loop_depth;
+    int saved_try_depth = cg->try_depth;
+    CGType *saved_return_type = cg->cur_return_type;
+    bool saved_is_main = cg->cur_fn_is_main;
+    char **saved_captured_names = cg->captured_binding_names;
+    size_t saved_captured_name_count = cg->captured_binding_name_count;
+    bool saved_captures_self = cg->current_callable_captures_self;
+    char **body_captured_names = NULL;
+    size_t body_captured_name_count = 0U;
+    bool body_captures_self = false;
+    Scope *fn_scope = NULL;
+    bool ok = false;
+
+    buf_init(&fn);
+    if (!cg_compute_capture_requirements_in_lambda_body(lambda_expr,
+                                                        &body_captured_names,
+                                                        &body_captured_name_count,
+                                                        &body_captures_self)) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    fn_scope = scope_push(NULL);
+    if (fn_scope == NULL) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+
+    cg->cur_body = &fn;
+    cg->cur_scope = fn_scope;
+    cg->tmp_counter = 0;
+    cg->loop_depth = 0;
+    cg->try_depth = 0;
+    cg->cur_return_type = spec->callable_return_type;
+    cg->cur_fn_is_main = false;
+    cg->captured_binding_names = body_captured_names;
+    cg->captured_binding_name_count = body_captured_name_count;
+    cg->current_callable_captures_self = body_captures_self;
+
+    buf_append_cstr(&fn, "static ");
+    cg_emit_c_type(&fn, spec->callable_return_type);
+    buf_append_fmt(&fn, " %s(void *_closure", invoke_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&fn, ", ");
+        cg_emit_c_type(&fn, spec->callable_param_types[i]);
+        buf_append_fmt(&fn, " _arg%zu", i);
+    }
+    buf_append_fmt(&fn,
+        ") {\n"
+        "    struct %s *_lambda = (struct %s *)_closure;\n"
+        "    (void)_lambda;\n",
+        closure_struct_name,
+        closure_struct_name);
+
+    for (size_t i = 0; i < capture_count; ++i) {
+        Buf cell_expr;
+        Buf value_expr;
+        buf_init(&cell_expr);
+        buf_init(&value_expr);
+        buf_append_fmt(&cell_expr, "_lambda->%s", capture_field_names[i]);
+        buf_append_fmt(&value_expr, "(_lambda->%s->value)", capture_field_names[i]);
+        if (cell_expr.data == NULL || value_expr.data == NULL ||
+            !cg_scope_add_capture_alias(fn_scope,
+                                        capture_names[i],
+                                        value_expr.data,
+                                        cell_expr.data,
+                                        captures[i]->capture_cell_struct_name,
+                                        captures[i]->capture_cell_desc_name,
+                                        captures[i]->type)) {
+            buf_free(&cell_expr);
+            buf_free(&value_expr);
+            cg_fail(cg, blame, "codegen: out of memory");
+            goto cleanup;
+        }
+        buf_free(&cell_expr);
+        buf_free(&value_expr);
+    }
+
+    for (size_t i = 0; i < lambda_expr->as.lambda.param_count; ++i) {
+        const FengParameter *param = &lambda_expr->as.lambda.params[i];
+        char arg_name[32];
+        int n = snprintf(arg_name, sizeof arg_name, "_arg%zu", i);
+        if (n < 0 || (size_t)n >= sizeof arg_name) {
+            cg_fail(cg, param->token, "codegen: lambda argument name overflow");
+            goto cleanup;
+        }
+        buf_append_fmt(&fn, "    (void)%s;\n", arg_name);
+        if (cg_current_callable_captures_name(cg, param->name.data, param->name.length)) {
+            if (!cg_scope_bind_capture_cell(cg,
+                                            fn_scope,
+                                            param->name,
+                                            spec->callable_param_types[i],
+                                            param->token,
+                                            arg_name,
+                                            true,
+                                            false)) {
+                goto cleanup;
+            }
+            continue;
+        }
+        char *param_name = strndup(param->name.data, param->name.length);
+        CGType *param_type = cgtype_clone(spec->callable_param_types[i]);
+        if (param_name == NULL || param_type == NULL ||
+            !scope_add(fn_scope, param_name, arg_name, param_type, true)) {
+            free(param_name);
+            cgtype_free(param_type);
+            cg_fail(cg, param->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        free(param_name);
+    }
+
+    if (lambda_expr->as.lambda.is_block_body) {
+        if (!cg_emit_block(cg, lambda_expr->as.lambda.body_block)) goto cleanup;
+        cg_release_scope(cg, fn_scope);
+        if (spec->callable_return_type->kind == CG_TYPE_VOID) {
+            buf_append_cstr(&fn, "    return;\n");
+        } else {
+            buf_append_cstr(&fn,
+                "    feng_panic(\"lambda reached end without return\");\n");
+        }
+    } else {
+        ExprResult result;
+        if (!cg_emit_expr(cg, lambda_expr->as.lambda.body, &result)) goto cleanup;
+        if (spec->callable_return_type->kind == CG_TYPE_VOID) {
+            buf_append_fmt(&fn, "    %s;\n", result.c_expr);
+            er_free(&result);
+            cg_release_scope(cg, fn_scope);
+            buf_append_cstr(&fn, "    return;\n");
+        } else if (!cg_emit_return_expr_result(cg, lambda_expr->token, &result)) {
+            goto cleanup;
+        }
+    }
+    buf_append_cstr(&fn, "}\n\n");
+    if (fn.data == NULL) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+    buf_append(&cg->witness_defs, fn.data, fn.length);
+    ok = true;
+
+cleanup:
+    cg->cur_body = saved_body;
+    cg->cur_scope = saved_scope;
+    cg->tmp_counter = saved_tmp_counter;
+    cg->loop_depth = saved_loop_depth;
+    cg->try_depth = saved_try_depth;
+    cg->cur_return_type = saved_return_type;
+    cg->cur_fn_is_main = saved_is_main;
+    cg->captured_binding_names = saved_captured_names;
+    cg->captured_binding_name_count = saved_captured_name_count;
+    cg->current_callable_captures_self = saved_captures_self;
+    if (fn_scope != NULL) scope_pop_free(fn_scope);
+    for (size_t i = 0; i < body_captured_name_count; ++i) free(body_captured_names[i]);
+    free(body_captured_names);
+    buf_free(&fn);
+    return ok;
+}
+
+static bool cg_emit_callable_lambda_coercion(CG *cg,
+                                             const FengExpr *e,
+                                             const FengExpr *lambda_expr,
+                                             const FengSpecCoercionSite *cs,
+                                             ExprResult *out) {
+    const UserSpec *target_spec = NULL;
+    const Local **captures = NULL;
+    FengSlice *capture_names = NULL;
+    char **capture_field_names = NULL;
+    size_t capture_count = 0U;
+    size_t capture_capacity = 0U;
+    char *closure_struct_name = NULL;
+    char *closure_desc_name = NULL;
+    char *invoke_name = NULL;
+    char *closure_var = NULL;
+    bool ok = false;
+    FengToken blame = e ? e->token : (lambda_expr ? lambda_expr->token : (FengToken){0});
+
+    er_init(out);
+    if (lambda_expr == NULL || lambda_expr->kind != FENG_EXPR_LAMBDA) {
+        return cg_fail(cg, blame,
+            "codegen: callable lambda coercion is missing lambda semantic data");
+    }
+    if (!cg_resolve_coercion_target_user_spec(cg, cs, blame, &target_spec)) {
+        return false;
+    }
+    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
+        return cg_fail(cg, blame,
+            "codegen: callable lambda coercion target was not registered as a callable-form spec");
+    }
+    if (target_spec->callable_param_count != lambda_expr->as.lambda.param_count) {
+        return cg_fail(cg, blame,
+            "codegen: callable lambda coercion parameter count mismatch");
+    }
+
+    capture_capacity = lambda_expr->as.lambda.capture_count +
+                       (lambda_expr->as.lambda.captures_self ? 1U : 0U);
+    if (capture_capacity > 0U) {
+        captures = calloc(capture_capacity, sizeof *captures);
+        capture_names = calloc(capture_capacity, sizeof *capture_names);
+        capture_field_names = calloc(capture_capacity, sizeof *capture_field_names);
+        if (captures == NULL || capture_names == NULL || capture_field_names == NULL) {
+            cg_fail(cg, blame, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    for (size_t i = 0; i < lambda_expr->as.lambda.capture_count; ++i) {
+        const FengLambdaCapture *capture = &lambda_expr->as.lambda.captures[i];
+        if (capture->kind != FENG_LAMBDA_CAPTURE_LOCAL) {
+            continue;
+        }
+        const Local *local = scope_lookup(cg->cur_scope,
+                                          capture->name.data,
+                                          capture->name.length);
+        if (local == NULL || local->capture_cell_c_name == NULL ||
+            local->capture_cell_struct_name == NULL ||
+            local->capture_cell_desc_name == NULL) {
+            cg_fail(cg, blame,
+                "codegen: lambda capture '%.*s' was not lowered to a capture cell",
+                (int)capture->name.length,
+                capture->name.data);
+            goto cleanup;
+        }
+        captures[capture_count] = local;
+        capture_names[capture_count] = capture->name;
+        Buf fb;
+        buf_init(&fb);
+        buf_append_fmt(&fb, "_cap%zu", capture_count);
+        capture_field_names[capture_count] = fb.data;
+        if (capture_field_names[capture_count] == NULL) {
+            cg_fail(cg, blame, "codegen: out of memory");
+            goto cleanup;
+        }
+        capture_count += 1U;
+    }
+    if (lambda_expr->as.lambda.captures_self) {
+        FengSlice self_name = {"self", 4U};
+        const Local *local = scope_lookup(cg->cur_scope, "self", 4U);
+        if (local == NULL || local->capture_cell_c_name == NULL ||
+            local->capture_cell_struct_name == NULL ||
+            local->capture_cell_desc_name == NULL) {
+            cg_fail(cg, blame,
+                "codegen: lambda self capture was not lowered to a capture cell");
+            goto cleanup;
+        }
+        captures[capture_count] = local;
+        capture_names[capture_count] = self_name;
+        Buf fb;
+        buf_init(&fb);
+        buf_append_fmt(&fb, "_cap%zu", capture_count);
+        capture_field_names[capture_count] = fb.data;
+        if (capture_field_names[capture_count] == NULL) {
+            cg_fail(cg, blame, "codegen: out of memory");
+            goto cleanup;
+        }
+        capture_count += 1U;
+    }
+
+    size_t lambda_id = cg->lambda_counter++;
+    {
+        Buf sb;
+        Buf db;
+        Buf ib;
+        buf_init(&sb);
+        buf_init(&db);
+        buf_init(&ib);
+        buf_append_fmt(&sb, "FengLambda__%s__%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       lambda_id);
+        buf_append_fmt(&db, "FengLambdaDesc__%s__%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       lambda_id);
+        buf_append_fmt(&ib, "FengLambdaInvoke__%s__%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       lambda_id);
+        closure_struct_name = sb.data;
+        closure_desc_name = db.data;
+        invoke_name = ib.data;
+    }
+    if (closure_struct_name == NULL || closure_desc_name == NULL || invoke_name == NULL) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+
+    if (!cg_emit_lambda_closure_type(cg,
+                                     target_spec,
+                                     closure_struct_name,
+                                     closure_desc_name,
+                                     captures,
+                                     capture_field_names,
+                                     capture_count,
+                                     blame)) {
+        goto cleanup;
+    }
+    cg_emit_lambda_invoke_proto(cg, target_spec, invoke_name);
+    if (!cg_emit_lambda_invoke_function(cg,
+                                        target_spec,
+                                        lambda_expr,
+                                        closure_struct_name,
+                                        invoke_name,
+                                        captures,
+                                        capture_names,
+                                        capture_field_names,
+                                        capture_count,
+                                        blame)) {
+        goto cleanup;
+    }
+
+    closure_var = cg_fresh_temp(cg, "_lambda");
+    if (closure_var == NULL) {
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+    buf_append_fmt(cg->cur_body,
+        "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n"
+        "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+        "    %s->_self = NULL;\n"
+        "    %s->invoke = %s;\n",
+        closure_struct_name,
+        closure_var,
+        closure_struct_name,
+        closure_desc_name,
+        closure_var,
+        closure_var,
+        closure_var,
+        invoke_name);
+    for (size_t i = 0; i < capture_count; ++i) {
+        buf_append_fmt(cg->cur_body,
+            "    %s->%s = NULL;\n"
+            "    feng_assign((void **)&%s->%s, (void *)%s);\n",
+            closure_var,
+            capture_field_names[i],
+            closure_var,
+            capture_field_names[i],
+            captures[i]->capture_cell_c_name);
+    }
+
+    {
+        Buf expr;
+        buf_init(&expr);
+        buf_append_fmt(&expr, "(struct %s *)%s",
+                       target_spec->c_closure_struct_name,
+                       closure_var);
+        out->c_expr = expr.data;
+    }
+    out->type = cgtype_new(CG_TYPE_CALLABLE);
+    if (out->c_expr == NULL || out->type == NULL) {
+        er_free(out);
+        cg_fail(cg, blame, "codegen: out of memory");
+        goto cleanup;
+    }
+    out->type->user_spec = target_spec;
+    out->owns_ref = true;
+    ok = true;
+
+cleanup:
+    if (!ok) er_free(out);
+    if (capture_field_names != NULL) {
+        for (size_t i = 0; i < capture_capacity; ++i) free(capture_field_names[i]);
+    }
+    free(capture_field_names);
+    free(capture_names);
+    free(captures);
+    free(closure_struct_name);
+    free(closure_desc_name);
+    free(invoke_name);
+    free(closure_var);
+    return ok;
+}
+
 static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     const Local *l = scope_lookup(cg->cur_scope, e->as.identifier.data,
@@ -3788,8 +5179,14 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
     if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE) {
         return cg_emit_callable_method_coercion(cg, e, cs, out);
     }
+    if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA) {
+        return cg_emit_callable_lambda_coercion(cg, e, cs->callable_lambda_expr, cs, out);
+    }
     if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER) {
         const UserSpec *target_spec = NULL;
+        if (cs->callable_lambda_expr != NULL) {
+            return cg_emit_callable_lambda_coercion(cg, e, cs->callable_lambda_expr, cs, out);
+        }
         if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
             return false;
         }
@@ -5735,6 +7132,31 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, b->token,
                 "codegen: binding without type or initializer not supported");
         }
+    }
+    if (cg_current_callable_captures_name(cg, b->name.data, b->name.length)) {
+        bool ok;
+        if (has_init) {
+            ok = cg_scope_bind_capture_cell(cg,
+                                            cg->cur_scope,
+                                            b->name,
+                                            decl_type,
+                                            b->token,
+                                            init.c_expr,
+                                            true,
+                                            init.owns_ref);
+            er_free(&init);
+        } else {
+            ok = cg_scope_bind_capture_cell(cg,
+                                            cg->cur_scope,
+                                            b->name,
+                                            decl_type,
+                                            b->token,
+                                            NULL,
+                                            false,
+                                            false);
+        }
+        cgtype_free(decl_type);
+        return ok;
     }
     char *cname = cg_local_cname(cg, b->name.data, b->name.length);
     if (!cname) { if (has_init) er_free(&init); cgtype_free(decl_type); return false; }
@@ -8265,6 +9687,14 @@ static bool cg_emit_function(CG *cg,
                              const FengDecl *decl,
                              bool is_main,
                              FengCompileTarget target) {
+    char **captured_names = NULL;
+    size_t captured_name_count = 0U;
+    char **saved_captured_names = cg->captured_binding_names;
+    size_t saved_captured_name_count = cg->captured_binding_name_count;
+    bool saved_captures_self = cg->current_callable_captures_self;
+    Scope *fn_scope = NULL;
+    bool ok = false;
+
     if (!cg_register_free_fn(cg, decl)) return false;
     FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
@@ -8274,10 +9704,8 @@ static bool cg_emit_function(CG *cg,
 
     if (is_main && !cg_check_main_signature(cg, fn)) return false;
 
-    /* Forward proto. */
     cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
 
-    /* Body. */
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
     if (needs_static) {
@@ -8286,8 +9714,11 @@ static bool cg_emit_function(CG *cg,
     cg_emit_c_type(body, fn->return_type);
     buf_append_fmt(body, " %s(", fn->c_name);
     if (fn->param_count == 0) buf_append_cstr(body, "void");
-    Scope *fn_scope = scope_push(NULL);
-    if (!fn_scope) return cg_fail(cg, decl->token, "codegen: out of memory");
+    fn_scope = scope_push(NULL);
+    if (!fn_scope) {
+        cg_fail(cg, decl->token, "codegen: out of memory");
+        goto cleanup;
+    }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
     cg->loop_depth = 0;
@@ -8298,43 +9729,74 @@ static bool cg_emit_function(CG *cg,
         cg_emit_c_type(body, fn->param_types[i]);
         buf_append_fmt(body, " %s",
             fn->param_names[i] ? fn->param_names[i] : "_p");
-        CGType *pt = cgtype_clone(fn->param_types[i]);
-        scope_add(fn_scope, fn->param_names[i] ? fn->param_names[i] : "_p",
-                  fn->param_names[i] ? fn->param_names[i] : "_p", pt, true);
     }
     buf_append_cstr(body, ") {\n");
 
-    /* Suppress -Wunused-parameter for parameters that the body may not
-     * reference. The cast is a no-op at runtime. */
+    if (!cg_compute_capture_requirements_in_block(decl->as.function_decl.body,
+                                                  &captured_names,
+                                                  &captured_name_count,
+                                                  &cg->current_callable_captures_self)) {
+        cg_fail(cg, decl->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->captured_binding_names = captured_names;
+    cg->captured_binding_name_count = captured_name_count;
+
     for (size_t i = 0; i < fn->param_count; i++) {
         const char *pn = fn->param_names[i] ? fn->param_names[i] : "_p";
         buf_append_fmt(body, "    (void)%s;\n", pn);
     }
 
-    if (!cg_emit_block(cg, decl->as.function_decl.body)) {
-        cg->cur_scope = NULL;
-        scope_pop_free(fn_scope);
-        return false;
+    for (size_t i = 0; i < fn->param_count; i++) {
+        const char *pn = fn->param_names[i] ? fn->param_names[i] : "_p";
+        if (cg_current_callable_captures_name(cg, pn, strlen(pn))) {
+            if (!cg_scope_bind_capture_cell(cg,
+                                            fn_scope,
+                                            decl->as.function_decl.params[i].name,
+                                            fn->param_types[i],
+                                            decl->as.function_decl.params[i].token,
+                                            pn,
+                                            true,
+                                            false)) {
+                goto cleanup;
+            }
+            continue;
+        }
+        CGType *pt = cgtype_clone(fn->param_types[i]);
+        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+            cgtype_free(pt);
+            cg_fail(cg, decl->token, "codegen: out of memory");
+            goto cleanup;
+        }
     }
 
-    /* Implicit fall-off cleanup + return for void/main. */
+    if (!cg_emit_block(cg, decl->as.function_decl.body)) goto cleanup;
+
     cg_release_scope(cg, fn_scope);
     if (fn->return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
     } else if (is_main && fn->return_type->kind == CG_TYPE_I32) {
         buf_append_cstr(body, "    return 0;\n");
     } else {
-        /* Non-void without explicit return is rejected by semantic; emit
-         * abort as defensive measure. */
         buf_append_cstr(body, "    feng_panic(\"function reached end without return\");\n");
     }
     buf_append_cstr(body, "}\n\n");
-    cg->cur_scope = NULL;
-    scope_pop_free(fn_scope);
+    ok = true;
+
+cleanup:
+    cg->captured_binding_names = saved_captured_names;
+    cg->captured_binding_name_count = saved_captured_name_count;
+    cg->current_callable_captures_self = saved_captures_self;
+    for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
+    free(captured_names);
+    if (fn_scope != NULL) {
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+    }
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
     cg->cur_fn_is_main = false;
-    return true;
+    return ok;
 }
 
 /* ===================== driver ===================== */
@@ -10721,6 +12183,15 @@ cleanup:
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
  * parameter typed as `struct T *`. */
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) {
+    char **captured_names = NULL;
+    size_t captured_name_count = 0U;
+    char **saved_captured_names = cg->captured_binding_names;
+    size_t saved_captured_name_count = cg->captured_binding_name_count;
+    bool saved_captures_self = cg->current_callable_captures_self;
+    Scope *fn_scope = NULL;
+    bool ok = false;
+    FengSlice self_name = {"self", 4U};
+
     cg_emit_user_method_proto(&cg->fn_protos, t, m, true);
 
     Buf *body = &cg->fn_defs;
@@ -10731,41 +12202,97 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
     cg_emit_c_type(body, m->return_type);
     buf_append_fmt(body, " %s(struct %s *self", m->c_name, t->c_struct_name);
 
-    Scope *fn_scope = scope_push(NULL);
-    if (!fn_scope) return cg_fail(cg, m->member->token, "codegen: out of memory");
+    fn_scope = scope_push(NULL);
+    if (!fn_scope) {
+        cg_fail(cg, m->member->token, "codegen: out of memory");
+        goto cleanup;
+    }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
-    /* Register self as a borrowed param so cg_release_scope skips it. */
-    {
-        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
-        if (!self_t) {
-            cg->cur_scope = NULL; scope_pop_free(fn_scope);
-            return false;
-        }
-        self_t->user = t;
-        scope_add(fn_scope, "self", "self", self_t, true);
-    }
+
     for (size_t i = 0; i < m->param_count; i++) {
         buf_append_cstr(body, ", ");
         cg_emit_c_type(body, m->param_types[i]);
         const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
         buf_append_fmt(body, " %s", pn);
-        CGType *pt = cgtype_clone(m->param_types[i]);
-        scope_add(fn_scope, pn, pn, pt, true);
     }
     buf_append_cstr(body, ") {\n");
+
+    if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
+                                                  &captured_names,
+                                                  &captured_name_count,
+                                                  &cg->current_callable_captures_self)) {
+        cg_fail(cg, m->member->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->captured_binding_names = captured_names;
+    cg->captured_binding_name_count = captured_name_count;
+
     buf_append_cstr(body, "    (void)self;\n");
     for (size_t i = 0; i < m->param_count; i++) {
         const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
         buf_append_fmt(body, "    (void)%s;\n", pn);
     }
-    if (!cg_emit_block(cg, m->member->as.callable.body)) {
-        cg->cur_scope = NULL; scope_pop_free(fn_scope);
-        cg->cur_body = NULL; cg->cur_return_type = NULL;
-        return false;
+
+    if (cg->current_callable_captures_self) {
+        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
+        if (!self_t) {
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        self_t->user = t;
+        if (!cg_scope_bind_capture_cell(cg,
+                                        fn_scope,
+                                        self_name,
+                                        self_t,
+                                        m->member->token,
+                                        "self",
+                                        true,
+                                        false)) {
+            cgtype_free(self_t);
+            goto cleanup;
+        }
+        cgtype_free(self_t);
+    } else {
+        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
+        if (!self_t) {
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        self_t->user = t;
+        if (!scope_add(fn_scope, "self", "self", self_t, true)) {
+            cgtype_free(self_t);
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
     }
+
+    for (size_t i = 0; i < m->param_count; i++) {
+        const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
+        if (cg_current_callable_captures_name(cg, pn, strlen(pn))) {
+            if (!cg_scope_bind_capture_cell(cg,
+                                            fn_scope,
+                                            m->member->as.callable.params[i].name,
+                                            m->param_types[i],
+                                            m->member->as.callable.params[i].token,
+                                            pn,
+                                            true,
+                                            false)) {
+                goto cleanup;
+            }
+            continue;
+        }
+        CGType *pt = cgtype_clone(m->param_types[i]);
+        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+            cgtype_free(pt);
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
     if (m->return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
@@ -10774,10 +12301,21 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
             "    feng_panic(\"method reached end without return\");\n");
     }
     buf_append_cstr(body, "}\n\n");
-    cg->cur_scope = NULL; scope_pop_free(fn_scope);
+    ok = true;
+
+cleanup:
+    cg->captured_binding_names = saved_captured_names;
+    cg->captured_binding_name_count = saved_captured_name_count;
+    cg->current_callable_captures_self = saved_captures_self;
+    for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
+    free(captured_names);
+    if (fn_scope != NULL) {
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+    }
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
-    return true;
+    return ok;
 }
 
 /* Emit the user finalizer thunk body. Mirrors cg_emit_user_method but with
