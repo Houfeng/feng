@@ -10,7 +10,7 @@
 
 ## Todo List
 
-> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及 Map/Hashable 级真实场景均已闭环。由于 union-form `spec` 仍处于语法草案阶段，本轮“泛型 100% 完整支持”的验收口径临时限定为**不含 union-form**的既有语言形态；当前回归结果已经形成该口径下的阶段性完成证据。
+> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及简化 Map/Hashable 级场景均已闭环。但从真实 `Map<K, V>` 需求反查后，`K: Eq<K>` 这类“约束面引用当前类型参数”的自引用泛型 spec constraint 仍未通过 codegen，因此当前不能认定为泛型 100% 完整。由于 union-form `spec` 仍处于语法草案阶段，本轮继续限定为**不含 union-form**的既有语言形态；完成判定必须新增真实 Map 所需约束形态的端到端回归。
 
 - [x] **Phase 5.5**：符号表结构重构（G5 前置，见 [feng-plan.md](./feng-plan.md) §Phase 5.5）
 - [x] **G0**：所有设计决策收口（Q1–Q5 全部已决策，见 [§G0](#g0-规则收口前置于一切编码)）
@@ -20,7 +20,7 @@
 - [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面按 union 语法落地后另行收口，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
 - [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion，以及 generic-type generic-method 基础路径已完成；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
-- [x] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及 Map/Hashable 级真实场景；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
+- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及简化 Map/Hashable 场景；真实 Map 还需要补 `K: Eq<K>` / `Hashable<K>` 自引用泛型 spec constraint 端到端回归，union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
 
 ---
 
@@ -72,15 +72,17 @@
 - 代码生成层已经移除 `generic methods on generic types are not yet supported` 失败分支；G6-6 的 ABI 落地为：泛型类型共享方法体按“外层类型参数描述符 -> 方法类型参数描述符”接收统一 descriptor 序列；具体类型实例 wrapper 负责补齐外层 descriptor，调用点负责为方法级类型实参构造 descriptor，并继续通过 `_out` 处理方法级泛型返回值。
 - 当前基础证据来自 `test/codegen/test_codegen.c` 的生成 C 编译用例，以及 `test/smoke/phase1a/generic_type_generic_method.ff` 端到端 smoke。
 
-#### P4. `Map<K: Hashable, V>` 级真实目标场景已形成基础完成证据
+#### P4. `Map<K: Hashable, V>` 级场景已形成基础证据，但真实 Map 约束尚未完整
 
 - 当前 object-form 约束调用不再只依赖最小 smoke；`test/smoke/phase1a/generic_map_hashable.ff` 已把 `MiniMap<K: Hashable, V>` 作为 Map/Hashable 级准入用例锁定。
 - 该 smoke 覆盖受约束类型参数方法调用、泛型类型字段读写、generic type shared body 内部同类型方法调用，以及 `K`/`V` 多类型参数组合，作为“不含 union”的真实目标场景基础证据。
+- 但该 smoke 的 `Hashable` 约束没有携带键自身类型参数；真实 `Map` 需要 `Eq<K>` / `Hashable<K>` 这类约束面引用当前类型参数的形态，才能表达 `key.same(other: K)` 这类同类型键比较。
+- 当前最小 probe `type MiniMap<K: Eq<K>, V>` 已通过 semantic，但 codegen 在解析约束时失败：`generic type/spec instance 'Eq<...>' was not registered`。因此，当前泛型能力不能认定为 100% 完整，也不应在 `std` 中落地生产级 `Map<K, V>`。
 
-#### P5. 测试覆盖已形成“不含 union 的泛型完整”阶段性证据
+#### P5. 测试覆盖已形成基础证据，但缺少真实 Map 约束准入
 
 - 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form `spec` 聚合值 generic arg（包含 `let x: MySpec` 作为 `t: T` 实参与 `MySpec` 作为泛型类型实参）、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion、generic spec concrete instance 的 object/callable 基础 codegen 路径、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及 `Map<K: Hashable, V>` 级真实目标场景。
-- 当前 `make test` 已通过；在 union-form `spec` 与 future tuple / value-struct 聚合值不纳入本轮验收的前提下，可以把本轮回归作为“不含 union 的泛型完整”的阶段性完成证据。
+- 当前 `make test` 已通过；但该回归尚不能覆盖 `K: Eq<K>` / `Hashable<K>` 这类真实 Map 所需约束形态，因此不能作为“不含 union 的泛型完整”最终完成证据。
 - 源码中保留的 `aggregate type as generic type argument not yet supported (missing flatten rule)` 是未来聚合值类型接入前的护栏；不同约束面之间的泛型参数转发仍等待未来多约束 / 约束合取语义收口，不作为当前既有语言形态的阻塞项。
 
 ### 三、当前类型覆盖矩阵
