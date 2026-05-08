@@ -782,6 +782,176 @@ static void test_generic_constraint_witness_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kCallableSpecTopLevelFnSrc =
+    "mod feng.codegen.cb1;\n"
+    "spec Mapper(x: int): int;\n"
+    "fn add1(x: int): int {\n"
+    "    return x + 1;\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let mapper: Mapper = add1;\n"
+    "    return mapper(41);\n"
+    "}\n";
+
+static void test_callable_spec_top_level_fn_codegen(void) {
+    FengProgram *program = parse_or_die(kCallableSpecTopLevelFnSrc, "cb1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (callable spec top-level fn): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FENG_TYPE_TAG_CLOSURE") != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__cb1__Mapper") != NULL);
+    ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericCallableConstraintSrc =
+    "mod feng.codegen.cb2;\n"
+    "spec Mapper(x: int): int;\n"
+    "fn add1(x: int): int {\n"
+    "    return x + 1;\n"
+    "}\n"
+    "fn apply<T: Mapper>(mapper: T, value: int): int {\n"
+    "    return mapper(value);\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let mapper: Mapper = add1;\n"
+    "    return apply:<Mapper>(mapper, 41);\n"
+    "}\n";
+
+static void test_generic_callable_constraint_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericCallableConstraintSrc, "cb2.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic callable constraint): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "_T->witness") != NULL);
+    ASSERT(strstr(out.c_source, ")->invoke(") != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecSlotWitness__") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericObjectSpecInstanceSrc =
+    "mod feng.codegen.gs1;\n"
+    "spec Box<T> {\n"
+    "    fn fetch(): T;\n"
+    "}\n"
+    "fn read_it(box: Box<int>): int {\n"
+    "    return box.fetch();\n"
+    "}\n";
+
+static void test_generic_object_spec_instance_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericObjectSpecInstanceSrc, "gs1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic object spec instance): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs1__Box__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "->fetch(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericCallableSpecInstanceSrc =
+    "mod feng.codegen.gs2;\n"
+    "spec Mapper<T>(x: T): T;\n"
+    "fn apply(mapper: Mapper<int>): int {\n"
+    "    return mapper(41);\n"
+    "}\n";
+
+static void test_generic_callable_spec_instance_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericCallableSpecInstanceSrc, "gs2.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic callable spec instance): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs2__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedSpecValueSrc =
     "mod feng.codegen.gf7;\n"
     "spec Named {\n"
@@ -901,6 +1071,10 @@ int main(void) {
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();
     test_generic_spec_arg_codegen();
+    test_callable_spec_top_level_fn_codegen();
+    test_generic_callable_constraint_codegen();
+    test_generic_object_spec_instance_codegen();
+    test_generic_callable_spec_instance_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();

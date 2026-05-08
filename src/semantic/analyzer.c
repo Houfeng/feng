@@ -153,6 +153,10 @@ typedef enum CallableValueResolutionKind {
 typedef struct CallableValueResolution {
     CallableValueResolutionKind kind;
     const FengCallableSignature *callable;
+    const FengDecl *callable_decl;
+    const FengTypeMember *callable_member;
+    const FengDecl *callable_owner_type_decl;
+    const FengDecl *callable_fit_decl;
     const FengExpr *lambda_expr;
 } CallableValueResolution;
 
@@ -1984,22 +1988,34 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
     InferredExprType owner_type,
     const FengTypeRef *member_type_ref) {
     FengTypeRef *substituted;
+    const FengTypeParam *owner_type_params = NULL;
+    size_t owner_type_param_count = 0U;
 
     if (context == NULL || owner_type_decl == NULL ||
-        owner_type_decl->kind != FENG_DECL_TYPE ||
-        owner_type_decl->as.type_decl.type_param_count == 0U ||
         owner_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
         owner_type.type_ref == NULL ||
         owner_type.type_ref->kind != FENG_TYPE_REF_NAMED ||
-        owner_type.type_ref->as.named.type_arg_count !=
-            owner_type_decl->as.type_decl.type_param_count) {
+        (owner_type_decl->kind != FENG_DECL_TYPE && owner_type_decl->kind != FENG_DECL_SPEC)) {
+        return member_type_ref;
+    }
+
+    if (owner_type_decl->kind == FENG_DECL_TYPE) {
+        owner_type_params = owner_type_decl->as.type_decl.type_params;
+        owner_type_param_count = owner_type_decl->as.type_decl.type_param_count;
+    } else {
+        owner_type_params = owner_type_decl->as.spec_decl.type_params;
+        owner_type_param_count = owner_type_decl->as.spec_decl.type_param_count;
+    }
+
+    if (owner_type_param_count == 0U ||
+        owner_type.type_ref->as.named.type_arg_count != owner_type_param_count) {
         return member_type_ref;
     }
 
     substituted = clone_type_ref_substituting_type_params(
         member_type_ref,
-        owner_type_decl->as.type_decl.type_params,
-        owner_type_decl->as.type_decl.type_param_count,
+        owner_type_params,
+        owner_type_param_count,
         owner_type.type_ref->as.named.type_args);
     if (substituted == NULL) {
         return member_type_ref;
@@ -2459,6 +2475,27 @@ static const FengDecl *resolve_function_type_decl(const ResolveContext *context,
     }
 
     return type_decl;
+}
+
+static const FengDecl *resolve_callable_constraint_type_decl(const ResolveContext *context,
+                                                            InferredExprType expr_type) {
+    const TypeParamEntry *type_param_entry;
+
+    if (expr_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        expr_type.type_ref == NULL ||
+        expr_type.type_ref->kind != FENG_TYPE_REF_NAMED ||
+        expr_type.type_ref->as.named.segment_count != 1U ||
+        expr_type.type_ref->as.named.type_arg_count != 0U) {
+        return NULL;
+    }
+
+    type_param_entry = find_type_param(context, expr_type.type_ref->as.named.segments[0]);
+    if (type_param_entry == NULL || type_param_entry->type_param == NULL ||
+        type_param_entry->type_param->constraint == NULL) {
+        return NULL;
+    }
+
+    return resolve_function_type_decl(context, type_param_entry->type_param->constraint);
 }
 
 static bool inferred_expr_type_is_void(InferredExprType expr_type) {
@@ -4682,12 +4719,20 @@ static CallableValueResolution resolve_top_level_function_value_overload(
         if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
             result.callable = &decl->as.function_decl;
+            result.callable_decl = decl;
+            result.callable_member = NULL;
+            result.callable_owner_type_decl = NULL;
+            result.callable_fit_decl = NULL;
             result.lambda_expr = NULL;
             continue;
         }
 
         result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
         result.callable = NULL;
+        result.callable_decl = NULL;
+        result.callable_member = NULL;
+        result.callable_owner_type_decl = NULL;
+        result.callable_fit_decl = NULL;
         result.lambda_expr = NULL;
     }
 
@@ -4731,12 +4776,20 @@ static CallableValueResolution resolve_module_public_function_value_overload(
             if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
                 result.callable = &decl->as.function_decl;
+                result.callable_decl = decl;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
                 result.lambda_expr = NULL;
                 continue;
             }
 
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
             result.callable = NULL;
+            result.callable_decl = NULL;
+            result.callable_member = NULL;
+            result.callable_owner_type_decl = NULL;
+            result.callable_fit_decl = NULL;
             result.lambda_expr = NULL;
         }
     }
@@ -4779,12 +4832,20 @@ static CallableValueResolution resolve_accessible_method_value_overload(
         if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
             result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
             result.callable = &member->as.callable;
+            result.callable_decl = NULL;
+            result.callable_member = member;
+            result.callable_owner_type_decl = type_decl;
+            result.callable_fit_decl = NULL;
             result.lambda_expr = NULL;
             continue;
         }
 
         result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
         result.callable = NULL;
+        result.callable_decl = NULL;
+        result.callable_member = NULL;
+        result.callable_owner_type_decl = NULL;
+        result.callable_fit_decl = NULL;
         result.lambda_expr = NULL;
     }
 
@@ -4808,6 +4869,36 @@ static bool function_type_parameters_match_args(ResolveContext *context,
         if (!expr_matches_expected_type_ref(context,
                                             args[arg_index],
                                             type_decl->as.spec_decl.as.callable.params[arg_index].type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool function_type_parameters_match_args_for_instance(
+    ResolveContext *context,
+    const FengDecl *type_decl,
+    InferredExprType owner_type,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t arg_index;
+
+    if (!decl_is_function_type(type_decl)) {
+        return false;
+    }
+    if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
+        return false;
+    }
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
+            context,
+            type_decl,
+            owner_type,
+            type_decl->as.spec_decl.as.callable.params[arg_index].type);
+
+        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
             return false;
         }
     }
@@ -5185,7 +5276,12 @@ static FunctionCallResolution resolve_accessible_method_overload(
 
                 if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                     !slice_equals(member->as.callable.name, name) ||
-                    !callable_parameters_match_args(context, &member->as.callable, args, arg_count)) {
+                    !callable_parameters_match_args_for_owner_instance(context,
+                                                                       &member->as.callable,
+                                                                       type_decl,
+                                                                       owner_type,
+                                                                       args,
+                                                                       arg_count)) {
                     continue;
                 }
                 if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
@@ -5291,14 +5387,50 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               size_t arg_count) {
     InferredExprType callee_type = infer_expr_type(context, callee);
     const FengDecl *callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
+    const FengDecl *callee_constraint_decl =
+        resolve_callable_constraint_type_decl(context, callee_type);
     char *target_name = NULL;
 
     if (callee_type_decl != NULL && decl_is_function_type(callee_type_decl)) {
-        if (function_type_parameters_match_args(context, callee_type_decl, args, arg_count)) {
+        if (function_type_parameters_match_args_for_instance(context,
+                                                             callee_type_decl,
+                                                             callee_type,
+                                                             args,
+                                                             arg_count)) {
             note_callable_value_expr_exception_escape(context, callee);
             record_object_arg_coercion_sites(context, args, arg_count,
                                              callee_type_decl->as.spec_decl.as.callable.params,
                                              callee_type_decl->as.spec_decl.as.callable.param_count);
+            return true;
+        }
+
+        target_name = format_expr_target_name(callee);
+        if (!resolver_append_error(
+                context,
+                callee->token,
+                format_message("call target '%s' has no function type overload accepting %zu argument(s)",
+                               target_name != NULL ? target_name : "<expression>",
+                               arg_count))) {
+            free(target_name);
+            return false;
+        }
+
+        free(target_name);
+        return true;
+    }
+
+    if (callee_constraint_decl != NULL) {
+        if (function_type_parameters_match_args(context,
+                                                callee_constraint_decl,
+                                                args,
+                                                arg_count)) {
+            note_callable_value_expr_exception_escape(context, callee);
+            record_object_arg_coercion_sites(
+                context,
+                args,
+                arg_count,
+                callee_constraint_decl->as.spec_decl.as.callable.params,
+                callee_constraint_decl->as.spec_decl.as.callable.param_count);
             return true;
         }
 
@@ -5747,6 +5879,21 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                            expr->as.call.args,
                                            expr->as.call.arg_count);
     }
+    if (callee_type_decl != NULL &&
+        function_type_parameters_match_args_for_instance(context,
+                                                         callee_type_decl,
+                                                         callee_type,
+                                                         expr->as.call.args,
+                                                         expr->as.call.arg_count)) {
+        return inferred_expr_type_from_return_type_ref(
+            substitute_type_ref_for_owner_instance(
+                context,
+                callee_type_decl,
+                callee_type,
+                callee_type_decl->as.spec_decl.as.callable.return_type));
+    }
+
+    callee_type_decl = resolve_callable_constraint_type_decl(context, callee_type);
     if (callee_type_decl != NULL &&
         function_type_parameters_match_args(context,
                                             callee_type_decl,
@@ -7027,6 +7174,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                     (!requires_fixed_abi_callable ||
                      inferred_expr_type_can_match_fixed_abi_callable_type(local_entry->type))) {
                     result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                    result.callable_decl = NULL;
+                    result.callable_member = NULL;
+                    result.callable_owner_type_decl = NULL;
+                    result.callable_fit_decl = NULL;
                     result.lambda_expr = local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA
                                              ? local_entry->type.lambda_expr
                                              : NULL;
@@ -7047,6 +7198,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             if (inferred_expr_type_is_known(expr_type) &&
                 inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable_decl = NULL;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
             }
             return result;
         }
@@ -7071,6 +7226,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                     if (inferred_expr_type_is_known(expr_type) &&
                         inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
                         result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                        result.callable_decl = NULL;
+                        result.callable_member = NULL;
+                        result.callable_owner_type_decl = NULL;
+                        result.callable_fit_decl = NULL;
                     }
                     return result;
                 }
@@ -7097,6 +7256,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             if (inferred_expr_type_is_known(expr_type) &&
                 inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable_decl = NULL;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
             }
             return result;
         }
@@ -7107,6 +7270,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             }
             if (lambda_expr_matches_function_type(context, expr, function_type_decl)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable_decl = NULL;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
                 result.lambda_expr = expr;
             }
             return result;
@@ -7117,8 +7284,16 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             if (inferred_expr_type_is_known(expr_type) &&
                 inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable_decl = NULL;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
             } else if (expr_type_inference_is_pending(context, expr)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable_decl = NULL;
+                result.callable_member = NULL;
+                result.callable_owner_type_decl = NULL;
+                result.callable_fit_decl = NULL;
             }
             return result;
         }
@@ -8101,6 +8276,7 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
                                                const FengExpr *expr,
                                                const FengTypeRef *expected_type_ref) {
     const FengDecl *target_decl;
+    CallableValueResolution resolution;
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
@@ -8110,11 +8286,20 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
     if (target_decl == NULL) {
         return;
     }
+    resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
+    if (resolution.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+        return;
+    }
     (void)feng_semantic_record_callable_spec_coercion_site(
         context->analysis,
         expr,
         target_decl,
-        classify_callable_source(context, expr));
+        classify_callable_source(context, expr),
+        resolution.callable_decl,
+        resolution.callable_member,
+        resolution.callable_owner_type_decl,
+        resolution.callable_fit_decl,
+        resolution.lambda_expr);
 }
 
 /* Phase S2-a — SpecDefaultBinding recording helper (§6.3). Records a

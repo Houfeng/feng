@@ -17,9 +17,9 @@
 - [x] **G1**：词法分析确认与测试（见 [§G1](#g1-词法分析)）
 - [x] **G2**：AST 结构扩展（见 [§G2](#g2-ast-扩展)）
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
-- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization 已完成，但 callable/union 约束面和 generic spec 语义闭环仍未完成，见 [§当前问题总表](#当前问题总表)）
+- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call 与 generic spec concrete instance 的基础语义已完成，但 union 约束面、generic spec coercion 与泛型类型上的泛型方法仍未完成，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness 与 generic aggregate return 已完成；但 callable-form / generic spec / generic-type generic-method / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering 与 generic spec concrete instance 基础路径已完成；但 generic spec coercion / generic-type generic-method / union-form / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
 - [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用和 generic aggregate return，但仍不足以证明“泛型 100% 完整”，见 [§G7](#g7-测试与验证)）
 
 ---
@@ -52,11 +52,17 @@
 - 这说明当前泛型并未覆盖“未来 tuple / 其他 aggregate 值”这整类 generic arg，也不能宣称“已覆盖所有值类型”。
 - 影响范围包括：未来 tuple / 其他按值聚合类型，以及任何依赖 `FengAggregateValueDescriptor` 的按值泛型场景。
 
-#### P2. callable-form `spec`、generic `spec` 与 union-form `spec` 的泛型覆盖仍未闭合
+#### P2. generic `spec` coercion 与 union-form `spec` 的泛型覆盖仍未闭合
 
 - 当前源码中的 `spec` form 枚举仍只有 object-form / callable-form 两类；源码尚未把 union-form 纳入同一条泛型实现路径。
-- 语义 value-kind 已经把 callable-form `spec` 归类为 managed pointer，但 codegen 仍保留 `callable-form specs not yet supported` 的未完成分支。
-- codegen 在 spec shell 注册阶段仍直接跳过 generic `spec`，这意味着“泛型 `spec` 声明契约”尚未进入完整发码路径。
+- callable-form `spec` 现在已经有统一 callable value 表示；top-level function coercion、direct invoke、generic callable constraint invoke lowering，以及 generic callable `spec` concrete instance 的 direct call 均已进入同一条 lowering。
+- codegen 现在已经能注册并解析 generic `spec` concrete instance；object-form / callable-form 两类 `Spec<int>` 具名使用都能进入 shell/member/codegen 路径。
+- 但 generic `spec` 的 coercion 路径仍未完全闭合：当前 sidecar 只记录 target spec decl，尚未把 object-form / callable-form generic spec instance 的目标实例信息一起带到 codegen，因此“一等 spec 值物化到 generic spec concrete instance”还不能宣称 100% 完成。
+- callable-form `spec` 的 method value / lambda coercion 仍未完成；当前已闭环的是 top-level function coercion 与已是 callable value 的 direct call / generic invoke 路径。
+- 因而，generic `spec` 与 callable-form `spec` 的真实收口前提是：
+    - codegen 能注册并解析 generic spec instance；
+    - callable-form `spec` 能复用同一套 callable value 表示与 direct invoke lowering；
+    - 这套表示未来还能向 union-form `spec` 扩展，而不是再次推翻 ABI。
 - 因此，当前实现距离“所有形态 Spec 都可作为泛型实参/约束”还有明确差距。
 
 #### P3. 泛型类型上的泛型方法仍未支持
@@ -71,8 +77,8 @@
 
 #### P5. 测试覆盖仍不足以证明“泛型 100% 完整”
 
-- 现有 smoke 已证明：标量值类型、托管指针类型、object-form 约束调用，以及 generic aggregate return 的基础闭环。
-- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg、callable-form `spec` 泛型路径、generic `spec` codegen、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
+- 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering，以及 generic spec concrete instance 的 object/callable 基础 codegen 路径。
+- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg、generic spec coercion、callable-form `spec` 的 method/lambda coercion、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
 - 因此，当前仍不能把 `make test` 通过解释为“泛型已经 100% 完整”。
 
 ### 三、当前类型覆盖矩阵
@@ -83,10 +89,11 @@
 | 托管指针类型（`UserType` / `string` / `T[]`） | **已支持基础路径** | 走 `FENG_VALUE_MANAGED_POINTER` |
 | object-form spec value | **已支持基础路径** | 无约束 generic arg、约束 witness 调用、aggregate return 已闭环 |
 | 受约束 object-form spec value generic arg | **已支持基础路径** | slot witness adapter 已闭环 |
-| callable-form spec value | **未完成** | value-kind 已有落点，但 codegen 尚未闭合 |
+| callable-form spec value | **已支持基础路径** | callable value 表示、top-level fn coercion、direct call、generic callable constraint 与 generic callable spec instance 直调已闭环；method/lambda coercion 仍待补齐 |
 | union-form spec value | **未完成** | 当前源码未进入统一泛型路径 |
 | 未来 tuple / 其他按值聚合类型 | **未完成** | 与 aggregate 支持同一闭环 |
 | 受约束类型参数上的 object-form 行为调用 | **已支持基础路径** | `_T->witness` lowering 已闭环 |
+| generic spec concrete instance (`Spec<int>`) | **已支持基础路径** | object-form / callable-form concrete instance 已能进入 shell/member/codegen 路径与直调/成员调用 |
 | analyzer 在 generic 实例化点统一 witness materialization | **已支持基础路径** | generic call / type ref / constructor 已统一 demand witness |
 
 ### 四、当前契约覆盖矩阵
@@ -98,9 +105,10 @@
 | 泛型约束声明与解析 | **已支持基础路径** | 允许 `T: Spec`、允许泛型 spec 实例约束 |
 | object-form `spec` 约束下的成员/方法行为调用 | **已支持基础路径** | 当前已通过 `_T->witness` + smoke/codegen 回归 |
 | analyzer 在 generic 实例化点 materialize object-form witness | **已支持基础路径** | semantic 侧已统一 demand witness |
-| callable-form `spec` 约束下的直接调用 | **未完成** | 需要单独的 invoke lowering |
+| callable-form `spec` 约束下的直接调用 | **已支持基础路径** | `_T->witness->invoke(...)` lowering 已闭环，并与 callable value direct call 共享表示 |
 | union-form `spec` 约束下的收窄/成员可见性 | **未完成** | 需要复用 union 既有规则，不可另开特判 |
 | 一等 spec 值与泛型约束共享一套 lowering | **不应继续混用** | 需要在实现上显式区分 |
+| callable value 的 codegen 表示 | **已支持基础路径** | callable-form `spec`、generic callable constraint 与 generic callable spec instance 已共享同一套表示 |
 
 ---
 
@@ -979,6 +987,7 @@ struct {
 5. **semantic / codegen 职责边界明确**：analyzer 已负责在 generic 实例化点 materialize semantic witness sidecar；codegen 最终仍应以消费稳定的 descriptor / witness 输入为主，不以回退合成作为完成态前提。
 6. **禁止运行时查表**：所有 witness 读取都必须经由 `FengGenericParamDescriptor.witness` 的静态解释进入共享主体。
 7. **值类型零堆分配**：泛型路径不得引入任何为了契约或多态而存在的托管堆分配。
+8. **callable-form 走统一 callable value 表示**：callable-form `spec` 与 generic callable constraint 必须收口到同一套 callable value / invoke lowering；不能为 generic path 另起一条只在约束内部可用的特殊 ABI。
 
 **G6 后续优化思路**：
 
@@ -1083,11 +1092,11 @@ G4-16(泛型 fit 左侧) → G4-17
 5. G4-1 ~ G4-14（语义分析主体）+ G4-20（语义测试）
 6. G4-15 ~ G4-18（父 spec 约束、fit、终结器）
 7. G5（符号表导出）+ G5-8（符号表测试）
-8. **当前补齐阶段 A**：完成其余 aggregate generic arg 类型覆盖（G6-1）
-9. **当前补齐阶段 B**：完成 callable-form `spec` / generic `spec` / union-form `spec` 的统一契约 lowering（G4 收口 + G6-3 / G6-4 / G6-5）
-10. **当前补齐阶段 C**：完成泛型类型上的泛型方法（G6-6）
-11. **当前补齐阶段 D**：补齐 `Map<K: Hashable, V>` 等真实 smoke 与回归（G7-4 / G7-5 / G7-6 / G7-7）
-12. 泛型完整后，再恢复 fit 值类型工作
+9. **当前补齐阶段 A**：完成 callable value codegen 表示与 callable-form `spec` / generic `spec` 的统一契约 lowering（G4 收口 + G6-3 / G6-4 / G6-5）
+10. **当前补齐阶段 B**：完成其余 aggregate generic arg 类型覆盖（G6-1）
+11. **当前补齐阶段 C**：完成泛型类型上的泛型方法（G6-6）
+12. **当前补齐阶段 D**：补齐 `Map<K: Hashable, V>` 等真实 smoke 与回归（G7-4 / G7-5 / G7-6 / G7-7）
+13. 泛型完整后，再恢复 fit 值类型工作
 
 ### 关于当前代码库基础
 

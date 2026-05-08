@@ -86,7 +86,12 @@ bool feng_semantic_record_callable_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
         const FengDecl *target_spec_decl,
-        FengSpecCoercionCallableSource callable_source) {
+    FengSpecCoercionCallableSource callable_source,
+    const FengDecl *callable_decl,
+    const FengTypeMember *callable_member,
+    const FengDecl *callable_owner_type_decl,
+    const FengDecl *callable_fit_decl,
+    const FengExpr *callable_lambda_expr) {
     if (analysis_const == NULL || expr == NULL || target_spec_decl == NULL) {
         return false;
     }
@@ -101,6 +106,11 @@ bool feng_semantic_record_callable_spec_coercion_site(
     slot->target_spec_decl = target_spec_decl;
     slot->relation = NULL;
     slot->callable_source = callable_source;
+    slot->callable_decl = callable_decl;
+    slot->callable_member = callable_member;
+    slot->callable_owner_type_decl = callable_owner_type_decl;
+    slot->callable_fit_decl = callable_fit_decl;
+    slot->callable_lambda_expr = callable_lambda_expr;
     return true;
 }
 

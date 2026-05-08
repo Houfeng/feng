@@ -12,5 +12,6 @@
     "miniz",
     "nums",
     "venv"
-  ]
+  ],
+  "chat.agent.maxRequests": 100
 }

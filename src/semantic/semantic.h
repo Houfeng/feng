@@ -165,6 +165,15 @@ typedef struct FengSpecCoercionSite {
     /* CALLABLE form only: classification of the value source. Unspecified
      * for FORM_OBJECT. */
     FengSpecCoercionCallableSource callable_source;
+    /* CALLABLE form only: exact resolved implementation surface. Top-level
+     * functions set callable_decl, method values set callable_member plus
+     * callable_owner_type_decl, lambda literals set callable_lambda_expr,
+     * and already-callable values leave all of these NULL. */
+    const FengDecl *callable_decl;
+    const FengTypeMember *callable_member;
+    const FengDecl *callable_owner_type_decl;
+    const FengDecl *callable_fit_decl;
+    const FengExpr *callable_lambda_expr;
 } FengSpecCoercionSite;
 
 typedef struct FengSemanticAnalysis {
@@ -318,7 +327,12 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr,
     const FengDecl *target_spec_decl,
-    FengSpecCoercionCallableSource callable_source);
+    FengSpecCoercionCallableSource callable_source,
+    const FengDecl *callable_decl,
+    const FengTypeMember *callable_member,
+    const FengDecl *callable_owner_type_decl,
+    const FengDecl *callable_fit_decl,
+    const FengExpr *callable_lambda_expr);
 
 /* Look up the recorded coercion site for `expr`. Returns NULL when no site
  * was recorded (either the expression is not a coercion site, or the

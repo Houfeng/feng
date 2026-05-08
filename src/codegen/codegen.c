@@ -95,6 +95,7 @@ typedef enum CGTypeKind {
     CG_TYPE_ARRAY,        /* element kind held separately when needed */
     CG_TYPE_OBJECT,       /* user-defined type — Phase 1A iter 2 */
     CG_TYPE_SPEC,         /* fat object-form spec value (Step 4b — value model) */
+    CG_TYPE_CALLABLE,     /* callable-form spec value (closure pointer) */
     CG_TYPE_GENERIC_PARAM /* erased type-parameter slot (G6 — generics) */
 } CGTypeKind;
 
@@ -108,7 +109,7 @@ typedef struct CGType {
     /* For OBJECT: borrowed pointer to the registered UserType. NULL otherwise.
      * The UserType is owned by the CG context and outlives every CGType. */
     const struct UserType *user;
-    /* For SPEC (Step 4b): borrowed pointer to the registered UserSpec. NULL
+    /* For SPEC/CALLABLE: borrowed pointer to the registered UserSpec. NULL
      * otherwise. The UserSpec is owned by the CG context and outlives every
      * CGType. */
     const struct UserSpec *user_spec;
@@ -168,6 +169,7 @@ static CGValueKind cgtype_value_kind(const CGType *t) {
         case CG_TYPE_STRING:
         case CG_TYPE_ARRAY:
         case CG_TYPE_OBJECT:
+        case CG_TYPE_CALLABLE:
             return CG_VK_MANAGED_POINTER;
         case CG_TYPE_SPEC:
             return CG_VK_AGGREGATE;
@@ -233,6 +235,7 @@ static const char *cgtype_to_c(CGTypeKind k) {
         case CG_TYPE_STRING: return "FengString *";
         case CG_TYPE_ARRAY: return "FengArray *";
         case CG_TYPE_OBJECT: return "void *";
+        case CG_TYPE_CALLABLE: return "void *";
         case CG_TYPE_GENERIC_PARAM: return "void *"; /* erased; actual dispatch via descriptor */
         default: return "void";
     }
@@ -294,20 +297,9 @@ typedef struct UserType {
     const FengProgram *owner_program;
 } UserType;
 
-/* Object-form spec registry (Step 4b — value model fat spec). One entry per
- * `spec` declaration. The runtime layout for a value of spec S is the
- * by-value `struct FengSpecValue__M__S { void *subject; const FengSpecWitness__M__S *witness; }`
- * (no header — see dev/feng-value-model-delivered.md §3.3 / §7.2). subject sits
- * at offset 0 so the existing pointer-cleanup chain reuses on `&value.subject`.
- *
- * Phase 4b-α covers object-form, single-program, in-module spec usage:
- *   - param/return/local of spec type
- *   - concrete object → spec coercion at call-arg position
- *   - spec method dispatch via witness->slot(subject, ...)
- *
- * Callable-form specs, spec fields inside `type`, default zero of spec, and
- * spec equality are deferred to 4b-β / 4b-γ.
- */
+/* Spec registry. Object-form specs lower to by-value fat structs; callable-
+ * form specs lower to managed closure pointers plus a constraint-surface
+ * witness with a single erased `invoke` slot. */
 typedef struct UserSpecMember {
     char   *feng_name;          /* e.g., "greet" */
     char   *c_field_name;       /* sanitised — slot name in the witness struct */
@@ -330,6 +322,7 @@ typedef struct UserSpecMember {
 
 typedef struct UserSpec {
     char   *feng_name;                /* e.g., "Named" */
+    FengSpecForm form;
     char   *c_value_struct_name;      /* e.g., FengSpecValue__feng__sample__Named */
     char   *c_witness_struct_name;    /* e.g., FengSpecWitness__feng__sample__Named */
     /* Value-model descriptor symbols (see dev/feng-value-model-delivered.md
@@ -350,12 +343,26 @@ typedef struct UserSpec {
     char   *c_default_subject_desc_name;   /* e.g., FengSpecDefault__M__S__Subject_desc */
     char   *c_default_subject_new_name;    /* e.g., FengSpecDefault__M__S__new_subject */
     char   *c_default_witness_name;        /* e.g., FengSpecDefaultWitness__M__S */
+    char   *c_closure_struct_name;         /* callable-form only */
+    char   *c_closure_desc_name;           /* callable-form only */
     UserSpecMember *members;
     size_t          member_count;
+    CGType         *callable_return_type;
+    CGType        **callable_param_types;
+    size_t          callable_param_count;
     const FengDecl *decl;
+    bool            is_generic_instance;
+    const FengDecl *generic_origin_decl;
+    FengTypeRef   **generic_type_args;
+    size_t          generic_type_arg_count;
     /* Owning program — see UserType.owner_program. */
     const FengProgram *owner_program;
 } UserSpec;
+
+typedef struct GenericSpecDecl {
+    const FengDecl    *decl;
+    const FengProgram *owner_program;
+} GenericSpecDecl;
 
 /* `fit T :: S { ... }` registry (Step 4b-γ). One entry per fit declaration.
  * Codegen treats fit-body methods as if they were ordinary methods on T,
@@ -397,6 +404,10 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
     }
     if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
         buf_append_fmt(b, "struct %s", t->user_spec->c_value_struct_name);
+        return;
+    }
+    if (t && t->kind == CG_TYPE_CALLABLE && t->user_spec) {
+        buf_append_fmt(b, "struct %s *", t->user_spec->c_closure_struct_name);
         return;
     }
     buf_append_cstr(b, cgtype_to_c(t ? t->kind : CG_TYPE_VOID));
@@ -571,13 +582,19 @@ typedef struct CG {
     UserType *user_types;
     size_t    user_type_count;
     size_t    user_type_capacity;
-    /* Object-form spec registry (Step 4b). Sibling of user_types. Each entry
-     * holds the fat-spec value layout, witness-table layout, and member
-     * descriptors used by codegen to emit coercions, dispatch, and
-     * lifecycle for spec-typed values. */
+    /* Spec registry. Sibling of user_types. Each entry holds either the
+     * object-form fat-spec layout or the callable-form closure metadata,
+     * plus the shared constraint-surface witness metadata. */
     struct UserSpec *user_specs;
     size_t           user_spec_count;
     size_t           user_spec_capacity;
+    struct {
+        const struct UserSpec *spec;
+        const FengDecl *function_decl;
+        char *c_var;
+    } *callable_fn_values;
+    size_t callable_fn_value_count;
+    size_t callable_fn_value_capacity;
     /* Fit registry (Step 4b-γ). Sibling of user_specs. Each entry models
      * one `fit T :: S { ... }` so witness emission for FIT_METHOD source
      * can look up the C symbol of the fit-body method to call. */
@@ -647,6 +664,11 @@ typedef struct CG {
     GenericTypeDecl *generic_type_decls;
     size_t           generic_type_decl_count;
     size_t           generic_type_decl_capacity;
+    /* Registry: open generic spec declarations (concrete instances are
+     * registered into user_specs[] once their type arguments are known). */
+    GenericSpecDecl *generic_spec_decls;
+    size_t           generic_spec_decl_count;
+    size_t           generic_spec_decl_capacity;
     /* Per-function emission state when inside a generic function body.
      * `in_generic_fn` is the gate; the parallel arrays are borrowed from the
      * GenericFn being emitted and must not be freed by this block. */
@@ -672,6 +694,16 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
+static bool cg_emit_expr_raw(CG *cg, const FengExpr *expr, ExprResult *out);
+static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg, const char *cname);
@@ -680,12 +712,17 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
 static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
+static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl);
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var);
 static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const UserSpec *dst, FengToken blame,
                                         const char **out_var);
+static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
+                                              const FengDecl *function_decl,
+                                              FengToken blame,
+                                              const char **out_var);
 /* G6 — generic codegen helpers. */
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
@@ -766,12 +803,14 @@ static bool cg_build_generic_param_constraints(CG *cg,
             free(constraints);
             return false;
         }
-        if (!constraint_type || constraint_type->kind != CG_TYPE_SPEC ||
+        if (!constraint_type ||
+            (constraint_type->kind != CG_TYPE_SPEC &&
+             constraint_type->kind != CG_TYPE_CALLABLE) ||
             constraint_type->user_spec == NULL) {
             cgtype_free(constraint_type);
             free(constraints);
             return cg_fail(cg, type_params[i].token,
-                "codegen: generic constraint for '%.*s' must be an object-form spec supported by codegen",
+                "codegen: generic constraint for '%.*s' must be a spec supported by codegen",
                 (int)type_params[i].name.length,
                 type_params[i].name.data);
         }
@@ -886,6 +925,11 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
             if (!t->user_spec) { buf_append_cstr(out, "S_unknown"); return true; }
             buf_append_cstr(out, "S_");
             buf_append_cstr(out, t->user_spec->c_value_struct_name);
+            return true;
+        case CG_TYPE_CALLABLE:
+            if (!t->user_spec) { buf_append_cstr(out, "C_unknown"); return true; }
+            buf_append_cstr(out, "C_");
+            buf_append_cstr(out, t->user_spec->c_closure_struct_name);
             return true;
         case CG_TYPE_ARRAY:
             buf_append_cstr(out, "A_");
@@ -1095,6 +1139,110 @@ static const UserFit *cg_find_user_fit_by_decl(const CG *cg, const FengDecl *dec
     return NULL;
 }
 
+static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
+                                              const FengDecl *function_decl,
+                                              FengToken blame,
+                                              const char **out_var) {
+    const FreeFn *fn;
+
+    if (out_var == NULL || spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE ||
+        function_decl == NULL || function_decl->kind != FENG_DECL_FUNCTION) {
+        return cg_fail(cg, blame,
+            "codegen: invalid callable function-value request");
+    }
+    for (size_t i = 0; i < cg->callable_fn_value_count; ++i) {
+        if (cg->callable_fn_values[i].spec == spec &&
+            cg->callable_fn_values[i].function_decl == function_decl) {
+            *out_var = cg->callable_fn_values[i].c_var;
+            return true;
+        }
+    }
+
+    fn = cg_find_free_fn_by_decl(cg, function_decl);
+    if (fn == NULL) {
+        return cg_fail(cg, blame,
+            "codegen: callable value source function was not registered");
+    }
+    if (cg->callable_fn_value_count + 1 > cg->callable_fn_value_capacity) {
+        size_t cap = cg->callable_fn_value_capacity ? cg->callable_fn_value_capacity * 2 : 4;
+        void *grown = realloc(cg->callable_fn_values, cap * sizeof *cg->callable_fn_values);
+        if (grown == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        cg->callable_fn_values = grown;
+        cg->callable_fn_value_capacity = cap;
+    }
+
+    char *fn_san = cg_sanitize(fn->c_name, strlen(fn->c_name));
+    if (fn_san == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    Buf vb; buf_init(&vb);
+    buf_append_fmt(&vb, "FengCallableValue__%s__%s", spec->c_closure_struct_name, fn_san);
+    char *var_name = vb.data;
+
+    Buf ab; buf_init(&ab);
+    buf_append_fmt(&ab, "FengCallableInvoke__%s__%s", spec->c_closure_struct_name, fn_san);
+    char *adapter_name = ab.data;
+    free(fn_san);
+
+    if (var_name == NULL || adapter_name == NULL) {
+        free(var_name);
+        free(adapter_name);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_c_type(&cg->headers, spec->callable_return_type);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_c_type(&cg->headers, spec->callable_param_types[i]);
+        buf_append_fmt(&cg->headers, " _arg%zu", i);
+    }
+    buf_append_cstr(&cg->headers, ");\n");
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_c_type(&cg->witness_defs, spec->callable_return_type);
+    buf_append_fmt(&cg->witness_defs, " %s(void *_closure", adapter_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_c_type(&cg->witness_defs, spec->callable_param_types[i]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", i);
+    }
+    buf_append_cstr(&cg->witness_defs, ") {\n    (void)_closure;\n    ");
+    if (spec->callable_return_type != NULL &&
+        spec->callable_return_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(&cg->witness_defs, "return ");
+    }
+    buf_append_fmt(&cg->witness_defs, "%s(", fn->c_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        if (i > 0) buf_append_cstr(&cg->witness_defs, ", ");
+        buf_append_fmt(&cg->witness_defs, "_arg%zu", i);
+    }
+    buf_append_cstr(&cg->witness_defs, ");\n}\n\n");
+
+    buf_append_fmt(&cg->statics,
+        "static struct %s %s = {\n"
+        "    ._hdr = { .desc = &%s, .tag = FENG_TYPE_TAG_CLOSURE, .refcount = FENG_REFCOUNT_IMMORTAL },\n"
+        "    .invoke = %s\n"
+        "};\n",
+        spec->c_closure_struct_name,
+        var_name,
+        spec->c_closure_desc_name,
+        adapter_name);
+
+    cg->callable_fn_values[cg->callable_fn_value_count].spec = spec;
+    cg->callable_fn_values[cg->callable_fn_value_count].function_decl = function_decl;
+    cg->callable_fn_values[cg->callable_fn_value_count].c_var = var_name;
+    cg->callable_fn_value_count += 1;
+
+    free(adapter_name);
+    *out_var = var_name;
+    return true;
+}
+
 /* ---- Generic registry helpers (G6) ---- */
 
 static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
@@ -1159,6 +1307,20 @@ static bool cg_register_generic_type_decl(CG *cg, const FengDecl *decl) {
     cg->generic_type_decls[cg->generic_type_decl_count].decl = decl;
     cg->generic_type_decls[cg->generic_type_decl_count].owner_program = cg->cur_program;
     cg->generic_type_decl_count++;
+    return true;
+}
+
+static bool cg_register_generic_spec_decl(CG *cg, const FengDecl *decl) {
+    if (cg->generic_spec_decl_count + 1 > cg->generic_spec_decl_capacity) {
+        size_t cap = cg->generic_spec_decl_capacity ? cg->generic_spec_decl_capacity * 2 : 4;
+        void *p = realloc(cg->generic_spec_decls, cap * sizeof *cg->generic_spec_decls);
+        if (!p) return false;
+        cg->generic_spec_decls = p;
+        cg->generic_spec_decl_capacity = cap;
+    }
+    cg->generic_spec_decls[cg->generic_spec_decl_count].decl = decl;
+    cg->generic_spec_decls[cg->generic_spec_decl_count].owner_program = cg->cur_program;
+    cg->generic_spec_decl_count++;
     return true;
 }
 
@@ -1440,6 +1602,59 @@ static const GenericTypeDecl *cg_find_generic_type_decl_by_decl(CG *cg,
     return NULL;
 }
 
+static const GenericSpecDecl *cg_find_generic_spec_decl(CG *cg,
+                                                        const FengTypeRef *ref) {
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U) {
+        return NULL;
+    }
+    const FengSlice name = ref->as.named.segments[0];
+    const GenericSpecDecl *visible = NULL;
+    for (size_t i = 0; i < cg->generic_spec_decl_count; ++i) {
+        const GenericSpecDecl *entry = &cg->generic_spec_decls[i];
+        const FengDecl *decl = entry->decl;
+        if (decl == NULL || decl->kind != FENG_DECL_SPEC) continue;
+        if (!cg_module_segments_equal(&decl->as.spec_decl.name, 1U, &name, 1U)) continue;
+        if (cg->cur_program != NULL && entry->owner_program == cg->cur_program) {
+            return entry;
+        }
+        if (!cg->cur_program || cg_program_can_see(cg->cur_program, entry->owner_program)) {
+            if (visible == NULL) visible = entry;
+        }
+    }
+    return visible;
+}
+
+static UserSpec *cg_find_generic_instance_user_spec(CG *cg,
+                                                    const FengDecl *origin_decl,
+                                                    FengTypeRef *const *type_args,
+                                                    size_t type_arg_count) {
+    for (size_t i = 0; i < cg->user_spec_count; ++i) {
+        UserSpec *us = &cg->user_specs[i];
+        if (!us->is_generic_instance || us->generic_origin_decl != origin_decl ||
+            us->generic_type_arg_count != type_arg_count) {
+            continue;
+        }
+        bool same = true;
+        for (size_t arg_index = 0; same && arg_index < type_arg_count; ++arg_index) {
+            same = cg_type_ref_equal(us->generic_type_args[arg_index],
+                                     type_args[arg_index]);
+        }
+        if (same) return us;
+    }
+    return NULL;
+}
+
+static UserSpec *cg_find_generic_instance_user_spec_for_ref(CG *cg,
+                                                            const FengTypeRef *ref) {
+    const GenericSpecDecl *generic_decl = cg_find_generic_spec_decl(cg, ref);
+    if (generic_decl == NULL) return NULL;
+    return cg_find_generic_instance_user_spec(cg,
+                                              generic_decl->decl,
+                                              ref->as.named.type_args,
+                                              ref->as.named.type_arg_count);
+}
+
 static UserType *cg_find_generic_instance_user_type(CG *cg,
                                                     const FengDecl *origin_decl,
                                                     FengTypeRef *const *type_args,
@@ -1579,6 +1794,154 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     return true;
 }
 
+static bool cg_register_generic_spec_instance_shell(CG *cg,
+                                                    const GenericSpecDecl *generic_decl,
+                                                    FengTypeRef *const *type_args,
+                                                    size_t type_arg_count,
+                                                    FengToken blame) {
+    if (generic_decl == NULL || generic_decl->decl == NULL) return true;
+    const FengDecl *decl = generic_decl->decl;
+    if (decl->kind != FENG_DECL_SPEC) return true;
+    if (type_arg_count != decl->as.spec_decl.type_param_count) {
+        return cg_fail(cg, blame,
+                       "codegen: generic spec '%.*s' expects %zu type argument(s), got %zu",
+                       (int)decl->as.spec_decl.name.length,
+                       decl->as.spec_decl.name.data,
+                       decl->as.spec_decl.type_param_count,
+                       type_arg_count);
+    }
+    if (cg_find_generic_instance_user_spec(cg, decl, type_args, type_arg_count) != NULL) {
+        return true;
+    }
+    if (cg->user_spec_count + 1 > cg->user_spec_capacity) {
+        size_t cap = cg->user_spec_capacity ? cg->user_spec_capacity * 2 : 4;
+        void *p = realloc(cg->user_specs, cap * sizeof *cg->user_specs);
+        if (!p) return false;
+        cg->user_specs = p;
+        cg->user_spec_capacity = cap;
+    }
+
+    UserSpec *s = &cg->user_specs[cg->user_spec_count++];
+    memset(s, 0, sizeof *s);
+    s->owner_program = generic_decl->owner_program;
+    s->decl = decl;
+    s->form = decl->as.spec_decl.form;
+    s->is_generic_instance = true;
+    s->generic_origin_decl = decl;
+    s->generic_type_arg_count = type_arg_count;
+    s->generic_type_args = type_arg_count ? calloc(type_arg_count, sizeof(FengTypeRef *)) : NULL;
+    if (type_arg_count > 0U && s->generic_type_args == NULL) return false;
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        s->generic_type_args[i] = cg_type_ref_clone(type_args[i]);
+        if (s->generic_type_args[i] == NULL) return false;
+    }
+
+    Buf display; buf_init(&display);
+    buf_append(&display, decl->as.spec_decl.name.data, decl->as.spec_decl.name.length);
+    buf_append_cstr(&display, "<");
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        if (i) buf_append_cstr(&display, ", ");
+        cg_append_type_ref_display(&display, type_args[i]);
+    }
+    buf_append_cstr(&display, ">");
+    s->feng_name = display.data;
+
+    char *base_san = cg_sanitize(decl->as.spec_decl.name.data,
+                                 decl->as.spec_decl.name.length);
+    if (base_san == NULL) return false;
+
+    Buf symbol; buf_init(&symbol);
+    buf_append_cstr(&symbol, base_san);
+    buf_append_cstr(&symbol, "__G");
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        buf_append_cstr(&symbol, "__");
+        if (!cg_append_type_ref_symbol(&symbol, type_args[i])) {
+            free(base_san);
+            buf_free(&symbol);
+            return false;
+        }
+    }
+
+    char *owner_mangle = cg_module_mangle(generic_decl->owner_program->module_segments,
+                                          generic_decl->owner_program->module_segment_count);
+    if (owner_mangle == NULL) {
+        free(base_san);
+        buf_free(&symbol);
+        return false;
+    }
+
+    if (s->form == FENG_SPEC_FORM_OBJECT) {
+        Buf vb; buf_init(&vb);
+        buf_append_fmt(&vb, "FengSpecValue__%s__%s", owner_mangle, symbol.data);
+        s->c_value_struct_name = vb.data;
+
+        Buf wb; buf_init(&wb);
+        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
+        s->c_witness_struct_name = wb.data;
+
+        Buf db; buf_init(&db);
+        buf_append_fmt(&db, "FengSpecAgg__%s__%s", owner_mangle, symbol.data);
+        s->c_aggregate_desc_name = db.data;
+
+        Buf sb; buf_init(&sb);
+        buf_append_fmt(&sb, "FengSpecAggSlots__%s__%s", owner_mangle, symbol.data);
+        s->c_aggregate_slots_name = sb.data;
+
+        Buf db2; buf_init(&db2);
+        buf_append_fmt(&db2, "FengSpecAggDefault__%s__%s", owner_mangle, symbol.data);
+        s->c_aggregate_default_name = db2.data;
+
+        Buf ib; buf_init(&ib);
+        buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", owner_mangle, symbol.data);
+        s->c_aggregate_init_fn_name = ib.data;
+
+        Buf dssb; buf_init(&dssb);
+        buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
+                       owner_mangle, symbol.data);
+        s->c_default_subject_struct_name = dssb.data;
+
+        Buf ddb; buf_init(&ddb);
+        buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
+                       owner_mangle, symbol.data);
+        s->c_default_subject_desc_name = ddb.data;
+
+        Buf dnb; buf_init(&dnb);
+        buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
+                       owner_mangle, symbol.data);
+        s->c_default_subject_new_name = dnb.data;
+
+        Buf dwb; buf_init(&dwb);
+        buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
+                       owner_mangle, symbol.data);
+        s->c_default_witness_name = dwb.data;
+    } else {
+        Buf wb; buf_init(&wb);
+        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
+        s->c_witness_struct_name = wb.data;
+
+        Buf cb; buf_init(&cb);
+        buf_append_fmt(&cb, "FengClosure__%s__%s", owner_mangle, symbol.data);
+        s->c_closure_struct_name = cb.data;
+
+        Buf db; buf_init(&db);
+        buf_append_fmt(&db, "FengClosureDesc__%s__%s", owner_mangle, symbol.data);
+        s->c_closure_desc_name = db.data;
+    }
+
+    free(owner_mangle);
+    free(base_san);
+    buf_free(&symbol);
+    if (s->form == FENG_SPEC_FORM_OBJECT) {
+        return s->feng_name && s->c_value_struct_name && s->c_witness_struct_name &&
+               s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
+               s->c_aggregate_default_name && s->c_aggregate_init_fn_name &&
+               s->c_default_subject_struct_name && s->c_default_subject_desc_name &&
+               s->c_default_subject_new_name && s->c_default_witness_name;
+    }
+    return s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
+           s->c_closure_desc_name;
+}
+
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type) {
     *out_type = NULL;
@@ -1601,8 +1964,18 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 *out_type = t;
                 return true;
             }
+            UserSpec *generic_spec_instance = cg_find_generic_instance_user_spec_for_ref(cg, ref);
+            if (generic_spec_instance != NULL) {
+                CGType *t = cgtype_new(generic_spec_instance->form == FENG_SPEC_FORM_CALLABLE
+                                       ? CG_TYPE_CALLABLE
+                                       : CG_TYPE_SPEC);
+                if (!t) return false;
+                t->user_spec = generic_spec_instance;
+                *out_type = t;
+                return true;
+            }
             return cg_fail(cg, ref->token,
-                "codegen: generic type instance '%.*s<...>' was not registered",
+                "codegen: generic type/spec instance '%.*s<...>' was not registered",
                 (int)seg->length, seg->data);
         }
         /* G6: when inside a generic function body, check type parameter names
@@ -1638,7 +2011,9 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         }
         const UserSpec *us = cg_find_user_spec(cg, seg->data, seg->length);
         if (us) {
-            CGType *t = cgtype_new(CG_TYPE_SPEC);
+            CGType *t = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
+                                   ? CG_TYPE_CALLABLE
+                                   : CG_TYPE_SPEC);
             if (!t) return false;
             t->user_spec = us;
             *out_type = t;
@@ -1678,6 +2053,28 @@ static bool cg_resolve_type_for_user_type_member(CG *cg,
         ref,
         owner->generic_origin_decl->as.type_decl.type_params,
         owner->generic_origin_decl->as.type_decl.type_param_count,
+        owner->generic_type_args);
+    if (!substituted) return false;
+    bool ok = cg_resolve_type(cg, substituted, fallback, out_type);
+    cg_type_ref_free(substituted);
+    return ok;
+}
+
+static bool cg_resolve_type_for_user_spec_member(CG *cg,
+                                                 const UserSpec *owner,
+                                                 const FengTypeRef *ref,
+                                                 const FengToken *fallback,
+                                                 CGType **out_type) {
+    if (owner == NULL || !owner->is_generic_instance) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+    if (ref == NULL) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+    FengTypeRef *substituted = cg_type_ref_substitute(
+        ref,
+        owner->generic_origin_decl->as.spec_decl.type_params,
+        owner->generic_origin_decl->as.spec_decl.type_param_count,
         owner->generic_type_args);
     if (!substituted) return false;
     bool ok = cg_resolve_type(cg, substituted, fallback, out_type);
@@ -1974,11 +2371,6 @@ static const UserMethod *cg_user_type_method_by_member(const UserType *t,
 /* ------------- Spec registration (Step 4b — value model) ------------- */
 
 static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
-    /* Phase 4b-α only handles object-form specs. Callable-form is deferred. */
-    if (decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
-        return cg_fail(cg, decl->token,
-            "codegen: callable-form specs not yet supported (Step 4b-γ)");
-    }
     if (cg->user_spec_count + 1 > cg->user_spec_capacity) {
         size_t cap = cg->user_spec_capacity ? cg->user_spec_capacity * 2 : 4;
         void *p = realloc(cg->user_specs, cap * sizeof *cg->user_specs);
@@ -1990,6 +2382,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     memset(s, 0, sizeof *s);
     s->owner_program = cg->cur_program;
     s->decl = decl;
+    s->form = decl->as.spec_decl.form;
     s->feng_name = strndup(decl->as.spec_decl.name.data,
                            decl->as.spec_decl.name.length);
     if (!s->feng_name) return false;
@@ -1998,63 +2391,102 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
                             decl->as.spec_decl.name.length);
     if (!san) return false;
 
-    Buf vb; buf_init(&vb);
-    buf_append_fmt(&vb, "FengSpecValue__%s__%s", cg->module_mangle, san);
-    s->c_value_struct_name = vb.data;
-
     Buf wb; buf_init(&wb);
     buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
     s->c_witness_struct_name = wb.data;
 
-    /* Value-model descriptor names. Reuses the same module/sanitised name
-     * mangling as the value/witness structs to keep symbol triples easy to
-     * correlate when reading generated C. */
-    Buf db; buf_init(&db);
-    buf_append_fmt(&db, "FengSpecAgg__%s__%s", cg->module_mangle, san);
-    s->c_aggregate_desc_name = db.data;
+    if (s->form == FENG_SPEC_FORM_OBJECT) {
+        Buf vb; buf_init(&vb);
+        buf_append_fmt(&vb, "FengSpecValue__%s__%s", cg->module_mangle, san);
+        s->c_value_struct_name = vb.data;
 
-    Buf sb; buf_init(&sb);
-    buf_append_fmt(&sb, "FengSpecAggSlots__%s__%s", cg->module_mangle, san);
-    s->c_aggregate_slots_name = sb.data;
+        Buf db; buf_init(&db);
+        buf_append_fmt(&db, "FengSpecAgg__%s__%s", cg->module_mangle, san);
+        s->c_aggregate_desc_name = db.data;
 
-    Buf db2; buf_init(&db2);
-    buf_append_fmt(&db2, "FengSpecAggDefault__%s__%s", cg->module_mangle, san);
-    s->c_aggregate_default_name = db2.data;
+        Buf sb; buf_init(&sb);
+        buf_append_fmt(&sb, "FengSpecAggSlots__%s__%s", cg->module_mangle, san);
+        s->c_aggregate_slots_name = sb.data;
 
-    Buf ib; buf_init(&ib);
-    buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
-    s->c_aggregate_init_fn_name = ib.data;
+        Buf db2; buf_init(&db2);
+        buf_append_fmt(&db2, "FengSpecAggDefault__%s__%s", cg->module_mangle, san);
+        s->c_aggregate_default_name = db2.data;
 
-    Buf dssb; buf_init(&dssb);
-    buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
-                   cg->module_mangle, san);
-    s->c_default_subject_struct_name = dssb.data;
+        Buf ib; buf_init(&ib);
+        buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
+        s->c_aggregate_init_fn_name = ib.data;
 
-    Buf ddb; buf_init(&ddb);
-    buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
-                   cg->module_mangle, san);
-    s->c_default_subject_desc_name = ddb.data;
+        Buf dssb; buf_init(&dssb);
+        buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
+                       cg->module_mangle, san);
+        s->c_default_subject_struct_name = dssb.data;
 
-    Buf dnb; buf_init(&dnb);
-    buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
-                   cg->module_mangle, san);
-    s->c_default_subject_new_name = dnb.data;
+        Buf ddb; buf_init(&ddb);
+        buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
+                       cg->module_mangle, san);
+        s->c_default_subject_desc_name = ddb.data;
 
-    Buf dwb; buf_init(&dwb);
-    buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
-                   cg->module_mangle, san);
-    s->c_default_witness_name = dwb.data;
+        Buf dnb; buf_init(&dnb);
+        buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
+                       cg->module_mangle, san);
+        s->c_default_subject_new_name = dnb.data;
+
+        Buf dwb; buf_init(&dwb);
+        buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
+                       cg->module_mangle, san);
+        s->c_default_witness_name = dwb.data;
+    } else {
+        Buf cb; buf_init(&cb);
+        buf_append_fmt(&cb, "FengClosure__%s__%s", cg->module_mangle, san);
+        s->c_closure_struct_name = cb.data;
+
+        Buf db; buf_init(&db);
+        buf_append_fmt(&db, "FengClosureDesc__%s__%s", cg->module_mangle, san);
+        s->c_closure_desc_name = db.data;
+    }
 
     free(san);
-    return s->c_value_struct_name && s->c_witness_struct_name
-        && s->c_aggregate_desc_name && s->c_aggregate_slots_name
-        && s->c_aggregate_default_name && s->c_aggregate_init_fn_name
-        && s->c_default_subject_struct_name && s->c_default_subject_desc_name
-        && s->c_default_subject_new_name && s->c_default_witness_name;
+    if (s->form == FENG_SPEC_FORM_OBJECT) {
+        return s->c_value_struct_name && s->c_witness_struct_name
+            && s->c_aggregate_desc_name && s->c_aggregate_slots_name
+            && s->c_aggregate_default_name && s->c_aggregate_init_fn_name
+            && s->c_default_subject_struct_name && s->c_default_subject_desc_name
+            && s->c_default_subject_new_name && s->c_default_witness_name;
+    }
+    return s->c_witness_struct_name && s->c_closure_struct_name && s->c_closure_desc_name;
 }
 
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
     const FengDecl *decl = s->decl;
+    if (s->form == FENG_SPEC_FORM_CALLABLE) {
+        s->callable_param_count = decl->as.spec_decl.as.callable.param_count;
+        s->callable_param_types = decl->as.spec_decl.as.callable.param_count
+            ? calloc(decl->as.spec_decl.as.callable.param_count,
+                     sizeof *s->callable_param_types)
+            : NULL;
+        if (decl->as.spec_decl.as.callable.param_count > 0U &&
+            s->callable_param_types == NULL) {
+            return false;
+        }
+        for (size_t i = 0; i < decl->as.spec_decl.as.callable.param_count; ++i) {
+            if (!cg_resolve_type_for_user_spec_member(
+                    cg,
+                    s,
+                    decl->as.spec_decl.as.callable.params[i].type,
+                    &decl->as.spec_decl.as.callable.params[i].token,
+                    &s->callable_param_types[i])) {
+                return false;
+            }
+        }
+        if (!cg_resolve_type_for_user_spec_member(cg,
+                                                  s,
+                                                  decl->as.spec_decl.as.callable.return_type,
+                                                  &decl->token,
+                                                  &s->callable_return_type)) {
+            return false;
+        }
+        return true;
+    }
     /* Phase 4b-α rejects parent_specs to keep witness composition out of
      * scope; per dev/feng-value-model-delivered.md the closure is intended
      * for 4b-β/γ. */
@@ -2074,7 +2506,8 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
             sm->is_var = (m->as.field.mutability == FENG_MUTABILITY_VAR);
             sm->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
             sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
-            if (!cg_resolve_type(cg, m->as.field.type, &m->token, &sm->type)) return false;
+            if (!cg_resolve_type_for_user_spec_member(cg, s, m->as.field.type,
+                                                      &m->token, &sm->type)) return false;
             /* Aggregate-typed spec fields (spec inside spec) are part of the
              * 4b-γ fat-spec recursion and need recursive aggregate_assign;
              * reject early so the gap surfaces at compile time rather than
@@ -2088,19 +2521,22 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
             const FengCallableSignature *sig = &m->as.callable;
             sm->feng_name = strndup(sig->name.data, sig->name.length);
             sm->c_field_name = cg_sanitize(sig->name.data, sig->name.length);
-            if (!cg_resolve_type(cg, sig->return_type, &sig->token, &sm->type)) return false;
             sm->param_count = sig->param_count;
             sm->param_types = sig->param_count
                 ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
             sm->param_names = sig->param_count
                 ? calloc(sig->param_count, sizeof(char*)) : NULL;
             for (size_t pi = 0; pi < sig->param_count; pi++) {
-                if (!cg_resolve_type(cg, sig->params[pi].type,
-                                     &sig->params[pi].token,
-                                     &sm->param_types[pi])) return false;
+                if (!cg_resolve_type_for_user_spec_member(cg,
+                                                          s,
+                                                          sig->params[pi].type,
+                                                          &sig->params[pi].token,
+                                                          &sm->param_types[pi])) return false;
                 sm->param_names[pi] = strndup(sig->params[pi].name.data,
                                               sig->params[pi].name.length);
             }
+            if (!cg_resolve_type_for_user_spec_member(cg, s, sig->return_type,
+                                                      &sig->token, &sm->type)) return false;
         } else {
             return cg_fail(cg, m->token,
                 "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
@@ -2245,6 +2681,10 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
  * value-struct definition. The witness-struct definition is emitted later in
  * cg_emit_user_spec_definition (which needs every method's CType resolved). */
 static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
+    if (s->form == FENG_SPEC_FORM_CALLABLE) {
+        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+        return;
+    }
     /* Witness struct is forward-declared here so the value struct (whose
      * `witness` field points at it) can be defined immediately. */
     buf_append_fmt(&cg->headers, "struct %s;\n", s->c_witness_struct_name);
@@ -2260,6 +2700,39 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
  * empty struct would be invalid C — emit a `_padding` byte. */
 static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     Buf *td = &cg->type_defs;
+    if (s->form == FENG_SPEC_FORM_CALLABLE) {
+        buf_append_fmt(td, "struct %s {\n", s->c_closure_struct_name);
+        buf_append_cstr(td, "    FengManagedHeader _hdr;\n    ");
+        cg_emit_c_type(td, s->callable_return_type);
+        buf_append_cstr(td, " (*invoke)(void *_closure");
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            buf_append_cstr(td, ", ");
+            cg_emit_c_type(td, s->callable_param_types[i]);
+        }
+        buf_append_cstr(td, ");\n};\n\n");
+
+        buf_append_fmt(td, "struct %s {\n    void (*invoke)(const void *_callee",
+                       s->c_witness_struct_name);
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            buf_append_cstr(td, ", const void *");
+        }
+        buf_append_cstr(td, ", void *_out);\n};\n\n");
+
+        buf_append_fmt(td,
+            "static const FengTypeDescriptor %s = {\n"
+            "    \"%s\",\n"
+            "    sizeof(struct %s),\n"
+            "    NULL,\n"
+            "    NULL,\n"
+            "    false,\n"
+            "    0,\n"
+            "    NULL\n"
+            "};\n\n",
+            s->c_closure_desc_name,
+            s->feng_name,
+            s->c_closure_struct_name);
+        return;
+    }
     buf_append_fmt(td, "struct %s {\n", s->c_witness_struct_name);
     size_t emitted = 0;
     for (size_t i = 0; i < s->member_count; i++) {
@@ -3019,6 +3492,108 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         (int)e->as.identifier.length, e->as.identifier.data);
 }
 
+static bool cg_emit_callable_function_coercion(CG *cg,
+                                               const FengExpr *e,
+                                               const FengSpecCoercionSite *cs,
+                                               ExprResult *out) {
+    const UserSpec *target_spec = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+    const char *callable_var = NULL;
+
+    er_init(out);
+    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
+        return cg_fail(cg, e->token,
+            "codegen: callable coercion target was not registered as a callable-form spec");
+    }
+    if (cs->callable_decl == NULL || cs->callable_decl->kind != FENG_DECL_FUNCTION) {
+        return cg_fail(cg, e->token,
+            "codegen: only top-level function callable coercions are supported in this step");
+    }
+    if (!cg_ensure_callable_function_value(cg, target_spec, cs->callable_decl,
+                                           e->token, &callable_var)) {
+        return false;
+    }
+    {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "&%s", callable_var);
+        out->c_expr = b.data;
+    }
+    out->type = cgtype_new(CG_TYPE_CALLABLE);
+    if (!out->c_expr || !out->type) {
+        er_free(out);
+        return false;
+    }
+    out->type->user_spec = target_spec;
+    out->owns_ref = false;
+    return true;
+}
+
+static bool cg_emit_callable_spec_coercion(CG *cg,
+                                           const FengExpr *e,
+                                           const FengSpecCoercionSite *cs,
+                                           ExprResult *out) {
+    if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN) {
+        return cg_emit_callable_function_coercion(cg, e, cs, out);
+    }
+    if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER) {
+        const UserSpec *target_spec = cg_find_user_spec_by_decl(cg, cs->target_spec_decl);
+        if (!cg_emit_expr_raw(cg, e, out)) {
+            return false;
+        }
+        if (target_spec != NULL && out->type != NULL && out->type->kind == CG_TYPE_CALLABLE &&
+            out->type->user_spec == target_spec) {
+            return true;
+        }
+        er_free(out);
+        return cg_fail(cg, e->token,
+            "codegen: callable-form spec coercion across distinct callable value types is not yet supported in this step");
+    }
+    return cg_fail(cg, e->token,
+        "codegen: callable-form lambda/method coercion not yet supported in this step");
+}
+
+static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
+    bool ok;
+
+    if (cg->failed) return false;
+    switch (e->kind) {
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            ok = cg_emit_literal(cg, e, out); break;
+        case FENG_EXPR_IDENTIFIER:
+            ok = cg_emit_identifier(cg, e, out); break;
+        case FENG_EXPR_SELF: {
+            const Local *l = scope_lookup(cg->cur_scope, "self", 4);
+            if (!l) {
+                return cg_fail(cg, e->token,
+                    "codegen: 'self' used outside of method body");
+            }
+            er_init(out);
+            out->c_expr = strdup(l->c_name);
+            out->type = cgtype_clone(l->type);
+            out->owns_ref = false;
+            ok = out->c_expr && out->type;
+            break;
+        }
+        case FENG_EXPR_BINARY:        ok = cg_emit_binary(cg, e, out); break;
+        case FENG_EXPR_UNARY:         ok = cg_emit_unary(cg, e, out); break;
+        case FENG_EXPR_CALL:          ok = cg_emit_call(cg, e, out); break;
+        case FENG_EXPR_MEMBER:        ok = cg_emit_member(cg, e, out); break;
+        case FENG_EXPR_OBJECT_LITERAL:ok = cg_emit_object_literal(cg, e, out); break;
+        case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
+        case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
+        case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
+        case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
+        case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
+        case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
+        default:
+            return cg_fail(cg, e->token,
+                "codegen: expression kind not yet supported in this iteration");
+    }
+    return ok;
+}
+
 static bool cg_emit_registered_call(CG *cg,
                                     const FengExpr *e,
                                     const FreeFn *fn,
@@ -3089,6 +3664,186 @@ static bool cg_emit_registered_call(CG *cg,
     out->c_expr = b.data;
     out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
     return out->c_expr && out->type;
+}
+
+static bool cg_emit_callable_value_call(CG *cg,
+                                        const FengExpr *e,
+                                        ExprResult *callee,
+                                        const UserSpec *spec,
+                                        ExprResult *out) {
+    Buf args_buf;
+
+    er_init(out);
+    if (spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE) {
+        return cg_fail(cg, e->token,
+            "codegen: callable value call requires a callable-form spec type");
+    }
+    if (e->as.call.arg_count != spec->callable_param_count) {
+        return cg_fail(cg, e->token,
+            "codegen: wrong argument count for callable '%s' (expected %zu, got %zu)",
+            spec->feng_name,
+            spec->callable_param_count,
+            e->as.call.arg_count);
+    }
+    if (cgtype_is_managed(callee->type) && callee->owns_ref) {
+        cg_materialize_to_local(cg, callee, "_t");
+    }
+
+    buf_init(&args_buf);
+    for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+        ExprResult ar;
+        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+            buf_free(&args_buf);
+            return false;
+        }
+        if ((cgtype_is_managed(ar.type) || cgtype_is_aggregate(ar.type)) && ar.owns_ref) {
+            cg_materialize_to_local(cg, &ar, "_t");
+        }
+        buf_append_cstr(&args_buf, ", ");
+        buf_append_cstr(&args_buf, ar.c_expr);
+        er_free(&ar);
+    }
+
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b, "((struct %s *)%s)->invoke(%s%s)",
+                   spec->c_closure_struct_name,
+                   callee->c_expr,
+                   callee->c_expr,
+                   args_buf.data ? args_buf.data : "");
+    buf_free(&args_buf);
+    out->c_expr = b.data;
+    out->type = cgtype_clone(spec->callable_return_type);
+    out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+    bool ok = out->c_expr && out->type;
+    er_free(callee);
+    return ok;
+}
+
+static bool cg_emit_generic_callable_value_call(CG *cg,
+                                                const FengExpr *e,
+                                                ExprResult *callee,
+                                                size_t generic_param_index,
+                                                ExprResult *out) {
+    const UserSpec *constraint = cg_generic_param_constraint_spec(cg, generic_param_index);
+    const char *desc_name = cg_generic_param_desc_name(cg, generic_param_index);
+    char **arg_addr_exprs = NULL;
+    bool ok = true;
+
+    er_init(out);
+    if (constraint == NULL || constraint->form != FENG_SPEC_FORM_CALLABLE ||
+        desc_name == NULL) {
+        er_free(callee);
+        return cg_fail(cg, e->token,
+            "codegen: generic direct call requires a callable-form spec constraint");
+    }
+    if (e->as.call.arg_count != constraint->callable_param_count) {
+        er_free(callee);
+        return cg_fail(cg, e->token,
+            "codegen: wrong argument count for callable constraint '%s' (expected %zu, got %zu)",
+            constraint->feng_name,
+            constraint->callable_param_count,
+            e->as.call.arg_count);
+    }
+
+    arg_addr_exprs = calloc(e->as.call.arg_count, sizeof *arg_addr_exprs);
+    if (arg_addr_exprs == NULL) {
+        er_free(callee);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+
+    for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+        ExprResult ar;
+        char *tmp = NULL;
+        char *cty = NULL;
+        Buf addr; buf_init(&addr);
+
+        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+            ok = false;
+            break;
+        }
+        tmp = cg_fresh_temp(cg, "_ca");
+        cty = cg_ctype_dup(constraint->callable_param_types[i]);
+        if (tmp == NULL || cty == NULL) {
+            er_free(&ar);
+            free(tmp);
+            free(cty);
+            ok = false;
+            break;
+        }
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n", cty, tmp, cty, ar.c_expr);
+        if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+            cg_emit_cleanup_push_for_managed_local(cg, tmp);
+            ar.owns_ref = false;
+        } else if (cgtype_is_aggregate(ar.type) && ar.owns_ref) {
+            cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+            ar.owns_ref = false;
+        }
+        buf_append_fmt(&addr, "&%s", tmp);
+        arg_addr_exprs[i] = addr.data;
+        er_free(&ar);
+        free(tmp);
+        free(cty);
+        if (arg_addr_exprs[i] == NULL) {
+            ok = false;
+            break;
+        }
+    }
+
+    if (!ok) {
+        for (size_t i = 0; i < e->as.call.arg_count; ++i) free(arg_addr_exprs[i]);
+        free(arg_addr_exprs);
+        er_free(callee);
+        return false;
+    }
+
+    if (constraint->callable_return_type != NULL &&
+        constraint->callable_return_type->kind != CG_TYPE_VOID) {
+        char *ret_tmp = cg_fresh_temp(cg, "_cr");
+        char *ret_cty = cg_ctype_dup(constraint->callable_return_type);
+        if (ret_tmp == NULL || ret_cty == NULL) {
+            free(ret_tmp);
+            free(ret_cty);
+            ok = false;
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", ret_cty, ret_tmp);
+            buf_append_fmt(cg->cur_body, "    ((const struct %s *)%s->witness)->invoke(%s",
+                           constraint->c_witness_struct_name,
+                           desc_name,
+                           callee->c_expr);
+            for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+                buf_append_fmt(cg->cur_body, ", %s", arg_addr_exprs[i]);
+            }
+            buf_append_fmt(cg->cur_body, ", &%s);\n", ret_tmp);
+            out->c_expr = strdup(ret_tmp);
+            out->type = cgtype_clone(constraint->callable_return_type);
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+            if (out->type != NULL && cgtype_is_managed(out->type)) {
+                cg_emit_cleanup_push_for_managed_local(cg, ret_tmp);
+                out->owns_ref = true;
+            }
+            free(ret_tmp);
+            free(ret_cty);
+            ok = out->c_expr && out->type;
+        }
+    } else {
+        buf_append_fmt(cg->cur_body, "    ((const struct %s *)%s->witness)->invoke(%s",
+                       constraint->c_witness_struct_name,
+                       desc_name,
+                       callee->c_expr);
+        for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+            buf_append_fmt(cg->cur_body, ", %s", arg_addr_exprs[i]);
+        }
+        buf_append_cstr(cg->cur_body, ", NULL);\n");
+        out->c_expr = strdup("((void)0)");
+        out->type = cgtype_new(CG_TYPE_VOID);
+        out->owns_ref = false;
+        ok = out->c_expr && out->type;
+    }
+
+    for (size_t i = 0; i < e->as.call.arg_count; ++i) free(arg_addr_exprs[i]);
+    free(arg_addr_exprs);
+    er_free(callee);
+    return ok;
 }
 
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -3278,6 +4033,60 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             "codegen: only direct or method calls supported in this iteration");
     }
     const FengSlice name = e->as.call.callee->as.identifier;
+
+    {
+        const Local *callee_local = scope_lookup(cg->cur_scope, name.data, name.length);
+        if (callee_local != NULL && callee_local->type != NULL &&
+            callee_local->type->kind == CG_TYPE_GENERIC_PARAM) {
+            const UserSpec *constraint =
+                cg_generic_param_constraint_spec(cg, callee_local->type->generic_param_index);
+            if (constraint != NULL && constraint->form == FENG_SPEC_FORM_CALLABLE) {
+                ExprResult callee;
+                er_init(&callee);
+                callee.c_expr = strdup(callee_local->c_name);
+                callee.type = cgtype_clone(callee_local->type);
+                callee.owns_ref = false;
+                if (callee.c_expr == NULL || callee.type == NULL) {
+                    er_free(&callee);
+                    return false;
+                }
+                return cg_emit_generic_callable_value_call(
+                    cg, e, &callee, callee_local->type->generic_param_index, out);
+            }
+        }
+        if (callee_local != NULL && callee_local->type != NULL &&
+            callee_local->type->kind == CG_TYPE_CALLABLE &&
+            callee_local->type->user_spec != NULL) {
+            ExprResult callee;
+            er_init(&callee);
+            callee.c_expr = strdup(callee_local->c_name);
+            callee.type = cgtype_clone(callee_local->type);
+            callee.owns_ref = false;
+            if (callee.c_expr == NULL || callee.type == NULL) {
+                er_free(&callee);
+                return false;
+            }
+            return cg_emit_callable_value_call(cg, e, &callee,
+                                               callee.type->user_spec, out);
+        }
+
+        const ModuleBinding *callee_binding = cg_find_module_binding(cg, name.data, name.length);
+        if (callee_binding != NULL && callee_binding->type != NULL &&
+            callee_binding->type->kind == CG_TYPE_CALLABLE &&
+            callee_binding->type->user_spec != NULL) {
+            ExprResult callee;
+            er_init(&callee);
+            callee.c_expr = strdup(callee_binding->c_name);
+            callee.type = cgtype_clone(callee_binding->type);
+            callee.owns_ref = false;
+            if (callee.c_expr == NULL || callee.type == NULL) {
+                er_free(&callee);
+                return false;
+            }
+            return cg_emit_callable_value_call(cg, e, &callee,
+                                               callee.type->user_spec, out);
+        }
+    }
 
     if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
         rc->owner_type_decl != NULL &&
@@ -3676,6 +4485,13 @@ static char *cg_array_element_descriptor(const CGType *elem) {
                 buf_append_cstr(&b, "NULL");
             }
             break;
+        case CG_TYPE_CALLABLE:
+            if (elem->user_spec && elem->user_spec->c_closure_desc_name) {
+                buf_append_fmt(&b, "&%s", elem->user_spec->c_closure_desc_name);
+            } else {
+                buf_append_cstr(&b, "NULL");
+            }
+            break;
         default: buf_append_cstr(&b, "NULL"); break;
     }
     return b.data;
@@ -3685,6 +4501,7 @@ static bool cg_types_equal(const CGType *a, const CGType *b) {
     if (!a || !b) return false;
     if (a->kind != b->kind) return false;
     if (a->kind == CG_TYPE_OBJECT) return a->user == b->user;
+    if (a->kind == CG_TYPE_CALLABLE) return a->user_spec == b->user_spec;
     if (a->kind == CG_TYPE_ARRAY) return cg_types_equal(a->element, b->element);
     return true;
 }
@@ -4384,49 +5201,18 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cg->failed) return false;
     bool ok;
-    switch (e->kind) {
-        case FENG_EXPR_BOOL:
-        case FENG_EXPR_INTEGER:
-        case FENG_EXPR_FLOAT:
-        case FENG_EXPR_STRING:
-            ok = cg_emit_literal(cg, e, out); break;
-        case FENG_EXPR_IDENTIFIER:
-            ok = cg_emit_identifier(cg, e, out); break;
-        case FENG_EXPR_SELF: {
-            const Local *l = scope_lookup(cg->cur_scope, "self", 4);
-            if (!l) {
-                return cg_fail(cg, e->token,
-                    "codegen: 'self' used outside of method body");
-            }
-            er_init(out);
-            out->c_expr = strdup(l->c_name);
-            out->type = cgtype_clone(l->type);
-            out->owns_ref = false;
-            ok = out->c_expr && out->type;
-            break;
-        }
-        case FENG_EXPR_BINARY:        ok = cg_emit_binary(cg, e, out); break;
-        case FENG_EXPR_UNARY:         ok = cg_emit_unary(cg, e, out); break;
-        case FENG_EXPR_CALL:          ok = cg_emit_call(cg, e, out); break;
-        case FENG_EXPR_MEMBER:        ok = cg_emit_member(cg, e, out); break;
-        case FENG_EXPR_OBJECT_LITERAL:ok = cg_emit_object_literal(cg, e, out); break;
-        case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
-        case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
-        case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
-        case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
-        case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
-        case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
-        default:
-            return cg_fail(cg, e->token,
-                "codegen: expression kind not yet supported in this iteration");
+    const FengSpecCoercionSite *cs =
+        feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
+
+    if (cs && cs->form == FENG_SPEC_COERCION_FORM_CALLABLE) {
+        return cg_emit_callable_spec_coercion(cg, e, cs, out);
     }
+    ok = cg_emit_expr_raw(cg, e, out);
     if (!ok) return false;
 
     /* Step 4b — apply spec coercion if the analyzer marked this expression as
      * a coercion site. For object-form, we wrap the produced object reference
      * into a fat-spec value `{ .subject = expr, .witness = &Witness }`. */
-    const FengSpecCoercionSite *cs =
-        feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT) {
         if (!out->type || out->type->kind != CG_TYPE_OBJECT || !out->type->user) {
             return cg_fail(cg, e->token,
@@ -4459,9 +5245,6 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
          * receiving slot must retain `subject` if it wants to outlive the
          * source local's scope. */
         out->owns_ref = false;
-    } else if (cs && cs->form == FENG_SPEC_COERCION_FORM_CALLABLE) {
-        return cg_fail(cg, e->token,
-            "codegen: callable-form spec coercion not yet supported (Step 4b-γ)");
     }
     return true;
 }
@@ -6516,7 +7299,8 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             buf_append_fmt(&wb, "&%s", witness_var);
             owned_witness_expr = wb.data;
             witness_expr = owned_witness_expr;
-        } else if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
+        } else if (t && (t->kind == CG_TYPE_SPEC || t->kind == CG_TYPE_CALLABLE) &&
+                   t->user_spec) {
             const char *witness_var = NULL;
             if (!cg_ensure_spec_slot_witness(cg, t->user_spec, constraint_spec,
                                              *tok, &witness_var)) {
@@ -6530,7 +7314,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
         } else {
             buf_free(&b);
             return cg_fail(cg, *tok,
-                "codegen: constrained generic type argument currently requires a concrete user type or matching outer generic parameter (G6)");
+                "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, or matching outer generic parameter (G6)");
         }
     }
 
@@ -7409,96 +8193,162 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
     if (var.data == NULL) {
         return false;
     }
+    if (src->form != dst->form) {
+        buf_free(&var);
+        return cg_fail(cg, blame,
+            "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through mismatched spec forms",
+            src->feng_name, dst->feng_name);
+    }
 
     Buf *wd = &cg->witness_defs;
-    for (size_t i = 0; i < dst->member_count; ++i) {
-        const UserSpecMember *dst_member = &dst->members[i];
-        const UserSpecMember *src_member = cg_user_spec_member(src,
-                                                               dst_member->feng_name,
-                                                               strlen(dst_member->feng_name));
-
-        if (src_member == NULL ||
-            !cg_user_spec_member_compatible(src_member, dst_member)) {
+    buf_append_fmt(&cg->fn_protos, "static const struct %s %s;\n",
+                   dst->c_witness_struct_name, var.data);
+    if (src->form == FENG_SPEC_FORM_CALLABLE) {
+        if (src->callable_param_count != dst->callable_param_count ||
+            !cg_types_equal(src->callable_return_type, dst->callable_return_type)) {
             buf_free(&var);
             return cg_fail(cg, blame,
-                "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation",
+                "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
                 src->feng_name, dst->feng_name);
         }
+        for (size_t i = 0; i < dst->callable_param_count; ++i) {
+            if (!cg_types_equal(src->callable_param_types[i], dst->callable_param_types[i])) {
+                buf_free(&var);
+                return cg_fail(cg, blame,
+                    "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
+                    src->feng_name, dst->feng_name);
+            }
+        }
 
-        if (dst_member->kind == USM_KIND_FIELD) {
-            buf_append_cstr(wd, "static ");
-            cg_emit_c_type(wd, dst_member->type);
-            buf_append_fmt(wd, " %s__get_%s(void *_subject) {\n",
-                           var.data, dst_member->c_field_name);
-            buf_append_fmt(wd,
-                "    const struct %s *_value = (const struct %s *)_subject;\n"
-                "    return _value->witness->get_%s(_value->subject);\n"
-                "}\n",
-                src->c_value_struct_name,
-                src->c_value_struct_name,
-                src_member->c_field_name);
-            if (dst_member->is_var) {
-                buf_append_fmt(wd, "static void %s__set_%s(void *_subject, ",
-                               var.data, dst_member->c_field_name);
+        buf_append_cstr(wd, "static void ");
+        buf_append_fmt(wd, "%s__invoke(const void *_callee", var.data);
+        for (size_t i = 0; i < dst->callable_param_count; ++i) {
+            buf_append_fmt(wd, ", const void *_arg%zu", i);
+        }
+        buf_append_cstr(wd, ", void *_out) {\n");
+        buf_append_fmt(wd,
+            "    const struct %s *_value = (const struct %s *)_callee;\n"
+            "    ",
+            src->c_closure_struct_name,
+            src->c_closure_struct_name);
+        if (dst->callable_return_type->kind != CG_TYPE_VOID) {
+            char *ret_cty = cg_ctype_dup(dst->callable_return_type);
+
+            if (ret_cty == NULL) {
+                buf_free(&var);
+                return false;
+            }
+            buf_append_fmt(wd, "*((%s *)_out) = ", ret_cty);
+            free(ret_cty);
+        } else {
+            buf_append_cstr(wd, "(void)_out;\n    ");
+        }
+        buf_append_fmt(wd, "_value->invoke((void *)_value");
+        for (size_t i = 0; i < dst->callable_param_count; ++i) {
+            char *arg_cty = cg_ctype_dup(dst->callable_param_types[i]);
+
+            if (arg_cty == NULL) {
+                buf_free(&var);
+                return false;
+            }
+            buf_append_fmt(wd, ", *((const %s *)_arg%zu)", arg_cty, i);
+            free(arg_cty);
+        }
+        buf_append_cstr(wd, ");\n}\n");
+        buf_append_fmt(wd, "static const struct %s %s = {\n",
+                       dst->c_witness_struct_name, var.data);
+        buf_append_fmt(wd, "    .invoke = &%s__invoke,\n", var.data);
+        buf_append_cstr(wd, "};\n\n");
+    } else {
+        for (size_t i = 0; i < dst->member_count; ++i) {
+            const UserSpecMember *dst_member = &dst->members[i];
+            const UserSpecMember *src_member = cg_user_spec_member(src,
+                                                                   dst_member->feng_name,
+                                                                   strlen(dst_member->feng_name));
+
+            if (src_member == NULL ||
+                !cg_user_spec_member_compatible(src_member, dst_member)) {
+                buf_free(&var);
+                return cg_fail(cg, blame,
+                    "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation",
+                    src->feng_name, dst->feng_name);
+            }
+
+            if (dst_member->kind == USM_KIND_FIELD) {
+                buf_append_cstr(wd, "static ");
                 cg_emit_c_type(wd, dst_member->type);
-                buf_append_cstr(wd, " value) {\n");
+                buf_append_fmt(wd, " %s__get_%s(void *_subject) {\n",
+                               var.data, dst_member->c_field_name);
                 buf_append_fmt(wd,
-                    "    struct %s *_value = (struct %s *)_subject;\n"
-                    "    _value->witness->set_%s(_value->subject, value);\n"
+                    "    const struct %s *_value = (const struct %s *)_subject;\n"
+                    "    return _value->witness->get_%s(_value->subject);\n"
                     "}\n",
                     src->c_value_struct_name,
                     src->c_value_struct_name,
                     src_member->c_field_name);
+                if (dst_member->is_var) {
+                    buf_append_fmt(wd, "static void %s__set_%s(void *_subject, ",
+                                   var.data, dst_member->c_field_name);
+                    cg_emit_c_type(wd, dst_member->type);
+                    buf_append_cstr(wd, " value) {\n");
+                    buf_append_fmt(wd,
+                        "    struct %s *_value = (struct %s *)_subject;\n"
+                        "    _value->witness->set_%s(_value->subject, value);\n"
+                        "}\n",
+                        src->c_value_struct_name,
+                        src->c_value_struct_name,
+                        src_member->c_field_name);
+                }
+            } else {
+                buf_append_cstr(wd, "static ");
+                cg_emit_c_type(wd, dst_member->type);
+                buf_append_fmt(wd, " %s__%s(void *_subject",
+                               var.data, dst_member->c_field_name);
+                for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
+                    buf_append_cstr(wd, ", ");
+                    cg_emit_c_type(wd, dst_member->param_types[pi]);
+                    buf_append_fmt(wd, " _p%zu", pi);
+                }
+                buf_append_cstr(wd, ") {\n");
+                buf_append_fmt(wd,
+                    "    const struct %s *_value = (const struct %s *)_subject;\n",
+                    src->c_value_struct_name,
+                    src->c_value_struct_name);
+                buf_append_cstr(wd, "    ");
+                if (dst_member->type->kind != CG_TYPE_VOID) {
+                    buf_append_cstr(wd, "return ");
+                }
+                buf_append_fmt(wd, "_value->witness->%s(_value->subject",
+                               src_member->c_field_name);
+                for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
+                    buf_append_fmt(wd, ", _p%zu", pi);
+                }
+                buf_append_cstr(wd, ");\n}\n");
             }
-        } else {
-            buf_append_cstr(wd, "static ");
-            cg_emit_c_type(wd, dst_member->type);
-            buf_append_fmt(wd, " %s__%s(void *_subject",
-                           var.data, dst_member->c_field_name);
-            for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
-                buf_append_cstr(wd, ", ");
-                cg_emit_c_type(wd, dst_member->param_types[pi]);
-                buf_append_fmt(wd, " _p%zu", pi);
-            }
-            buf_append_cstr(wd, ") {\n");
-            buf_append_fmt(wd,
-                "    const struct %s *_value = (const struct %s *)_subject;\n",
-                src->c_value_struct_name,
-                src->c_value_struct_name);
-            buf_append_cstr(wd, "    ");
-            if (dst_member->type->kind != CG_TYPE_VOID) {
-                buf_append_cstr(wd, "return ");
-            }
-            buf_append_fmt(wd, "_value->witness->%s(_value->subject",
-                           src_member->c_field_name);
-            for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
-                buf_append_fmt(wd, ", _p%zu", pi);
-            }
-            buf_append_cstr(wd, ");\n}\n");
         }
-    }
 
-    buf_append_fmt(wd, "static const struct %s %s = {\n",
-                   dst->c_witness_struct_name, var.data);
-    for (size_t i = 0; i < dst->member_count; ++i) {
-        const UserSpecMember *dst_member = &dst->members[i];
+        buf_append_fmt(wd, "static const struct %s %s = {\n",
+                       dst->c_witness_struct_name, var.data);
+        for (size_t i = 0; i < dst->member_count; ++i) {
+            const UserSpecMember *dst_member = &dst->members[i];
 
-        if (dst_member->kind == USM_KIND_FIELD) {
-            buf_append_fmt(wd, "    .get_%s = &%s__get_%s,\n",
-                           dst_member->c_field_name, var.data,
-                           dst_member->c_field_name);
-            if (dst_member->is_var) {
-                buf_append_fmt(wd, "    .set_%s = &%s__set_%s,\n",
+            if (dst_member->kind == USM_KIND_FIELD) {
+                buf_append_fmt(wd, "    .get_%s = &%s__get_%s,\n",
+                               dst_member->c_field_name, var.data,
+                               dst_member->c_field_name);
+                if (dst_member->is_var) {
+                    buf_append_fmt(wd, "    .set_%s = &%s__set_%s,\n",
+                                   dst_member->c_field_name, var.data,
+                                   dst_member->c_field_name);
+                }
+            } else {
+                buf_append_fmt(wd, "    .%s = &%s__%s,\n",
                                dst_member->c_field_name, var.data,
                                dst_member->c_field_name);
             }
-        } else {
-            buf_append_fmt(wd, "    .%s = &%s__%s,\n",
-                           dst_member->c_field_name, var.data,
-                           dst_member->c_field_name);
         }
+        buf_append_cstr(wd, "};\n\n");
     }
-    buf_append_cstr(wd, "};\n\n");
 
     if (cg->spec_slot_witness_table_count + 1 > cg->spec_slot_witness_table_capacity) {
         size_t cap = cg->spec_slot_witness_table_capacity
@@ -7949,8 +8799,10 @@ static bool cg_pass_register_type_shells(CG *cg, const FengProgram *prog) {
     for (size_t i = 0; i < prog->declaration_count; i++) {
         const FengDecl *d = prog->declarations[i];
         if (d->kind == FENG_DECL_SPEC) {
-            /* G6: generic specs not yet supported in codegen. */
-            if (d->as.spec_decl.type_param_count > 0) continue;
+            if (d->as.spec_decl.type_param_count > 0) {
+                if (!cg_register_generic_spec_decl(cg, d)) return false;
+                continue;
+            }
             if (!cg_register_user_spec_shell(cg, d)) return false;
         }
     }
@@ -7987,6 +8839,16 @@ static bool cg_collect_generic_instances_from_type_ref(CG *cg,
                                                                   ref->as.named.type_args,
                                                                   ref->as.named.type_arg_count,
                                                                   ref->token);
+                }
+                {
+                    const GenericSpecDecl *generic_spec_decl = cg_find_generic_spec_decl(cg, ref);
+                    if (generic_spec_decl != NULL) {
+                        return cg_register_generic_spec_instance_shell(cg,
+                                                                       generic_spec_decl,
+                                                                       ref->as.named.type_args,
+                                                                       ref->as.named.type_arg_count,
+                                                                       ref->token);
+                    }
                 }
             }
             return true;
@@ -9825,6 +10687,17 @@ static void cg_dispose(CG *cg) {
         free(us->c_default_subject_desc_name);
         free(us->c_default_subject_new_name);
         free(us->c_default_witness_name);
+        free(us->c_closure_struct_name);
+        free(us->c_closure_desc_name);
+        for (size_t j = 0; j < us->generic_type_arg_count; ++j) {
+            cg_type_ref_free(us->generic_type_args[j]);
+        }
+        free(us->generic_type_args);
+        cgtype_free(us->callable_return_type);
+        for (size_t j = 0; j < us->callable_param_count; ++j) {
+            cgtype_free(us->callable_param_types[j]);
+        }
+        free(us->callable_param_types);
         for (size_t j = 0; j < us->member_count; j++) {
             UserSpecMember *sm = &us->members[j];
             free(sm->feng_name);
@@ -9840,6 +10713,10 @@ static void cg_dispose(CG *cg) {
         free(us->members);
     }
     free(cg->user_specs);
+    for (size_t i = 0; i < cg->callable_fn_value_count; ++i) {
+        free(cg->callable_fn_values[i].c_var);
+    }
+    free(cg->callable_fn_values);
     /* G6: generic function registry cleanup. */
     for (size_t i = 0; i < cg->generic_fn_count; i++) {
         free(cg->generic_fns[i].feng_name);
@@ -9850,6 +10727,7 @@ static void cg_dispose(CG *cg) {
     }
     free(cg->generic_fns);
     free(cg->generic_type_decls);
+    free(cg->generic_spec_decls);
     for (size_t i = 0; i < cg->user_fit_count; i++) {
         UserFit *uf = &cg->user_fits[i];
         for (size_t j = 0; j < uf->method_count; j++) {
