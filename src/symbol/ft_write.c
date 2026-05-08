@@ -650,28 +650,33 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
                                    FengToken token,
                                    FengSymbolError *out_error) {
     if (decl->declared_spec_count > 0U) {
-        FengSymbolFtAttrRecord attr;
         size_t index;
-        uint32_t first_type_id = (uint32_t)(ctx->type_count + 1U);
 
-        memset(&attr, 0, sizeof(attr));
         for (index = 0U; index < decl->declared_spec_count; ++index) {
-            if (writer_serialize_type(ctx, decl->declared_specs[index], path, token, out_error) == 0U) {
+            FengSymbolFtAttrRecord attr;
+            uint32_t type_id = writer_serialize_type(ctx,
+                                                     decl->declared_specs[index],
+                                                     path,
+                                                     token,
+                                                     out_error);
+
+            if (type_id == 0U) {
                 return false;
             }
-        }
-        attr.symbol_id = symbol_id;
-        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_DECLARED_SPECS;
-        attr.value0 = first_type_id;
-        attr.value1 = (uint32_t)decl->declared_spec_count;
-        if (!append_record((void **)&ctx->attrs,
-                           &ctx->attr_count,
-                           sizeof(attr),
-                           &attr,
-                           path,
-                           token,
-                           out_error)) {
-            return false;
+            memset(&attr, 0, sizeof(attr));
+            attr.symbol_id = symbol_id;
+            attr.kind = (uint16_t)FENG_SYMBOL_ATTR_DECLARED_SPECS;
+            attr.value0 = type_id;
+            attr.value1 = 1U;
+            if (!append_record((void **)&ctx->attrs,
+                               &ctx->attr_count,
+                               sizeof(attr),
+                               &attr,
+                               path,
+                               token,
+                               out_error)) {
+                return false;
+            }
         }
     }
     if (decl->union_annotated) {

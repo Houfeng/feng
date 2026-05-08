@@ -10,7 +10,7 @@
 
 ## Todo List
 
-> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 concrete generic spec parent codegen 均已闭环。但 2026-05-09 通过最小 probe 复查后，当前仍存在约束面向上转发、open generic spec parent 替换，以及泛型 fit 三个既有语言形态内的缺口，不能认定为泛型 100% 完整。由于 union-form `spec` 仍处于语法草案阶段，本轮继续限定为**不含 union-form**的既有语言形态；`std Map` 应等待这些当前缺口收口后再进入实现。
+> 当前复查结论：G0-G3/G5 已基本落地；G4/G6/G7 的第一阶段骨架已经形成，且 object-form 约束 witness lowering、generic instantiation witness materialization、constrained spec generic arg slot witness、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter、generic spec parent codegen、约束面向上转发、open generic spec parent 替换，以及泛型 fit 均已闭环。由于 union-form `spec` 仍处于语法草案阶段，本轮继续限定为**不含 union-form**的既有语言形态；`std Map` 应在本轮回归确认后再进入实现。
 
 - [x] **Phase 5.5**：符号表结构重构（G5 前置，见 [feng-plan.md](./feng-plan.md) §Phase 5.5）
 - [x] **G0**：所有设计决策收口（Q1–Q5 全部已决策，见 [§G0](#g0-规则收口前置于一切编码)）
@@ -19,8 +19,8 @@
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
 - [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面按 union 语法落地后另行收口，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion，以及 generic-type generic-method 基础路径已完成；仍需补齐约束面向上转发、open generic spec parent 替换与泛型 fit；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
-- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 concrete generic spec parent codegen；仍缺约束面向上转发、open generic spec parent 替换与泛型 fit 的成功 smoke；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion、generic-type generic-method 基础路径、约束面向上转发、open generic spec parent 替换，以及泛型 fit 均已完成；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
+- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter、generic spec parent codegen、约束面向上转发、open generic spec parent 替换，以及泛型 fit；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
 
 ---
 
@@ -36,13 +36,13 @@
 2. open generic 返回值 witness adapter：`spec Cloneable<T> { fn cloneValue(): T; }` 这类约束方法返回 open generic parameter 时，witness thunk 通过 `_out`/slot ABI 把 concrete 返回值写回 erased slot。
 3. generic spec parent codegen：`spec IntSequence: Sequence<int>` 这类语义层已接受的 generic spec parent，会在 codegen 注册与 witness 结构中按子优先、同名跳过的规则展开父 spec 成员。
 
-### 2026-05-09 复查新增缺口
+### 2026-05-09 复查新增缺口与本轮修复
 
-本次复查不只看文档，按现有 smoke、代码生成护栏与最小 probe 反查，确认以下缺口仍属于当前既有语言形态内的问题：
+本次复查不只看文档，按现有 smoke、代码生成护栏与最小 probe 反查，确认以下缺口属于当前既有语言形态内的问题；本轮已按顺序修复并补充 smoke：
 
-1. 约束面向上转发未完成：`fn useLabelled<U: Labelled>(value: U) { useNamed:<U>(value); }` 在 `Labelled: Named` 已成立时仍触发 `forwarding a generic type argument across a different constraint surface is not yet supported (G6)`。
-2. open generic spec parent 替换未完成：`spec Collection<T>: Sequence<T>` 与 `type IntBag: Collection<int>` 组合下，语义层仍以未替换的父 `Sequence<T>` 签名检查实现方法，最小 probe 报 `method 'first' signature does not match spec 'Sequence'`。
-3. 泛型 fit 未完成：`fit Box<T>: Reader<T>` 中左侧 `<T>` 仍未进入目标泛型 type 参数作用域，最小 probe 报 `unknown type 'T'`；这与 [feng-fit.md](../docs/feng-fit.md) 已定义的泛型 fit 语法不一致。
+1. 约束面向上转发：`fn useLabelled<U: Labelled>(value: U) { useNamed:<U>(value); }` 在 `Labelled: Named` 已成立时，可通过 parent-prefix 兼容的 descriptor adapter 转发到 `Named` 约束面。
+2. open generic spec parent 替换：`spec Collection<T>: Sequence<T>` 与 `type IntBag: Collection<int>` 组合下，语义层与 codegen 均以 `Sequence<int>` 检查和注册 parent spec instance。
+3. 泛型 fit：`fit Box<T>: Reader<T>` 中左侧 `<T>` 进入目标泛型 type 参数作用域，满足性检查、符号导出与 codegen 均按 concrete target instance 替换 `T`。
 
 ### 一、当前已经验证可工作的范围
 
@@ -101,12 +101,13 @@
 - semantic 已有 `spec IntSequence: Sequence<int>` 的成功用例，说明 generic spec parent forwarding 在语义层被视为合法形态。
 - codegen 已移除 `spec parent_specs not yet supported in Step 4b-α` 护栏，并在 `UserSpec` 成员注册时按语义侧闭包规则展开父 spec 成员：子 spec 自身成员优先，同名父成员跳过。
 - `test/smoke/phase1a/generic_spec_parent_codegen.ff` 已覆盖 `spec IntSequence: Sequence<int>`，并验证子 spec 未重复声明父成员时，`IntSequence` 视角仍可通过 witness 调用继承自 `Sequence<int>` 的 `size()`。
+- `test/smoke/phase1a/generic_spec_open_parent.ff` 已覆盖 `spec Collection<T>: Sequence<T>`，验证 parent spec 在 semantic 与 codegen 中都会按当前实例替换为 `Sequence<int>`。
 
 #### P5. 测试覆盖已形成基础证据，并补齐真实 Map 约束准入
 
-- 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form `spec` 聚合值 generic arg（包含 `let x: MySpec` 作为 `t: T` 实参与 `MySpec` 作为泛型类型实参）、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion、generic spec concrete instance 的 object/callable 基础 codegen 路径、泛型类型上的泛型方法、generic type shared body 内部 self-call、`Map<K: Hashable, V>` 级基础场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter，以及 generic spec parent codegen 场景。
+- 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form `spec` 聚合值 generic arg（包含 `let x: MySpec` 作为 `t: T` 实参与 `MySpec` 作为泛型类型实参）、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion、generic spec concrete instance 的 object/callable 基础 codegen 路径、泛型类型上的泛型方法、generic type shared body 内部 self-call、`Map<K: Hashable, V>` 级基础场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter、generic spec parent codegen、约束面向上转发、open generic spec parent 替换，以及泛型 fit 场景。
 - 当前 smoke 已覆盖 `generic_self_constraint`；在完成 `std Map` 规范、实现与回归之前，不把标准库 Map 本身计入已交付。
-- 源码中保留的 `aggregate type as generic type argument not yet supported (missing flatten rule)` 是未来聚合值类型接入前的护栏；不同约束面之间的泛型参数转发仍等待未来多约束 / 约束合取语义收口，不作为当前既有语言形态的阻塞项。
+- 源码中保留的 `aggregate type as generic type argument not yet supported (missing flatten rule)` 是未来聚合值类型接入前的护栏；多约束 / 约束合取语义仍等待后续规范收口，不作为当前既有语言形态的阻塞项。
 
 ### 三、当前类型覆盖矩阵
 
@@ -950,8 +951,8 @@ struct {
 | G4-13 | **显式泛型调用验证**：`:<...>` 只允许在泛型可调用目标上；对非泛型函数写 `:<...>` 报错；实参数量必须与类型参数个数一致 | `src/semantic/analyzer.c` | G4-7 |
 | G4-14 | **方法泛型参数重名检查**：泛型 type 内的方法泛型参数名不得与外层类型泛型参数名重名 | `src/semantic/analyzer.c` | G4-1 |
 | G4-15 | **泛型父 spec 约束传递检查**：`spec Child<T>: Parent<T>` 中 T 传递到 Parent 时，检查 T 是否满足 Parent 对应位置的约束 | `src/semantic/spec_relations.c` | G4-3 |
-| G4-16 | **泛型 fit 左侧解析**：`fit Box<T>: Reader<T>` 中 `<T>` 是对 Box<T> 已声明参数的引用，按"名称 + 泛型参数数量"匹配目标 type | `src/semantic/analyzer.c` | G4-5 |
-| G4-17 | **泛型 fit 满足性检查**：检查 `fit Box<T>: Reader<T>` 中方法签名是否满足 Reader<T>；此处 T 统一指向 Box<T> 的类型参数 | `src/semantic/spec_relations.c` | G4-16 |
+| G4-16 | **泛型 fit 左侧解析**：`fit Box<T>: Reader<T>` 中 `<T>` 是对 `Box<T>` 已声明参数的引用，按"名称 + 泛型参数数量"匹配目标 type | `src/semantic/analyzer.c` | G4-5 |
+| G4-17 | **泛型 fit 满足性检查**：检查 `fit Box<T>: Reader<T>` 中方法签名是否满足 `Reader<T>`；此处 T 统一指向 `Box<T>` 的类型参数 | `src/semantic/spec_relations.c` | G4-16 |
 | G4-18 | **终结器泛型参数拒绝**：泛型 type 内的终结器不允许携带类型参数 | `src/semantic/analyzer.c` | — |
 | G4-19 | **默认零值泛型扩展**（G0-3 已决策：按字段递推，类型参数替换后与非泛型规则一致） | `src/semantic/analyzer.c` | — |
 | G4-20 | **语义分析单元测试**：所有正确语法通过；所有错误语法（错误语法 1-12）报错 | `test/semantic/` | — |
@@ -981,7 +982,7 @@ struct {
 | G5-3 | **NAMED_GENERIC 类型节点**：为泛型具名使用（如 `Box<T>`、`List<int>`）生成 `FT_TYPE_KIND_NAMED_GENERIC` 节点 + TSEQ 类型实参 | `src/symbol/ft_write.c` |
 | G5-4 | **CALLABLE 类型节点**：泛型函数/方法的 type_ref 指向 CALLABLE 节点，其 TSEQ 中参数类型可含 TYPE_PARAM_REF | `src/symbol/ft_write.c` |
 | G5-5 | **泛型 spec 的 TYPS 编码**：按 SPEC_OBJECT / SPEC_CALLABLE TYPS.kind 区分 form，sym_ref = spec 符号 ID | `src/symbol/ft_write.c` |
-| G5-6 | **泛型 fit 的 extra_ref 与 attr**：fit 符号的 extra_ref 指向 NAMED_GENERIC 类型节点；FT_ATTR_FIT_SPECS 范围存 Reader<T> 等结构化使用 | `src/symbol/ft_write.c` |
+| G5-6 | **泛型 fit 的 extra_ref 与 attr**：fit 符号的 extra_ref 指向 NAMED_GENERIC 类型节点；FT_ATTR_FIT_SPECS 范围存 `Reader<T>` 等结构化使用 | `src/symbol/ft_write.c` |
 | G5-7 | **泛型声明的跨模块读取**：在 `src/symbol/imported_module.c` 中扩展 .ft 读取，重建泛型声明的类型参数和 NAMED_GENERIC 使用节点 | `src/symbol/imported_module.c` |
 | G5-8 | **符号表单元测试**：泛型 type/spec/fn/fit 的导出内容验证；跨模块读取后符号查询正确 | `test/symbol/` |
 

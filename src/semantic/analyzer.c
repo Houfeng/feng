@@ -2027,6 +2027,9 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
     return substituted;
 }
 
+static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
+                                             const FengTypeRef *type_ref);
+
 static const FengTypeRef *substitute_spec_member_type_ref_for_instance(
     ResolveContext *context,
     const FengDecl *spec_decl,
@@ -2048,6 +2051,63 @@ static const FengTypeRef *substitute_spec_member_type_ref_for_instance(
                                                   spec_decl,
                                                   owner_type,
                                                   member_type_ref);
+}
+
+static const FengTypeRef *instantiate_parent_spec_ref_for_instance(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengDecl *target_parent_decl) {
+    size_t parent_index;
+
+    if (context == NULL || spec_decl == NULL || target_parent_decl == NULL ||
+        spec_decl->kind != FENG_DECL_SPEC || target_parent_decl->kind != FENG_DECL_SPEC) {
+        return NULL;
+    }
+
+    for (parent_index = 0U;
+         parent_index < spec_decl->as.spec_decl.parent_spec_count;
+         ++parent_index) {
+        const FengTypeRef *parent_ref = spec_decl->as.spec_decl.parent_specs[parent_index];
+        const FengTypeRef *candidate_ref = parent_ref;
+        FengTypeRef *substituted = NULL;
+        const FengDecl *parent_decl;
+
+        if (spec_type_ref != NULL &&
+            spec_type_ref->kind == FENG_TYPE_REF_NAMED &&
+            spec_type_ref->as.named.type_arg_count == spec_decl->as.spec_decl.type_param_count &&
+            spec_decl->as.spec_decl.type_param_count > 0U) {
+            substituted = clone_type_ref_substituting_type_params(
+                parent_ref,
+                spec_decl->as.spec_decl.type_params,
+                spec_decl->as.spec_decl.type_param_count,
+                spec_type_ref->as.named.type_args);
+            if (substituted == NULL) {
+                return NULL;
+            }
+            if (!resolver_track_synthetic_type_ref(context, substituted)) {
+                free_synthetic_type_ref(substituted);
+                return NULL;
+            }
+            candidate_ref = substituted;
+        }
+
+        parent_decl = resolve_type_ref_decl(context, candidate_ref);
+        if (parent_decl == target_parent_decl) {
+            return candidate_ref;
+        }
+        if (parent_decl != NULL && parent_decl->kind == FENG_DECL_SPEC) {
+            const FengTypeRef *nested = instantiate_parent_spec_ref_for_instance(
+                context,
+                parent_decl,
+                candidate_ref,
+                target_parent_decl);
+            if (nested != NULL) {
+                return nested;
+            }
+        }
+    }
+    return NULL;
 }
 
 static FengTypeRef *create_named_type_ref_for_inference(FengToken token,
@@ -2220,6 +2280,9 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
 static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
                                               const FengDecl *type_decl,
                                               const FengTypeRef *spec_type_ref);
+static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
+                                             const FengTypeRef *source_type_ref,
+                                             const FengTypeRef *spec_type_ref);
 
 static const FengTypeRef *substitute_callable_return_type_for_call(
     ResolveContext *context,
@@ -2487,7 +2550,7 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                 if (src_decl != NULL && dst_decl != NULL &&
                     src_decl->kind == FENG_DECL_TYPE &&
                     dst_decl->kind == FENG_DECL_SPEC &&
-                    type_decl_satisfies_spec_type_ref(context, src_decl, type_ref)) {
+                    type_ref_satisfies_spec_type_ref(context, expr_type.type_ref, type_ref)) {
                     return true;
                 }
             }
@@ -5530,6 +5593,7 @@ static void record_spec_member_access(ResolveContext *context,
 
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
+                                           const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
                                            FengToken err_token);
@@ -8231,11 +8295,14 @@ static void record_object_spec_coercion_site_if_applicable(
         return;
     }
     if (!type_decl_satisfies_spec_type_ref(context, src_type_decl, expected_type_ref)) {
+        if (expr_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+            !type_ref_satisfies_spec_type_ref(context, expr_type.type_ref, expected_type_ref)) {
         /* Match must have been by exact type identity (src == target spec is
          * impossible since target is SPEC and src is TYPE), so absence here
          * means the match was a non-spec path (should not happen given the
          * SPEC target check above). Defensive no-op. */
-        return;
+            return;
+        }
     }
     relation = feng_semantic_lookup_spec_relation(context->analysis,
                                                   src_type_decl,
@@ -8257,6 +8324,9 @@ static void record_object_spec_coercion_site_if_applicable(
      * (per §8.1 / §8.2 — "复用同一份 SpecWitness 结果"). */
     compute_spec_witness_if_absent(context,
                                    src_type_decl,
+                                   expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+                                       ? expr_type.type_ref
+                                       : NULL,
                                    target_decl,
                                    expected_type_ref,
                                    expr->token);
@@ -8310,6 +8380,7 @@ static void record_object_arg_coercion_sites_for_owner_instance(
 static void materialize_object_spec_constraint_witness_if_applicable(
     ResolveContext *context,
     const FengTypeParam *type_param,
+    const FengTypeRef *actual_type_ref,
     const FengDecl *actual_type_decl,
     FengToken err_token) {
     const FengDecl *constraint_decl;
@@ -8331,6 +8402,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
 
     compute_spec_witness_if_absent(context,
                                    actual_type_decl,
+                                   actual_type_ref,
                                    constraint_decl,
                                    type_param->constraint,
                                    err_token);
@@ -8354,6 +8426,7 @@ static void materialize_named_type_param_constraint_witnesses(
 
         materialize_object_spec_constraint_witness_if_applicable(context,
                                                                  &type_params[i],
+                                                                 type_args[i],
                                                                  actual_type_decl,
                                                                  err_token);
     }
@@ -8420,6 +8493,7 @@ static void materialize_callable_type_param_constraint_witnesses(
 
         materialize_object_spec_constraint_witness_if_applicable(context,
                                                                  &callable->type_params[i],
+                                                                 NULL,
                                                                  actual_type_decl,
                                                                  call_expr->token);
     }
@@ -11875,6 +11949,155 @@ static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
     return true;
 }
 
+static bool fit_decl_instantiates_spec_type_ref(const ResolveContext *ctx,
+                                                const FengDecl *fit_decl,
+                                                const FengDecl *source_type_decl,
+                                                const FengTypeRef *source_type_ref,
+                                                const FengDecl *spec_decl,
+                                                const FengTypeRef *spec_type_ref) {
+    const FengDecl *fit_target_decl;
+    const FengTypeParam *type_params = NULL;
+    size_t type_param_count = 0U;
+    FengTypeRef *const *type_args = NULL;
+    size_t spec_index;
+
+    if (ctx == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
+        source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE ||
+        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC || spec_type_ref == NULL) {
+        return false;
+    }
+    fit_target_decl = resolve_type_ref_decl(ctx, fit_decl->as.fit_decl.target);
+    if (fit_target_decl != source_type_decl) {
+        return false;
+    }
+    type_params = source_type_decl->as.type_decl.type_params;
+    type_param_count = source_type_decl->as.type_decl.type_param_count;
+    if (type_param_count > 0U) {
+        const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
+
+        if (source_type_ref == NULL || source_type_ref->kind != FENG_TYPE_REF_NAMED ||
+            source_type_ref->as.named.type_arg_count != type_param_count ||
+            target_ref == NULL || target_ref->kind != FENG_TYPE_REF_NAMED ||
+            target_ref->as.named.type_arg_count != type_param_count) {
+            return false;
+        }
+        for (size_t i = 0U; i < type_param_count; ++i) {
+            const FengTypeRef *arg = target_ref->as.named.type_args[i];
+
+            if (arg == NULL || arg->kind != FENG_TYPE_REF_NAMED ||
+                arg->as.named.segment_count != 1U ||
+                arg->as.named.type_arg_count != 0U ||
+                !slice_equals(arg->as.named.segments[0], type_params[i].name)) {
+                return false;
+            }
+        }
+        type_args = source_type_ref->as.named.type_args;
+    }
+
+    for (spec_index = 0U; spec_index < fit_decl->as.fit_decl.spec_count; ++spec_index) {
+        const FengTypeRef *fit_spec_ref = fit_decl->as.fit_decl.specs[spec_index];
+        const FengDecl *fit_spec_decl = resolve_type_ref_decl(ctx, fit_spec_ref);
+        const FengTypeRef *candidate_ref = fit_spec_ref;
+        FengTypeRef *substituted = NULL;
+        bool matches;
+
+        if (fit_spec_decl != spec_decl) {
+            continue;
+        }
+        if (type_param_count > 0U) {
+            substituted = clone_type_ref_substituting_type_params(fit_spec_ref,
+                                                                  type_params,
+                                                                  type_param_count,
+                                                                  type_args);
+            if (substituted == NULL) {
+                return false;
+            }
+            candidate_ref = substituted;
+        }
+        matches = type_refs_semantically_equal(ctx, candidate_ref, spec_type_ref);
+        free_synthetic_type_ref(substituted);
+        if (matches) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
+                                                   const FengDecl *source_type_decl,
+                                                   const FengTypeRef *source_type_ref,
+                                                   const FengDecl *spec_decl,
+                                                   const FengTypeRef *spec_type_ref) {
+    size_t module_index;
+
+    if (ctx == NULL || ctx->analysis == NULL) {
+        return false;
+    }
+    for (module_index = 0U; module_index < ctx->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &ctx->analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            if (program == NULL) {
+                continue;
+            }
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *fit_decl = program->declarations[decl_index];
+
+                if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
+                    !fit_decl_is_visible_from(ctx, module, fit_decl)) {
+                    continue;
+                }
+                if (fit_decl_instantiates_spec_type_ref(ctx,
+                                                        fit_decl,
+                                                        source_type_decl,
+                                                        source_type_ref,
+                                                        spec_decl,
+                                                        spec_type_ref)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
+                                             const FengTypeRef *source_type_ref,
+                                             const FengTypeRef *spec_type_ref) {
+    const FengDecl *source_type_decl;
+    const FengDecl *spec_decl;
+
+    if (ctx == NULL || source_type_ref == NULL || spec_type_ref == NULL) {
+        return false;
+    }
+    source_type_decl = resolve_type_ref_decl(ctx, source_type_ref);
+    spec_decl = resolve_type_ref_decl(ctx, spec_type_ref);
+    if (source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE ||
+        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+    if (type_decl_satisfies_spec_type_ref(ctx, source_type_decl, spec_type_ref)) {
+        return true;
+    }
+    if (!type_decl_satisfies_spec_decl(ctx, source_type_decl, spec_decl)) {
+        return false;
+    }
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+        spec_type_ref->kind != FENG_TYPE_REF_NAMED ||
+        spec_type_ref->as.named.type_arg_count == 0U) {
+        return true;
+    }
+    return visible_fit_instantiates_spec_type_ref(ctx,
+                                                  source_type_decl,
+                                                  source_type_ref,
+                                                  spec_decl,
+                                                  spec_type_ref);
+}
+
 /* Phase S3 — SpecWitness compute (§6.5 / §8.1 / §8.2).
  *
  * Materialises one (T, S) witness on first demand. The walk follows S's
@@ -11899,6 +12122,8 @@ typedef struct WitnessFitCandidate {
 
 typedef struct WitnessFitCollectCtx {
     const ResolveContext *ctx;
+    const FengDecl *source_type_decl;
+    const FengTypeRef *source_type_ref;
     const FengCallableSignature *spec_sig;
     const FengDecl *spec_decl;
     const FengTypeRef *spec_type_ref;
@@ -11920,7 +12145,14 @@ static bool witness_fit_collect_visitor(const FengTypeMember *member,
             st->spec_type_ref,
             st->spec_sig,
             &member->as.callable)) {
-        return true;
+        if (!fit_decl_instantiates_spec_type_ref(st->ctx,
+                                                fit_decl,
+                                                st->source_type_decl,
+                                                st->source_type_ref,
+                                                st->spec_decl,
+                                                st->spec_type_ref)) {
+            return true;
+        }
     }
     if (st->count == st->capacity) {
         size_t new_cap = st->capacity == 0U ? 4U : st->capacity * 2U;
@@ -11942,6 +12174,7 @@ static bool witness_fit_collect_visitor(const FengTypeMember *member,
 
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
+                                           const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
                                            FengToken err_token) {
@@ -12055,10 +12288,32 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         0U);
                 }
 
+                const FengTypeRef *cur_spec_type_ref =
+                    cur == spec_decl
+                        ? spec_type_ref
+                        : instantiate_parent_spec_ref_for_instance(
+                              context,
+                              spec_decl,
+                              spec_type_ref,
+                              cur);
+
+                if (cur_spec_type_ref != NULL) {
+                    t_method = type_find_matching_method_in_spec_ref(
+                        context,
+                        type_decl,
+                        cur,
+                        cur_spec_type_ref,
+                        &sm->as.callable,
+                        NULL,
+                        0U);
+                }
+
                 fit_st.ctx = context;
+                fit_st.source_type_decl = type_decl;
+                fit_st.source_type_ref = source_type_ref;
                 fit_st.spec_sig = &sm->as.callable;
-                fit_st.spec_decl = (cur == spec_decl) ? spec_decl : NULL;
-                fit_st.spec_type_ref = (cur == spec_decl) ? spec_type_ref : NULL;
+                fit_st.spec_decl = cur_spec_type_ref != NULL ? cur : NULL;
+                fit_st.spec_type_ref = cur_spec_type_ref;
                 fit_st.items = NULL;
                 fit_st.count = 0U;
                 fit_st.capacity = 0U;
@@ -12615,8 +12870,33 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             continue;
         }
 
-        ok = verify_type_satisfies_spec(context, type_decl, closure[i], NULL,
-                                        type_decl->token, NULL, 0U);
+        {
+            const FengTypeRef *instantiated_spec_ref = NULL;
+
+            for (j = 0U; j < type_decl->as.type_decl.declared_spec_count; ++j) {
+                const FengTypeRef *declared_spec_ref = type_decl->as.type_decl.declared_specs[j];
+                const FengDecl *declared_spec = resolve_type_ref_decl(context, declared_spec_ref);
+
+                if (declared_spec == NULL || declared_spec == closure[i] ||
+                    declared_spec_ref == NULL ||
+                    declared_spec_ref->kind != FENG_TYPE_REF_NAMED ||
+                    declared_spec_ref->as.named.type_arg_count == 0U) {
+                    continue;
+                }
+                instantiated_spec_ref = instantiate_parent_spec_ref_for_instance(
+                    context,
+                    declared_spec,
+                    declared_spec_ref,
+                    closure[i]);
+                if (instantiated_spec_ref != NULL) {
+                    break;
+                }
+            }
+
+            ok = verify_type_satisfies_spec(context, type_decl, closure[i],
+                                            instantiated_spec_ref,
+                                            type_decl->token, NULL, 0U);
+        }
     }
     if (ok) {
         ok = detect_cross_spec_method_conflicts(context, type_decl, closure, closure_count,
@@ -12645,6 +12925,48 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
         free(target_name);
         return result;
+    }
+
+    if (target->as.type_decl.type_param_count > 0U) {
+        const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
+
+        if (target_ref == NULL || target_ref->kind != FENG_TYPE_REF_NAMED ||
+            target_ref->as.named.type_arg_count != target->as.type_decl.type_param_count) {
+            return resolver_append_error(
+                context,
+                fit_decl->token,
+                format_message(
+                    "fit target for generic type '%.*s' must reference all target type parameters directly",
+                    (int)target->as.type_decl.name.length,
+                    target->as.type_decl.name.data));
+        }
+        for (i = 0U; i < target->as.type_decl.type_param_count; ++i) {
+            const FengTypeRef *arg = target_ref->as.named.type_args[i];
+            if (arg == NULL || arg->kind != FENG_TYPE_REF_NAMED ||
+                arg->as.named.segment_count != 1U ||
+                arg->as.named.type_arg_count != 0U ||
+                !slice_equals(arg->as.named.segments[0], target->as.type_decl.type_params[i].name)) {
+                return resolver_append_error(
+                    context,
+                    arg != NULL ? arg->token : fit_decl->token,
+                    format_message(
+                        "fit target for generic type '%.*s' must use target type parameter '%.*s' at position %zu",
+                        (int)target->as.type_decl.name.length,
+                        target->as.type_decl.name.data,
+                        (int)target->as.type_decl.type_params[i].name.length,
+                        target->as.type_decl.type_params[i].name.data,
+                        i + 1U));
+            }
+        }
+    } else if (fit_decl->as.fit_decl.target != NULL &&
+               fit_decl->as.fit_decl.target->kind == FENG_TYPE_REF_NAMED &&
+               fit_decl->as.fit_decl.target->as.named.type_arg_count > 0U) {
+        return resolver_append_error(
+            context,
+            fit_decl->as.fit_decl.target->token,
+            format_message("fit target type '%.*s' is not generic",
+                           (int)target->as.type_decl.name.length,
+                           target->as.type_decl.name.data));
     }
 
     for (i = 0U; i < fit_decl->as.fit_decl.spec_count; ++i) {
@@ -12720,10 +13042,34 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             continue;
         }
 
-        ok = verify_type_satisfies_spec(
-            context, target, closure[i], NULL, fit_decl->token,
-            (const FengTypeMember *const *)fit_decl->as.fit_decl.members,
-            fit_decl->as.fit_decl.member_count);
+        {
+            const FengTypeRef *instantiated_spec_ref = NULL;
+
+            for (j = 0U; j < fit_decl->as.fit_decl.spec_count; ++j) {
+                const FengTypeRef *fit_spec_ref = fit_decl->as.fit_decl.specs[j];
+                const FengDecl *fit_spec = resolve_type_ref_decl(context, fit_spec_ref);
+
+                if (fit_spec == NULL || fit_spec == closure[i] ||
+                    fit_spec_ref == NULL ||
+                    fit_spec_ref->kind != FENG_TYPE_REF_NAMED ||
+                    fit_spec_ref->as.named.type_arg_count == 0U) {
+                    continue;
+                }
+                instantiated_spec_ref = instantiate_parent_spec_ref_for_instance(
+                    context,
+                    fit_spec,
+                    fit_spec_ref,
+                    closure[i]);
+                if (instantiated_spec_ref != NULL) {
+                    break;
+                }
+            }
+
+            ok = verify_type_satisfies_spec(
+                context, target, closure[i], instantiated_spec_ref, fit_decl->token,
+                (const FengTypeMember *const *)fit_decl->as.fit_decl.members,
+                fit_decl->as.fit_decl.member_count);
+        }
     }
     if (ok) {
         ok = detect_cross_spec_method_conflicts(context, target, closure, closure_count,
@@ -13021,11 +13367,28 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
         case FENG_DECL_FIT: {
             size_t fit_index;
             const FengDecl *fit_target_decl;
+            const TypeParamEntry *prev_tp = NULL;
+            size_t prev_tp_count = 0U;
+            bool ok = true;
+
+            fit_target_decl = resolve_type_ref_decl(context, decl->as.fit_decl.target);
+            if (fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE &&
+                fit_target_decl->as.type_decl.type_param_count > 0U) {
+                if (!resolver_push_type_params(context,
+                                               fit_target_decl->as.type_decl.type_params,
+                                               fit_target_decl->as.type_decl.type_param_count,
+                                               &prev_tp,
+                                               &prev_tp_count)) {
+                    return false;
+                }
+            }
             if (!resolve_type_ref(context, decl->as.fit_decl.target, false)) {
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
                 return false;
             }
             for (fit_index = 0U; fit_index < decl->as.fit_decl.spec_count; ++fit_index) {
                 if (!resolve_type_ref(context, decl->as.fit_decl.specs[fit_index], false)) {
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
                     return false;
                 }
             }
@@ -13035,14 +13398,13 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
              * when the right-hand side is a built-in or unresolved name); in
              * that case `validate_fit_declaration_contracts` reports the proper
              * diagnostic and we simply skip context propagation. */
-            fit_target_decl = resolve_type_ref_decl(context, decl->as.fit_decl.target);
             for (fit_index = 0U; fit_index < decl->as.fit_decl.member_count; ++fit_index) {
                 const FengTypeMember *member = decl->as.fit_decl.members[fit_index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
                 const FengDecl *previous_fit_decl = context->current_fit_decl;
                 const FengTypeMember *previous_callable_member =
                     context->current_callable_member;
-                bool ok;
+                bool member_ok;
 
                 if (fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE) {
                     context->current_type_decl = fit_target_decl;
@@ -13050,17 +13412,20 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 context->current_fit_decl = decl;
                 context->current_callable_member = member;
 
-                ok = resolve_callable(context, &member->as.callable, true);
+                member_ok = resolve_callable(context, &member->as.callable, true);
 
                 context->current_callable_member = previous_callable_member;
                 context->current_fit_decl = previous_fit_decl;
                 context->current_type_decl = previous_type_decl;
 
-                if (!ok) {
+                if (!member_ok) {
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
                     return false;
                 }
             }
-            return validate_fit_declaration_contracts(context, decl);
+            ok = validate_fit_declaration_contracts(context, decl);
+            resolver_pop_type_params(context, prev_tp, prev_tp_count);
+            return ok;
         }
 
         case FENG_DECL_FUNCTION:

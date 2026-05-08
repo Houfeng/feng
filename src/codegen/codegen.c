@@ -784,6 +784,8 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
 static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const UserSpec *dst, FengToken blame,
                                         const char **out_var);
+static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
+                                                   const UserSpec *dst);
 static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
                                               const FengDecl *function_decl,
                                               FengToken blame,
@@ -2042,9 +2044,13 @@ static bool cg_resolve_coercion_target_user_spec(CG *cg,
     return *out_spec != NULL;
 }
 
-static const UserFit *cg_find_user_fit_by_decl(const CG *cg, const FengDecl *decl) {
+static const UserFit *cg_find_user_fit_by_decl_and_target(const CG *cg,
+                                                          const FengDecl *decl,
+                                                          const UserType *target) {
     for (size_t i = 0; i < cg->user_fit_count; i++) {
-        if (cg->user_fits[i].decl == decl) return &cg->user_fits[i];
+        if (cg->user_fits[i].decl == decl && cg->user_fits[i].target == target) {
+            return &cg->user_fits[i];
+        }
     }
     return NULL;
 }
@@ -3103,14 +3109,32 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     free(base_san);
     buf_free(&symbol);
     if (s->form == FENG_SPEC_FORM_OBJECT) {
-        return s->feng_name && s->c_value_struct_name && s->c_witness_struct_name &&
-               s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
-               s->c_aggregate_default_name && s->c_aggregate_init_fn_name &&
-               s->c_default_subject_struct_name && s->c_default_subject_desc_name &&
-               s->c_default_subject_new_name && s->c_default_witness_name;
+        if (!(s->feng_name && s->c_value_struct_name && s->c_witness_struct_name &&
+              s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
+              s->c_aggregate_default_name && s->c_aggregate_init_fn_name &&
+              s->c_default_subject_struct_name && s->c_default_subject_desc_name &&
+              s->c_default_subject_new_name && s->c_default_witness_name)) {
+            return false;
+        }
+    } else if (!(s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
+                 s->c_closure_desc_name)) {
+        return false;
     }
-    return s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
-           s->c_closure_desc_name;
+
+    for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
+        CGTypeParamScope parent_scope = open_scope != NULL ? *open_scope : (CGTypeParamScope){0};
+        FengTypeRef *sub = cg_type_ref_substitute(decl->as.spec_decl.parent_specs[parent_index],
+                                                  decl->as.spec_decl.type_params,
+                                                  decl->as.spec_decl.type_param_count,
+                                                  type_args);
+        bool ok;
+
+        if (sub == NULL) return false;
+        ok = cg_collect_generic_instances_from_type_ref(cg, sub, parent_scope);
+        cg_type_ref_free(sub);
+        if (!ok) return false;
+    }
+    return true;
 }
 
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
@@ -3402,6 +3426,31 @@ static bool cg_user_spec_has_member_name(const UserSpec *s,
     return false;
 }
 
+static const FengTypeMember *cg_find_own_spec_member_by_name(const FengDecl *decl,
+                                                             const char *name,
+                                                             size_t len) {
+    if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
+        decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT || name == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < decl->as.spec_decl.as.object.member_count; ++i) {
+        const FengTypeMember *member = decl->as.spec_decl.as.object.members[i];
+
+        if (member == NULL) continue;
+        if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+            member->as.field.name.length == len &&
+            memcmp(member->as.field.name.data, name, len) == 0) {
+            return member;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == len &&
+            memcmp(member->as.callable.name.data, name, len) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
 static bool cg_user_spec_append_member_slot(UserSpec *s, UserSpecMember **out_slot) {
     size_t count = s->member_count;
     UserSpecMember *grown = realloc(s->members, (count + 1U) * sizeof *s->members);
@@ -3444,6 +3493,53 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
         }
     }
     return true;
+}
+
+static bool cg_user_spec_append_decl_member(CG *cg,
+                                            UserSpec *s,
+                                            const FengTypeMember *m) {
+    UserSpecMember *sm = NULL;
+
+    if (m == NULL) return true;
+    if (!cg_user_spec_append_member_slot(s, &sm)) return false;
+    sm->member = m;
+    if (m->kind == FENG_TYPE_MEMBER_FIELD) {
+        sm->kind = USM_KIND_FIELD;
+        sm->is_var = (m->as.field.mutability == FENG_MUTABILITY_VAR);
+        sm->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
+        sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
+        if (!cg_resolve_type_for_user_spec_member(cg, s, m->as.field.type,
+                                                  &m->token, &sm->type)) return false;
+        if (cgtype_value_kind(sm->type) == CG_VK_AGGREGATE) {
+            return cg_fail(cg, m->token,
+                "codegen: spec field of aggregate type not yet supported (Step 4b-γ)");
+        }
+    } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
+        sm->kind = USM_KIND_METHOD;
+        const FengCallableSignature *sig = &m->as.callable;
+        sm->feng_name = strndup(sig->name.data, sig->name.length);
+        sm->c_field_name = cg_sanitize(sig->name.data, sig->name.length);
+        sm->param_count = sig->param_count;
+        sm->param_types = sig->param_count
+            ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+        sm->param_names = sig->param_count
+            ? calloc(sig->param_count, sizeof(char*)) : NULL;
+        for (size_t pi = 0; pi < sig->param_count; pi++) {
+            if (!cg_resolve_type_for_user_spec_member(cg,
+                                                      s,
+                                                      sig->params[pi].type,
+                                                      &sig->params[pi].token,
+                                                      &sm->param_types[pi])) return false;
+            sm->param_names[pi] = strndup(sig->params[pi].name.data,
+                                          sig->params[pi].name.length);
+        }
+        if (!cg_resolve_type_for_user_spec_member(cg, s, sig->return_type,
+                                                  &sig->token, &sm->type)) return false;
+    } else {
+        return cg_fail(cg, m->token,
+            "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
+    }
+    return sm->feng_name != NULL && sm->c_field_name != NULL;
 }
 
 /* ===================== symbol tables ===================== */
@@ -3818,54 +3914,6 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         }
         return true;
     }
-    size_t mc = decl->as.spec_decl.as.object.member_count;
-    for (size_t i = 0; i < mc; i++) {
-        const FengTypeMember *m = decl->as.spec_decl.as.object.members[i];
-        UserSpecMember *sm = NULL;
-        if (!cg_user_spec_append_member_slot(s, &sm)) return false;
-        sm->member = m;
-        if (m->kind == FENG_TYPE_MEMBER_FIELD) {
-            sm->kind = USM_KIND_FIELD;
-            sm->is_var = (m->as.field.mutability == FENG_MUTABILITY_VAR);
-            sm->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
-            sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
-            if (!cg_resolve_type_for_user_spec_member(cg, s, m->as.field.type,
-                                                      &m->token, &sm->type)) return false;
-            /* Aggregate-typed spec fields (spec inside spec) are part of the
-             * 4b-γ fat-spec recursion and need recursive aggregate_assign;
-             * reject early so the gap surfaces at compile time rather than
-             * silently emitting a wrong thunk. */
-            if (cgtype_value_kind(sm->type) == CG_VK_AGGREGATE) {
-                return cg_fail(cg, m->token,
-                    "codegen: spec field of aggregate type not yet supported (Step 4b-γ)");
-            }
-        } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
-            sm->kind = USM_KIND_METHOD;
-            const FengCallableSignature *sig = &m->as.callable;
-            sm->feng_name = strndup(sig->name.data, sig->name.length);
-            sm->c_field_name = cg_sanitize(sig->name.data, sig->name.length);
-            sm->param_count = sig->param_count;
-            sm->param_types = sig->param_count
-                ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
-            sm->param_names = sig->param_count
-                ? calloc(sig->param_count, sizeof(char*)) : NULL;
-            for (size_t pi = 0; pi < sig->param_count; pi++) {
-                if (!cg_resolve_type_for_user_spec_member(cg,
-                                                          s,
-                                                          sig->params[pi].type,
-                                                          &sig->params[pi].token,
-                                                          &sm->param_types[pi])) return false;
-                sm->param_names[pi] = strndup(sig->params[pi].name.data,
-                                              sig->params[pi].name.length);
-            }
-            if (!cg_resolve_type_for_user_spec_member(cg, s, sig->return_type,
-                                                      &sig->token, &sm->type)) return false;
-        } else {
-            return cg_fail(cg, m->token,
-                "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
-        }
-        if (!sm->feng_name || !sm->c_field_name) return false;
-    }
     for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
         CGType *parent_type = NULL;
         UserSpec *parent_spec = NULL;
@@ -3887,12 +3935,49 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
             return false;
         }
         for (size_t member_index = 0; member_index < parent_spec->member_count; ++member_index) {
-            if (!cg_user_spec_clone_inherited_member(s, &parent_spec->members[member_index])) {
+            const UserSpecMember *parent_member = &parent_spec->members[member_index];
+            const FengTypeMember *override_member = cg_find_own_spec_member_by_name(
+                decl,
+                parent_member->feng_name,
+                strlen(parent_member->feng_name));
+
+            if (cg_user_spec_has_member_name(s,
+                                             parent_member->feng_name,
+                                             strlen(parent_member->feng_name))) {
+                continue;
+            }
+            if (override_member != NULL) {
+                if (!cg_user_spec_append_decl_member(cg, s, override_member)) {
+                    cgtype_free(parent_type);
+                    return false;
+                }
+                continue;
+            }
+            if (!cg_user_spec_clone_inherited_member(s, parent_member)) {
                 cgtype_free(parent_type);
                 return false;
             }
         }
         cgtype_free(parent_type);
+    }
+    for (size_t i = 0; i < decl->as.spec_decl.as.object.member_count; i++) {
+        const FengTypeMember *m = decl->as.spec_decl.as.object.members[i];
+        const char *name_data = NULL;
+        size_t name_len = 0U;
+
+        if (m->kind == FENG_TYPE_MEMBER_FIELD) {
+            name_data = m->as.field.name.data;
+            name_len = m->as.field.name.length;
+        } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
+            name_data = m->as.callable.name.data;
+            name_len = m->as.callable.name.length;
+        }
+        if (name_data != NULL && cg_user_spec_has_member_name(s, name_data, name_len)) {
+            continue;
+        }
+        if (!cg_user_spec_append_decl_member(cg, s, m)) {
+            return false;
+        }
     }
     return true;
 }
@@ -3934,25 +4019,14 @@ static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
  * and assign a per-program index for symbol mangling. Member resolution is
  * deferred to cg_register_user_fit_members so target T's methods (used by
  * cg_resolve_type for parameter / return types) are already populated. */
-static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
-    if (!decl->as.fit_decl.has_body) {
-        /* `fit T :: S, U;` (head-only) carries no methods to emit; semantic
-         * still consumes it for satisfaction relations. Codegen registers
-         * an empty entry so witness lookup by decl returns a stable handle. */
-    }
-    const FengTypeRef *target_ref = decl->as.fit_decl.target;
-    if (!target_ref || target_ref->kind != FENG_TYPE_REF_NAMED ||
-        target_ref->as.named.segment_count != 1) {
-        return cg_fail(cg, decl->token,
-            "codegen: only single-segment named fit targets are supported");
-    }
-    const FengSlice *seg = &target_ref->as.named.segments[0];
-    const UserType *target = cg_find_user_type(cg, seg->data, seg->length);
-    if (!target) {
-        return cg_fail(cg, decl->token,
-            "codegen: fit target type '%.*s' is not a known user type",
-            (int)seg->length, seg->data);
-    }
+static bool cg_register_user_fit_shell_for_target(CG *cg,
+                                                  const FengDecl *decl,
+                                                  const UserType *target,
+                                                  const FengTypeParam *type_params,
+                                                  size_t type_param_count,
+                                                  FengTypeRef *const *type_args,
+                                                  size_t type_arg_count) {
+    if (target == NULL) return false;
     if (cg->user_fit_count + 1 > cg->user_fit_capacity) {
         size_t cap = cg->user_fit_capacity ? cg->user_fit_capacity * 2 : 4;
         void *p = realloc(cg->user_fits, cap * sizeof *cg->user_fits);
@@ -3975,25 +4049,117 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     if (uf->spec_count > 0U && uf->specs == NULL) return false;
     for (size_t spec_index = 0; spec_index < uf->spec_count; ++spec_index) {
         const FengTypeRef *spec_ref = decl->as.fit_decl.specs[spec_index];
+        const FengTypeRef *resolved_spec_ref = spec_ref;
+        FengTypeRef *substituted = NULL;
+        CGTypeParamScope empty_scope = {0};
+        CGType *spec_type = NULL;
+        bool ok;
 
-        if (spec_ref == NULL || spec_ref->kind != FENG_TYPE_REF_NAMED ||
-            spec_ref->as.named.segment_count != 1) {
-            return cg_fail(cg, decl->token,
-                "codegen: only single-segment named fit specs are supported");
+        if (type_param_count > 0U) {
+            substituted = cg_type_ref_substitute(spec_ref,
+                                                type_params,
+                                                type_param_count,
+                                                type_args);
+            if (substituted == NULL) return false;
+            resolved_spec_ref = substituted;
         }
 
-        const FengSlice *spec_seg = &spec_ref->as.named.segments[0];
-        const UserSpec *spec = cg_find_user_spec(cg, spec_seg->data, spec_seg->length);
-
-        if (spec == NULL) {
+        ok = cg_collect_generic_instances_from_type_ref(cg, resolved_spec_ref, empty_scope) &&
+             cg_resolve_type(cg, resolved_spec_ref, &decl->token, &spec_type);
+        cg_type_ref_free(substituted);
+        if (!ok) return false;
+        if (spec_type == NULL ||
+            (spec_type->kind != CG_TYPE_SPEC && spec_type->kind != CG_TYPE_CALLABLE) ||
+            spec_type->user_spec == NULL) {
+            cgtype_free(spec_type);
             return cg_fail(cg, decl->token,
-                "codegen: fit spec '%.*s' is not a known user spec",
-                (int)spec_seg->length, spec_seg->data);
+                "codegen: fit spec did not resolve to a known user spec");
         }
-        uf->specs[spec_index] = spec;
+        uf->specs[spec_index] = spec_type->user_spec;
+        cgtype_free(spec_type);
     }
     cg->user_fit_count++;
+    (void)type_arg_count;
     return true;
+}
+
+static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
+    if (!decl->as.fit_decl.has_body) {
+        /* `fit T :: S, U;` (head-only) carries no methods to emit; semantic
+         * still consumes it for satisfaction relations. Codegen registers
+         * an empty entry so witness lookup by decl returns a stable handle. */
+    }
+    const FengTypeRef *target_ref = decl->as.fit_decl.target;
+    if (!target_ref || target_ref->kind != FENG_TYPE_REF_NAMED ||
+        target_ref->as.named.segment_count != 1) {
+        return cg_fail(cg, decl->token,
+            "codegen: only single-segment named fit targets are supported");
+    }
+    if (target_ref->as.named.type_arg_count > 0U) {
+        const GenericTypeDecl *generic_target = cg_find_generic_type_decl(cg, target_ref);
+        const FengDecl *target_decl = generic_target != NULL ? generic_target->decl : NULL;
+        if (target_decl == NULL || target_decl->kind != FENG_DECL_TYPE) {
+            return cg_fail(cg, decl->token,
+                "codegen: fit target did not resolve to a known user type");
+        }
+        for (size_t i = 0; i < cg->user_type_count; ++i) {
+            const UserType *candidate = &cg->user_types[i];
+
+            if (!candidate->is_generic_instance ||
+                candidate->generic_origin_decl != target_decl) {
+                continue;
+            }
+            if (!cg_register_user_fit_shell_for_target(
+                    cg,
+                    decl,
+                    candidate,
+                    target_decl->as.type_decl.type_params,
+                    target_decl->as.type_decl.type_param_count,
+                    candidate->generic_type_args,
+                    candidate->generic_type_arg_count)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    const FengSlice *seg = &target_ref->as.named.segments[0];
+    const UserType *target = cg_find_user_type(cg, seg->data, seg->length);
+    if (!target) {
+        return cg_fail(cg, decl->token,
+            "codegen: fit target type '%.*s' is not a known user type",
+            (int)seg->length, seg->data);
+    }
+    return cg_register_user_fit_shell_for_target(cg, decl, target, NULL, 0U, NULL, 0U);
+}
+
+static bool cg_resolve_type_for_user_fit_member(CG *cg,
+                                                const UserFit *uf,
+                                                const FengTypeRef *ref,
+                                                const FengToken *fallback,
+                                                CGType **out_type) {
+    const FengDecl *target_decl;
+
+    if (uf == NULL || uf->target == NULL || uf->decl == NULL ||
+        !uf->target->is_generic_instance) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+    target_decl = uf->target->generic_origin_decl;
+    if (target_decl == NULL || target_decl->kind != FENG_DECL_TYPE ||
+        target_decl->as.type_decl.type_param_count == 0U) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+
+    FengTypeRef *sub = cg_type_ref_substitute(ref,
+                                             target_decl->as.type_decl.type_params,
+                                             target_decl->as.type_decl.type_param_count,
+                                             uf->target->generic_type_args);
+    bool ok;
+
+    if (sub == NULL) return false;
+    ok = cg_resolve_type(cg, sub, fallback, out_type);
+    cg_type_ref_free(sub);
+    return ok;
 }
 
 /* Populate the fit's UserMethod array. Field members are not legal in a fit
@@ -4031,14 +4197,16 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         um->param_names = sig->param_count
             ? calloc(sig->param_count, sizeof(char*)) : NULL;
         for (size_t pi = 0; pi < sig->param_count; pi++) {
-            if (!cg_resolve_type(cg, sig->params[pi].type,
-                                 &sig->params[pi].token,
-                                 &um->param_types[pi])) return false;
+            if (!cg_resolve_type_for_user_fit_member(cg,
+                                                     uf,
+                                                     sig->params[pi].type,
+                                                     &sig->params[pi].token,
+                                                     &um->param_types[pi])) return false;
             um->param_names[pi] = strndup(sig->params[pi].name.data,
                                           sig->params[pi].name.length);
         }
-        if (!cg_resolve_type(cg, sig->return_type, &sig->token,
-                             &um->return_type)) return false;
+        if (!cg_resolve_type_for_user_fit_member(cg, uf, sig->return_type, &sig->token,
+                                                 &um->return_type)) return false;
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types, um->param_count);
         if (!um->c_name) return false;
@@ -10093,8 +10261,17 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 "codegen: generic type argument forwarding requires an active generic descriptor context");
         }
         if (constraint_spec && current_constraint != constraint_spec) {
-            return cg_fail(cg, *tok,
-                "codegen: forwarding a generic type argument across a different constraint surface is not yet supported (G6)");
+            if (current_constraint == NULL ||
+                !cg_user_spec_witness_prefix_compatible(current_constraint, constraint_spec)) {
+                return cg_fail(cg, *tok,
+                    "codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6)");
+            }
+            Buf adapter; buf_init(&adapter);
+            buf_append_fmt(&adapter,
+                "&(const FengGenericParamDescriptor){%s->size, %s->kind, %s->aggregate, %s->witness}",
+                desc, desc, desc, desc);
+            *out = adapter.data;
+            return *out != NULL;
         }
         *out = strdup(desc);
         return *out != NULL;
@@ -11092,6 +11269,37 @@ static bool cg_user_spec_member_compatible(const UserSpecMember *src,
     return true;
 }
 
+static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
+                                                   const UserSpec *dst) {
+    if (src == NULL || dst == NULL || src->form != dst->form) {
+        return false;
+    }
+    if (src == dst) {
+        return true;
+    }
+    if (src->form == FENG_SPEC_FORM_CALLABLE) {
+        if (src->callable_param_count != dst->callable_param_count ||
+            !cg_types_equal(src->callable_return_type, dst->callable_return_type)) {
+            return false;
+        }
+        for (size_t i = 0; i < src->callable_param_count; ++i) {
+            if (!cg_types_equal(src->callable_param_types[i], dst->callable_param_types[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (src->member_count < dst->member_count) {
+        return false;
+    }
+    for (size_t i = 0; i < dst->member_count; ++i) {
+        if (!cg_user_spec_member_compatible(&src->members[i], &dst->members[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const UserSpec *dst, FengToken blame,
                                         const char **out_var) {
@@ -11428,7 +11636,9 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
             }
             binding.source_kind = wm->source_kind;
             if (wm->source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
-                const UserFit *uf = cg_find_user_fit_by_decl(cg, wm->via_fit_decl);
+                const UserFit *uf = cg_find_user_fit_by_decl_and_target(cg,
+                                                                        wm->via_fit_decl,
+                                                                        t);
 
                 if (uf == NULL || uf->target != t) {
                     buf_free(&prefix); free(t_san); free(s_san);
@@ -12244,6 +12454,15 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                 }
                 break;
             case FENG_DECL_FIT:
+                {
+                    const GenericTypeDecl *generic_target = cg_find_generic_type_decl(cg,
+                                                                                     decl->as.fit_decl.target);
+                    const FengDecl *target_decl = generic_target != NULL ? generic_target->decl : NULL;
+                    if (target_decl != NULL && target_decl->kind == FENG_DECL_TYPE) {
+                        scope.first = target_decl->as.type_decl.type_params;
+                        scope.first_count = target_decl->as.type_decl.type_param_count;
+                    }
+                }
                 if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.target, scope)) {
                     cg->cur_program = NULL;
                     return false;
@@ -12394,12 +12613,18 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                  * symbol disjoint from T's own methods and from sibling
                  * fits for the same T. Witness thunks generated by
                  * cg_ensure_witness_instance call this c_name directly. */
-                const UserFit *uf = cg_find_user_fit_by_decl(cg, d);
-                if (!uf) return cg_fail(cg, d->token,
-                    "codegen: internal: fit not registered");
-                for (size_t mi = 0; mi < uf->method_count; mi++) {
-                    if (!cg_emit_user_method(cg, uf->target, &uf->methods[mi])) return false;
+                bool emitted_fit = false;
+                for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
+                    const UserFit *uf = &cg->user_fits[fit_index];
+
+                    if (uf->decl != d) continue;
+                    emitted_fit = true;
+                    for (size_t mi = 0; mi < uf->method_count; mi++) {
+                        if (!cg_emit_user_method(cg, uf->target, &uf->methods[mi])) return false;
+                    }
                 }
+                if (!emitted_fit) return cg_fail(cg, d->token,
+                    "codegen: internal: fit not registered");
                 break;
             }
             case FENG_DECL_FUNCTION:

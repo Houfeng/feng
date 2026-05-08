@@ -1023,6 +1023,40 @@ static bool fill_declared_specs(FengSymbolDeclView *decl,
     return true;
 }
 
+static bool fill_declared_specs_with_tparams(FengSymbolDeclView *decl,
+                                             const FengTypeRef *const *specs,
+                                             size_t spec_count,
+                                             const FengTypeParam *type_params,
+                                             size_t type_param_count,
+                                             const char *path,
+                                             FengToken token,
+                                             FengSymbolError *out_error) {
+    size_t index;
+
+    for (index = 0U; index < spec_count; ++index) {
+        FengSymbolTypeView *type = build_type_from_type_ref_with_tparams(specs[index],
+                                                                         type_params,
+                                                                         type_param_count,
+                                                                         path,
+                                                                         token,
+                                                                         out_error);
+        if (specs[index] != NULL && type == NULL) {
+            return false;
+        }
+        if (!append_type_pointer(&decl->declared_specs,
+                                 &decl->declared_spec_count,
+                                 type,
+                                 path,
+                                 token,
+                                 out_error)) {
+            feng_symbol_internal_type_free(type);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool fill_params_with_tparams(FengSymbolDeclView *decl,
                                      const FengParameter *params,
                                      size_t param_count,
@@ -1407,6 +1441,32 @@ static FengSymbolDeclView *find_local_type_like_decl(const BuildContext *ctx,
         if ((decl->kind == FENG_SYMBOL_DECL_KIND_TYPE || decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
             cstr_equals_slice(decl->name, name)) {
             return decl;
+        }
+    }
+    return NULL;
+}
+
+static const FengDecl *find_local_source_type_decl(const BuildContext *ctx,
+                                                   const FengTypeRef *type_ref) {
+    FengSlice name;
+    size_t program_index;
+
+    if (ctx == NULL || ctx->module == NULL ||
+        !named_type_targets_current_module(ctx, type_ref)) {
+        return NULL;
+    }
+    name = named_type_leaf_name(type_ref);
+    for (program_index = 0U; program_index < ctx->module->program_count; ++program_index) {
+        const FengProgram *program = ctx->module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_TYPE &&
+                feng_symbol_internal_slice_equals(decl->as.type_decl.name, name)) {
+                return decl;
+            }
         }
     }
     return NULL;
@@ -2084,6 +2144,14 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
 
         case FENG_DECL_FIT: {
             char *name = fit_display_name(source_decl->as.fit_decl.target);
+            const FengDecl *fit_target_source = find_local_source_type_decl(ctx,
+                                                                            source_decl->as.fit_decl.target);
+            const FengTypeParam *fit_type_params = fit_target_source != NULL
+                ? fit_target_source->as.type_decl.type_params
+                : NULL;
+            size_t fit_type_param_count = fit_target_source != NULL
+                ? fit_target_source->as.type_decl.type_param_count
+                : 0U;
             if (name == NULL) {
                 feng_symbol_internal_set_error(out_error, path, source_decl->token, "out of memory building fit name");
                 return NULL;
@@ -2104,17 +2172,24 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
-            decl->fit_target = build_type_from_type_ref(source_decl->as.fit_decl.target,
-                                                        path,
-                                                        source_decl->token,
-                                                        out_error);
+            ctx->type_params = fit_type_params;
+            ctx->type_param_count = fit_type_param_count;
+            decl->fit_target = build_type_from_type_ref_with_tparams(source_decl->as.fit_decl.target,
+                                                                     fit_type_params,
+                                                                     fit_type_param_count,
+                                                                     path,
+                                                                     source_decl->token,
+                                                                     out_error);
             if (decl->fit_target == NULL ||
-                !fill_declared_specs(decl,
-                                     (const FengTypeRef *const *)source_decl->as.fit_decl.specs,
-                                     source_decl->as.fit_decl.spec_count,
-                                     path,
-                                     source_decl->token,
-                                     out_error) ||
+                !fill_declared_specs_with_tparams(
+                    decl,
+                    (const FengTypeRef *const *)source_decl->as.fit_decl.specs,
+                    source_decl->as.fit_decl.spec_count,
+                    fit_type_params,
+                    fit_type_param_count,
+                    path,
+                    source_decl->token,
+                    out_error) ||
                 !apply_decl_annotations(decl,
                                         ctx->module,
                                         source_decl->annotations,
@@ -2123,11 +2198,15 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         path,
                                         source_decl->token,
                                         out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
             if (!register_source_decl(ctx, source_decl, decl, path, source_decl->token, out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
@@ -2144,11 +2223,15 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         path,
                                         source_decl->as.fit_decl.members[index]->token,
                                         out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
                     feng_symbol_internal_decl_free_members(decl);
                     free(decl);
                     return NULL;
                 }
             }
+            ctx->type_params = NULL;
+            ctx->type_param_count = 0U;
             return decl;
         }
 

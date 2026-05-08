@@ -1,0 +1,30 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Reader<T> {
+    fn read(): T;
+}
+
+type Box<T> {
+    var value: T;
+}
+
+fit Box<T>: Reader<T> {
+    fn read(): T {
+        return self.value;
+    }
+}
+
+fn readInt(reader: Reader<int>): int {
+    return reader.read();
+}
+
+fn main(args: string[]) {
+    let box: Box<int> = Box:<int>();
+    box.value = 42;
+    if readInt(box) == 42 {
+        puts("generic fit ok");
+    }
+}

@@ -1,0 +1,30 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn name(): string;
+}
+
+spec Labelled: Named {
+}
+
+type Item: Labelled {
+    fn name(): string {
+        return "item";
+    }
+}
+
+fn useNamed<T: Named>(value: T): string {
+    return value.name();
+}
+
+fn useLabelled<U: Labelled>(value: U): string {
+    return useNamed:<U>(value);
+}
+
+fn main(args: string[]) {
+    let item: Item = Item{};
+    puts(useLabelled:<Item>(item));
+}
