@@ -18,13 +18,21 @@ type Box<T> {
     fn current(): T {
         return self.value;
     }
+
+    fn currentAgain(): T {
+        return self.current();
+    }
+
+    fn echoInt(value: int): int {
+        return self.echo(value);
+    }
 }
 
 fn main(args: string[]) {
     let box = Box:<int>();
     let first: int = box.echo(20);
     let second: int = box.replace:<int>(22, first);
-    if box.current() + second == 42 {
+    if box.currentAgain() + second + box.echoInt(1) == 43 {
         puts("ok");
     } else {
         puts("fail");

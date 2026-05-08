@@ -1,0 +1,54 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Hashable {
+    fn hash(): int;
+    fn sameHash(hash: int): bool;
+}
+
+type Key: Hashable {
+    var id: int;
+
+    fn hash(): int {
+        return self.id + 1;
+    }
+
+    fn sameHash(hash: int): bool {
+        return self.hash() == hash;
+    }
+}
+
+type MiniMap<K: Hashable, V> {
+    var key: K;
+    var value: V;
+
+    fn put(key: K, value: V) {
+        self.key = key;
+        self.value = value;
+    }
+
+    fn hasKey(key: K): bool {
+        return key.sameHash(self.key.hash());
+    }
+
+    fn getValue(key: K): V {
+        if self.hasKey(key) {
+            return self.value;
+        }
+        return self.value;
+    }
+}
+
+fn main(args: string[]) {
+    let key: Key = Key{id: 41};
+    let map: MiniMap<Key, string> = MiniMap:<Key, string>();
+    map.put(key, "answer");
+    puts(map.getValue(key));
+    if map.hasKey(key) {
+        puts("ok");
+    } else {
+        puts("fail");
+    }
+}

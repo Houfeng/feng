@@ -799,6 +799,14 @@ static bool cg_emit_generic_type_method_call(CG *cg,
                                              const UserType *ut,
                                              const UserMethod *um,
                                              ExprResult *out);
+static bool cg_emit_generic_type_self_method_call(CG *cg,
+                                                  const FengExpr *e,
+                                                  const FengExpr *member_expr,
+                                                  ExprResult *recv,
+                                                  ExprResult *out);
+static char *cg_generic_type_method_shared_cname(CG *cg,
+                                                 const FengDecl *decl,
+                                                 const FengTypeMember *member);
 static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                const FengTypeMember *member);
 static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
@@ -5896,6 +5904,355 @@ cleanup:
     return ok;
 }
 
+static const FengTypeMember *cg_type_decl_method_member_by_name(const FengDecl *decl,
+                                                                const char *name,
+                                                                size_t len) {
+    if (decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *member = decl->as.type_decl.members[i];
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        if (member->as.callable.name.length == len &&
+            memcmp(member->as.callable.name.data, name, len) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+static bool cg_type_ref_is_direct_type_param(const FengTypeRef *ref,
+                                             const FengTypeParam *params,
+                                             size_t param_count,
+                                             size_t *out_index) {
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U ||
+        ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    const FengSlice *segment = &ref->as.named.segments[0];
+    for (size_t i = 0; i < param_count; ++i) {
+        FengSlice name = params[i].name;
+        if (segment->length == name.length &&
+            memcmp(segment->data, name.data, segment->length) == 0) {
+            if (out_index != NULL) *out_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool cg_emit_generic_type_self_method_call(CG *cg,
+                                                  const FengExpr *e,
+                                                  const FengExpr *member_expr,
+                                                  ExprResult *recv,
+                                                  ExprResult *out) {
+    const FengDecl *owner = cg->generic_type_method_decl;
+    const FengResolvedCallable *rc = &e->as.call.resolved_callable;
+    const FengTypeMember *member = NULL;
+    const FengCallableSignature *sig;
+    size_t method_tp_count;
+    char *shared_name = NULL;
+    CGType **param_types = NULL;
+    ExprResult *args = NULL;
+    CGType **type_args = NULL;
+    const UserSpec **constraint_specs = NULL;
+    char **desc_exprs = NULL;
+    char **arg_exprs = NULL;
+    CGType *return_type = NULL;
+    char *ret_cname = NULL;
+    char *ret_storage_cname = NULL;
+    bool ret_is_erased = false;
+    bool ok = true;
+
+    er_init(out);
+    if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD && rc->member != NULL) {
+        member = rc->member;
+    } else {
+        member = cg_type_decl_method_member_by_name(owner,
+                                                   member_expr->as.member.member.data,
+                                                   member_expr->as.member.member.length);
+    }
+    if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
+        er_free(recv);
+        return cg_fail(cg, e->token,
+            "codegen: generic type '%.*s' has no method '%.*s'",
+            (int)owner->as.type_decl.name.length,
+            owner->as.type_decl.name.data,
+            (int)member_expr->as.member.member.length,
+            member_expr->as.member.member.data);
+    }
+
+    sig = &member->as.callable;
+    method_tp_count = sig->type_param_count;
+    if (e->as.call.has_explicit_type_args &&
+        e->as.call.explicit_type_arg_count != method_tp_count) {
+        er_free(recv);
+        return cg_fail(cg, e->token,
+            "codegen: method expects %zu type argument(s), got %zu",
+            method_tp_count,
+            e->as.call.explicit_type_arg_count);
+    }
+    if (e->as.call.arg_count != sig->param_count) {
+        er_free(recv);
+        return cg_fail(cg, e->token,
+            "codegen: wrong argument count for method '%.*s' (expected %zu, got %zu)",
+            (int)sig->name.length,
+            sig->name.data,
+            sig->param_count,
+            e->as.call.arg_count);
+    }
+
+    shared_name = cg_generic_type_method_shared_cname(cg, owner, member);
+    param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
+    args = sig->param_count ? calloc(sig->param_count, sizeof *args) : NULL;
+    type_args = method_tp_count ? calloc(method_tp_count, sizeof *type_args) : NULL;
+    desc_exprs = method_tp_count ? calloc(method_tp_count, sizeof *desc_exprs) : NULL;
+    arg_exprs = sig->param_count ? calloc(sig->param_count, sizeof *arg_exprs) : NULL;
+    if (shared_name == NULL ||
+        (sig->param_count > 0U && (param_types == NULL || args == NULL || arg_exprs == NULL)) ||
+        (method_tp_count > 0U && (type_args == NULL || desc_exprs == NULL))) {
+        cg_fail(cg, e->token, "codegen: out of memory");
+        ok = false;
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < sig->param_count; ++i) {
+        if (!cg_emit_expr(cg, e->as.call.args[i], &args[i])) {
+            ok = false;
+            goto cleanup;
+        }
+    }
+
+    if (e->as.call.has_explicit_type_args) {
+        for (size_t i = 0; i < method_tp_count; ++i) {
+            if (!cg_resolve_type(cg, e->as.call.explicit_type_args[i],
+                                 &e->token, &type_args[i])) {
+                ok = false;
+                goto cleanup;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < method_tp_count; ++i) {
+            type_args[i] = cg_infer_method_type_arg(sig, i, args, sig->param_count);
+            if (type_args[i] == NULL) {
+                cg_fail(cg, e->token,
+                    "codegen: cannot infer type argument %zu for generic method '%.*s'",
+                    i,
+                    (int)sig->name.length,
+                    sig->name.data);
+                ok = false;
+                goto cleanup;
+            }
+        }
+    }
+
+    if (!cg_build_method_type_param_constraints(cg, NULL, sig, e->token,
+                                                &constraint_specs)) {
+        ok = false;
+        goto cleanup;
+    }
+    for (size_t i = 0; i < method_tp_count; ++i) {
+        if (!cg_generic_descriptor_expr(cg, type_args[i], constraint_specs[i],
+                                        &e->token, &desc_exprs[i])) {
+            ok = false;
+            goto cleanup;
+        }
+    }
+
+    for (size_t i = 0; i < sig->param_count; ++i) {
+        size_t method_tp_index = 0U;
+        if (cg_type_ref_is_direct_type_param(sig->params[i].type,
+                                            sig->type_params,
+                                            method_tp_count,
+                                            &method_tp_index)) {
+            param_types[i] = cgtype_new(CG_TYPE_GENERIC_PARAM);
+            if (param_types[i] != NULL) {
+                param_types[i]->generic_param_index = owner->as.type_decl.type_param_count + method_tp_index;
+            }
+        } else if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
+                                    &param_types[i])) {
+            ok = false;
+            goto cleanup;
+        }
+        if (param_types[i] == NULL) {
+            cg_fail(cg, e->token, "codegen: out of memory");
+            ok = false;
+            goto cleanup;
+        }
+        if (param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+            if (args[i].type != NULL && args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
+                arg_exprs[i] = strdup(args[i].c_expr);
+            } else {
+                char *tmp = cg_fresh_temp(cg, "_gsm");
+                char *cty = cg_ctype_dup(args[i].type);
+                if (tmp == NULL || cty == NULL) {
+                    free(tmp);
+                    free(cty);
+                    ok = false;
+                    goto cleanup;
+                }
+                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                               cty,
+                               tmp,
+                               args[i].c_expr);
+                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
+                    cg_emit_cleanup_push_for_managed_local(cg, tmp);
+                    args[i].owns_ref = false;
+                } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
+                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+                    args[i].owns_ref = false;
+                }
+                Buf arg;
+                buf_init(&arg);
+                buf_append_fmt(&arg, "&%s", tmp);
+                arg_exprs[i] = arg.data;
+                free(tmp);
+                free(cty);
+            }
+        } else {
+            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
+                cg_materialize_to_local(cg, &args[i], "_gsm");
+            } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
+                cg_materialize_to_local(cg, &args[i], "_gsm");
+            }
+            arg_exprs[i] = strdup(args[i].c_expr);
+        }
+        if (arg_exprs[i] == NULL) {
+            cg_fail(cg, e->token, "codegen: out of memory");
+            ok = false;
+            goto cleanup;
+        }
+    }
+
+    size_t return_method_tp_index = 0U;
+    if (cg_type_ref_is_direct_type_param(sig->return_type,
+                                        sig->type_params,
+                                        method_tp_count,
+                                        &return_method_tp_index)) {
+        return_type = cgtype_clone(type_args[return_method_tp_index]);
+    } else if (!cg_resolve_type(cg, sig->return_type, &member->token, &return_type)) {
+        ok = false;
+        goto cleanup;
+    }
+    if (return_type->kind != CG_TYPE_VOID) {
+        ret_cname = cg_fresh_temp(cg, "_gsm_ret");
+        if (ret_cname == NULL) {
+            ok = false;
+            goto cleanup;
+        }
+        if (return_type->kind == CG_TYPE_GENERIC_PARAM) {
+            const char *desc = cg_generic_param_desc_name(cg, return_type->generic_param_index);
+            ret_storage_cname = cg_fresh_temp(cg, "_gsm_ret_storage");
+            if (desc == NULL || ret_storage_cname == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body,
+                "    max_align_t %s[(%s->size + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                "    void *%s = (void *)%s;\n",
+                ret_storage_cname,
+                desc,
+                ret_cname,
+                ret_storage_cname);
+            ret_is_erased = true;
+        } else {
+            char *cty = cg_ctype_dup(return_type);
+            if (cty == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            free(cty);
+        }
+    }
+
+    buf_append_fmt(cg->cur_body, "    %s(%s, %s",
+                   shared_name,
+                   recv->c_expr,
+                   cg->generic_type_method_field_offsets_name);
+    for (size_t i = 0; i < owner->as.type_decl.type_param_count; ++i) {
+        buf_append_fmt(cg->cur_body, ", %s", cg->generic_fn_type_param_descs[i]);
+    }
+    for (size_t i = 0; i < method_tp_count; ++i) {
+        buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
+    }
+    for (size_t i = 0; i < sig->param_count; ++i) {
+        buf_append_fmt(cg->cur_body, ", %s", arg_exprs[i]);
+    }
+    if (ret_cname != NULL) {
+        buf_append_fmt(cg->cur_body, ret_is_erased ? ", %s" : ", &%s", ret_cname);
+    }
+    buf_append_cstr(cg->cur_body, ");\n");
+
+    if (ret_cname != NULL) {
+        out->c_expr = strdup(ret_cname);
+        out->type = return_type;
+        out->owns_ref = ret_is_erased || cgtype_is_managed(return_type) ||
+                        cgtype_is_aggregate(return_type);
+        if (!ret_is_erased && cgtype_is_managed(return_type)) {
+            cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
+        } else if (!ret_is_erased && cgtype_is_aggregate(return_type)) {
+            cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname);
+        }
+        return_type = NULL;
+    } else {
+        out->c_expr = strdup("((void)0)");
+        out->type = return_type;
+        out->owns_ref = false;
+        return_type = NULL;
+    }
+    if (out->c_expr == NULL || out->type == NULL) {
+        cg_fail(cg, e->token, "codegen: out of memory");
+        ok = false;
+        goto cleanup;
+    }
+
+cleanup:
+    if (!ok) {
+        er_free(out);
+    }
+    if (args != NULL) {
+        for (size_t i = 0; i < sig->param_count; ++i) {
+            er_free(&args[i]);
+        }
+    }
+    if (type_args != NULL) {
+        for (size_t i = 0; i < method_tp_count; ++i) {
+            cgtype_free(type_args[i]);
+        }
+    }
+    if (desc_exprs != NULL) {
+        for (size_t i = 0; i < method_tp_count; ++i) {
+            free(desc_exprs[i]);
+        }
+    }
+    if (param_types != NULL) {
+        for (size_t i = 0; i < sig->param_count; ++i) {
+            cgtype_free(param_types[i]);
+        }
+    }
+    if (arg_exprs != NULL) {
+        for (size_t i = 0; i < sig->param_count; ++i) {
+            free(arg_exprs[i]);
+        }
+    }
+    free(param_types);
+    free(args);
+    free(type_args);
+    free((void *)constraint_specs);
+    free(desc_exprs);
+    free(arg_exprs);
+    cgtype_free(return_type);
+    free(ret_storage_cname);
+    free(ret_cname);
+    free(shared_name);
+    er_free(recv);
+    return ok;
+}
+
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     const FengResolvedCallable *rc = &e->as.call.resolved_callable;
@@ -6022,6 +6379,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             out->owns_ref = cgtype_is_managed(out->type);
             er_free(&recv);
             return out->c_expr && out->type;
+        }
+        if (cg->in_generic_type_method &&
+            recv.type->kind == CG_TYPE_OBJECT && recv.type->user == NULL &&
+            cg->generic_type_method_decl != NULL &&
+            cg->generic_type_method_decl->kind == FENG_DECL_TYPE &&
+            ma->as.member.object->kind == FENG_EXPR_SELF) {
+            return cg_emit_generic_type_self_method_call(cg, e, ma, &recv, out);
         }
         if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
             er_free(&recv);
@@ -9462,25 +9826,42 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         size_t idx = cg->cur_return_type->generic_param_index;
         const char *desc = cg->generic_fn_type_param_descs[idx];
         cg_release_through(cg, NULL);
-        buf_append_fmt(cg->cur_body,
-            "    switch (%s->kind) {\n"
-            "        case FENG_VALUE_TRIVIAL:\n"
-            "            memcpy(_out, %s, %s->size); break;\n"
-            "        case FENG_VALUE_MANAGED_POINTER: {\n"
-            "            void *_mptr_ = *(void *const *)%s;\n"
-            "            feng_retain(_mptr_);\n"
-            "            *(void **)_out = _mptr_; break;\n"
-            "        }\n"
-            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-            "            feng_aggregate_retain((void *)%s, %s->aggregate);\n"
-            "            memcpy(_out, %s, %s->size); break;\n"
-            "    }\n"
-            "    return;\n",
-            desc,
-            r.c_expr, desc,
-            r.c_expr,
-            r.c_expr, desc,
-            r.c_expr, desc);
+        if (r.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            memcpy(_out, %s, %s->size); break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER:\n"
+                "            *(void **)_out = *(void *const *)%s; break;\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            memcpy(_out, %s, %s->size); break;\n"
+                "    }\n"
+                "    return;\n",
+                desc,
+                r.c_expr, desc,
+                r.c_expr,
+                r.c_expr, desc);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            memcpy(_out, %s, %s->size); break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                "            void *_mptr_ = *(void *const *)%s;\n"
+                "            feng_retain(_mptr_);\n"
+                "            *(void **)_out = _mptr_; break;\n"
+                "        }\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            feng_aggregate_retain((void *)%s, %s->aggregate);\n"
+                "            memcpy(_out, %s, %s->size); break;\n"
+                "    }\n"
+                "    return;\n",
+                desc,
+                r.c_expr, desc,
+                r.c_expr,
+                r.c_expr, desc,
+                r.c_expr, desc);
+        }
         er_free(&r);
         return true;
     }
