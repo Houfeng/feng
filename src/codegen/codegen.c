@@ -366,10 +366,13 @@ typedef struct UserSpec {
 typedef struct UserFit {
     const FengDecl *decl;
     const UserType *target;       /* resolved target T (named single-segment) */
+    const UserSpec **specs;       /* resolved spec list from `fit T :: S, ...` */
+    size_t          spec_count;
     UserMethod     *methods;      /* fit-body methods, c_name mangled with index */
     size_t          method_count;
     size_t          index;        /* per-program 0-based declaration order */
     char           *c_prefix;     /* "FengFit_<idx>__<modT>__<T>" */
+    const FengProgram *owner_program;
 } UserFit;
 
 
@@ -643,6 +646,7 @@ typedef struct CG {
     bool         in_generic_fn;
     size_t       generic_fn_type_param_count;
     char       **generic_fn_type_param_names;   /* borrowed — do NOT free */
+    const struct UserSpec **generic_fn_type_param_constraints; /* borrowed */
     /* C descriptor argument names for each type param ("_T", "_U", …).
      * Heap-owned; freed when in_generic_fn is cleared. */
     const char **generic_fn_type_param_descs;
@@ -674,7 +678,8 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const char **out_var);
 /* G6 — generic codegen helpers. */
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
-                                        const FengToken *tok, char **out);
+                                       const UserSpec *constraint_spec,
+                                       const FengToken *tok, char **out);
 static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt);
 static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                       FengCompileTarget target);
@@ -728,6 +733,71 @@ static bool cg_fail(CG *cg, FengToken token, const char *fmt, ...) {
 }
 
 /* ===================== mangling ===================== */
+
+static bool cg_build_generic_param_constraints(CG *cg,
+                                               const FengTypeParam *type_params,
+                                               size_t type_param_count,
+                                               FengToken blame,
+                                               const UserSpec ***out_constraints) {
+    *out_constraints = NULL;
+    if (type_param_count == 0) return true;
+
+    const UserSpec **constraints = calloc(type_param_count, sizeof *constraints);
+    if (!constraints) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    for (size_t i = 0; i < type_param_count; ++i) {
+        if (!type_params[i].constraint) continue;
+
+        CGType *constraint_type = NULL;
+        if (!cg_resolve_type(cg, type_params[i].constraint,
+                             &type_params[i].token, &constraint_type)) {
+            free(constraints);
+            return false;
+        }
+        if (!constraint_type || constraint_type->kind != CG_TYPE_SPEC ||
+            constraint_type->user_spec == NULL) {
+            cgtype_free(constraint_type);
+            free(constraints);
+            return cg_fail(cg, type_params[i].token,
+                "codegen: generic constraint for '%.*s' must be an object-form spec supported by codegen",
+                (int)type_params[i].name.length,
+                type_params[i].name.data);
+        }
+
+        constraints[i] = constraint_type->user_spec;
+        cgtype_free(constraint_type);
+    }
+
+    *out_constraints = constraints;
+    return true;
+}
+
+static const UserSpec *cg_generic_param_constraint_spec(const CG *cg, size_t index) {
+    if (!cg->generic_fn_type_param_constraints ||
+        index >= cg->generic_fn_type_param_count) {
+        return NULL;
+    }
+    return cg->generic_fn_type_param_constraints[index];
+}
+
+static const char *cg_generic_param_desc_name(const CG *cg, size_t index) {
+    if (!cg->generic_fn_type_param_descs ||
+        index >= cg->generic_fn_type_param_count) {
+        return NULL;
+    }
+    return cg->generic_fn_type_param_descs[index];
+}
+
+static char *cg_generic_witness_subject_expr(const char *desc_name,
+                                             const char *slot_expr) {
+    Buf b; buf_init(&b);
+    buf_append_fmt(&b,
+        "((%s->kind == FENG_VALUE_MANAGED_POINTER) ? *(void *const *)(%s) : (void *)(%s))",
+        desc_name, slot_expr, slot_expr);
+    return b.data;
+}
 
 /* Replace any non-alphanumeric/underscore byte in `src` with '_' to keep C
  * identifiers valid. Caller frees. */
@@ -2079,10 +2149,33 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     uf->decl = decl;
     uf->target = target;
     uf->index = cg->user_fit_count;
+    uf->owner_program = cg->cur_program;
     Buf b; buf_init(&b);
     buf_append_fmt(&b, "FengFit_%zu__%s", uf->index, target->c_struct_name);
     if (!b.data) return false;
     uf->c_prefix = b.data;
+    uf->spec_count = decl->as.fit_decl.spec_count;
+    uf->specs = uf->spec_count ? calloc(uf->spec_count, sizeof *uf->specs) : NULL;
+    if (uf->spec_count > 0U && uf->specs == NULL) return false;
+    for (size_t spec_index = 0; spec_index < uf->spec_count; ++spec_index) {
+        const FengTypeRef *spec_ref = decl->as.fit_decl.specs[spec_index];
+
+        if (spec_ref == NULL || spec_ref->kind != FENG_TYPE_REF_NAMED ||
+            spec_ref->as.named.segment_count != 1) {
+            return cg_fail(cg, decl->token,
+                "codegen: only single-segment named fit specs are supported");
+        }
+
+        const FengSlice *spec_seg = &spec_ref->as.named.segments[0];
+        const UserSpec *spec = cg_find_user_spec(cg, spec_seg->data, spec_seg->length);
+
+        if (spec == NULL) {
+            return cg_fail(cg, decl->token,
+                "codegen: fit spec '%.*s' is not a known user spec",
+                (int)spec_seg->length, spec_seg->data);
+        }
+        uf->specs[spec_index] = spec;
+    }
     cg->user_fit_count++;
     return true;
 }
@@ -3005,6 +3098,68 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
 
         ExprResult recv;
         if (!cg_emit_expr(cg, ma->as.member.object, &recv)) return false;
+        if (recv.type->kind == CG_TYPE_GENERIC_PARAM) {
+            size_t gp_idx = recv.type->generic_param_index;
+            const UserSpec *us = cg_generic_param_constraint_spec(cg, gp_idx);
+            const char *desc_name = cg_generic_param_desc_name(cg, gp_idx);
+            if (!us || !desc_name) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: generic method call requires an object-form spec constraint");
+            }
+            const UserSpecMember *sm = cg_user_spec_member(us,
+                ma->as.member.member.data, ma->as.member.member.length);
+            if (!sm || sm->kind != USM_KIND_METHOD) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: spec '%s' has no method '%.*s'",
+                    us->feng_name,
+                    (int)ma->as.member.member.length, ma->as.member.member.data);
+            }
+            if (e->as.call.arg_count != sm->param_count) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
+                    sm->feng_name, sm->param_count, e->as.call.arg_count);
+            }
+            char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+            if (!subject_expr) {
+                er_free(&recv);
+                return false;
+            }
+            Buf args_buf; buf_init(&args_buf);
+            bool ok = true;
+            for (size_t i = 0; i < e->as.call.arg_count; i++) {
+                ExprResult ar;
+                if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
+                if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+                    cg_materialize_to_local(cg, &ar, "_t");
+                } else if (cgtype_is_aggregate(ar.type)) {
+                    cg_materialize_to_local(cg, &ar, "_t");
+                }
+                buf_append_cstr(&args_buf, ", ");
+                buf_append_cstr(&args_buf, ar.c_expr);
+                er_free(&ar);
+            }
+            if (!ok) {
+                free(subject_expr);
+                buf_free(&args_buf);
+                er_free(&recv);
+                return false;
+            }
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b, "((const struct %s *)%s->witness)->%s(%s%s)",
+                           us->c_witness_struct_name, desc_name,
+                           sm->c_field_name, subject_expr,
+                           args_buf.data ? args_buf.data : "");
+            free(subject_expr);
+            buf_free(&args_buf);
+            out->c_expr = b.data;
+            out->type = cgtype_clone(sm->type);
+            out->owns_ref = cgtype_is_managed(out->type);
+            er_free(&recv);
+            return out->c_expr && out->type;
+        }
         if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
             /* Step 4b — spec method dispatch via witness table. */
             const UserSpec *us = recv.type->user_spec;
@@ -3236,6 +3391,40 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = value.data;
         }
         out->type = field_type;
+        out->owns_ref = false;
+        er_free(&recv);
+        return out->c_expr && out->type;
+    }
+    if (recv.type->kind == CG_TYPE_GENERIC_PARAM) {
+        size_t gp_idx = recv.type->generic_param_index;
+        const UserSpec *us = cg_generic_param_constraint_spec(cg, gp_idx);
+        const char *desc_name = cg_generic_param_desc_name(cg, gp_idx);
+        if (!us || !desc_name) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: generic member access requires an object-form spec constraint");
+        }
+        const UserSpecMember *sm = cg_user_spec_member(us,
+            e->as.member.member.data, e->as.member.member.length);
+        if (!sm || sm->kind != USM_KIND_FIELD) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: spec '%s' has no field '%.*s'",
+                us->feng_name,
+                (int)e->as.member.member.length, e->as.member.member.data);
+        }
+        char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+        if (!subject_expr) {
+            er_free(&recv);
+            return false;
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "((const struct %s *)%s->witness)->get_%s(%s)",
+                       us->c_witness_struct_name, desc_name,
+                       sm->c_field_name, subject_expr);
+        free(subject_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_clone(sm->type);
         out->owns_ref = false;
         er_free(&recv);
         return out->c_expr && out->type;
@@ -4909,6 +5098,126 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             cgtype_free(field_type); er_free(&recv);
             return true;
         }
+        if (recv.type->kind == CG_TYPE_GENERIC_PARAM) {
+            size_t gp_idx = recv.type->generic_param_index;
+            const UserSpec *us = cg_generic_param_constraint_spec(cg, gp_idx);
+            const char *desc_name = cg_generic_param_desc_name(cg, gp_idx);
+            if (!us || !desc_name) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: generic member assignment requires an object-form spec constraint");
+            }
+            const UserSpecMember *sm = cg_user_spec_member(us,
+                target->as.member.member.data,
+                target->as.member.member.length);
+            if (!sm || sm->kind != USM_KIND_FIELD) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: spec '%s' has no field '%.*s'",
+                    us->feng_name,
+                    (int)target->as.member.member.length,
+                    target->as.member.member.data);
+            }
+            if (!sm->is_var) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: spec field '%s' is not declared `var`",
+                    sm->feng_name);
+            }
+            char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+            if (!subject_expr) {
+                er_free(&recv);
+                return false;
+            }
+            if (is_compound) {
+                char *field_cty = cg_ctype_dup(sm->type);
+                char *old_tmp = NULL;
+                ExprResult v;
+                Buf expr;
+
+                if (!field_cty || !cgtype_is_numeric(sm->type->kind)) {
+                    free(field_cty);
+                    free(subject_expr);
+                    er_free(&recv);
+                    return cg_fail(cg, stmt->token,
+                        "codegen: compound spec field assignment requires a numeric field type");
+                }
+
+                old_tmp = cg_fresh_temp(cg, "_old");
+                if (!old_tmp) {
+                    free(field_cty);
+                    free(subject_expr);
+                    er_free(&recv);
+                    return false;
+                }
+
+                buf_append_fmt(cg->cur_body,
+                    "    %s %s = ((const struct %s *)%s->witness)->get_%s(%s);\n",
+                    field_cty, old_tmp, us->c_witness_struct_name,
+                    desc_name, sm->c_field_name, subject_expr);
+
+                if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                    free(old_tmp);
+                    free(field_cty);
+                    free(subject_expr);
+                    er_free(&recv);
+                    return false;
+                }
+
+                buf_init(&expr);
+                if (!cg_append_numeric_op_expr(&expr,
+                                               sm->type->kind,
+                                               old_tmp,
+                                               binary_op,
+                                               v.c_expr)) {
+                    buf_free(&expr);
+                    er_free(&v);
+                    free(old_tmp);
+                    free(field_cty);
+                    free(subject_expr);
+                    er_free(&recv);
+                    return cg_fail(cg, stmt->token,
+                        "codegen: unsupported compound spec field assignment operator");
+                }
+
+                buf_append_fmt(cg->cur_body,
+                    "    ((const struct %s *)%s->witness)->set_%s(%s, (%s)(%s));\n",
+                    us->c_witness_struct_name, desc_name,
+                    sm->c_field_name, subject_expr, field_cty, expr.data);
+
+                buf_free(&expr);
+                er_free(&v);
+                free(old_tmp);
+                free(field_cty);
+                free(subject_expr);
+                er_free(&recv);
+                return true;
+            }
+            ExprResult v;
+            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                free(subject_expr);
+                er_free(&recv);
+                return false;
+            }
+            if (cgtype_is_managed(sm->type) && v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { ");
+                cg_emit_c_type(cg->cur_body, sm->type);
+                buf_append_fmt(cg->cur_body,
+                    " _v = %s; ((const struct %s *)%s->witness)->set_%s(%s, _v); feng_release(_v); }\n",
+                    v.c_expr, us->c_witness_struct_name, desc_name,
+                    sm->c_field_name, subject_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    ((const struct %s *)%s->witness)->set_%s(%s, %s);\n",
+                    us->c_witness_struct_name, desc_name,
+                    sm->c_field_name, subject_expr, v.c_expr);
+            }
+            er_free(&v);
+            free(subject_expr);
+            er_free(&recv);
+            return true;
+        }
         if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
             /* Step 4b-β — spec field write via witness setter. */
             const UserSpec *us = recv.type->user_spec;
@@ -6163,37 +6472,82 @@ static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
  * Returns false (with error set) if the type is not yet supported as a
  * generic type argument (e.g. future aggregates without flatten rules). */
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
-                                        const FengToken *tok, char **out) {
+                                       const UserSpec *constraint_spec,
+                                       const FengToken *tok, char **out) {
+    if (t && t->kind == CG_TYPE_GENERIC_PARAM) {
+        const char *desc = cg_generic_param_desc_name(cg, t->generic_param_index);
+        const UserSpec *current_constraint =
+            cg_generic_param_constraint_spec(cg, t->generic_param_index);
+        if (!desc) {
+            return cg_fail(cg, *tok,
+                "codegen: generic type argument forwarding requires an active generic descriptor context");
+        }
+        if (constraint_spec && current_constraint != constraint_spec) {
+            return cg_fail(cg, *tok,
+                "codegen: forwarding a generic type argument across a different constraint surface is not yet supported (G6)");
+        }
+        *out = strdup(desc);
+        return *out != NULL;
+    }
+
     Buf b; buf_init(&b);
+    const char *witness_expr = "NULL";
+    char *owned_witness_expr = NULL;
+
+    if (constraint_spec) {
+        if (t && t->kind == CG_TYPE_OBJECT && t->user) {
+            const char *witness_var = NULL;
+            if (!cg_ensure_witness_instance(cg, t->user, constraint_spec,
+                                            *tok, &witness_var)) {
+                buf_free(&b);
+                return false;
+            }
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "&%s", witness_var);
+            owned_witness_expr = wb.data;
+            witness_expr = owned_witness_expr;
+        } else if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
+            buf_free(&b);
+            return cg_fail(cg, *tok,
+                "codegen: constrained object-form spec value as generic type argument not yet supported (slot witness required) (G6)");
+        } else {
+            buf_free(&b);
+            return cg_fail(cg, *tok,
+                "codegen: constrained generic type argument currently requires a concrete user type or matching outer generic parameter (G6)");
+        }
+    }
+
     switch (cgtype_value_kind(t)) {
         case CG_VK_TRIVIAL: {
             const char *cty = cgtype_to_c(t->kind);
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL, NULL}",
-                cty);
+                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL, %s}",
+                cty, witness_expr);
             break;
         }
         case CG_VK_MANAGED_POINTER:
-            buf_append_cstr(&b,
-                "&(const FengGenericParamDescriptor)"
-                "{sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL, NULL}");
+            buf_append_fmt(&b,
+                "&(const FengGenericParamDescriptor){sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL, %s}",
+                witness_expr);
             break;
         case CG_VK_AGGREGATE: {
             const char *desc = cg_aggregate_field_desc_name(t);
             char *cty = cg_ctype_dup(t);
             if (!desc || !cty) {
                 free(cty);
+                free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
                     "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
             }
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL}",
-                cty, desc);
+                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, %s}",
+                cty, desc, witness_expr);
             free(cty);
             break;
         }
     }
+    free(owned_witness_expr);
     *out = b.data;
     return *out != NULL;
 }
@@ -6263,9 +6617,43 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r.type)) {
-        er_free(&r);
-        return cg_fail(cg, stmt->token,
-            "codegen: aggregate return inside generic function not yet supported (G6)");
+        const char *desc = cg_aggregate_field_desc_name(r.type);
+        char *tmp;
+        char *cty;
+
+        if (!desc) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                "codegen: missing aggregate descriptor for generic aggregate return");
+        }
+
+        tmp = cg_fresh_temp(cg, "_ret");
+        cty = cg_ctype_dup(r.type);
+        if (!tmp || !cty) {
+            free(tmp);
+            free(cty);
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                "codegen: out of memory while emitting generic aggregate return");
+        }
+
+        if (!r.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                cty, tmp, r.c_expr, tmp, desc);
+        } else {
+            cg_materialize_to_local(cg, &r, "_t");
+            buf_append_fmt(cg->cur_body,
+                "    %s %s; memset(&%s, 0, sizeof %s);"
+                " feng_aggregate_take(&%s, &%s, &%s);\n",
+                cty, tmp, tmp, tmp, tmp, r.c_expr, desc);
+        }
+
+        free(cty);
+        cg_release_through(cg, NULL);
+        buf_append_fmt(cg->cur_body,
+            "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
+        free(tmp);
     } else {
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
@@ -6306,6 +6694,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
     /* Allocate descriptor arg names: "_T", "_U", ... */
     size_t tp_count = sig->type_param_count;
     const char **desc_names = calloc(tp_count, sizeof *desc_names);
+    const UserSpec **constraint_specs = NULL;
     if (!desc_names) return cg_fail(cg, decl->token, "codegen: out of memory");
     for (size_t i = 0; i < tp_count; i++) {
         Buf b; buf_init(&b);
@@ -6318,10 +6707,18 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         }
     }
 
+    if (!cg_build_generic_param_constraints(cg, sig->type_params, tp_count,
+                                            decl->token, &constraint_specs)) {
+        for (size_t i = 0; i < tp_count; i++) free((void *)desc_names[i]);
+        free(desc_names);
+        return false;
+    }
+
     /* Activate generic-function emission state. */
     cg->in_generic_fn = true;
     cg->generic_fn_type_param_count = tp_count;
     cg->generic_fn_type_param_names = gfn->type_param_names; /* borrowed */
+    cg->generic_fn_type_param_constraints = constraint_specs;  /* owned by frame */
     cg->generic_fn_type_param_descs = desc_names;             /* owned */
 
     /* Resolve return type (CG_TYPE_GENERIC_PARAM when it's T/U/…). */
@@ -6498,9 +6895,11 @@ cleanup_params:
 cleanup:
     for (size_t i = 0; i < tp_count; i++) free((void *)desc_names[i]);
     free(desc_names);
+    free((void *)constraint_specs);
     cg->in_generic_fn = false;
     cg->generic_fn_type_param_count = 0;
     cg->generic_fn_type_param_names = NULL;
+    cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
     return ok;
 }
@@ -6594,7 +6993,19 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     if (!desc_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; goto bail; }
     for (size_t i = 0; i < tp_count && ok; i++) {
         FengToken _etok = e->token;
-        if (!cg_generic_descriptor_expr(cg, type_args[i], &_etok, &desc_exprs[i])) {
+        const UserSpec *constraint_spec = NULL;
+        if (i < sig->type_param_count && sig->type_params[i].constraint) {
+            CGType *constraint_type = NULL;
+            if (!cg_resolve_type(cg, sig->type_params[i].constraint,
+                                 &sig->type_params[i].token, &constraint_type)) {
+                ok = false;
+            } else {
+                constraint_spec = constraint_type ? constraint_type->user_spec : NULL;
+                cgtype_free(constraint_type);
+            }
+        }
+        if (ok && !cg_generic_descriptor_expr(cg, type_args[i], constraint_spec,
+                                              &_etok, &desc_exprs[i])) {
             ok = false;
         }
     }
@@ -6603,9 +7014,16 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     /* ---- Step 4: determine if each param is T-typed; materialise arg ---- */
     /* Temporarily activate generic-fn type param state so cg_resolve_type
      * recognises the param type refs (T, U, …) as generic params. */
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+
     cg->in_generic_fn = true;
     cg->generic_fn_type_param_count = tp_count;
     cg->generic_fn_type_param_names = gfn->type_param_names;
+    cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
 
     char **arg_addr_exprs = calloc(arg_count + 1, sizeof *arg_addr_exprs);
@@ -6653,10 +7071,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
         if (!arg_addr_exprs[i]) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; }
     }
 
-    cg->in_generic_fn = false;
-    cg->generic_fn_type_param_count = 0;
-    cg->generic_fn_type_param_names = NULL;
-    cg->generic_fn_type_param_descs = NULL;
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
 
     if (!ok) {
         for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
@@ -6675,6 +7094,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
         cg->in_generic_fn = true;
         cg->generic_fn_type_param_count = tp_count;
         cg->generic_fn_type_param_names = gfn->type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
         cg->generic_fn_type_param_descs = NULL;
         CGType *rt = NULL;
         if (sig->return_type) {
@@ -6683,10 +7103,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             rt = cgtype_new(CG_TYPE_VOID);
             ok = (rt != NULL);
         }
-        cg->in_generic_fn = false;
-        cg->generic_fn_type_param_count = 0;
-        cg->generic_fn_type_param_names = NULL;
-        cg->generic_fn_type_param_descs = NULL;
+        cg->in_generic_fn = saved_in_generic_fn;
+        cg->generic_fn_type_param_count = saved_tp_count;
+        cg->generic_fn_type_param_names = saved_tp_names;
+        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+        cg->generic_fn_type_param_descs = saved_tp_descs;
         if (!ok || !rt) {
             cgtype_free(rt);
             for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
@@ -6888,12 +7309,126 @@ static const char *cg_witness_table_lookup(const CG *cg, const UserType *t,
     return NULL;
 }
 
+typedef struct CGWitnessBinding {
+    FengSpecWitnessSourceKind source_kind;
+    const UserField *field;
+    const UserMethod *method;
+    const UserFit *fit;
+} CGWitnessBinding;
+
+static bool cg_user_method_matches_spec_member(const UserMethod *method,
+                                               const UserSpecMember *spec_member) {
+    if (method == NULL || spec_member == NULL || spec_member->kind != USM_KIND_METHOD) {
+        return false;
+    }
+    if (method->param_count != spec_member->param_count ||
+        !cg_types_equal(method->return_type, spec_member->type)) {
+        return false;
+    }
+    for (size_t i = 0; i < method->param_count; ++i) {
+        if (!cg_types_equal(method->param_types[i], spec_member->param_types[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
+    if (fit == NULL || spec == NULL) return false;
+    for (size_t i = 0; i < fit->spec_count; ++i) {
+        if (fit->specs[i] == spec) return true;
+    }
+    return false;
+}
+
+static bool cg_resolve_witness_binding_fallback(CG *cg,
+                                                const UserType *t,
+                                                const UserSpec *s,
+                                                const UserSpecMember *sm,
+                                                FengToken blame,
+                                                CGWitnessBinding *out) {
+    size_t fit_match_count = 0U;
+    size_t type_match_count = 0U;
+
+    memset(out, 0, sizeof *out);
+    if (sm->kind == USM_KIND_FIELD) {
+        const UserField *field = cg_user_type_field(t, sm->feng_name,
+                                                    strlen(sm->feng_name));
+
+        if (field == NULL) {
+            return cg_fail(cg, blame,
+                "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                t->feng_name, s->feng_name, sm->feng_name);
+        }
+        if (!cg_types_equal(field->type, sm->type)) {
+            return cg_fail(cg, blame,
+                "codegen: field '%s' on type '%s' does not match spec '%s' field type",
+                sm->feng_name, t->feng_name, s->feng_name);
+        }
+        out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD;
+        out->field = field;
+        return true;
+    }
+
+    for (size_t i = 0; i < t->method_count; ++i) {
+        const UserMethod *candidate = &t->methods[i];
+
+        if (strcmp(candidate->feng_name, sm->feng_name) != 0 ||
+            !cg_user_method_matches_spec_member(candidate, sm)) {
+            continue;
+        }
+        out->method = candidate;
+        ++type_match_count;
+    }
+
+    for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
+        const UserFit *fit = &cg->user_fits[fit_index];
+
+        if (fit->target != t || !cg_user_fit_targets_spec(fit, s)) {
+            continue;
+        }
+        if (cg->cur_program != NULL && fit->owner_program != NULL &&
+            !cg_program_can_see(cg->cur_program, fit->owner_program)) {
+            continue;
+        }
+        for (size_t method_index = 0; method_index < fit->method_count; ++method_index) {
+            const UserMethod *candidate = &fit->methods[method_index];
+
+            if (strcmp(candidate->feng_name, sm->feng_name) != 0 ||
+                !cg_user_method_matches_spec_member(candidate, sm)) {
+                continue;
+            }
+            out->fit = fit;
+            out->method = candidate;
+            ++fit_match_count;
+        }
+    }
+
+    if (type_match_count + fit_match_count == 0U) {
+        return cg_fail(cg, blame,
+            "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+            t->feng_name, s->feng_name, sm->feng_name);
+    }
+    if (type_match_count + fit_match_count > 1U) {
+        return cg_fail(cg, blame,
+            "codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself)",
+            t->feng_name, sm->feng_name, s->feng_name);
+    }
+    if (type_match_count == 1U) {
+        out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD;
+        out->fit = NULL;
+        return true;
+    }
+
+    out->source_kind = FENG_SPEC_WITNESS_SOURCE_FIT_METHOD;
+    return true;
+}
+
 /* Ensure a witness table for (T, S) has been materialised in fn_protos /
  * fn_defs and write its C variable name to *out_var (borrowed pointer into
- * the cache). The witness contents are read from the analysis sidecar
- * (feng_semantic_lookup_spec_witness, populated on-demand at coercion sites
- * during semantic analysis). 4b-α only supports own-method-sourced slots; any
- * fit-sourced or unresolved slot is reported as an error here. */
+ * the cache). The preferred source is the semantic witness sidecar. When the
+ * analyzer has not demanded `(T, S)` yet, codegen falls back to the already
+ * registered type/spec/fit metadata and synthesizes the same static witness. */
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var) {
@@ -6902,11 +7437,6 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
 
     const FengSpecWitness *witness = feng_semantic_lookup_spec_witness(
         cg->analysis, t->decl, s->decl);
-    if (!witness) {
-        return cg_fail(cg, blame,
-            "codegen: internal: spec witness for (%s, %s) not computed by analyzer",
-            t->feng_name, s->feng_name);
-    }
 
     /* Emit one thunk per spec method member (in spec member order). Field
      * accessor thunks are deferred to 4b-β. */
@@ -6925,20 +7455,73 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
      * thunk; fields get a getter and (for `var`) a setter. */
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (i >= witness->member_count) {
+        CGWitnessBinding binding;
+
+        memset(&binding, 0, sizeof binding);
+        if (witness != NULL) {
+            const FengSpecWitnessMember *wm;
+
+            if (i >= witness->member_count) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: witness slot count mismatch for (%s, %s)",
+                    t->feng_name, s->feng_name);
+            }
+            wm = &witness->members[i];
+            if (!wm->impl_member) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                    t->feng_name, s->feng_name, sm->feng_name);
+            }
+            binding.source_kind = wm->source_kind;
+            if (wm->source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
+                const UserFit *uf = cg_find_user_fit_by_decl(cg, wm->via_fit_decl);
+
+                if (uf == NULL || uf->target != t) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s'",
+                        s->feng_name, sm->feng_name, t->feng_name);
+                }
+                binding.fit = uf;
+                for (size_t k = 0; k < uf->method_count; ++k) {
+                    if (uf->methods[k].member == wm->impl_member) {
+                        binding.method = &uf->methods[k];
+                        break;
+                    }
+                }
+                if (binding.method == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: fit method '%s' not found in fit body for type '%s'",
+                        sm->feng_name, t->feng_name);
+                }
+            } else if (sm->kind == USM_KIND_METHOD) {
+                binding.method = cg_user_type_method_by_member(t, wm->impl_member);
+                if (binding.method == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
+                        t->feng_name, sm->feng_name, s->feng_name);
+                }
+            } else if (sm->kind == USM_KIND_FIELD) {
+                binding.field = cg_user_type_field(t,
+                                                   wm->impl_member->as.field.name.data,
+                                                   wm->impl_member->as.field.name.length);
+                if (binding.field == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
+                        t->feng_name, sm->feng_name, s->feng_name);
+                }
+            }
+        } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
             buf_free(&prefix); free(t_san); free(s_san);
-            return cg_fail(cg, blame,
-                "codegen: internal: witness slot count mismatch for (%s, %s)",
-                t->feng_name, s->feng_name);
+            return false;
         }
-        const FengSpecWitnessMember *wm = &witness->members[i];
-        if (!wm->impl_member) {
-            buf_free(&prefix); free(t_san); free(s_san);
-            return cg_fail(cg, blame,
-                "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
-                t->feng_name, s->feng_name, sm->feng_name);
-        }
-        if (wm->source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
+
+        if (binding.source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
             /* Step 4b-γ — fit-provided method. The fit body emits the
              * implementation as `<fit_prefix>__<member>(struct T *self, ...)`
              * (see cg_register_user_fit_members / cg_emit_user_fit_methods);
@@ -6949,18 +7532,14 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                     "codegen: spec field '%s' cannot be satisfied by a fit method",
                     sm->feng_name);
             }
-            const UserFit *uf = cg_find_user_fit_by_decl(cg, wm->via_fit_decl);
+            const UserFit *uf = binding.fit;
+            const UserMethod *fm = binding.method;
+
             if (!uf || uf->target != t) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s'",
+                    "codegen: internal: fit binding for spec '%s' member '%s' not registered for type '%s'",
                     s->feng_name, sm->feng_name, t->feng_name);
-            }
-            const UserMethod *fm = NULL;
-            for (size_t k = 0; k < uf->method_count; k++) {
-                if (uf->methods[k].member == wm->impl_member) {
-                    fm = &uf->methods[k]; break;
-                }
             }
             if (!fm) {
                 buf_free(&prefix); free(t_san); free(s_san);
@@ -7002,14 +7581,13 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
             continue;
         }
         if (sm->kind == USM_KIND_METHOD) {
-            if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
+            if (binding.source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
                     "codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α)",
                     sm->feng_name, t->feng_name);
             }
-            const UserMethod *um = cg_user_type_method(t, sm->feng_name,
-                                                       strlen(sm->feng_name));
+            const UserMethod *um = binding.method;
             if (!um) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
@@ -7054,14 +7632,13 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
             /* Step 4b-β — TYPE_OWN_FIELD witness. The implementing field
              * lives directly on T; locate it by Feng name to recover the
              * sanitised C field identifier. */
-            if (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD) {
+            if (binding.source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
                     "codegen: spec field '%s' must be satisfied by a field on '%s'",
                     sm->feng_name, t->feng_name);
             }
-            const UserField *uf = cg_user_type_field(t, sm->feng_name,
-                                                     strlen(sm->feng_name));
+            const UserField *uf = binding.field;
             if (!uf) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
@@ -8502,10 +9079,12 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
 static bool cg_activate_generic_type_context(CG *cg,
                                              const FengDecl *decl,
                                              char **type_param_names,
+                                             const UserSpec **constraint_specs,
                                              const char **desc_names) {
     cg->in_generic_fn = true;
     cg->generic_fn_type_param_count = decl->as.type_decl.type_param_count;
     cg->generic_fn_type_param_names = type_param_names;
+    cg->generic_fn_type_param_constraints = constraint_specs;
     cg->generic_fn_type_param_descs = desc_names;
     return true;
 }
@@ -8514,6 +9093,7 @@ static void cg_clear_generic_type_context(CG *cg) {
     cg->in_generic_fn = false;
     cg->generic_fn_type_param_count = 0;
     cg->generic_fn_type_param_names = NULL;
+    cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
     cg->in_generic_type_method = false;
     cg->generic_type_method_decl = NULL;
@@ -8533,6 +9113,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 
     size_t tp_count = decl->as.type_decl.type_param_count;
     char **type_param_names = NULL;
+    const UserSpec **constraint_specs = NULL;
     const char **desc_names = NULL;
     CGType *return_type = NULL;
     CGType **param_types = NULL;
@@ -8542,9 +9123,13 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     bool ok = false;
 
     if (!cg_generic_type_param_names(cg, decl, &type_param_names)) goto cleanup;
+    if (!cg_build_generic_param_constraints(cg, decl->as.type_decl.type_params,
+                                            tp_count, member->token,
+                                            &constraint_specs)) goto cleanup;
     if (!cg_generic_type_desc_names(cg, decl, type_param_names, &desc_names)) goto cleanup;
 
-    cg_activate_generic_type_context(cg, decl, type_param_names, desc_names);
+    cg_activate_generic_type_context(cg, decl, type_param_names,
+                                     constraint_specs, desc_names);
     cg->in_generic_type_method = true;
     cg->generic_type_method_decl = decl;
     cg->generic_type_method_field_offsets_name = "_field_offsets";
@@ -8679,6 +9264,7 @@ cleanup:
     free(param_types);
     cgtype_free(return_type);
     cg_free_const_cstr_array(desc_names, tp_count);
+    free((void *)constraint_specs);
     cg_free_cstr_array(type_param_names, tp_count);
     free(shared_name);
     return ok;
@@ -8702,11 +9288,15 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
 
     size_t tp_count = decl->as.type_decl.type_param_count;
     char **type_param_names = NULL;
+    const UserSpec **constraint_specs = NULL;
     CGType **origin_param_types = NULL;
     char **desc_exprs = NULL;
     bool ok = false;
 
     if (!cg_generic_type_param_names(cg, decl, &type_param_names)) goto cleanup;
+    if (!cg_build_generic_param_constraints(cg, decl->as.type_decl.type_params,
+                                            tp_count, m->member->token,
+                                            &constraint_specs)) goto cleanup;
 
     origin_param_types = sig->param_count ? calloc(sig->param_count, sizeof *origin_param_types) : NULL;
     desc_exprs = tp_count ? calloc(tp_count, sizeof *desc_exprs) : NULL;
@@ -8715,7 +9305,8 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         goto cleanup;
     }
 
-    cg_activate_generic_type_context(cg, decl, type_param_names, NULL);
+    cg_activate_generic_type_context(cg, decl, type_param_names,
+                                     constraint_specs, NULL);
     for (size_t i = 0; i < sig->param_count; ++i) {
         if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
                              &origin_param_types[i])) {
@@ -8731,7 +9322,8 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             cgtype_free(arg_type);
             goto cleanup;
         }
-        if (!cg_generic_descriptor_expr(cg, arg_type, &m->member->token, &desc_exprs[i])) {
+        if (!cg_generic_descriptor_expr(cg, arg_type, constraint_specs[i],
+                                        &m->member->token, &desc_exprs[i])) {
             cgtype_free(arg_type);
             goto cleanup;
         }
@@ -8812,6 +9404,7 @@ cleanup:
         for (size_t i = 0; i < sig->param_count; ++i) cgtype_free(origin_param_types[i]);
     }
     free(origin_param_types);
+    free((void *)constraint_specs);
     if (desc_exprs) {
         for (size_t i = 0; i < tp_count; ++i) free(desc_exprs[i]);
     }

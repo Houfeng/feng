@@ -729,6 +729,113 @@ static void test_generic_spec_arg_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericConstraintWitnessSrc =
+    "mod feng.codegen.gf5;\n"
+    "spec Named {\n"
+    "    var name: string;\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    var name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "fn rename<T: Named>(user: T, next: string): string {\n"
+    "    user.name = next;\n"
+    "    return user.name;\n"
+    "}\n"
+    "fn greet_generic<T: Named>(user: T): string {\n"
+    "    return user.greet();\n"
+    "}\n";
+
+static void test_generic_constraint_witness_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericConstraintWitnessSrc, "gf5.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic constraint witness): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "_T->witness") != NULL);
+    ASSERT(strstr(out.c_source, "get_name") != NULL);
+    ASSERT(strstr(out.c_source, "set_name") != NULL);
+    ASSERT(strstr(out.c_source, "->greet(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericAggregateReturnSrc =
+    "mod feng.codegen.gf6;\n"
+    "spec Named {\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    let name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "fn make_named<T>(name: string): Named {\n"
+    "    let user: User = User{name: name};\n"
+    "    return user;\n"
+    "}\n"
+    "fn forward_named<T>(named: Named): Named {\n"
+    "    return named;\n"
+    "}\n"
+    "fn rebound_named<T>(name: string): Named {\n"
+    "    return make_named:<T>(name);\n"
+    "}\n";
+
+static void test_generic_aggregate_return_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericAggregateReturnSrc, "gf6.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic aggregate return): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_take(&") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_retain(&") != NULL);
+    ASSERT(strstr(out.c_source, "memcpy(_out, &") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -741,6 +848,8 @@ int main(void) {
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();
     test_generic_spec_arg_codegen();
+    test_generic_constraint_witness_codegen();
+    test_generic_aggregate_return_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

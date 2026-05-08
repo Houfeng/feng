@@ -1,0 +1,32 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    var name: string;
+    fn greet(): string;
+}
+
+type User: Named {
+    var name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+fn rename<T: Named>(user: T, next: string): string {
+    user.name = next;
+    return user.name;
+}
+
+fn greetGeneric<T: Named>(user: T): string {
+    return user.greet();
+}
+
+fn main(args: string[]) {
+    let user: User = User{name: "before"};
+    puts(rename(user, "generic constraint field ok"));
+    puts(greetGeneric(user));
+}
