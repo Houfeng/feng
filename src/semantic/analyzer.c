@@ -5940,8 +5940,20 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                InferredExprType return_type =
-                    callable_effective_return_type(context, resolution.callable);
+                InferredExprType return_type;
+
+                if (resolution.callable->return_type != NULL) {
+                    const FengTypeRef *return_type_ref =
+                        substitute_callable_return_type_for_call(context,
+                                                                 NULL,
+                                                                 inferred_expr_type_unknown(),
+                                                                 expr,
+                                                                 resolution.callable);
+
+                    return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
+                } else {
+                    return_type = callable_effective_return_type(context, resolution.callable);
+                }
 
                 if (inferred_expr_type_is_known(return_type)) {
                     return return_type;
@@ -5966,8 +5978,20 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
-                    InferredExprType return_type =
-                        callable_effective_return_type(context, resolution.callable);
+                    InferredExprType return_type;
+
+                    if (resolution.callable->return_type != NULL) {
+                        const FengTypeRef *return_type_ref =
+                            substitute_callable_return_type_for_call(context,
+                                                                     NULL,
+                                                                     inferred_expr_type_unknown(),
+                                                                     expr,
+                                                                     resolution.callable);
+
+                        return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
+                    } else {
+                        return_type = callable_effective_return_type(context, resolution.callable);
+                    }
 
                     if (inferred_expr_type_is_known(return_type)) {
                         return return_type;

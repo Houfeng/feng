@@ -1,0 +1,58 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+fn identity<T>(value: T): T {
+    return value;
+}
+
+type Holder<T> {
+    var value: T;
+
+    fn put(value: T) {
+        self.value = value;
+    }
+
+    fn readValue(): T {
+        return self.value;
+    }
+
+    fn echo<U>(value: U): U {
+        return value;
+    }
+
+    fn echoThroughMethod(value: T): T {
+        return self.echo(value);
+    }
+}
+
+fn main(args: string[]) {
+    let named: Named = User{name: "spec generic value ok"};
+
+    let fromFn: Named = identity(named);
+    puts(fromFn.greet());
+
+    let holder: Holder<Named> = Holder:<Named>();
+    holder.put(named);
+    let fromTypeArg: Named = holder.readValue();
+    puts(fromTypeArg.greet());
+
+    let fromMethod: Named = holder.echo(named);
+    puts(fromMethod.greet());
+
+    let fromSelfCall: Named = holder.echoThroughMethod(named);
+    puts(fromSelfCall.greet());
+}

@@ -48,7 +48,7 @@
 - 当前已实现语言形态中的 object-form `spec` 聚合值已经可作为无约束与受约束 generic arg；`aggregate type as generic type argument not yet supported (missing flatten rule) (G6)` 只保护尚未定义 flatten 规则的未来聚合类型。
 - 因此，在“不含 union，且 tuple/value-struct 尚未成为可用语言形态”的本轮验收口径下，aggregate generic arg 不再作为当前阻塞项；未来新增聚合值类型时，必须先为其补齐 `FengAggregateValueDescriptor` / flatten 规则，再进入同一 generic descriptor ABI。
 
-- 当前**无约束** object-form `spec` value 作为 generic arg 的基础路径已经通过 codegen 回归。
+- 当前**无约束** object-form `spec` value 作为 generic arg 的基础路径已经通过 codegen 回归与 smoke：`let x: MySpec` 这类 fat spec value 可以作为 `t: T` 的实参传入泛型函数/方法，也可以作为 `Holder<MySpec>` / `Box<MySpec>` 这类泛型类型实参进入字段、参数与返回路径。
 - 当前**受约束** object-form `spec` value 作为 generic type argument 已通过 slot witness adapter 闭环。
 - 一般 aggregate type 作为 generic type argument 的失败分支仍应保留，直到对应语言形态具备稳定布局与 flatten 规则；这不是当前既有泛型能力的未完成项，而是未来值聚合类型接入泛型 ABI 的护栏。
 - 影响范围包括：未来 tuple / value-struct / union carrier，以及任何新增的 `FengAggregateValueDescriptor` 按值泛型场景。
@@ -79,7 +79,7 @@
 
 #### P5. 测试覆盖已形成“不含 union 的泛型完整”阶段性证据
 
-- 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form `spec` 聚合值 generic arg、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion、generic spec concrete instance 的 object/callable 基础 codegen 路径、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及 `Map<K: Hashable, V>` 级真实目标场景。
+- 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form `spec` 聚合值 generic arg（包含 `let x: MySpec` 作为 `t: T` 实参与 `MySpec` 作为泛型类型实参）、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion、generic spec concrete instance 的 object/callable 基础 codegen 路径、泛型类型上的泛型方法、generic type shared body 内部 self-call，以及 `Map<K: Hashable, V>` 级真实目标场景。
 - 当前 `make test` 已通过；在 union-form `spec` 与 future tuple / value-struct 聚合值不纳入本轮验收的前提下，可以把本轮回归作为“不含 union 的泛型完整”的阶段性完成证据。
 - 源码中保留的 `aggregate type as generic type argument not yet supported (missing flatten rule)` 是未来聚合值类型接入前的护栏；不同约束面之间的泛型参数转发仍等待未来多约束 / 约束合取语义收口，不作为当前既有语言形态的阻塞项。
 

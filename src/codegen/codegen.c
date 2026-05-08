@@ -3748,6 +3748,9 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     buf_append_fmt(&cg->headers,
         "struct %s { void *subject; const struct %s *witness; };\n",
         s->c_value_struct_name, s->c_witness_struct_name);
+    buf_append_fmt(&cg->headers,
+        "static const FengAggregateValueDescriptor %s;\n",
+        s->c_aggregate_desc_name);
 }
 
 /* Emit the witness struct body. Method members get a single function-pointer
