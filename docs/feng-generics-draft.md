@@ -112,17 +112,15 @@ spec UserList<T: Named>: NamedList<T> {}
 
 spec Animal {}
 
-spec Dog: Animal {}
+spec Canine: Animal {}
 
 spec A<T: Animal> {}
 
-spec B<T: Dog>: A<T> {}   // 合法：同一个 T 继续上传，按单值 spec 匹配处理
+spec B<T: Canine>: A<T> {}   // 合法：同一个 T 继续上传，按单值 spec 匹配处理
 
-type User: Named {
-  let name: string;
-}
+spec StrongNamed: Named {}
 
-spec StrictUserList<T: User>: NamedList<T> {}
+spec StrictNamedList<T: StrongNamed>: NamedList<T> {}
 ```
 
 正确语法五，类型位置中的泛型实例化：
@@ -303,13 +301,13 @@ type Plain<T> {
 ```feng
 spec Animal {}
 
-spec Dog: Animal {}
+spec Canine: Animal {}
 
 type Box<T> {
   let value: T;
 }
 
-let dogs: Box<Dog> = ...;
+let dogs: Box<Canine> = ...;
 let animals: Box<Animal> = dogs;
 ```
 
@@ -331,7 +329,7 @@ spec Reader<T: Bar> { ... }
 - Feng 允许在 `type`、顶层 `fn`、object-form `spec`、callable-form `spec` 和成员方法上声明泛型参数。
 - 泛型声明头继续使用普通角括号语法，即 `Name<T>`、`Name<T, U>`。
 - 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
-- 类型参数可选择声明泛型约束，语法为 `T: ConstraintSpec`；无约束时直接写作 `T`。
+- 类型参数可选择声明泛型约束，语法为 `T: SomeSpec`；无约束时直接写作 `T`。
 - 当前阶段每个类型参数至多声明一个泛型约束。
 - 泛型约束只能是 `spec` 引用，包括 object-form、callable-form 和 union-form。
 - 当调用点省略显式类型实参时，编译器必须尝试执行泛型推导。
@@ -345,7 +343,7 @@ spec Reader<T: Bar> { ... }
 - 因此，父 `spec` 列表允许写具体类型实参，也允许把当前 `spec` 自己的类型参数继续传递给父泛型 `spec`。
 - 但父 `spec` 列表右侧仍然必须解析为 `spec`；这一点不因泛型而放宽为可写任意 `type`。
 - 若把当前 `spec` 的类型参数继续传递给父泛型 `spec`，则必须检查该类型参数是否满足父 `spec` 对应类型参数的既有约束；不满足时必须报错。
-- 若当前类型参数自身已经带有更强的泛型约束，例如 `T: User` 传给 `Parent<T: Named>`，或 `T: Dog` 传给 `A<T: Animal>`，则编译器必须进一步检查该泛型约束在当前可见契约关系下是否可按父约束使用；满足则合法，不满足则报错。
+- 若当前类型参数自身已经带有更强的泛型约束，例如 `T: StrongNamed` 传给 `Parent<T: Named>`，或 `T: Canine` 传给 `A<T: Animal>`，则编译器必须进一步检查该泛型约束在当前可见契约关系下是否可按父约束使用；满足则合法，不满足则报错。
 - 这类“同一个类型参数在更强约束到更弱约束之间的继续传递”属于单值约束匹配，不属于不同泛型实例之间的 variance。
 - 类型位置（字段类型、参数类型、返回类型、类型标注等）中的泛型实例化继续直接使用 `<...>` 语法；`List<int>`、`Map<string, int>` 这类写法不引入歧义，因此不使用 `:<...>`。
 - 表达式位置的泛型调用（函数调用、方法调用、类型构造器调用）在需要显式写出类型实参时，均因 `<` 与关系运算符产生歧义，必须统一使用 `:<...>` 消歧。凡是在表达式位置调用目标后显式写出类型实参，无论目标是顶层函数、模块函数、成员方法还是泛型类型构造器，都统一使用 `:<...>`。
@@ -358,7 +356,7 @@ spec Reader<T: Bar> { ... }
 - Feng 当前阶段不支持泛型容器类型的 variance。泛型实例之间按不变处理；只有泛型构造器相同、类型参数数量相同且各位置类型实参完全一致时，才视为同一泛型实例类型。
 - 因而，即使两个类型实参之间存在 `type` / `spec` 满足关系、父子 `spec` 关系或其他可见契约关系，也不因此自动建立对应泛型实例之间的兼容关系。
 - 本文当前不支持基于协变/逆变的隐式或显式自动转换；需要时开发者必须手动编程完成遍历、重建或适配目标值。
-- 因而，“`B<T: Dog>: A<T>` 合法”与“`Box<Dog>` 可自动当作 `Box<Animal>` 使用”是两类不同问题：前者是同一个类型参数沿父子约束链的单值 `spec` 匹配，后者属于泛型容器 variance，而 Feng 当前阶段不支持后者。
+- 因而，“`B<T: Canine>: A<T>` 合法”与“`Box<Canine>` 可自动当作 `Box<Animal>` 使用”是两类不同问题：前者是同一个类型参数沿父子约束链的单值 `spec` 匹配，后者属于泛型容器 variance，而 Feng 当前阶段不支持后者。
 - 同一作用域内,同 kind 的具名泛型 `type` 或具名泛型 `spec` 的声明 identity 按“名称 + 泛型参数数量”确定；泛型参数名与泛型约束都不参与 identity。
 - 因此，`type UserType<T: Foo>` 与 `type UserType<T: Bar>` 冲突；`type UserType<T: Foo>` 与 `type UserType<T: Foo, U>` 可共存。`spec` 的对应规则相同。
 - 因此，`UserType<T>` 与 `UserType<T, U>` 是两个不同的具名 `type`。在字段类型、参数类型、返回类型、父 `spec` 使用以及 `fit` 左侧这类所有类型使用位置，都必须按“名称 + 泛型参数数量”精确解析；若当前作用域中不存在精确匹配的声明，则属于“找不到该 `type` / `spec` 声明”，而不是对其他同名不同参数数量声明的模糊匹配。
@@ -377,7 +375,7 @@ spec Reader<T: Bar> { ... }
 
 - [必须] 泛型声明在声明名后使用 `<...>` 书写类型参数列表。
 - [必须] 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
-- [必须] 约束类型参数使用 `T: ConstraintSpec` 语法；无约束类型参数直接写作 `T`。
+- [必须] 约束类型参数使用 `T: SomeSpec` 语法；无约束类型参数直接写作 `T`。
 - [必须] 当前阶段每个类型参数至多声明一个泛型约束。
 - [必须] 泛型约束只能是 `spec` 引用，包括 object-form、callable-form 和 union-form。
 - [必须] 当调用点省略显式类型实参时，编译器必须尝试推导全部类型参数；若不能唯一确定，则编译期报错。
@@ -422,7 +420,7 @@ spec Reader<T: Bar> { ... }
 - 编译器必须把 `spec Child: Parent<int>`、`spec Child<T>: Parent<T>` 中的 `Parent<...>` 解析为父 `spec` 使用，而不是新的类型参数定义。
 - 编译器必须检查父 `spec` 列表右侧的泛型实例是否确实解析为 `spec`，并检查类型实参数量是否与父泛型 `spec` 的声明匹配。
 - 编译器必须在 `spec` 继承链分析时检查传递给父泛型 `spec` 的每个类型实参是否满足父 `spec` 对应类型参数的约束；若把当前 `spec` 的类型参数继续上传，也必须在当前声明处完成该检查。
-- 编译器必须在 `T: User -> Parent<T: Named>`、`T: Dog -> A<T: Animal>` 这类传递中，依据当前泛型约束在当前可见契约关系下是否满足目标 `spec` 完成合法性判定。
+- 编译器必须在 `T: StrongNamed -> Parent<T: Named>`、`T: Canine -> A<T: Animal>` 这类传递中，依据当前泛型约束在当前可见契约关系下是否满足目标 `spec` 完成合法性判定。
 - 编译器必须在语义分析阶段拒绝无约束类型参数上的成员访问、关系运算和逻辑运算。
 - 编译器必须按不变规则检查泛型实例兼容性；若泛型构造器相同但任一位置类型实参不同，即使这些实参之间存在 `type` / `spec` 满足关系或其他可见契约关系，也必须拒绝任何基于 variance 的隐式或显式自动转换；需要时只能由开发者手动编程完成转换。
 - 编译器必须按“名称 + 泛型参数数量”检查具名泛型 `type` 与具名泛型 `spec` 的重复声明冲突；泛型参数名和泛型约束不同，不构成新的声明 identity。
@@ -467,7 +465,7 @@ spec Reader<T: Bar> { ... }
 ### 9.2 语法分析
 
 - 扩展声明语法，使 `type`、顶层 `fn`、`spec` 和成员方法都可携带类型参数列表。
-- 扩展类型参数语法，使单个类型参数可携带可选泛型约束 `T: ConstraintSpec`；参数定义位置本身必须是参数名。
+- 扩展类型参数语法，使单个类型参数可携带可选泛型约束 `T: SomeSpec`；参数定义位置本身必须是参数名。
 - 扩展类型引用语法，使类型位置可解析 `Name<T>`、`Name<T, U>` 这类实例化写法。
 - 扩展 `spec` 父列表语法，使 `spec Child: Parent<int>`、`spec Child<T>: Parent<T>` 这类父泛型 `spec` 使用可被稳定解析为“父 `spec` 引用 + 类型实参列表”。
 - 扩展调用语法，使 postfix 调用目标支持 `callee:<...>(...)` 这一显式泛型调用后缀。

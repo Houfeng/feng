@@ -154,7 +154,7 @@
 - 这里“复用 witness”指复用同一套编译期 witness 生成机制与同一约束面的静态 slot 形状；不要求所有调用路径无条件共用同一个最终 witness instance。
 - 对每个类型参数，按声明顺序只展开一个隐藏 `const FengGenericParamDescriptor *_T`；共享主体需要约束能力时，从 `_T->witness` 取对应 witness。
 - `witness` 的静态解释在生成共享主体时就固定，不允许运行时枚举或查表。
-- `FengNamedWitness` / `FengHandlerWitness` / `FengValueWitness` 只是三种示例，不是“全语言只固定这三种 witness 结构”。
+- `FengNamedWitness` / `FengHandlerWitness` / `FengIntOrStringWitness` 只是三种示例，不是“全语言只固定这三种 witness 结构”。
 - **固定的是生成规则**：object-form 生成字段/方法槽位；callable-form 生成 `invoke` 槽位；future union-form 生成 `test__Case` / `project__Case` 槽位。
 - **变化的是 witness type**：按“约束面”生成不同的 witness 结构。
 - **再变化的是 witness instance**：按“具体类型如何满足该约束面”生成不同实例。
@@ -165,7 +165,10 @@
 **最小可实现定义**：
 
 ```c
-/* object-form spec Named {
+/* 示例：object-form 约束面的 witness type。
+ * 实际代码必须按具体约束面生成命名；这里的 Named 只用于说明形状。
+ *
+ * object-form spec Named {
  *   let name: string;
  *   fn rename(next: string): void;
  * }
@@ -176,18 +179,26 @@ typedef struct FengNamedWitness {
     void (*call__rename)(void *subject, const void *arg_next, void *_out);
 } FengNamedWitness;
 
-/* callable-form spec Handler(x: int): bool; */
+/* 示例：callable-form 约束面的 witness type。
+ * 实际代码必须按具体约束面生成命名；这里的 Handler 只用于说明形状。
+ *
+ * callable-form spec Handler(x: int): bool;
+ */
 typedef struct FengHandlerWitness {
     void (*invoke)(const void *callee, const void *arg_x, void *_out);
 } FengHandlerWitness;
 
-/* future union-form spec Value: int | string; */
-typedef struct FengValueWitness {
+/* 示例：union-form 约束面的 witness type。
+ * 实际代码必须按具体约束面生成命名；这里的 IntOrString 只用于说明形状。
+ *
+ * future union-form spec IntOrString: int | string;
+ */
+typedef struct FengIntOrStringWitness {
     bool (*test__int)(const void *subject);
     void (*project__int)(const void *subject, void *_out);
     bool (*test__string)(const void *subject);
     void (*project__string)(const void *subject, void *_out);
-} FengValueWitness;
+} FengIntOrStringWitness;
 ```
 
 - 上面不是“运行时通用反射表”，而是**编译器按约束面直接生成的静态 witness 结构**。
@@ -202,8 +213,7 @@ typedef struct FengValueWitness {
 **witness type 与 witness instance 的边界**：
 
 ```c
-/* 同一个约束面：共用一个 witness type */
-typedef struct FengNamedWitness FengNamedWitness;
+/* Named 约束面的 witness type 见前文 FengNamedWitness 定义 */
 
 /* 不同满足者：各自生成不同 instance */
 extern const FengNamedWitness feng_witness__User__Named;
@@ -359,12 +369,12 @@ _K_Hashable->call__equals(entry_key_ptr, _p_key, &_tmp_eq);
 - future union-form 收窄直接变成：
 
 ```c
-const FengValueWitness *_V_Value =
-    (const FengValueWitness *)_V->witness;
+const FengIntOrStringWitness *_V_IntOrString =
+    (const FengIntOrStringWitness *)_V->witness;
 
-if (_V_Value->test__int(v_ptr)) {
+if (_V_IntOrString->test__int(v_ptr)) {
     int64_t _tmp;
-    _V_Value->project__int(v_ptr, &_tmp);
+    _V_IntOrString->project__int(v_ptr, &_tmp);
     /* ... */
 }
 ```
@@ -603,7 +613,7 @@ typedef struct FengGenericParamDescriptor {
 各类 T 的静态实例（codegen 在使用点生成）：
 
 ```c
-// 所有值类型（int/bool/float）共用一个实例
+// 所有 size = 8 且无约束的 trivial 值类型可共用一个实例
 const FengGenericParamDescriptor feng_generic_trivial8_param =
     { .size=8, .kind=FENG_VALUE_TRIVIAL, .aggregate=NULL, .witness=NULL };
 
@@ -672,7 +682,7 @@ static void cg_emit_generic_method(CG *cg, ...) {
 
 **结论**：当前方案本身就位于“全单态化”和“动态派发”之间：布局与 wrapper 是单态的，主体语义是共享的，契约调用走静态 witness 槽位而不是运行时反射。未来若对本包源码可见实例追加更激进的全单态化，只需要在 wrapper / 发码策略层分流，不需要推翻共享主体 ABI。
 
-**规范更新**：`docs/feng-generics-draft.md` §7 需要按此方案重写（详见 G0-1）。
+**规范更新**：`docs/feng-generics-draft.md` §9 需要按此方案重写（详见 G0-1）。
 
 ---
 
@@ -764,7 +774,7 @@ pair(1, "x");
 
 | 编号 | 任务 | 产出 | 备注 |
 | --- | --- | --- | --- |
-| G0-1 | 决策 Q1 代码生成策略，写入 `docs/feng-generics-draft.md` §7 | 规范更新 | ✓ 已决策，参见 Q1 节；阻塞 G6 已解除 |
+| G0-1 | 决策 Q1 代码生成策略，写入 `docs/feng-generics-draft.md` §9 | 规范更新 | ✓ 已决策，参见 Q1 节；阻塞 G6 已解除 |
 | G0-2 | 决策 Q2 泛型约束是否可以写泛型 spec 实例，更新规范 §4 和 §5 | 规范更新 | ✓ 已决策，参见 Q2 节 |
 | G0-3 | 决策 Q3 泛型 type 默认零值规则，更新 `docs/feng-type.md` | 规范更新 | ✓ 已决策，参见 Q3 节（原阻塞 G4-19） |
 | G0-4 | 决策 Q4 `>>` token 处理策略 | 规范更新 | ✓ 已决策，参见 Q4 节；G1-2 可删除 |

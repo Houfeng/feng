@@ -173,7 +173,7 @@ static CGValueKind cgtype_value_kind(const CGType *t) {
             return CG_VK_AGGREGATE;
         case CG_TYPE_GENERIC_PARAM:
             /* Erased type: ARC dispatch happens at the generic call-site via
-             * the FengGenericValueDescriptor; the placeholder itself is not
+             * the FengGenericParamDescriptor; the placeholder itself is not
              * managed through the normal ARC path. */
             return CG_VK_TRIVIAL;
         default:
@@ -515,7 +515,7 @@ typedef struct ModuleBinding {
 /* ---- Generic function registry (G6) ----
  * One entry per generic function declaration (type_param_count > 0).  These
  * are NOT registered as FreeFns; they are emitted with a separate C
- * signature that uses void* params + FengGenericValueDescriptor descriptors
+ * signature that uses void* params + FengGenericParamDescriptor descriptors
  * and a void-return + _out parameter convention. */
 typedef struct GenericFn {
     char   *feng_name;          /* Feng identifier, e.g. "identity" */
@@ -6157,11 +6157,11 @@ static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
 
 /* ===================== G6 — generic codegen ===================== */
 
-/* Build a compound-literal expression for a FengGenericValueDescriptor
+/* Build a compound-literal expression for a FengGenericParamDescriptor
  * matching the given concrete CGType.  *out is set to a heap-allocated C
  * expression string; caller frees.
  * Returns false (with error set) if the type is not yet supported as a
- * generic type argument (e.g. aggregate/spec). */
+ * generic type argument (e.g. future aggregates without flatten rules). */
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                         const FengToken *tok, char **out) {
     Buf b; buf_init(&b);
@@ -6169,19 +6169,30 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
         case CG_VK_TRIVIAL: {
             const char *cty = cgtype_to_c(t->kind);
             buf_append_fmt(&b,
-                "&(const FengGenericValueDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL}",
+                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL, NULL}",
                 cty);
             break;
         }
         case CG_VK_MANAGED_POINTER:
             buf_append_cstr(&b,
-                "&(const FengGenericValueDescriptor)"
-                "{sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL}");
+                "&(const FengGenericParamDescriptor)"
+                "{sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL, NULL}");
             break;
-        case CG_VK_AGGREGATE:
-            buf_free(&b);
-            return cg_fail(cg, *tok,
-                "codegen: aggregate/spec type as generic type argument not yet supported (G6)");
+        case CG_VK_AGGREGATE: {
+            const char *desc = cg_aggregate_field_desc_name(t);
+            char *cty = cg_ctype_dup(t);
+            if (!desc || !cty) {
+                free(cty);
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
+            }
+            buf_append_fmt(&b,
+                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL}",
+                cty, desc);
+            free(cty);
+            break;
+        }
     }
     *out = b.data;
     return *out != NULL;
@@ -6274,12 +6285,12 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
  *
  * ABI:
  *   void c_name(
- *       const FengGenericValueDescriptor *_T [, *_U, ...],
+ *       const FengGenericParamDescriptor *_T [, *_U, ...],
  *       <params — T-typed as const void *, non-generic as normal C type>,
  *       [void *_out]       ← present iff return type is non-void
  *   );
  *
- * The caller is responsible for setting up concrete FengGenericValueDescriptor
+ * The caller is responsible for setting up concrete FengGenericParamDescriptor
  * compound-literal arguments and passing T-typed values by pointer. */
 static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                       FengCompileTarget target) {
@@ -6377,7 +6388,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         }                                                                       \
         for (size_t _i = 0; _i < tp_count; _i++) {                             \
             if (!_first) buf_append_cstr((buf_ptr), ", ");                      \
-            buf_append_fmt((buf_ptr), "const FengGenericValueDescriptor *%s",  \
+            buf_append_fmt((buf_ptr), "const FengGenericParamDescriptor *%s",  \
                            desc_names[_i]);                                     \
             _first = false;                                                     \
         }                                                                       \
@@ -6522,7 +6533,7 @@ static CGType *cg_infer_type_arg(const GenericFn *gfn, size_t tp_idx,
 /* Emit a call to a generic function.
  *
  * Protocol at the call site:
- *   1. For each type parameter: build a FengGenericValueDescriptor
+ *   1. For each type parameter: build a FengGenericParamDescriptor
  *      compound literal and pass its address.
  *   2. For each parameter whose type is a type param: materialise the
  *      argument to a local variable of the concrete C type, pass &local.
@@ -8568,7 +8579,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     buf_append_fmt(proto, "static void %s(void *_self, const size_t *_field_offsets",
                    shared_name);
     for (size_t i = 0; i < tp_count; ++i) {
-        buf_append_fmt(proto, ", const FengGenericValueDescriptor *%s", desc_names[i]);
+        buf_append_fmt(proto, ", const FengGenericParamDescriptor *%s", desc_names[i]);
     }
     for (size_t i = 0; i < param_count; ++i) {
         buf_append_cstr(proto, ", ");
@@ -8587,7 +8598,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     buf_append_fmt(body, "static void %s(void *_self, const size_t *_field_offsets",
                    shared_name);
     for (size_t i = 0; i < tp_count; ++i) {
-        buf_append_fmt(body, ", const FengGenericValueDescriptor *%s", desc_names[i]);
+        buf_append_fmt(body, ", const FengGenericParamDescriptor *%s", desc_names[i]);
     }
     for (size_t i = 0; i < param_count; ++i) {
         buf_append_cstr(body, ", ");
