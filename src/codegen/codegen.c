@@ -594,6 +594,13 @@ typedef struct CG {
     } *witness_tables;
     size_t witness_table_count;
     size_t witness_table_capacity;
+    struct {
+        const struct UserSpec *src;
+        const struct UserSpec *dst;
+        char *c_var;
+    } *spec_slot_witness_tables;
+    size_t spec_slot_witness_table_count;
+    size_t spec_slot_witness_table_capacity;
     ModuleBinding *module_bindings;
     size_t         module_binding_count;
     size_t         module_binding_capacity;
@@ -676,6 +683,9 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var);
+static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
+                                        const UserSpec *dst, FengToken blame,
+                                        const char **out_var);
 /* G6 — generic codegen helpers. */
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
@@ -6507,9 +6517,16 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             owned_witness_expr = wb.data;
             witness_expr = owned_witness_expr;
         } else if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
-            buf_free(&b);
-            return cg_fail(cg, *tok,
-                "codegen: constrained object-form spec value as generic type argument not yet supported (slot witness required) (G6)");
+            const char *witness_var = NULL;
+            if (!cg_ensure_spec_slot_witness(cg, t->user_spec, constraint_spec,
+                                             *tok, &witness_var)) {
+                buf_free(&b);
+                return false;
+            }
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "&%s", witness_var);
+            owned_witness_expr = wb.data;
+            witness_expr = owned_witness_expr;
         } else {
             buf_free(&b);
             return cg_fail(cg, *tok,
@@ -7309,6 +7326,18 @@ static const char *cg_witness_table_lookup(const CG *cg, const UserType *t,
     return NULL;
 }
 
+static const char *cg_spec_slot_witness_lookup(const CG *cg,
+                                               const UserSpec *src,
+                                               const UserSpec *dst) {
+    for (size_t i = 0; i < cg->spec_slot_witness_table_count; ++i) {
+        if (cg->spec_slot_witness_tables[i].src == src &&
+            cg->spec_slot_witness_tables[i].dst == dst) {
+            return cg->spec_slot_witness_tables[i].c_var;
+        }
+    }
+    return NULL;
+}
+
 typedef struct CGWitnessBinding {
     FengSpecWitnessSourceKind source_kind;
     const UserField *field;
@@ -7339,6 +7368,159 @@ static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
         if (fit->specs[i] == spec) return true;
     }
     return false;
+}
+
+static bool cg_user_spec_member_compatible(const UserSpecMember *src,
+                                           const UserSpecMember *dst) {
+    if (src == NULL || dst == NULL || src->kind != dst->kind) {
+        return false;
+    }
+    if (src->kind == USM_KIND_FIELD) {
+        return cg_types_equal(src->type, dst->type) &&
+               (!dst->is_var || src->is_var);
+    }
+    if (src->param_count != dst->param_count ||
+        !cg_types_equal(src->type, dst->type)) {
+        return false;
+    }
+    for (size_t i = 0; i < src->param_count; ++i) {
+        if (!cg_types_equal(src->param_types[i], dst->param_types[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
+                                        const UserSpec *dst, FengToken blame,
+                                        const char **out_var) {
+    const char *cached = cg_spec_slot_witness_lookup(cg, src, dst);
+
+    if (cached != NULL) {
+        *out_var = cached;
+        return true;
+    }
+    if (cg == NULL || src == NULL || dst == NULL) {
+        return false;
+    }
+
+    Buf var; buf_init(&var);
+    buf_append_fmt(&var, "FengSpecSlotWitness__%zu", cg->spec_slot_witness_table_count);
+    if (var.data == NULL) {
+        return false;
+    }
+
+    Buf *wd = &cg->witness_defs;
+    for (size_t i = 0; i < dst->member_count; ++i) {
+        const UserSpecMember *dst_member = &dst->members[i];
+        const UserSpecMember *src_member = cg_user_spec_member(src,
+                                                               dst_member->feng_name,
+                                                               strlen(dst_member->feng_name));
+
+        if (src_member == NULL ||
+            !cg_user_spec_member_compatible(src_member, dst_member)) {
+            buf_free(&var);
+            return cg_fail(cg, blame,
+                "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation",
+                src->feng_name, dst->feng_name);
+        }
+
+        if (dst_member->kind == USM_KIND_FIELD) {
+            buf_append_cstr(wd, "static ");
+            cg_emit_c_type(wd, dst_member->type);
+            buf_append_fmt(wd, " %s__get_%s(void *_subject) {\n",
+                           var.data, dst_member->c_field_name);
+            buf_append_fmt(wd,
+                "    const struct %s *_value = (const struct %s *)_subject;\n"
+                "    return _value->witness->get_%s(_value->subject);\n"
+                "}\n",
+                src->c_value_struct_name,
+                src->c_value_struct_name,
+                src_member->c_field_name);
+            if (dst_member->is_var) {
+                buf_append_fmt(wd, "static void %s__set_%s(void *_subject, ",
+                               var.data, dst_member->c_field_name);
+                cg_emit_c_type(wd, dst_member->type);
+                buf_append_cstr(wd, " value) {\n");
+                buf_append_fmt(wd,
+                    "    struct %s *_value = (struct %s *)_subject;\n"
+                    "    _value->witness->set_%s(_value->subject, value);\n"
+                    "}\n",
+                    src->c_value_struct_name,
+                    src->c_value_struct_name,
+                    src_member->c_field_name);
+            }
+        } else {
+            buf_append_cstr(wd, "static ");
+            cg_emit_c_type(wd, dst_member->type);
+            buf_append_fmt(wd, " %s__%s(void *_subject",
+                           var.data, dst_member->c_field_name);
+            for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
+                buf_append_cstr(wd, ", ");
+                cg_emit_c_type(wd, dst_member->param_types[pi]);
+                buf_append_fmt(wd, " _p%zu", pi);
+            }
+            buf_append_cstr(wd, ") {\n");
+            buf_append_fmt(wd,
+                "    const struct %s *_value = (const struct %s *)_subject;\n",
+                src->c_value_struct_name,
+                src->c_value_struct_name);
+            buf_append_cstr(wd, "    ");
+            if (dst_member->type->kind != CG_TYPE_VOID) {
+                buf_append_cstr(wd, "return ");
+            }
+            buf_append_fmt(wd, "_value->witness->%s(_value->subject",
+                           src_member->c_field_name);
+            for (size_t pi = 0; pi < dst_member->param_count; ++pi) {
+                buf_append_fmt(wd, ", _p%zu", pi);
+            }
+            buf_append_cstr(wd, ");\n}\n");
+        }
+    }
+
+    buf_append_fmt(wd, "static const struct %s %s = {\n",
+                   dst->c_witness_struct_name, var.data);
+    for (size_t i = 0; i < dst->member_count; ++i) {
+        const UserSpecMember *dst_member = &dst->members[i];
+
+        if (dst_member->kind == USM_KIND_FIELD) {
+            buf_append_fmt(wd, "    .get_%s = &%s__get_%s,\n",
+                           dst_member->c_field_name, var.data,
+                           dst_member->c_field_name);
+            if (dst_member->is_var) {
+                buf_append_fmt(wd, "    .set_%s = &%s__set_%s,\n",
+                               dst_member->c_field_name, var.data,
+                               dst_member->c_field_name);
+            }
+        } else {
+            buf_append_fmt(wd, "    .%s = &%s__%s,\n",
+                           dst_member->c_field_name, var.data,
+                           dst_member->c_field_name);
+        }
+    }
+    buf_append_cstr(wd, "};\n\n");
+
+    if (cg->spec_slot_witness_table_count + 1 > cg->spec_slot_witness_table_capacity) {
+        size_t cap = cg->spec_slot_witness_table_capacity
+                         ? cg->spec_slot_witness_table_capacity * 2
+                         : 4;
+        void *p = realloc(cg->spec_slot_witness_tables,
+                          cap * sizeof *cg->spec_slot_witness_tables);
+
+        if (p == NULL) {
+            buf_free(&var);
+            return false;
+        }
+        cg->spec_slot_witness_tables = p;
+        cg->spec_slot_witness_table_capacity = cap;
+    }
+
+    cg->spec_slot_witness_tables[cg->spec_slot_witness_table_count].src = src;
+    cg->spec_slot_witness_tables[cg->spec_slot_witness_table_count].dst = dst;
+    cg->spec_slot_witness_tables[cg->spec_slot_witness_table_count].c_var = var.data;
+    *out_var = var.data;
+    cg->spec_slot_witness_table_count++;
+    return true;
 }
 
 static bool cg_resolve_witness_binding_fallback(CG *cg,
@@ -9690,6 +9872,10 @@ static void cg_dispose(CG *cg) {
         free(cg->witness_tables[i].c_var);
     }
     free(cg->witness_tables);
+    for (size_t i = 0; i < cg->spec_slot_witness_table_count; ++i) {
+        free(cg->spec_slot_witness_tables[i].c_var);
+    }
+    free(cg->spec_slot_witness_tables);
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         free(cg->module_bindings[i].feng_name);
         free(cg->module_bindings[i].c_name);

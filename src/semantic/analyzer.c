@@ -7943,6 +7943,123 @@ static void record_object_arg_coercion_sites_for_owner_instance(
     }
 }
 
+static void materialize_object_spec_constraint_witness_if_applicable(
+    ResolveContext *context,
+    const FengTypeParam *type_param,
+    const FengDecl *actual_type_decl,
+    FengToken err_token) {
+    const FengDecl *constraint_decl;
+
+    if (context == NULL || type_param == NULL || actual_type_decl == NULL ||
+        actual_type_decl->kind != FENG_DECL_TYPE || type_param->constraint == NULL) {
+        return;
+    }
+
+    constraint_decl = resolve_type_ref_decl(context, type_param->constraint);
+    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC ||
+        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return;
+    }
+
+    if (!type_decl_satisfies_spec_decl(context, actual_type_decl, constraint_decl)) {
+        return;
+    }
+
+    compute_spec_witness_if_absent(context,
+                                   actual_type_decl,
+                                   constraint_decl,
+                                   err_token);
+}
+
+static void materialize_named_type_param_constraint_witnesses(
+    ResolveContext *context,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    const FengTypeRef *const *type_args,
+    size_t type_arg_count,
+    FengToken err_token) {
+    size_t i;
+
+    if (context == NULL || type_params == NULL || type_args == NULL) {
+        return;
+    }
+
+    for (i = 0U; i < type_param_count && i < type_arg_count; ++i) {
+        const FengDecl *actual_type_decl = resolve_type_ref_decl(context, type_args[i]);
+
+        materialize_object_spec_constraint_witness_if_applicable(context,
+                                                                 &type_params[i],
+                                                                 actual_type_decl,
+                                                                 err_token);
+    }
+}
+
+static const FengDecl *infer_callable_type_param_concrete_arg_decl(
+    ResolveContext *context,
+    const FengExpr *call_expr,
+    const FengCallableSignature *callable,
+    size_t type_param_index) {
+    size_t arg_index;
+
+    if (context == NULL || call_expr == NULL || call_expr->kind != FENG_EXPR_CALL ||
+        callable == NULL || type_param_index >= callable->type_param_count) {
+        return NULL;
+    }
+
+    if (call_expr->as.call.has_explicit_type_args &&
+        type_param_index < call_expr->as.call.explicit_type_arg_count) {
+        const FengDecl *actual_type_decl =
+            resolve_type_ref_decl(context,
+                                  call_expr->as.call.explicit_type_args[type_param_index]);
+
+        return actual_type_decl != NULL && actual_type_decl->kind == FENG_DECL_TYPE
+                   ? actual_type_decl
+                   : NULL;
+    }
+
+    for (arg_index = 0U;
+         arg_index < callable->param_count && arg_index < call_expr->as.call.arg_count;
+         ++arg_index) {
+        const FengTypeRef *param_type = callable->params[arg_index].type;
+
+        if (!param_type_is_type_param_ref(callable, param_type) ||
+            !slice_equals(callable->type_params[type_param_index].name,
+                          param_type->as.named.segments[0])) {
+            continue;
+        }
+
+        return concrete_type_decl_of_inferred(
+            context,
+            infer_expr_type(context, call_expr->as.call.args[arg_index]));
+    }
+
+    return NULL;
+}
+
+static void materialize_callable_type_param_constraint_witnesses(
+    ResolveContext *context,
+    const FengExpr *call_expr,
+    const FengCallableSignature *callable) {
+    size_t i;
+
+    if (context == NULL || call_expr == NULL || callable == NULL) {
+        return;
+    }
+
+    for (i = 0U; i < callable->type_param_count; ++i) {
+        const FengDecl *actual_type_decl = infer_callable_type_param_concrete_arg_decl(
+            context,
+            call_expr,
+            callable,
+            i);
+
+        materialize_object_spec_constraint_witness_if_applicable(context,
+                                                                 &callable->type_params[i],
+                                                                 actual_type_decl,
+                                                                 call_expr->token);
+    }
+}
+
 static FengSpecCoercionCallableSource classify_callable_source(
         const ResolveContext *context, const FengExpr *expr) {
     if (expr == NULL) {
@@ -9046,6 +9163,15 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
         mutable_expr->as.call.resolved_callable.kind = FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR;
         mutable_expr->as.call.resolved_callable.owner_type_decl = target.type_decl;
         mutable_expr->as.call.resolved_callable.member = constructor_member;
+        if (expr->as.call.has_explicit_type_args) {
+            materialize_named_type_param_constraint_witnesses(
+                context,
+                target.type_decl->as.type_decl.type_params,
+                target.type_decl->as.type_decl.type_param_count,
+                (const FengTypeRef *const *)expr->as.call.explicit_type_args,
+                expr->as.call.explicit_type_arg_count,
+                expr->token);
+        }
         if (constructor_member != NULL &&
             constructor_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
             record_object_arg_coercion_sites(context,
@@ -9116,6 +9242,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
+                    materialize_callable_type_param_constraint_witnesses(context,
+                                                                        expr,
+                                                                        resolution.callable);
                     record_resolved_callable_from_resolution(expr, &resolution);
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
@@ -9179,6 +9308,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 note_callable_exception_escape(context, resolution.callable);
+                materialize_callable_type_param_constraint_witnesses(context,
+                                                                    expr,
+                                                                    resolution.callable);
                 record_resolved_callable_from_resolution(expr, &resolution);
                 record_object_arg_coercion_sites_for_owner_instance(context,
                                                                     expr->as.call.args,
@@ -9254,6 +9386,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     note_callable_exception_escape(context, resolution.callable);
+                    materialize_callable_type_param_constraint_witnesses(context,
+                                                                        expr,
+                                                                        resolution.callable);
                     record_resolved_callable_from_resolution(expr, &resolution);
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
@@ -9875,6 +10010,25 @@ static bool resolve_named_type_ref(ResolveContext *context,
                                (int)name.length, name.data,
                                expected_arity, type_arg_count));
         }
+
+        if (base_decl->kind == FENG_DECL_TYPE) {
+            materialize_named_type_param_constraint_witnesses(
+                context,
+                base_decl->as.type_decl.type_params,
+                base_decl->as.type_decl.type_param_count,
+                (const FengTypeRef *const *)type_ref->as.named.type_args,
+                type_arg_count,
+                type_ref->token);
+        } else if (base_decl->kind == FENG_DECL_SPEC) {
+            materialize_named_type_param_constraint_witnesses(
+                context,
+                base_decl->as.spec_decl.type_params,
+                base_decl->as.spec_decl.type_param_count,
+                (const FengTypeRef *const *)type_ref->as.named.type_args,
+                type_arg_count,
+                type_ref->token);
+        }
+
         return true;
     }
 

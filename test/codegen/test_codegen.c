@@ -782,6 +782,59 @@ static void test_generic_constraint_witness_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericConstrainedSpecValueSrc =
+    "mod feng.codegen.gf7;\n"
+    "spec Named {\n"
+    "    var name: string;\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    var name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "fn rename<T: Named>(user: T, next: string): string {\n"
+    "    user.name = next;\n"
+    "    return user.greet();\n"
+    "}\n"
+    "fn use_it(): string {\n"
+    "    let named: Named = User{name: \"before\"};\n"
+    "    return rename:<Named>(named, \"after\");\n"
+    "}\n";
+
+static void test_generic_constrained_spec_value_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericConstrainedSpecValueSrc, "gf7.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 constrained spec generic arg): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecSlotWitness__") != NULL);
+    ASSERT(strstr(out.c_source, "_value->witness->get_name") != NULL);
+    ASSERT(strstr(out.c_source, "_value->witness->greet") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericAggregateReturnSrc =
     "mod feng.codegen.gf6;\n"
     "spec Named {\n"
@@ -849,6 +902,7 @@ int main(void) {
     test_generic_fn_call_codegen();
     test_generic_spec_arg_codegen();
     test_generic_constraint_witness_codegen();
+    test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;

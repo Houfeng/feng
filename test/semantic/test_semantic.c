@@ -8251,6 +8251,44 @@ static void test_spec_witness_on_demand_only(void) {
     feng_program_free(program);
 }
 
+static void test_spec_witness_via_generic_instantiation(void) {
+    /* Generic instantiation should demand the same object-form witness that
+     * direct spec coercion sites already materialize. */
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn greet<T: Named>(value: T): string {\n"
+        "    return value.name();\n"
+        "}\n"
+        "fn run(): string {\n"
+        "    let user = User{n: \"u\"};\n"
+        "    return greet(user);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("witness_generic_call.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *user = find_type_decl_by_name(analysis, "User");
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+
+    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, user, named) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_spec_witness_multi_fit_conflict(void) {
     /* §8.1: two visible fits both provide the same (name, params, return)
      * implementation of S's method on T → conflict at first coercion. */
@@ -9083,6 +9121,7 @@ int main(void) {
     test_spec_witness_via_fit();
     test_spec_witness_field_member();
     test_spec_witness_on_demand_only();
+    test_spec_witness_via_generic_instantiation();
     test_spec_witness_multi_fit_conflict();
     test_spec_equality_object_eq_recorded();
     test_spec_equality_object_neq_recorded();
