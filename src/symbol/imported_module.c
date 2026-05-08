@@ -489,7 +489,11 @@ static FengTypeParam *synthesize_type_params(const FengSymbolDeclView *symbol_de
             free_synthetic_type_params(params, fill);
             return NULL;
         }
-        params[fill].constraint = NULL;
+        params[fill].constraint = synthesize_type_ref(member->value_type);
+        if (member->value_type != NULL && params[fill].constraint == NULL) {
+            free_synthetic_type_params(params, fill + 1U);
+            return NULL;
+        }
         ++fill;
     }
     *out_count = fill;

@@ -1136,6 +1136,19 @@ static bool emit_type_param_children(FengSymbolDeclView *decl,
         if (tp_decl == NULL) {
             return false;
         }
+        if (type_params[index].constraint != NULL) {
+            tp_decl->value_type = build_type_from_type_ref_with_tparams(type_params[index].constraint,
+                                                                        type_params,
+                                                                        type_param_count,
+                                                                        path,
+                                                                        type_params[index].token,
+                                                                        out_error);
+            if (tp_decl->value_type == NULL) {
+                feng_symbol_internal_decl_free_members(tp_decl);
+                free(tp_decl);
+                return false;
+            }
+        }
         if (!append_member_decl(decl, tp_decl, path, type_params[index].token, out_error)) {
             feng_symbol_internal_decl_free_members(tp_decl);
             free(tp_decl);

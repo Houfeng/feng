@@ -290,6 +290,7 @@ typedef struct UserType {
     const FengDecl *generic_origin_decl;
     FengTypeRef **generic_type_args;
     size_t generic_type_arg_count;
+    const FengProgram *instantiation_program;
     /* Owning program — set when the type shell is registered while emitting
      * that program. Used by cg_find_user_type to enforce per-program
      * (module / `use`) visibility so two distinct types that happen to share
@@ -2824,6 +2825,10 @@ static UserType *cg_find_generic_instance_user_type_for_ref(CG *cg,
 static bool cg_collect_generic_instances_from_type_ref(CG *cg,
                                                        const FengTypeRef *ref,
                                                        CGTypeParamScope scope);
+static bool cg_collect_generic_instances_from_type_params(CG *cg,
+                                                          const FengTypeParam *type_params,
+                                                          size_t type_param_count,
+                                                          CGTypeParamScope scope);
 
 static bool cg_register_generic_type_instance_shell(CG *cg,
                                                     const GenericTypeDecl *generic_decl,
@@ -2855,6 +2860,9 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     UserType *t = &cg->user_types[cg->user_type_count++];
     memset(t, 0, sizeof *t);
     t->owner_program = generic_decl->owner_program;
+    t->instantiation_program = cg->cur_program != NULL
+        ? cg->cur_program
+        : generic_decl->owner_program;
     t->decl = decl;
     t->is_generic_instance = true;
     t->generic_origin_decl = decl;
@@ -2910,6 +2918,16 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     free(base_san);
     buf_free(&symbol);
     if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name) {
+        return false;
+    }
+
+    CGTypeParamScope constraint_scope = {0};
+    constraint_scope.first = decl->as.type_decl.type_params;
+    constraint_scope.first_count = decl->as.type_decl.type_param_count;
+    if (!cg_collect_generic_instances_from_type_params(cg,
+                                                       decl->as.type_decl.type_params,
+                                                       decl->as.type_decl.type_param_count,
+                                                       constraint_scope)) {
         return false;
     }
 
@@ -10957,7 +10975,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             ok = false;
         }
     }
-    if (!ok) { for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]); free(desc_exprs); goto bail; }
+    if (!ok) {
+        for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+        free(desc_exprs);
+        goto bail;
+    }
 
     /* ---- Step 4: determine if each param is T-typed; materialise arg ---- */
     /* Temporarily activate generic-fn type param state so cg_resolve_type
@@ -12297,6 +12319,23 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                     }
                 }
             }
+            if (expr->as.call.resolved_callable.kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+                expr->as.call.resolved_callable.function_decl != NULL &&
+                expr->as.call.resolved_callable.function_decl->kind == FENG_DECL_FUNCTION) {
+                const FengCallableSignature *sig =
+                    &expr->as.call.resolved_callable.function_decl->as.function_decl;
+                if (sig->type_param_count > 0U) {
+                    CGTypeParamScope call_scope = scope;
+                    call_scope.second = sig->type_params;
+                    call_scope.second_count = sig->type_param_count;
+                    if (!cg_collect_generic_instances_from_type_params(cg,
+                                                                       sig->type_params,
+                                                                       sig->type_param_count,
+                                                                       call_scope)) {
+                        return false;
+                    }
+                }
+            }
             if (expr->as.call.resolved_callable.kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
                 expr->as.call.resolved_callable.owner_type_decl != NULL &&
                 expr->as.call.resolved_callable.owner_type_decl->kind == FENG_DECL_TYPE &&
@@ -12799,7 +12838,9 @@ static bool cg_emit_all_programs(CG *cg,
      * each type's owning program so cg_resolve_type's visibility filter
      * picks the right same-simple-named candidate. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
-        cg->cur_program = cg->user_types[i].owner_program;
+        cg->cur_program = cg->user_types[i].instantiation_program != NULL
+            ? cg->user_types[i].instantiation_program
+            : cg->user_types[i].owner_program;
         bool ok = cg_register_user_type_members(cg, &cg->user_types[i]);
         cg->cur_program = NULL;
         if (!ok) {
@@ -12905,11 +12946,20 @@ static bool cg_emit_all_programs(CG *cg,
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
         }
+        const FengProgram *visibility_program = t->instantiation_program != NULL
+            ? t->instantiation_program
+            : t->owner_program;
+        if (!cg_emit_module_header(cg, visibility_program)) {
+            return false;
+        }
+        cg->cur_program = visibility_program;
         for (size_t mi = 0; mi < t->method_count; mi++) {
             if (!cg_emit_generic_type_method_wrapper(cg, t, &t->methods[mi])) {
+                cg->cur_program = NULL;
                 return false;
             }
         }
+        cg->cur_program = NULL;
     }
     /* Pass 4: per-program decl emission (externs / functions / methods /
      * finalizers / fit method bodies). */

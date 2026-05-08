@@ -794,6 +794,7 @@ static bool writer_collect_decl(WriterContext *ctx,
     switch (decl->kind) {
         case FENG_SYMBOL_DECL_KIND_BINDING:
         case FENG_SYMBOL_DECL_KIND_FIELD:
+        case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
             record.type_ref = writer_serialize_type(ctx, decl->value_type, path, decl->token, out_error);
             if (decl->value_type != NULL && record.type_ref == 0U) {
                 return false;

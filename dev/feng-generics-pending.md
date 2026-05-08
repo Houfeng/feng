@@ -48,6 +48,13 @@
 
 本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `use` 消费”。该路径必须满足 [feng-package.md](../docs/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `fn` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
 
+本轮按以下四项收口：
+
+1. `type_param` 的约束必须随 `.ft/.fb` 导出、读取，并在 imported AST 合成时恢复为 `T: Constraint`。
+2. consumer 调用 imported 受约束泛型顶层函数时，descriptor 必须携带本地实际类型对 imported spec 的 witness，不能退化为 `witness = NULL`。
+3. consumer 以本地类型实参实例化 imported 受约束泛型类型并调用方法时，wrapper/codegen 必须在使用点解析约束并传递正确 descriptor。
+4. CLI package 回归必须覆盖 imported 受约束泛型函数调用和 imported 受约束泛型类型实例化两条路径。
+
 已用最小 probe 复现的缺口如下，本轮修复必须同时补回归：
 
 1. 外部包公开泛型顶层函数后，consumer 调用时不能在 codegen 中丢失函数级类型参数引用。

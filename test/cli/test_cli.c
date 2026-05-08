@@ -1383,6 +1383,108 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
     free(remove_error);
 }
 
+static void test_direct_build_consumes_package_constrained_generic_function(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_constrained_generic_fn_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgconstrainedgenericfn",
+        "pu mod test.cli.pkgconstrainedgenericfn;\n"
+        "pu spec Eq<T> {\n"
+        "  fn same(other: T): bool;\n"
+        "}\n"
+        "pu fn sameAs<T: Eq<T>>(left: T, right: T): bool {\n"
+        "  return left.same(right);\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkgconstrainedgenericfnmain;\n"
+        "use test.cli.pkgconstrainedgenericfn;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "type Key: Eq<Key> {\n"
+        "  var id: int;\n"
+        "  fn same(other: Key): bool {\n"
+        "    return self.id == other.id;\n"
+        "  }\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "  let a = Key{id: 5};\n"
+        "  let b = Key{id: 5};\n"
+        "  if sameAs(a, b) { puts(\"constrained generic fn ok\"); }\n"
+        "}\n",
+        "constrained_generic_fn_main",
+        "constrained generic fn ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+static void test_direct_build_consumes_package_constrained_generic_type(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_constrained_generic_type_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgconstrainedgenerictype",
+        "pu mod test.cli.pkgconstrainedgenerictype;\n"
+        "pu spec Eq<T> {\n"
+        "  fn same(other: T): bool;\n"
+        "}\n"
+        "pu type MiniMap<K: Eq<K>, V> {\n"
+        "  var key: K;\n"
+        "  var value: V;\n"
+        "  pu fn put(key: K, value: V) {\n"
+        "    self.key = key;\n"
+        "    self.value = value;\n"
+        "  }\n"
+        "  pu fn hasKey(key: K): bool {\n"
+        "    return key.same(self.key);\n"
+        "  }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkgconstrainedgenerictypemain;\n"
+        "use test.cli.pkgconstrainedgenerictype;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string): int;\n"
+        "type Key: Eq<Key> {\n"
+        "  var id: int;\n"
+        "  fn same(other: Key): bool {\n"
+        "    return self.id == other.id;\n"
+        "  }\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "  let a = Key{id: 8};\n"
+        "  let b = Key{id: 8};\n"
+        "  let map: MiniMap<Key, string> = MiniMap:<Key, string>();\n"
+        "  map.put(a, \"value\");\n"
+        "  if map.hasKey(b) { puts(\"constrained generic type ok\"); }\n"
+        "}\n",
+        "constrained_generic_type_main",
+        "constrained generic type ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
     char template_path[] = "/tmp/feng_cli_pack_manifest_XXXXXX";
     char *workspace_dir;
@@ -6675,6 +6777,8 @@ int main(void) {
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_generic_spec_constraint();
+    test_direct_build_consumes_package_constrained_generic_function();
+    test_direct_build_consumes_package_constrained_generic_type();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_frontend_outputs_absolute_bundle_paths();

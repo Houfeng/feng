@@ -13,5 +13,5 @@
     "nums",
     "venv"
   ],
-  "chat.agent.maxRequests": 100
+  "chat.agent.maxRequests": 200
 }
