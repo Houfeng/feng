@@ -1044,6 +1044,53 @@ static void test_generic_callable_spec_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kCallableSpecMethodCoercionSrc =
+    "mod feng.codegen.gs5;\n"
+    "spec Mapper<T>(x: T): T;\n"
+    "type Adder {\n"
+    "    fn add1(x: int): int {\n"
+    "        return x + 1;\n"
+    "    }\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let mapper: Mapper<int> = Adder().add1;\n"
+    "    return mapper(41);\n"
+    "}\n";
+
+static void test_callable_spec_method_coercion_codegen(void) {
+    FengProgram *program = parse_or_die(kCallableSpecMethodCoercionSrc, "gs5.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (callable spec method coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengCallableBind__FengClosure__feng__codegen__gs5__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "feng_object_new(&FengClosureDesc__feng__codegen__gs5__Mapper__G__int)") != NULL);
+    ASSERT(strstr(out.c_source, "feng_assign(&_o->_self, (void *)_self)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedSpecValueSrc =
     "mod feng.codegen.gf7;\n"
     "spec Named {\n"
@@ -1169,6 +1216,7 @@ int main(void) {
     test_generic_callable_spec_instance_codegen();
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
+    test_callable_spec_method_coercion_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();

@@ -17,9 +17,9 @@
 - [x] **G1**：词法分析确认与测试（见 [§G1](#g1-词法分析)）
 - [x] **G2**：AST 结构扩展（见 [§G2](#g2-ast-扩展)）
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
-- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance 与 direct generic spec instance coercion 的基础语义已完成，但 union 约束面、callable-form method/lambda coercion 与泛型类型上的泛型方法仍未完成，见 [§当前问题总表](#当前问题总表)）
+- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion 与 callable-form method coercion 的基础语义已完成，但 union 约束面、callable-form lambda coercion 与泛型类型上的泛型方法仍未完成，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance 与 direct generic spec coercion 基础路径已完成；但 generic-type generic-method / union-form / callable-form method/lambda coercion / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion 与 callable-form method coercion 基础路径已完成；但 generic-type generic-method / union-form / callable-form lambda coercion / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
 - [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用和 generic aggregate return，但仍不足以证明“泛型 100% 完整”，见 [§G7](#g7-测试与验证)）
 
 ---
@@ -52,13 +52,13 @@
 - 这说明当前泛型并未覆盖“未来 tuple / 其他 aggregate 值”这整类 generic arg，也不能宣称“已覆盖所有值类型”。
 - 影响范围包括：未来 tuple / 其他按值聚合类型，以及任何依赖 `FengAggregateValueDescriptor` 的按值泛型场景。
 
-#### P2. callable-form method/lambda coercion 与 union-form `spec` 的泛型覆盖仍未闭合
+#### P2. callable-form lambda coercion 与 union-form `spec` 的泛型覆盖仍未闭合
 
 - 当前源码中的 `spec` form 枚举仍只有 object-form / callable-form 两类；源码尚未把 union-form 纳入同一条泛型实现路径。
 - callable-form `spec` 现在已经有统一 callable value 表示；top-level function coercion、direct invoke、generic callable constraint invoke lowering，以及 generic callable `spec` concrete instance 的 direct call 均已进入同一条 lowering。
 - codegen 现在已经能注册并解析 generic `spec` concrete instance；object-form / callable-form 两类 `Spec<int>` 具名使用都能进入 shell/member/codegen 路径。
 - analyzer / codegen 现在已经按 concrete target type ref 打通 direct generic `spec` coercion：object-form `type -> Spec<int>` 与 top-level function -> `CallableSpec<int>` 都已进入同一条 semantic sidecar / codegen 路径，并补齐了对应回归。
-- callable-form `spec` 的 method value / lambda coercion 仍未完成；当前已闭环的是 top-level function coercion 与已是 callable value 的 direct call / generic invoke 路径。
+- callable-form `spec` 的 method value coercion 已经进入统一 callable value lowering，并通过绑定 receiver 的 closure 形态闭环；lambda coercion 仍未完成。
 - 因而，generic `spec` 与 callable-form `spec` 的真实收口前提是：
     - codegen 能注册并解析 generic spec instance；
     - callable-form `spec` 能复用同一套 callable value 表示与 direct invoke lowering；
@@ -78,7 +78,7 @@
 #### P5. 测试覆盖仍不足以证明“泛型 100% 完整”
 
 - 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering，以及 generic spec concrete instance 的 object/callable 基础 codegen 路径。
-- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg、callable-form `spec` 的 method/lambda coercion、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
+- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg、callable-form `spec` 的 lambda coercion、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
 - 因此，当前仍不能把 `make test` 通过解释为“泛型已经 100% 完整”。
 
 ### 三、当前类型覆盖矩阵
@@ -89,7 +89,7 @@
 | 托管指针类型（`UserType` / `string` / `T[]`） | **已支持基础路径** | 走 `FENG_VALUE_MANAGED_POINTER` |
 | object-form spec value | **已支持基础路径** | 无约束 generic arg、约束 witness 调用、aggregate return 已闭环 |
 | 受约束 object-form spec value generic arg | **已支持基础路径** | slot witness adapter 已闭环 |
-| callable-form spec value | **已支持基础路径** | callable value 表示、top-level fn coercion、generic callable spec instance coercion、direct call、generic callable constraint 已闭环；method/lambda coercion 仍待补齐 |
+| callable-form spec value | **已支持基础路径** | callable value 表示、top-level fn coercion、method coercion、generic callable spec instance coercion、direct call、generic callable constraint 已闭环；lambda coercion 仍待补齐 |
 | union-form spec value | **未完成** | 当前源码未进入统一泛型路径 |
 | 未来 tuple / 其他按值聚合类型 | **未完成** | 与 aggregate 支持同一闭环 |
 | 受约束类型参数上的 object-form 行为调用 | **已支持基础路径** | `_T->witness` lowering 已闭环 |
