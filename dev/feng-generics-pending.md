@@ -17,9 +17,9 @@
 - [x] **G1**：词法分析确认与测试（见 [§G1](#g1-词法分析)）
 - [x] **G2**：AST 结构扩展（见 [§G2](#g2-ast-扩展)）
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
-- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion 与 callable-form lambda coercion 的基础语义已完成，但 union 约束面与泛型类型上的泛型方法仍未完成，见 [§当前问题总表](#当前问题总表)）
+- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面仍未完成，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion 与 callable-form lambda coercion 基础路径已完成；但 generic-type generic-method / union-form / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
+- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion，以及 generic-type generic-method 基础路径已完成；但 union-form / 其余类型覆盖仍未完成，见 [§G6](#g6-代码生成)）
 - [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用和 generic aggregate return，但仍不足以证明“泛型 100% 完整”，见 [§G7](#g7-测试与验证)）
 
 ---
@@ -32,6 +32,7 @@
 
 - 泛型声明、类型引用、显式类型实参、基本推导、名称与 arity 校验，已经具备可用基础。
 - 泛型类型上的**非泛型方法**，当参数/返回仅使用外层类型参数，且具体类型实参属于当前已支持类别时，可以正确编译运行。
+- 泛型类型上的**泛型方法**基础路径已经可用：共享方法体按外层类型参数描述符后接方法类型参数描述符展开；实例 wrapper 补外层描述符，调用点补方法级描述符；当前 smoke 已覆盖 `Box<T>.echo<U>` 的推导调用与 `Box<T>.replace<U>` 的显式类型实参调用。
 - 当前 smoke 已验证 `Box<T>` 的 `setValue(next: T)` / `readValue(): T` 路径可工作，覆盖了 `i32` 与 `string` 两类实例。
 - 当前 codegen 与 smoke 已验证 object-form `spec` 约束下的字段读写与方法调用可以通过 `_T->witness` 闭环工作。
 - 当前 codegen 与 smoke 已验证 generic function / shared body 中 object-form `spec` 这类 aggregate return 已闭环，且同时覆盖 borrowed 与 owns_ref 两条返回路径。
@@ -63,10 +64,12 @@
 - 因而，generic `spec` 与 callable-form `spec` 的真实收口前提是：codegen 能注册并解析 generic spec instance；callable-form `spec` 能复用同一套 callable value 表示与 direct invoke lowering；这套表示未来还能向 union-form `spec` 扩展，而不是再次推翻 ABI。
 - 因此，当前实现距离“所有形态 Spec 都可作为泛型实参/约束”还有明确差距。
 
-#### P3. 泛型类型上的泛型方法仍未支持
+#### P3. 泛型类型上的泛型方法基础路径已完成
 
-- 当前 `type Box<T> { fn map<U>(...) { ... } }` 这类“泛型类型 + 方法级泛型参数”的组合仍未完成。
-- 代码里保留了明确错误：`generic methods on generic types are not yet supported`。
+- 当前 `type Box<T> { fn map<U>(...) { ... } }` 这类“泛型类型 + 方法级泛型参数”的基础组合已经打通。
+- 语义层已经能在成员方法调用返回类型上同时替换外层类型参数与方法级类型参数，支持方法级类型实参显式指定与直接参数位置推导。
+- 代码生成层已经移除 `generic methods on generic types are not yet supported` 失败分支；G6-6 的 ABI 落地为：泛型类型共享方法体按“外层类型参数描述符 -> 方法类型参数描述符”接收统一 descriptor 序列；具体类型实例 wrapper 负责补齐外层 descriptor，调用点负责为方法级类型实参构造 descriptor，并继续通过 `_out` 处理方法级泛型返回值。
+- 当前基础证据来自 `test/codegen/test_codegen.c` 的生成 C 编译用例，以及 `test/smoke/phase1a/generic_type_generic_method.ff` 端到端 smoke。
 
 #### P4. `Map<K: Hashable, V>` 级真实目标场景尚未形成完成证据
 
@@ -76,7 +79,7 @@
 #### P5. 测试覆盖仍不足以证明“泛型 100% 完整”
 
 - 现有 smoke / 单测已证明：标量值类型、托管指针类型、object-form 约束调用、generic aggregate return、generic callable constraint invoke lowering、callable-form `spec` 的 lambda coercion，以及 generic spec concrete instance 的 object/callable 基础 codegen 路径。
-- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg、泛型类型上的泛型方法，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
+- 现有 smoke / 单测尚未证明：受约束 aggregate generic arg，以及 `Map<K: Hashable, V>` 这类真实标准库目标场景。
 - 因此，当前仍不能把 `make test` 通过解释为“泛型已经 100% 完整”。
 
 ### 三、当前类型覆盖矩阵
@@ -967,7 +970,7 @@ struct {
 | G6-3 | **完成 object-form `spec` 约束的 witness lowering**：字段 getter/setter 与方法 thunk 全部进入静态 witness 结构 | `src/codegen/codegen.c` |
 | G6-4 | **完成 callable-form `spec` 约束的 invoke lowering**：共享主体可直接调用 callable-form 契约 | `src/codegen/codegen.c` |
 | G6-5 | **为 union-form `spec` 预留统一 generic ABI**：复用 union runtime/value model，不在 generic 层新增第四类分发机制 | `src/codegen/codegen.c` |
-| G6-6 | **完成泛型类型上的泛型方法**：外层类型参数与方法类型参数统一进入共享 ABI | `src/codegen/codegen.c` |
+| G6-6 | **已完成泛型类型上的泛型方法基础路径**：外层类型参数与方法类型参数统一进入共享 ABI，覆盖推导与显式方法类型实参调用 | `src/codegen/codegen.c` / `src/semantic/analyzer.c` / `test/codegen/` / `test/smoke/` |
 | G6-7 | **补齐代码生成单元测试与 smoke** | `test/codegen/` |
 
 **G6 当前必须坚持的实现原则**：
@@ -1035,7 +1038,7 @@ struct {
 | G7-1 | Parser 测试：全量覆盖 `docs/feng-generics-draft.md` 中正确语法 1-9 和错误语法 1-12 |
 | G7-2 | 语义分析测试：泛型声明、重载、推导、object-form / callable-form / union-form 约束访问、invariance 各场景 |
 | G7-3 | 符号表测试：泛型声明导出 / 跨包读取后语义等价验证 |
-| G7-4 | 代码生成 smoke：基础 `Box<T>`、`MyType<T, V>`、任意多个类型参数、泛型类型上的泛型方法 |
+| G7-4 | 代码生成 smoke：基础 `Box<T>`、`MyType<T, V>`、任意多个类型参数、泛型类型上的泛型方法（基础 smoke 已补，后续继续补真实场景） |
 | G7-5 | 类型覆盖 smoke：内建标量、`string`、数组、`UserType`、object-form `spec`、callable-form `spec`、aggregate 返回 |
 | G7-6 | 契约 smoke：`Map<K: Hashable, V>`、受约束算法函数、object-form / callable-form / union-form 约束场景 |
 | G7-7 | 全量回归测试：确保既有非泛型功能无回归 |
@@ -1092,7 +1095,7 @@ G4-16(泛型 fit 左侧) → G4-17
 7. G5（符号表导出）+ G5-8（符号表测试）
 9. **当前补齐阶段 A**：完成 callable value codegen 表示与 callable-form `spec` / generic `spec` 的统一契约 lowering（G4 收口 + G6-3 / G6-4 / G6-5）
 10. **当前补齐阶段 B**：完成其余 aggregate generic arg 类型覆盖（G6-1）
-11. **当前补齐阶段 C**：完成泛型类型上的泛型方法（G6-6）
+11. **当前补齐阶段 C（已完成基础路径）**：完成泛型类型上的泛型方法（G6-6）
 12. **当前补齐阶段 D**：补齐 `Map<K: Hashable, V>` 等真实 smoke 与回归（G7-4 / G7-5 / G7-6 / G7-7）
 13. 泛型完整后，再恢复 fit 值类型工作
 
@@ -1105,6 +1108,6 @@ G4-16(泛型 fit 左侧) → G4-17
 - 当前代码实现里已经有以 `FengGenericValueDescriptor` 为核心的共享主体 ABI；完整态将其收口为 `FengGenericParamDescriptor`（重命名并增加 `witness`）。
 - `Box<T>` 的基础 smoke 已通过，证明“外层类型参数参与参数/返回/字段读写”这条最小路径可工作。
 - 语义 value-kind 已经给出一条可用总分类：标量 builtin 是 trivial，`UserType` 与 callable-form `spec` 是 managed pointer，object-form `spec` 是 aggregate。
-- 当前主要问题集中在：aggregate 泛型实参、callable-form / union-form `spec` 覆盖、受约束类型参数调用，以及泛型类型上的泛型方法。
+- 当前主要问题集中在：aggregate 泛型实参、union-form `spec` 覆盖、受约束类型参数真实场景覆盖，以及 `Map<K: Hashable, V>` 级标准库目标场景。
 
 因此，当前阶段不再从 G2/G3 重新起步，而是直接针对 G4/G6/G7 的剩余缺口收口。

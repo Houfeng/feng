@@ -2180,6 +2180,8 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
+static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
+                                         const FengTypeRef *type_ref);
 static bool validate_type_param_constraints(ResolveContext *context,
                                             const FengTypeParam *type_params,
                                             size_t type_param_count);
@@ -2218,6 +2220,102 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
 static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
                                               const FengDecl *type_decl,
                                               const FengTypeRef *spec_type_ref);
+
+static const FengTypeRef *substitute_callable_return_type_for_call(
+    ResolveContext *context,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type,
+    const FengExpr *call_expr,
+    const FengCallableSignature *callable) {
+    const FengTypeRef *return_type_ref;
+    FengTypeRef **type_args = NULL;
+    bool *owned_type_args = NULL;
+    FengTypeRef *substituted = NULL;
+
+    if (callable == NULL || callable->return_type == NULL) {
+        return NULL;
+    }
+
+    return_type_ref = substitute_type_ref_for_owner_instance(context,
+                                                            owner_type_decl,
+                                                            owner_type,
+                                                            callable->return_type);
+    if (callable->type_param_count == 0U || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL) {
+        return return_type_ref;
+    }
+
+    type_args = calloc(callable->type_param_count, sizeof *type_args);
+    owned_type_args = calloc(callable->type_param_count, sizeof *owned_type_args);
+    if (type_args == NULL || owned_type_args == NULL) {
+        free(type_args);
+        free(owned_type_args);
+        return return_type_ref;
+    }
+
+    for (size_t type_param_index = 0U;
+         type_param_index < callable->type_param_count;
+         ++type_param_index) {
+        if (call_expr->as.call.has_explicit_type_args &&
+            type_param_index < call_expr->as.call.explicit_type_arg_count) {
+            type_args[type_param_index] =
+                call_expr->as.call.explicit_type_args[type_param_index];
+            continue;
+        }
+
+        for (size_t arg_index = 0U;
+             arg_index < callable->param_count &&
+             arg_index < call_expr->as.call.arg_count;
+             ++arg_index) {
+            const FengTypeRef *param_type = callable->params[arg_index].type;
+
+            if (!param_type_is_type_param_ref(callable, param_type) ||
+                !slice_equals(callable->type_params[type_param_index].name,
+                              param_type->as.named.segments[0])) {
+                continue;
+            }
+
+            InferredExprType arg_type = infer_expr_type(context,
+                                                        call_expr->as.call.args[arg_index]);
+            type_args[type_param_index] =
+                create_type_ref_from_inferred_type(&arg_type, call_expr->token);
+            owned_type_args[type_param_index] = type_args[type_param_index] != NULL;
+            break;
+        }
+    }
+
+    for (size_t type_param_index = 0U;
+         type_param_index < callable->type_param_count;
+         ++type_param_index) {
+        if (type_args[type_param_index] == NULL) {
+            goto cleanup;
+        }
+    }
+
+    substituted = clone_type_ref_substituting_type_params(return_type_ref,
+                                                          callable->type_params,
+                                                          callable->type_param_count,
+                                                          type_args);
+    if (substituted != NULL && resolver_track_synthetic_type_ref(context, substituted)) {
+        return_type_ref = substituted;
+        substituted = NULL;
+    }
+
+cleanup:
+    if (substituted != NULL) {
+        free_synthetic_type_ref(substituted);
+    }
+    for (size_t type_param_index = 0U;
+         type_param_index < callable->type_param_count;
+         ++type_param_index) {
+        if (owned_type_args[type_param_index]) {
+            free_synthetic_type_ref(type_args[type_param_index]);
+        }
+    }
+    free(type_args);
+    free(owned_type_args);
+    return return_type_ref;
+}
 
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
@@ -5898,10 +5996,11 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.callable->return_type != NULL) {
                     const FengTypeRef *return_type_ref =
-                        substitute_type_ref_for_owner_instance(context,
-                                                               owner_type_decl,
-                                                               owner_type,
-                                                               resolution.callable->return_type);
+                        substitute_callable_return_type_for_call(context,
+                                                                 owner_type_decl,
+                                                                 owner_type,
+                                                                 expr,
+                                                                 resolution.callable);
 
                     return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
                 } else {

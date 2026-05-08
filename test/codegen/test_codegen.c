@@ -1289,6 +1289,61 @@ static void test_generic_aggregate_return_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericTypeGenericMethodSrc =
+    "mod feng.codegen.gf8;\n"
+    "type Box<T> {\n"
+    "    var value: T;\n"
+    "    fn echo<U>(value: U): U {\n"
+    "        return value;\n"
+    "    }\n"
+    "    fn replace<U>(next: T, result: U): U {\n"
+    "        self.value = next;\n"
+    "        return result;\n"
+    "    }\n"
+    "    fn current(): T {\n"
+    "        return self.value;\n"
+    "    }\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let box = Box:<int>();\n"
+    "    let first: int = box.echo(20);\n"
+    "    let second: int = box.replace:<int>(22, first);\n"
+    "    return box.current() + second;\n"
+    "}\n";
+
+static void test_generic_type_generic_method_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericTypeGenericMethodSrc, "gf8.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G6 generic type generic method): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengGenericMethod__feng__codegen__gf8__Box") != NULL);
+    ASSERT(strstr(out.c_source, "const FengGenericParamDescriptor *_U") != NULL);
+    ASSERT(strstr(out.c_source, "void *_out") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -1313,6 +1368,7 @@ int main(void) {
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_generic_aggregate_return_codegen();
+    test_generic_type_generic_method_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

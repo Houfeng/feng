@@ -1,0 +1,32 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type Box<T> {
+    var value: T;
+
+    fn echo<U>(value: U): U {
+        return value;
+    }
+
+    fn replace<U>(next: T, result: U): U {
+        self.value = next;
+        return result;
+    }
+
+    fn current(): T {
+        return self.value;
+    }
+}
+
+fn main(args: string[]) {
+    let box = Box:<int>();
+    let first: int = box.echo(20);
+    let second: int = box.replace:<int>(22, first);
+    if box.current() + second == 42 {
+        puts("ok");
+    } else {
+        puts("fail");
+    }
+}
