@@ -4673,6 +4673,56 @@ static bool callable_parameters_match_args_for_owner_instance(
     return true;
 }
 
+static bool callable_signatures_equal_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *left,
+    const FengCallableSignature *right,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type) {
+    size_t param_index;
+    const FengTypeRef *left_return;
+    const FengTypeRef *right_return;
+
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    if (left->type_param_count != right->type_param_count ||
+        left->param_count != right->param_count) {
+        return false;
+    }
+
+    for (param_index = 0U; param_index < left->param_count; ++param_index) {
+        const FengTypeRef *left_param = substitute_type_ref_for_owner_instance(
+            context,
+            owner_type_decl,
+            owner_type,
+            left->params[param_index].type);
+        const FengTypeRef *right_param = substitute_type_ref_for_owner_instance(
+            context,
+            owner_type_decl,
+            owner_type,
+            right->params[param_index].type);
+
+        if (!type_refs_semantically_equal(context, left_param, right_param)) {
+            return false;
+        }
+    }
+
+    if (left->return_type == NULL || right->return_type == NULL) {
+        return left->return_type == NULL && right->return_type == NULL;
+    }
+
+    left_return = substitute_type_ref_for_owner_instance(context,
+                                                         owner_type_decl,
+                                                         owner_type,
+                                                         left->return_type);
+    right_return = substitute_type_ref_for_owner_instance(context,
+                                                          owner_type_decl,
+                                                          owner_type,
+                                                          right->return_type);
+    return type_refs_semantically_equal(context, left_return, right_return);
+}
+
 static bool current_stmt_is_inside_finally(const ResolveContext *context) {
     return context != NULL && context->finally_depth > 0U;
 }
@@ -5507,6 +5557,17 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     result.owner_type_decl = type_decl;
                     continue;
                 }
+
+                if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
+                    result.callable != NULL &&
+                    callable_signatures_equal_for_owner_instance(context,
+                                                                 result.callable,
+                                                                 &member->as.callable,
+                                                                 type_decl,
+                                                                 owner_type)) {
+                    continue;
+                }
+
                 result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
                 result.callable = NULL;
                 result.member = NULL;
@@ -9734,19 +9795,44 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
         }
 
         owner_type = resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
-        if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_TYPE) {
+        if (owner_type_decl != NULL &&
+            (owner_type_decl->kind == FENG_DECL_TYPE ||
+             owner_type_decl->kind == FENG_DECL_SPEC)) {
+            FengSlice owner_name = decl_typeish_name(owner_type_decl);
             const FengTypeMember *accessible_method =
-                find_accessible_type_method_member(context,
-                                                   owner_type_decl,
-                                                   provider_module,
-                                                   callee->as.member.member);
+                owner_type_decl->kind == FENG_DECL_TYPE
+                    ? find_accessible_type_method_member(context,
+                                                         owner_type_decl,
+                                                         provider_module,
+                                                         callee->as.member.member)
+                    : find_spec_object_member(context,
+                                              owner_type_decl,
+                                              callee->as.member.member);
             const FengTypeMember *field_member =
-                find_type_field_member(owner_type_decl, callee->as.member.member);
+                owner_type_decl->kind == FENG_DECL_TYPE
+                    ? find_type_field_member(owner_type_decl, callee->as.member.member)
+                    : find_spec_object_member(context,
+                                              owner_type_decl,
+                                              callee->as.member.member);
             const FengTypeMember *accessible_field =
-                find_accessible_type_field_member(context,
-                                                  owner_type_decl,
-                                                  provider_module,
-                                                  callee->as.member.member);
+                owner_type_decl->kind == FENG_DECL_TYPE
+                    ? find_accessible_type_field_member(context,
+                                                        owner_type_decl,
+                                                        provider_module,
+                                                        callee->as.member.member)
+                    : find_spec_object_member(context,
+                                              owner_type_decl,
+                                              callee->as.member.member);
+
+            if (accessible_method != NULL && accessible_method->kind != FENG_TYPE_MEMBER_METHOD) {
+                accessible_method = NULL;
+            }
+            if (field_member != NULL && field_member->kind != FENG_TYPE_MEMBER_FIELD) {
+                field_member = NULL;
+            }
+            if (accessible_field != NULL && accessible_field->kind != FENG_TYPE_MEMBER_FIELD) {
+                accessible_field = NULL;
+            }
 
             resolution = resolve_accessible_method_overload(context,
                                                             owner_type_decl,
@@ -9776,8 +9862,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     context,
                     callee->token,
                     format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
-                                   (int)owner_type_decl->as.type_decl.name.length,
-                                   owner_type_decl->as.type_decl.name.data,
+                                   (int)owner_name.length,
+                                   owner_name.data,
                                    (int)callee->as.member.member.length,
                                    callee->as.member.member.data,
                                    expr->as.call.arg_count));
@@ -9787,16 +9873,18 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     context,
                     callee->token,
                     format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
-                                   (int)owner_type_decl->as.type_decl.name.length,
-                                   owner_type_decl->as.type_decl.name.data,
+                                   (int)owner_name.length,
+                                   owner_name.data,
                                    (int)callee->as.member.member.length,
                                    callee->as.member.member.data,
                                    expr->as.call.arg_count));
             }
-            if (field_member != NULL && accessible_field == NULL) {
+            if (owner_type_decl->kind == FENG_DECL_TYPE &&
+                field_member != NULL && accessible_field == NULL) {
                 return true;
             }
-            if (find_type_method_member(owner_type_decl, callee->as.member.member) != NULL) {
+            if (owner_type_decl->kind == FENG_DECL_TYPE &&
+                find_type_method_member(owner_type_decl, callee->as.member.member) != NULL) {
                 return true;
             }
             if (accessible_field != NULL) {

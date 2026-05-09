@@ -1,0 +1,25 @@
+mod feng.probe;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Sequence<T> {
+  fn size(): int;
+}
+
+spec IntSequence: Sequence<int> {
+  fn size(): int;
+}
+
+type Counter: IntSequence {
+  fn size(): int {
+    return 1;
+  }
+}
+
+fn main(args: string[]) {
+  let counter: IntSequence = Counter();
+  if counter.size() == 1 {
+    puts("generic spec parent ok");
+  }
+}
