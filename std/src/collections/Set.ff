@@ -1,1 +1,187 @@
 pu mod std.collections;
+
+/**
+ * A set stores unique keys.
+ * @param <K> - the element type of this set
+ *
+ * Implementation notes:
+ * - Uses the same open-addressing strategy as `Map`.
+ * - Set stores keys only (no value payload).
+ */
+pu type Set<K: HashKey<K>> {
+	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
+	pr var states: i32[]!;
+	pr var hashes: u64[]!;
+	pr var keys: K[]!;
+	pr var size: i32;
+	pr var used: i32;
+	pr var capacity: i32;
+	pr var missingKey: K;
+
+	pr fn nextSlot(slot: i32): i32 {
+		let next: i32 = slot + 1;
+		if next >= self.capacity {
+			return 0;
+		}
+		return next;
+	}
+
+	pr fn slotForHash(hash: u64): i32 {
+		return (i32)(hash % (u64)self.capacity);
+	}
+
+	pr fn insertRehashed(hash: u64, key: K) {
+		var slot: i32 = self.slotForHash(hash);
+		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+			if self.states[slot] != 1 {
+				self.states[slot] = 1;
+				self.hashes[slot] = hash;
+				self.keys[slot] = key;
+				self.size = self.size + 1;
+				self.used = self.used + 1;
+				return;
+			}
+			slot = self.nextSlot(slot);
+		}
+	}
+
+	pr fn rehash(newCapacity: i32) {
+		let oldStates: i32[]! = self.states;
+		let oldHashes: u64[]! = self.hashes;
+		let oldKeys: K[]! = self.keys;
+		let oldCapacity: i32 = self.capacity;
+		self.states = i32[newCapacity]!;
+		self.hashes = u64[newCapacity]!;
+		self.keys = K[newCapacity]!;
+		self.capacity = newCapacity;
+		self.size = 0;
+		self.used = 0;
+		for var i: i32 = 0; i < oldCapacity; i = i + 1 {
+			if oldStates[i] == 1 {
+				self.insertRehashed(oldHashes[i], oldKeys[i]);
+			}
+		}
+	}
+
+	pr fn ensureWritableForInsert() {
+		if self.capacity == 0 {
+			self.rehash(8);
+			return;
+		}
+		if (self.used + 1) * 10 >= self.capacity * 7 {
+			self.rehash(self.capacity * 2);
+			return;
+		}
+		if self.size * 4 < self.used {
+			self.rehash(self.capacity);
+		}
+	}
+
+	pr fn maybeShrinkAfterRemove() {
+		if self.capacity <= 8 {
+			return;
+		}
+		if self.size * 10 <= self.capacity * 2 {
+			var newCapacity: i32 = self.capacity / 2;
+			if newCapacity < 8 {
+				newCapacity = 8;
+			}
+			self.rehash(newCapacity);
+			return;
+		}
+		if self.size * 4 < self.used {
+			self.rehash(self.capacity);
+		}
+	}
+
+	pr fn findSlot(key: K, keyHash: u64): i32 {
+		if self.capacity == 0 {
+			return -1;
+		}
+		var slot: i32 = self.slotForHash(keyHash);
+		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+			let state: i32 = self.states[slot];
+			if state == 0 {
+				return -1;
+			}
+			if state == 1 && self.hashes[slot] == keyHash {
+				let candidate: K = self.keys[slot];
+				let matched: bool = key.same(candidate);
+				if matched {
+					return slot;
+				}
+			}
+			slot = self.nextSlot(slot);
+		}
+		return -1;
+	}
+
+	/**
+	 * Adds `key` into this set.
+	 * @param key - element to add
+	 */
+	pu fn add(key: K) {
+		self.ensureWritableForInsert();
+		let keyHash: u64 = key.hash();
+		var slot: i32 = self.slotForHash(keyHash);
+		var firstDeleted: i32 = -1;
+		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+			let state: i32 = self.states[slot];
+			if state == 0 {
+				var target: i32 = slot;
+				if firstDeleted >= 0 {
+					target = firstDeleted;
+				} else {
+					self.used = self.used + 1;
+				}
+				self.states[target] = 1;
+				self.hashes[target] = keyHash;
+				self.keys[target] = key;
+				self.size = self.size + 1;
+				return;
+			}
+			if state == 2 {
+				if firstDeleted < 0 {
+					firstDeleted = slot;
+				}
+			} else {
+				if self.hashes[slot] == keyHash {
+					let candidate: K = self.keys[slot];
+					let matched: bool = key.same(candidate);
+					if matched {
+						return;
+					}
+				}
+			}
+			slot = self.nextSlot(slot);
+		}
+		self.rehash(self.capacity * 2);
+		self.add(key);
+	}
+
+	/**
+	 * Removes `key` from this set if it exists.
+	 * @param key - element to remove
+	 */
+	pu fn remove(key: K) {
+		let keyHash: u64 = key.hash();
+		let slot: i32 = self.findSlot(key, keyHash);
+		if slot < 0 {
+			return;
+		}
+		self.states[slot] = 2;
+		self.hashes[slot] = 0;
+		self.keys[slot] = self.missingKey;
+		self.size = self.size - 1;
+		self.maybeShrinkAfterRemove();
+	}
+
+	/**
+	 * Returns true if `key` exists in this set, otherwise false.
+	 * @param key - element to test
+	 */
+	pu fn has(key: K): bool {
+		let keyHash: u64 = key.hash();
+		return self.findSlot(key, keyHash) >= 0;
+	}
+}

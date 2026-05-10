@@ -14,7 +14,7 @@ pu spec HashKey<T> {
  * - Open addressing hash table with linear probing.
  * - Average O(1) for get/set/remove/has under normal hash distribution.
  * - Collisions are resolved by probing and `same` key comparison.
- * - `getValue` returns the default zero value of `V` when key is missing.
+ * - `get` returns the default zero value of `V` when key is missing.
  */
 pu type Map<K: HashKey<K>, V> {
   // Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
@@ -136,7 +136,7 @@ pu type Map<K: HashKey<K>, V> {
    * If `key` does not exist, returns the zero default value of `V`.
    * @param key - lookup key
    */
-  pu fn getValue(key: K): V {
+  pu fn get(key: K): V {
     let keyHash: u64 = key.hash();
     let slot: i32 = self.findSlot(key, keyHash);
     if slot >= 0 {
@@ -151,7 +151,7 @@ pu type Map<K: HashKey<K>, V> {
    * @param key - map key
    * @param value - value to insert or replace
    */
-  pu fn setValue(key: K, value: V) {
+  pu fn set(key: K, value: V) {
     self.ensureWritableForInsert();
     let keyHash: u64 = key.hash();
     var slot: i32 = self.slotForHash(keyHash);
@@ -190,7 +190,7 @@ pu type Map<K: HashKey<K>, V> {
     }
     // Full probing path means tombstones consumed all slack; rebuild and retry.
     self.rehash(self.capacity * 2);
-    self.setValue(key, value);
+    self.set(key, value);
   }
 
   /**
@@ -198,7 +198,7 @@ pu type Map<K: HashKey<K>, V> {
    * If `key` does not exist, this method has no effect.
    * @param key - key to remove
    */
-  pu fn removeKey(key: K) {
+  pu fn remove(key: K) {
     let keyHash: u64 = key.hash();
     let slot: i32 = self.findSlot(key, keyHash);
     if slot < 0 {
@@ -216,7 +216,7 @@ pu type Map<K: HashKey<K>, V> {
    * Returns true if `key` exists in the map, otherwise false.
    * @param key - key to test
    */
-  pu fn hasKey(key: K): bool {
+  pu fn has(key: K): bool {
     let keyHash: u64 = key.hash();
     return self.findSlot(key, keyHash) >= 0;
   }
