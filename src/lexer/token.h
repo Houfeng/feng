@@ -40,17 +40,16 @@ extern "C" {
 #define FENG_RESERVED_WORD_LIST(X) \
     X(CLASS, "class") \
     X(STRUCT, "struct") \
-    X(PUBLIC, "public") \
-    X(PRIVATE, "private") \
-    X(PROTECTED, "protected") \
-    X(INTERNAL, "internal") \
     X(STATIC, "static") \
     X(ENUM, "enum") \
     X(CONST, "const") \
-    X(SWITCH, "switch") \
-    X(CASE, "case") \
     X(EXPORT, "export") \
-    X(IMPORT, "import")
+    X(IMPORT, "import") \
+    X(MODULE, "module") \
+    X(OPEN, "open") \
+    X(SEAL, "seal") \
+    X(FUNC, "func") \
+    X(PROP, "prop")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(FIXED, "fixed") \

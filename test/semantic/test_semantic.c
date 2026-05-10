@@ -1757,8 +1757,8 @@ static void test_omitted_return_function_can_infer_lambda_signature(void) {
         "    return (x: int) -> x * 2;\n"
         "}\n"
         "fn run(): int {\n"
-        "    let func: IntToInt = make();\n"
-        "    return func(4);\n"
+        "    let callable: IntToInt = make();\n"
+        "    return callable(4);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("auto_return_lambda_signature_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -1783,8 +1783,8 @@ static void test_omitted_return_function_value_matches_named_function_type(void)
         "    return x;\n"
         "}\n"
         "fn run(): int {\n"
-        "    let func: IntToInt = pick;\n"
-        "    return func(4);\n"
+        "    let callable: IntToInt = pick;\n"
+        "    return callable(4);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("omitted_return_function_value_named_type_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -1903,8 +1903,8 @@ static void test_untyped_lambda_binding_is_callable(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run(): int {\n"
-        "    let func = (x: int) -> x * 2;\n"
-        "    return func(2);\n"
+        "    let callable = (x: int) -> x * 2;\n"
+        "    return callable(2);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("untyped_lambda_binding_call_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -1926,8 +1926,8 @@ static void test_untyped_lambda_binding_matches_named_function_type(void) {
         "mod demo.main;\n"
         "spec IntToInt(x: int): int;\n"
         "fn run(): int {\n"
-        "    let func = (x: int) -> x * 2;\n"
-        "    let typed: IntToInt = func;\n"
+        "    let callable = (x: int) -> x * 2;\n"
+        "    let typed: IntToInt = callable;\n"
         "    return typed(3);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("untyped_lambda_binding_function_type_ok.f", source);
