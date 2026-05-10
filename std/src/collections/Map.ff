@@ -62,7 +62,6 @@ pu type Map<K: HashKey<K>, V> {
     let oldKeys: K[]! = self.keys;
     let oldValues: V[]! = self.values;
     let oldCapacity: i32 = self.capacity;
-
     self.states = i32[newCapacity]!;
     self.hashes = u64[newCapacity]!;
     self.keys = K[newCapacity]!;
@@ -70,7 +69,6 @@ pu type Map<K: HashKey<K>, V> {
     self.capacity = newCapacity;
     self.size = 0;
     self.used = 0;
-
     for var i: i32 = 0; i < oldCapacity; i = i + 1 {
       if oldStates[i] == 1 {
         self.insertRehashed(oldHashes[i], oldKeys[i], oldValues[i]);
@@ -83,13 +81,11 @@ pu type Map<K: HashKey<K>, V> {
       self.rehash(8);
       return;
     }
-
     // Grow before reaching high probe costs.
     if (self.used + 1) * 10 >= self.capacity * 7 {
       self.rehash(self.capacity * 2);
       return;
     }
-
     // Too many tombstones: rebuild in-place to restore probe quality.
     if self.size * 4 < self.used {
       self.rehash(self.capacity);
@@ -100,7 +96,6 @@ pu type Map<K: HashKey<K>, V> {
     if self.capacity <= 8 {
       return;
     }
-
     if self.size * 10 <= self.capacity * 2 {
       var newCapacity: i32 = self.capacity / 2;
       if newCapacity < 8 {
@@ -109,7 +104,6 @@ pu type Map<K: HashKey<K>, V> {
       self.rehash(newCapacity);
       return;
     }
-
     if self.size * 4 < self.used {
       self.rehash(self.capacity);
     }
@@ -119,14 +113,12 @@ pu type Map<K: HashKey<K>, V> {
     if self.capacity == 0 {
       return -1;
     }
-
     var slot: i32 = self.slotForHash(keyHash);
     for var step: i32 = 0; step < self.capacity; step = step + 1 {
       let state: i32 = self.states[slot];
       if state == 0 {
         return -1;
       }
-
       if state == 1 && self.hashes[slot] == keyHash {
         let candidate: K = self.keys[slot];
         let matched: bool = key.same(candidate);
@@ -134,7 +126,6 @@ pu type Map<K: HashKey<K>, V> {
           return slot;
         }
       }
-
       slot = self.nextSlot(slot);
     }
     return -1;
@@ -143,6 +134,7 @@ pu type Map<K: HashKey<K>, V> {
   /**
    * Returns the value associated with `key`.
    * If `key` does not exist, returns the zero default value of `V`.
+   * @param key - lookup key
    */
   pu fn getValue(key: K): V {
     let keyHash: u64 = key.hash();
@@ -156,17 +148,16 @@ pu type Map<K: HashKey<K>, V> {
   /**
    * Inserts or updates the value for `key`.
    * If `key` already exists, only its value is replaced.
+   * @param key - map key
+   * @param value - value to insert or replace
    */
   pu fn setValue(key: K, value: V) {
     self.ensureWritableForInsert();
-
     let keyHash: u64 = key.hash();
     var slot: i32 = self.slotForHash(keyHash);
     var firstDeleted: i32 = -1;
-
     for var step: i32 = 0; step < self.capacity; step = step + 1 {
       let state: i32 = self.states[slot];
-
       if state == 0 {
         var target: i32 = slot;
         if firstDeleted >= 0 {
@@ -181,7 +172,6 @@ pu type Map<K: HashKey<K>, V> {
         self.size = self.size + 1;
         return;
       }
-
       if state == 2 {
         if firstDeleted < 0 {
           firstDeleted = slot;
@@ -196,10 +186,8 @@ pu type Map<K: HashKey<K>, V> {
           }
         }
       }
-
       slot = self.nextSlot(slot);
     }
-
     // Full probing path means tombstones consumed all slack; rebuild and retry.
     self.rehash(self.capacity * 2);
     self.setValue(key, value);
@@ -208,6 +196,7 @@ pu type Map<K: HashKey<K>, V> {
   /**
    * Removes `key` from the map if it exists.
    * If `key` does not exist, this method has no effect.
+   * @param key - key to remove
    */
   pu fn removeKey(key: K) {
     let keyHash: u64 = key.hash();
@@ -215,18 +204,17 @@ pu type Map<K: HashKey<K>, V> {
     if slot < 0 {
       return;
     }
-
     self.states[slot] = 2;
     self.hashes[slot] = 0;
     self.keys[slot] = self.missingKey;
     self.values[slot] = self.missingValue;
     self.size = self.size - 1;
-
     self.maybeShrinkAfterRemove();
   }
 
   /**
    * Returns true if `key` exists in the map, otherwise false.
+   * @param key - key to test
    */
   pu fn hasKey(key: K): bool {
     let keyHash: u64 = key.hash();
