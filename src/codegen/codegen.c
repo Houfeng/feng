@@ -8951,6 +8951,115 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (!elem_cty) {
             free(idx_tmp); er_free(&v); er_free(&ix); er_free(&recv); return false;
         }
+        if (recv.type->element->kind == CG_TYPE_GENERIC_PARAM) {
+            size_t gp_index = recv.type->element->generic_param_index;
+            const char *desc = NULL;
+            if (cg->generic_fn_type_param_descs != NULL) {
+                desc = cg->generic_fn_type_param_descs[gp_index];
+            }
+            if (desc == NULL) {
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&v);
+                er_free(&ix);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: missing generic descriptor for array element assignment");
+            }
+            if (v.type->kind != CG_TYPE_GENERIC_PARAM ||
+                v.type->generic_param_index != gp_index) {
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&v);
+                er_free(&ix);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: generic array element assignment requires a value with the same generic type parameter");
+            }
+            char *slots_tmp = cg_fresh_temp(cg, "_gslots");
+            char *old_tmp = cg_fresh_temp(cg, "_gold");
+            char *src_tmp = cg_fresh_temp(cg, "_gsrc");
+            char *new_tmp = cg_fresh_temp(cg, "_gnew");
+            if (!slots_tmp || !old_tmp || !src_tmp || !new_tmp) {
+                free(slots_tmp);
+                free(old_tmp);
+                free(src_tmp);
+                free(new_tmp);
+                free(elem_cty);
+                free(idx_tmp);
+                er_free(&v);
+                er_free(&ix);
+                er_free(&recv);
+                return false;
+            }
+            buf_append_fmt(cg->cur_body,
+                "    void **%s = (void **)feng_array_data(%s);\n"
+                "    void *%s = %s[%s];\n"
+                "    const void *%s = %s;\n"
+                "    void *%s = NULL;\n"
+                "    if (%s != NULL) {\n"
+                "        %s = malloc(%s->size);\n"
+                "        if (%s == NULL) feng_panic(\"codegen: out of memory cloning generic array element\");\n"
+                "        switch (%s->kind) {\n"
+                "            case FENG_VALUE_TRIVIAL:\n"
+                "                memcpy(%s, %s, %s->size);\n"
+                "                break;\n"
+                "            case FENG_VALUE_MANAGED_POINTER: {\n"
+                "                void *_new_value = *(void *const *)%s;\n"
+                "                feng_retain(_new_value);\n"
+                "                *(void **)%s = _new_value;\n"
+                "                break;\n"
+                "            }\n"
+                "            case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "                memcpy(%s, %s, %s->size);\n"
+                "                feng_aggregate_retain(%s, %s->aggregate);\n"
+                "                break;\n"
+                "        }\n"
+                "    }\n"
+                "    if (%s != NULL) {\n"
+                "        switch (%s->kind) {\n"
+                "            case FENG_VALUE_TRIVIAL:\n"
+                "                break;\n"
+                "            case FENG_VALUE_MANAGED_POINTER:\n"
+                "                feng_release(*(void **)%s);\n"
+                "                break;\n"
+                "            case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "                feng_aggregate_release(%s, %s->aggregate);\n"
+                "                break;\n"
+                "        }\n"
+                "        free(%s);\n"
+                "    }\n"
+                "    %s[%s] = %s;\n",
+                slots_tmp, recv.c_expr,
+                old_tmp, slots_tmp, idx_tmp,
+                src_tmp, v.c_expr,
+                new_tmp,
+                src_tmp,
+                new_tmp, desc,
+                new_tmp,
+                desc,
+                new_tmp, src_tmp, desc,
+                src_tmp,
+                new_tmp,
+                new_tmp, src_tmp, desc,
+                new_tmp, desc,
+                old_tmp,
+                desc,
+                old_tmp,
+                old_tmp, desc,
+                old_tmp,
+                slots_tmp, idx_tmp, new_tmp);
+            free(slots_tmp);
+            free(old_tmp);
+            free(src_tmp);
+            free(new_tmp);
+            free(elem_cty);
+            free(idx_tmp);
+            er_free(&v);
+            er_free(&ix);
+            er_free(&recv);
+            return true;
+        }
         if (cgtype_is_managed(recv.type->element)) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
@@ -13833,16 +13942,12 @@ static bool cg_generic_type_param_names(CG *cg, const FengDecl *decl,
     return true;
 }
 
-static size_t cg_generic_type_method_ordinal(const FengDecl *decl,
-                                             const FengTypeMember *member) {
-    size_t ordinal = 0;
-    for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
-        const FengTypeMember *candidate = decl->as.type_decl.members[i];
-        if (candidate->kind != FENG_TYPE_MEMBER_METHOD) continue;
-        if (candidate == member) return ordinal;
-        ordinal++;
-    }
-    return ordinal;
+/* Returns true if the method is treated as public for cross-module dispatch.
+ * Public methods use ordinal m<N> (counting only public methods) so consumers
+ * that only see the bundle interface assign the same index as the library,
+ * ensuring cross-module generic method dispatch links correctly. */
+static bool cg_generic_method_is_public(const FengTypeMember *member) {
+    return member->visibility == FENG_VISIBILITY_PUBLIC;
 }
 
 static char *cg_generic_type_method_shared_cname(CG *cg,
@@ -13866,10 +13971,24 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
         return NULL;
     }
     Buf b; buf_init(&b);
-    buf_append_fmt(&b, "FengGenericMethod__%s__%s__m%zu__%s",
+    /* Public methods use the public ordinal (m<N>, counting only public
+     * methods). Private/internal methods use their private ordinal (i<N>,
+     * counting only private methods). This ensures consumers that only see
+     * the public interface assign the same m<N> index as the library. */
+    bool is_pub = cg_generic_method_is_public(member);
+    size_t ordinal = 0;
+    for (size_t _i = 0; _i < decl->as.type_decl.member_count; ++_i) {
+        const FengTypeMember *_c = decl->as.type_decl.members[_i];
+        if (_c->kind != FENG_TYPE_MEMBER_METHOD) continue;
+        if (cg_generic_method_is_public(_c) != is_pub) continue;
+        if (_c == member) break;
+        ordinal++;
+    }
+    buf_append_fmt(&b, "FengGenericMethod__%s__%s__%s%zu__%s",
                    owner_mangle,
                    type_san,
-                   cg_generic_type_method_ordinal(decl, member),
+                   is_pub ? "m" : "i",
+                   ordinal,
                    method_san);
     free(owner_mangle); free(type_san); free(method_san);
     return b.data;
@@ -14637,6 +14756,7 @@ static char *cg_finalize(CG *cg) {
         "#include <math.h>\n"
         "#include <stddef.h>\n"
         "#include <stdint.h>\n"
+        "#include <stdlib.h>\n"
         "#include <string.h>\n"
         "#include \"runtime/feng_runtime.h\"\n\n");
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);

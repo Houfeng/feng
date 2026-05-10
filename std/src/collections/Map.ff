@@ -228,6 +228,13 @@ pu type Map<K: Hashable<K>, V> {
   }
 
   /**
+   * Returns the number of occupied entries in the map.
+   */
+  pu fn count(): i32 {
+    return self.size;
+  }
+
+  /**
    * Returns all occupied entries as an immutable dense array.
    * @return immutable array of map entities
    */

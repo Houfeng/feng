@@ -187,6 +187,13 @@ pu type Set<K: Hashable<K>> {
 	}
 
 	/**
+	 * Returns the number of occupied elements in the set.
+	 */
+	pu fn count(): i32 {
+		return self.size;
+	}
+
+	/**
 	 * Returns all keys as an immutable dense array.
 	 * @return immutable array of keys
 	 */

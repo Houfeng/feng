@@ -1,0 +1,12 @@
+mod std_test;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+pu fn check(cond: bool, name: string) {
+  if cond {
+    puts("ok: " + name);
+  } else {
+    puts("FAIL: " + name);
+  }
+}

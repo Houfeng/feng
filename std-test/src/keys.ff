@@ -1,0 +1,19 @@
+mod std_test;
+
+use std.collections;
+
+/**
+ * An integer key type implementing Hashable<IntKey>,
+ * used as the key type in Map and Set tests.
+ */
+pu type IntKey: Hashable<IntKey> {
+  let value: i32;
+
+  fn hash(): u64 {
+    return (u64)self.value;
+  }
+
+  fn same(other: IntKey): bool {
+    return self.value == other.value;
+  }
+}
