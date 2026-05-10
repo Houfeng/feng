@@ -42,18 +42,15 @@ extern "C" {
     X(STRUCT, "struct") \
     X(PUBLIC, "public") \
     X(PRIVATE, "private") \
-    X(PUB, "pub") \
-    X(PRO, "pro") \
-    X(GET, "get") \
-    X(SET, "set") \
-    X(THIS, "this") \
-    X(INTERFACE, "interface") \
+    X(PROTECTED, "protected") \
+    X(INTERNAL, "internal") \
     X(STATIC, "static") \
     X(ENUM, "enum") \
     X(CONST, "const") \
-    X(ABSTRACT, "abstract") \
-    X(CHAR, "char") \
-    X(IS, "is")
+    X(SWITCH, "switch") \
+    X(CASE, "case") \
+    X(EXPORT, "export") \
+    X(IMPORT, "import")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(FIXED, "fixed") \

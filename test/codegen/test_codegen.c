@@ -273,7 +273,7 @@ static void test_multi_file_lib(void) {
 
 static void test_lib_public_functions_are_exported(void) {
     static const char *kSource =
-        "mod feng.codegen.export;\n"
+        "mod feng.codegen.exposed;\n"
         "pu fn public_fn(): i32 {\n"
         "    return 1;\n"
         "}\n"
@@ -311,11 +311,11 @@ static void test_lib_public_functions_are_exported(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "int32_t feng__feng__codegen__export__public_fn__from__void(") != NULL);
+                  "int32_t feng__feng__codegen__exposed__public_fn__from__void(") != NULL);
     ASSERT(strstr(out.c_source,
-                  "static int32_t feng__feng__codegen__export__public_fn__from__void(") == NULL);
+                  "static int32_t feng__feng__codegen__exposed__public_fn__from__void(") == NULL);
     ASSERT(strstr(out.c_source,
-                  "static int32_t feng__feng__codegen__export__hidden_fn__from__void(") != NULL);
+                  "static int32_t feng__feng__codegen__exposed__hidden_fn__from__void(") != NULL);
 
     feng_codegen_output_free(&out);
     feng_codegen_error_free(&cgerr);

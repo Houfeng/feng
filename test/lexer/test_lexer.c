@@ -44,7 +44,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengAnnotationKind annotation_kind;
 
     ASSERT(feng_keyword_count() == 26U);
-    ASSERT(feng_reserved_word_count() == 16U);
+    ASSERT(feng_reserved_word_count() == 13U);
     ASSERT(feng_builtin_annotation_count() == 6U);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_SPEC);
@@ -56,13 +56,15 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(!feng_lookup_keyword("int", 3U, &keyword_kind));
     ASSERT(!feng_lookup_keyword("float", 5U, &keyword_kind));
     ASSERT(feng_is_reserved_word("class", 5U));
-    ASSERT(feng_is_reserved_word("interface", 9U));
+    ASSERT(feng_is_reserved_word("protected", 9U));
+    ASSERT(feng_is_reserved_word("internal", 8U));
     ASSERT(feng_is_reserved_word("static", 6U));
     ASSERT(feng_is_reserved_word("enum", 4U));
     ASSERT(feng_is_reserved_word("const", 5U));
-    ASSERT(feng_is_reserved_word("abstract", 8U));
-    ASSERT(feng_is_reserved_word("char", 4U));
-    ASSERT(feng_is_reserved_word("is", 2U));
+    ASSERT(feng_is_reserved_word("switch", 6U));
+    ASSERT(feng_is_reserved_word("case", 4U));
+    ASSERT(feng_is_reserved_word("export", 6U));
+    ASSERT(feng_is_reserved_word("import", 6U));
     ASSERT(!feng_is_reserved_word("self", 4U));
     ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
@@ -76,18 +78,15 @@ static void test_reserved_words_rejected(void) {
         "struct",
         "public",
         "private",
-        "pub",
-        "pro",
-        "get",
-        "set",
-        "this",
-        "interface",
+        "protected",
+        "internal",
         "static",
         "enum",
         "const",
-        "abstract",
-        "char",
-        "is"
+        "switch",
+        "case",
+        "export",
+        "import"
     };
     size_t index;
 
