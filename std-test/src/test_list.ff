@@ -2,6 +2,10 @@ mod std_test;
 
 use std.collections;
 
+type RefBox {
+  var value: i32;
+}
+
 fn list_add_get() {
   let l = List:<i32>();
   let v0: i32 = 42;
@@ -60,45 +64,43 @@ fn list_size_after_remove() {
 
 fn list_multiple_elements() {
   let l = List:<i32>();
-  let a0: i32 = 0;
-  let a1: i32 = 1;
-  let a2: i32 = 2;
-  let a3: i32 = 3;
-  let a4: i32 = 4;
-  l.add(a0);
-  l.add(a1);
-  l.add(a2);
-  l.add(a3);
-  l.add(a4);
-  check(l.size() == 5, "list/multiple-size");
-  let ok: bool = l.get(0) == 0 &&
-    l.get(1) == 1 &&
-    l.get(2) == 2 &&
-    l.get(3) == 3 &&
-    l.get(4) == 4;
-  check(ok, "list/multiple-values");
+  for var i: i32 = 0; i < 20; i = i + 1 {
+    l.add(i);
+  }
+  check(l.size() == 20, "list/multiple-size");
+  var allOk: bool = true;
+  for var i: i32 = 0; i < 20; i = i + 1 {
+    if l.get(i) != i {
+      allOk = false;
+    }
+  }
+  check(allOk, "list/multiple-values");
 }
 
 fn list_entities_order() {
   let l = List:<i32>();
-  let a: i32 = 100;
-  let b: i32 = 200;
-  let c: i32 = 300;
-  l.add(a);
-  l.add(b);
-  l.add(c);
-  check(l.get(0) == 100, "list/entities-order-0");
-  check(l.get(1) == 200, "list/entities-order-1");
-  check(l.get(2) == 300, "list/entities-order-2");
+  l.add(100);
+  l.add(200);
+  l.add(300);
+  let ents = l.entities();
+  check(ents[0] == 100, "list/entities-order-0");
+  check(ents[1] == 200, "list/entities-order-1");
+  check(ents[2] == 300, "list/entities-order-2");
 }
 
 fn list_entities_count() {
   let l = List:<i32>();
-  let a: i32 = 1;
-  let b: i32 = 2;
-  l.add(a);
-  l.add(b);
+  l.add(1);
+  l.add(2);
   check(l.size() == 2, "list/entities-count");
+}
+
+fn list_reference_semantics() {
+  let l = List:<RefBox>();
+  let b = RefBox { value: 10 };
+  l.add(b);
+  b.value = 99;
+  check(l.get(0).value == 99, "list/reference-semantics");
 }
 
 pu fn run_list_tests() {
@@ -110,4 +112,5 @@ pu fn run_list_tests() {
   list_multiple_elements();
   list_entities_order();
   list_entities_count();
+  list_reference_semantics();
 }

@@ -74,8 +74,11 @@ fn set_entities_two() {
   let k13 = IntKey { value: 13 };
   s.add(k7);
   s.add(k13);
-  check(s.has(k7), "set/entities-has-7");
-  check(s.has(k13), "set/entities-has-13");
+  let ents = s.entities();
+  let a: i32 = ents[0].value;
+  let b: i32 = ents[1].value;
+  check((a == 7) || (b == 7), "set/entities-has-7");
+  check((a == 13) || (b == 13), "set/entities-has-13");
 }
 
 pu fn run_set_tests() {

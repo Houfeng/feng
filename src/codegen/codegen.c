@@ -7949,6 +7949,19 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             "    FengArray *%s = feng_array_new_kinded("
             "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), %s);\n",
             arr_tmp, agg_desc, elem_cty, size_tmp);
+    } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
+        size_t gp_index = elem->generic_param_index;
+        const char *desc = cg_generic_param_desc_name(cg, gp_index);
+        if (desc == NULL) {
+            free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+            cgtype_free(elem);
+            return cg_fail(cg, e->token,
+                "codegen: generic array-new requires an active generic descriptor");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new_kinded("
+            "%s->kind, %s->aggregate, NULL, %s->size, %s);\n",
+            arr_tmp, desc, desc, desc, size_tmp);
     } else if (elem_managed && elem->kind == CG_TYPE_OBJECT && elem->user &&
                elem->user->c_default_zero_name) {
         /* Managed object element: allocate the array of pointers, then
@@ -8028,8 +8041,26 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
         free(idx_tmp); er_free(&idx); er_free(&recv); return false;
     }
     Buf b; buf_init(&b);
-    buf_append_fmt(&b, "(((%s *)feng_array_data(%s))[%s])",
-                   elem_cty, recv.c_expr, idx_tmp);
+    if (recv.type->element->kind == CG_TYPE_GENERIC_PARAM) {
+        size_t gp_index = recv.type->element->generic_param_index;
+        const char *desc = cg_generic_param_desc_name(cg, gp_index);
+        if (desc == NULL) {
+            free(elem_cty); free(idx_tmp);
+            er_free(&idx); er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: generic array index requires an active generic descriptor");
+        }
+        buf_append_fmt(&b,
+            "((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
+            "(void *)&((void **)feng_array_data(%s))[%s] : "
+            "(void *)((char *)feng_array_data(%s) + (%s) * %s->size))",
+            desc,
+            recv.c_expr, idx_tmp,
+            recv.c_expr, idx_tmp, desc);
+    } else {
+        buf_append_fmt(&b, "(((%s *)feng_array_data(%s))[%s])",
+                       elem_cty, recv.c_expr, idx_tmp);
+    }
     free(elem_cty); free(idx_tmp);
     out->c_expr = b.data;
     out->type = cgtype_clone(recv.type->element);
@@ -8953,10 +8984,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         }
         if (recv.type->element->kind == CG_TYPE_GENERIC_PARAM) {
             size_t gp_index = recv.type->element->generic_param_index;
-            const char *desc = NULL;
-            if (cg->generic_fn_type_param_descs != NULL) {
-                desc = cg->generic_fn_type_param_descs[gp_index];
-            }
+            const char *desc = cg_generic_param_desc_name(cg, gp_index);
             if (desc == NULL) {
                 free(elem_cty);
                 free(idx_tmp);
@@ -8976,15 +9004,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                     "codegen: generic array element assignment requires a value with the same generic type parameter");
             }
-            char *slots_tmp = cg_fresh_temp(cg, "_gslots");
-            char *old_tmp = cg_fresh_temp(cg, "_gold");
+            char *slot_tmp = cg_fresh_temp(cg, "_gslot");
             char *src_tmp = cg_fresh_temp(cg, "_gsrc");
-            char *new_tmp = cg_fresh_temp(cg, "_gnew");
-            if (!slots_tmp || !old_tmp || !src_tmp || !new_tmp) {
-                free(slots_tmp);
-                free(old_tmp);
+            if (!slot_tmp || !src_tmp) {
+                free(slot_tmp);
                 free(src_tmp);
-                free(new_tmp);
                 free(elem_cty);
                 free(idx_tmp);
                 er_free(&v);
@@ -8993,66 +9017,38 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return false;
             }
             buf_append_fmt(cg->cur_body,
-                "    void **%s = (void **)feng_array_data(%s);\n"
-                "    void *%s = %s[%s];\n"
+                "    void *%s = ((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
+                "(void *)&((void **)feng_array_data(%s))[%s] : "
+                "(void *)((char *)feng_array_data(%s) + (%s) * %s->size));\n"
                 "    const void *%s = %s;\n"
-                "    void *%s = NULL;\n"
-                "    if (%s != NULL) {\n"
-                "        %s = malloc(%s->size);\n"
-                "        if (%s == NULL) feng_panic(\"codegen: out of memory cloning generic array element\");\n"
-                "        switch (%s->kind) {\n"
-                "            case FENG_VALUE_TRIVIAL:\n"
-                "                memcpy(%s, %s, %s->size);\n"
-                "                break;\n"
-                "            case FENG_VALUE_MANAGED_POINTER: {\n"
-                "                void *_new_value = *(void *const *)%s;\n"
-                "                feng_retain(_new_value);\n"
-                "                *(void **)%s = _new_value;\n"
-                "                break;\n"
-                "            }\n"
-                "            case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "                memcpy(%s, %s, %s->size);\n"
-                "                feng_aggregate_retain(%s, %s->aggregate);\n"
-                "                break;\n"
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            memcpy(%s, %s, %s->size);\n"
+                "            break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                "            void *_new_value = *(void *const *)%s;\n"
+                "            feng_retain(_new_value);\n"
+                "            void *_old_value = *(void **)%s;\n"
+                "            *(void **)%s = _new_value;\n"
+                "            feng_release(_old_value);\n"
+                "            break;\n"
                 "        }\n"
-                "    }\n"
-                "    if (%s != NULL) {\n"
-                "        switch (%s->kind) {\n"
-                "            case FENG_VALUE_TRIVIAL:\n"
-                "                break;\n"
-                "            case FENG_VALUE_MANAGED_POINTER:\n"
-                "                feng_release(*(void **)%s);\n"
-                "                break;\n"
-                "            case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "                feng_aggregate_release(%s, %s->aggregate);\n"
-                "                break;\n"
-                "        }\n"
-                "        free(%s);\n"
-                "    }\n"
-                "    %s[%s] = %s;\n",
-                slots_tmp, recv.c_expr,
-                old_tmp, slots_tmp, idx_tmp,
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            feng_aggregate_assign(%s, %s, %s->aggregate);\n"
+                "            break;\n"
+                "    }\n",
+                slot_tmp, desc,
+                recv.c_expr, idx_tmp,
+                recv.c_expr, idx_tmp, desc,
                 src_tmp, v.c_expr,
-                new_tmp,
-                src_tmp,
-                new_tmp, desc,
-                new_tmp,
                 desc,
-                new_tmp, src_tmp, desc,
+                slot_tmp, src_tmp, desc,
                 src_tmp,
-                new_tmp,
-                new_tmp, src_tmp, desc,
-                new_tmp, desc,
-                old_tmp,
-                desc,
-                old_tmp,
-                old_tmp, desc,
-                old_tmp,
-                slots_tmp, idx_tmp, new_tmp);
-            free(slots_tmp);
-            free(old_tmp);
+                slot_tmp,
+                slot_tmp,
+                slot_tmp, src_tmp, desc);
+            free(slot_tmp);
             free(src_tmp);
-            free(new_tmp);
             free(elem_cty);
             free(idx_tmp);
             er_free(&v);
