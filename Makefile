@@ -61,7 +61,7 @@ THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-func
 LIB_DIR := $(BUILD_DIR)/lib
 RUNTIME_LIB := $(LIB_DIR)/libfeng_runtime.a
 
-.PHONY: all cli runtime test smoke clean
+.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests clean
 
 all: cli runtime
 
@@ -69,7 +69,7 @@ cli: $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB)
 
-test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests
+test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -78,6 +78,11 @@ test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_symbol
+
+std-tests: cli
+	$(BIN_DIR)/feng build ./std
+	$(BIN_DIR)/feng build ./std_test
+	./std_test/build/bin/std_test
 
 smoke: cli runtime
 	./scripts/run_smoke.sh
