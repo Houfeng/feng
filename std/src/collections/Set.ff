@@ -9,7 +9,7 @@ pu mod std.collections;
  * - Set stores keys only (no value payload).
  * - `entities` returns an immutable dense array of keys.
  */
-pu type Set<K: HashKey<K>> {
+pu type Set<K: Hashable<K>> {
 	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
 	pr var states: i32[]!;
 	pr var hashes: u64[]!;

@@ -1,10 +1,5 @@
 pu mod std.collections;
 
-pu spec HashKey<T> {
-  fn hash(): u64;
-  fn same(other: T): bool;
-}
-
 /**
  * A map entity stores one key-value pair.
  * @param <K> - the key type
@@ -27,7 +22,7 @@ pu type MapEntity<K, V> {
  * - `get` returns the default zero value of `V` when key is missing.
  * - `entities` returns an immutable dense array of occupied entries.
  */
-pu type Map<K: HashKey<K>, V> {
+pu type Map<K: Hashable<K>, V> {
   // Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
   pr var states: i32[]!;
   pr var hashes: u64[]!;
