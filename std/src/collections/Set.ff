@@ -7,6 +7,7 @@ pu mod std.collections;
  * Implementation notes:
  * - Uses the same open-addressing strategy as `Map`.
  * - Set stores keys only (no value payload).
+ * - `entities` returns an immutable dense array of keys.
  */
 pu type Set<K: HashKey<K>> {
 	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
@@ -183,5 +184,21 @@ pu type Set<K: HashKey<K>> {
 	pu fn has(key: K): bool {
 		let keyHash: u64 = key.hash();
 		return self.findSlot(key, keyHash) >= 0;
+	}
+
+	/**
+	 * Returns all keys as an immutable dense array.
+	 * @return immutable array of keys
+	 */
+	pu fn entities(): K[]! {
+		let items: K[]! = K[self.size]!;
+		var outputIndex: i32 = 0;
+		for var i: i32 = 0; i < self.capacity; i = i + 1 {
+			if self.states[i] == 1 {
+				items[outputIndex] = self.keys[i];
+				outputIndex = outputIndex + 1;
+			}
+		}
+		return items;
 	}
 }
