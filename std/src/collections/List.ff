@@ -103,7 +103,7 @@ pu type List<T> {
    * Returns all elements as an immutable dense array in insertion order.
    * @return immutable array of all elements
    */
-  pu fn entities(): T[]! {
+  pu fn entries(): T[]! {
     let result: T[]! = T[self.count]!;
     for var i: i32 = 0; i < self.count; i = i + 1 {
       result[i] = self.items[i];

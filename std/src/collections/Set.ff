@@ -197,7 +197,7 @@ pu type Set<K: Hashable<K>> {
 	 * Returns all keys as an immutable dense array.
 	 * @return immutable array of keys
 	 */
-	pu fn entities(): K[]! {
+	pu fn entries(): K[]! {
 		let items: K[]! = K[self.size]!;
 		var outputIndex: i32 = 0;
 		for var i: i32 = 0; i < self.capacity; i = i + 1 {
