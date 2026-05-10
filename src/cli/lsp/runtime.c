@@ -5308,6 +5308,8 @@ static bool append_hover_doc_markdown(FengLspString *buffer, const char *doc_tex
             const char *name_start;
             const char *name_end;
             const char *desc_start;
+            const char *detail_start;
+            bool highlight_first_word = false;
 
             while (tag_end < line_end && !isspace((unsigned char)*tag_end)) {
                 ++tag_end;
@@ -5324,6 +5326,9 @@ static bool append_hover_doc_markdown(FengLspString *buffer, const char *doc_tex
             while (desc_start < line_end && isspace((unsigned char)*desc_start)) {
                 ++desc_start;
             }
+            highlight_first_word = (size_t)(tag_end - line_start) == 6U &&
+                                   strncmp(line_start, "@param", 6U) == 0;
+            detail_start = highlight_first_word ? desc_start : name_start;
             if (wrote_any &&
                 !string_append_cstr(buffer,
                                     pending_blank || !previous_was_tag ? "\n\n" : "\n")) {
@@ -5334,16 +5339,16 @@ static bool append_hover_doc_markdown(FengLspString *buffer, const char *doc_tex
                 !string_append_cstr(buffer, "**")) {
                 return false;
             }
-            if (name_end > name_start) {
+            if (highlight_first_word && name_end > name_start) {
                 if (!string_append_cstr(buffer, " `") ||
                     !string_append_bytes(buffer, name_start, (size_t)(name_end - name_start)) ||
                     !string_append_cstr(buffer, "`")) {
                     return false;
                 }
             }
-            if (desc_start < line_end) {
+            if (detail_start < line_end) {
                 if (!string_append_cstr(buffer, " ") ||
-                    !string_append_bytes(buffer, desc_start, (size_t)(line_end - desc_start))) {
+                    !string_append_bytes(buffer, detail_start, (size_t)(line_end - detail_start))) {
                     return false;
                 }
             }
