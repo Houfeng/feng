@@ -12918,6 +12918,9 @@ static bool cg_ensure_witness_instance_for_subject_key(
             return cg_fail(cg, blame,
                 "codegen: fit method '%s' was not registered", sm->feng_name);
         }
+        /* D4 contract: witness thunk must forward into the same emitted fit
+         * method symbol used by direct-call (fm->c_name). Do not synthesize
+         * a separate box-only method implementation symbol. */
 
         if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
             Buf *fp = &cg->fn_protos;

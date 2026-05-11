@@ -639,9 +639,15 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.fit_builtin_spec;\n"
         "spec Named { fn name(): string; }\n"
+        "spec ScalarTwice { fn twice_only_scalar(): int; }\n"
         "fit i32: Named {\n"
         "    fn name(): string {\n"
         "        return \"i32\";\n"
+        "    }\n"
+        "}\n"
+        "fit i32: ScalarTwice {\n"
+        "    fn twice_only_scalar(): int {\n"
+        "        return self + self;\n"
         "    }\n"
         "}\n"
         "fit int[]: Named {\n"
@@ -651,6 +657,12 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "}\n"
         "fn call_name(v: Named): string {\n"
         "    return v.name();\n"
+        "}\n"
+        "fn call_twice_direct(v: int): int {\n"
+        "    return v.twice_only_scalar();\n"
+        "}\n"
+        "fn call_twice_spec(v: ScalarTwice): int {\n"
+        "    return v.twice_only_scalar();\n"
         "}\n"
         "fn make_scalar_named(): Named {\n"
         "    return (8);\n"
@@ -666,7 +678,9 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    let c: string = call_name(s1);\n"
         "    let d: string = call_name(s2);\n"
         "    let f: string = call_name((9));\n"
-        "    return 1;\n"
+        "    let t1: int = call_twice_direct(5);\n"
+        "    let t2: int = call_twice_spec((5));\n"
+        "    return t1 + t2;\n"
         "}\n";
 
     FengProgram *program = parse_or_die(kSource, "tests/fit_builtin_spec_codegen.ff");
@@ -707,6 +721,8 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(strstr(out.c_source, "struct FengScalarBox {") == NULL);
     ASSERT(count_substr(out.c_source, "FENG_SLOT_POINTER") >= 1U);
     ASSERT(count_substr(out.c_source, ".managed_slot_count = 1,") >= 1U);
+    ASSERT(count_substr(out.c_source, "__twice_only_scalar(") >= 3U);
+    ASSERT(strstr(out.c_source, "twice_only_scalar_box") == NULL);
     ASSERT(strstr(out.c_source, "subject_") != NULL);
     compile_generated_c_or_die(out.c_source);
 

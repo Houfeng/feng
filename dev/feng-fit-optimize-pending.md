@@ -376,7 +376,7 @@ struct FengScalarBox {
 - [x] D1：抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
 - [x] D2：新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
 - [x] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
-- [ ] D4：direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
+- [x] D4：direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
 - [ ] D5：将 `cg_ensure_witness_instance` 从“只接受 `UserType`”推广到接受统一 subject target。
 - [ ] D6：对对象 target：继续 `(struct T *)_subject`。
 - [ ] D7：对 builtin 标量：从借用地址或 `FengScalarBox` 中只做一次原生类型取值。
