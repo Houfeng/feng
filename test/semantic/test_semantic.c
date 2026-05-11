@@ -8207,6 +8207,45 @@ static void test_spec_coercion_object_return(void) {
     feng_program_free(program);
 }
 
+static void test_spec_coercion_object_scalar_return_uses_box_owner(void) {
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "fit i32: Named {\n"
+        "    fn name(): string { return \"i32\"; }\n"
+        "}\n"
+        "fn make(): Named {\n"
+        "    return (7);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_scalar_ret.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengStmt *ret_stmt = make->as.function_decl.body->statements[0];
+    ASSERT(ret_stmt->kind == FENG_STMT_RETURN);
+    const FengExpr *ret_expr = ret_stmt->as.return_value;
+    ASSERT(ret_expr != NULL);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, ret_expr);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(strcmp(site->src_subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_spec_coercion_callable_top_level_fn(void) {
     /* `let f: Cb = my_fn;` — top-level function bound to a callable-form
      * spec slot records a CALLABLE site classified as TOP_LEVEL_FN. */
@@ -9642,6 +9681,7 @@ int main(void) {
     test_spec_coercion_object_array_let_binding();
     test_spec_coercion_object_argument();
     test_spec_coercion_object_return();
+    test_spec_coercion_object_scalar_return_uses_box_owner();
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
     test_spec_default_local_binding_object_form();

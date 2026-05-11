@@ -652,12 +652,17 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "fn call_name(v: Named): string {\n"
         "    return v.name();\n"
         "}\n"
+        "fn make_scalar_named(): Named {\n"
+        "    return (8);\n"
+        "}\n"
         "fn run(): int {\n"
         "    let xs: int[] = [1, 2];\n"
         "    let s1: Named = (7);\n"
         "    let s2: Named = xs;\n"
+        "    let s3: Named = make_scalar_named();\n"
         "    let a: string = s1.name();\n"
         "    let b: string = s2.name();\n"
+        "    let e: string = s3.name();\n"
         "    let c: string = call_name(s1);\n"
         "    let d: string = call_name(s2);\n"
         "    return 1;\n"
@@ -694,11 +699,13 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
     ASSERT(strstr(out.c_source, "__name") != NULL);
-    ASSERT(count_substr(out.c_source, "struct FengScalarBox *_sb") == 1U);
+    ASSERT(count_substr(out.c_source, "struct FengScalarBox *_sb") == 2U);
     ASSERT(strstr(out.c_source, ".witness->name(") != NULL);
     ASSERT(strstr(out.c_source, "witness->witness->") == NULL);
     ASSERT(strstr(out.c_source, "static const FengTypeDescriptor feng_scalar_box_descriptor") == NULL);
     ASSERT(strstr(out.c_source, "struct FengScalarBox {") == NULL);
+    ASSERT(count_substr(out.c_source, "FENG_SLOT_POINTER") >= 1U);
+    ASSERT(count_substr(out.c_source, ".managed_slot_count = 1,") >= 1U);
     ASSERT(strstr(out.c_source, "subject_") != NULL);
     compile_generated_c_or_die(out.c_source);
 
