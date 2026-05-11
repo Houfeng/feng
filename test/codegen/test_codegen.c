@@ -740,6 +740,64 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_object_spec_thunk_subject_cast_shape_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.object_spec_cast;\n"
+        "spec Named { fn name(): string; }\n"
+        "type User: Named {\n"
+        "    var n: string;\n"
+        "    fn name(): string { return self.n; }\n"
+        "}\n"
+        "fn call(v: Named): string {\n"
+        "    return v.name();\n"
+        "}\n"
+        "fn run(): string {\n"
+        "    let u: User = User{n: \"u\"};\n"
+        "    return call(u);\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/object_spec_cast_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (object spec thunk cast shape): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecThunk__") != NULL);
+    ASSERT(strstr(out.c_source, " *)_subject") != NULL);
+    ASSERT(strstr(out.c_source, ".witness->name(") != NULL);
+    ASSERT(strstr(out.c_source, "FengScalarBox") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* ---- G6 generic codegen tests ------------------------------------------ */
 
 static const char *kGenericFnSrc =
@@ -1927,6 +1985,7 @@ int main(void) {
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
+    test_object_spec_thunk_subject_cast_shape_codegen();
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();

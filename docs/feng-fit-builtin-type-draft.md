@@ -119,6 +119,7 @@ fit *byte {
 - 内建类型进入 witness 路径时, subject 必须携带实际值、实际字符串引用或实际数组引用。不得出现“只有 witness、subject 为空”的运行时模型。
 - builtin witness thunk 只允许执行一次按目标既有表示的取值或取指针, 然后直接调用对应的内建 `fit` 方法实现。不得通过 boxing 构造新的运行时对象。
 - 对同一 `fit` 方法, direct-call 与 spec-call 必须复用同一个已发射的 `fit` 实现符号; 禁止为 spec 路径再生成独立的“箱版方法实现符号”。
+- 对对象 target 的 spec thunk, `_subject` 必须保持一次 `(struct T *)_subject` 还原后直接转发到实现方法, 不得改写为其他承载或额外包装层。
 
 ### 6.3 标量 subject 稳定承载
 

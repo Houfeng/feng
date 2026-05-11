@@ -13313,6 +13313,8 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             }
             buf_append_cstr(fd, ") {\n");
             if (sm->type->kind == CG_TYPE_VOID) {
+                /* D6 contract: object subjects are restored by exactly one
+                 * `(struct T *)_subject` cast before forwarding. */
                 buf_append_fmt(fd, "    %s((struct %s *)_subject", fm->c_name, t->c_struct_name);
             } else {
                 buf_append_fmt(fd, "    return %s((struct %s *)_subject",
