@@ -6016,7 +6016,8 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                                              FengExpr *const *args,
                                              size_t arg_count,
                                              const FengParameter *params,
-                                             size_t param_count);
+                                             size_t param_count,
+                                             FengSpecObjectSubjectStorageKind preferred_storage);
 
 static void record_spec_member_access(ResolveContext *context,
                                       const FengExpr *expr,
@@ -6050,7 +6051,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
             note_callable_value_expr_exception_escape(context, callee);
             record_object_arg_coercion_sites(context, args, arg_count,
                                              callee_type_decl->as.spec_decl.as.callable.params,
-                                             callee_type_decl->as.spec_decl.as.callable.param_count);
+                                             callee_type_decl->as.spec_decl.as.callable.param_count,
+                                             FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
             return true;
         }
 
@@ -6080,7 +6082,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                 args,
                 arg_count,
                 callee_constraint_decl->as.spec_decl.as.callable.params,
-                callee_constraint_decl->as.spec_decl.as.callable.param_count);
+                callee_constraint_decl->as.spec_decl.as.callable.param_count,
+                FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
             return true;
         }
 
@@ -8725,12 +8728,14 @@ static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *cont
 static void record_object_spec_coercion_site_if_applicable(
         ResolveContext *context,
         const FengExpr *expr,
-        const FengTypeRef *expected_type_ref) {
+    const FengTypeRef *expected_type_ref,
+    FengSpecObjectSubjectStorageKind preferred_storage) {
     const FengDecl *target_decl;
     const FengDecl *src_type_decl;
     InferredExprType expr_type;
     const FengSpecRelation *relation;
     FengSemanticSubjectKey subject_key_for_coercion;
+    FengSpecObjectSubjectStorageKind storage_kind = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER;
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
@@ -8746,7 +8751,8 @@ static void record_object_spec_coercion_site_if_applicable(
         for (i = 0U; i < expr->as.array_literal.count; ++i) {
             record_object_spec_coercion_site_if_applicable(context,
                                                             expr->as.array_literal.items[i],
-                                                            expected_type_ref->as.inner);
+                                                            expected_type_ref->as.inner,
+                                                            preferred_storage);
         }
         return;
     }
@@ -8807,13 +8813,21 @@ static void record_object_spec_coercion_site_if_applicable(
     if (relation == NULL) {
         return;
     }
+
+    if (preferred_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL &&
+        (inferred_expr_type_is_bool(expr_type) ||
+         inferred_expr_type_is_integer(expr_type) ||
+         inferred_expr_type_is_float(expr_type))) {
+        storage_kind = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL;
+    }
+
     (void)feng_semantic_record_object_spec_coercion_site(context->analysis,
                                                           expr,
                                                           &subject_key_for_coercion,
                                                           target_decl,
                                                           expected_type_ref,
                                                           relation,
-                                                          FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+                                                          storage_kind);
 
     /* Phase S3 — materialise the (T, S) witness on first demand (§8.2). The
      * compute helper is idempotent: subsequent coercions for the same pair
@@ -8840,7 +8854,8 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                                              FengExpr *const *args,
                                              size_t arg_count,
                                              const FengParameter *params,
-                                             size_t param_count) {
+                                             size_t param_count,
+                                             FengSpecObjectSubjectStorageKind preferred_storage) {
     size_t i;
 
     if (params == NULL || args == NULL || param_count != arg_count) {
@@ -8849,7 +8864,8 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
     for (i = 0U; i < arg_count; ++i) {
         record_object_spec_coercion_site_if_applicable(context,
                                                         args[i],
-                                                        params[i].type);
+                                                        params[i].type,
+                                                        preferred_storage);
     }
 }
 
@@ -8872,7 +8888,10 @@ static void record_object_arg_coercion_sites_for_owner_instance(
             owner_type_decl,
             owner_type,
             params[i].type);
-        record_object_spec_coercion_site_if_applicable(context, args[i], param_type);
+        record_object_spec_coercion_site_if_applicable(context,
+                                                       args[i],
+                                                       param_type,
+                                                       FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
     }
 }
 
@@ -9235,7 +9254,10 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
         return validate_function_typed_expr(context, expr, expected_type_ref);
     }
     if (expr_matches_expected_type_ref(context, expr, expected_type_ref)) {
-        record_object_spec_coercion_site_if_applicable(context, expr, expected_type_ref);
+        record_object_spec_coercion_site_if_applicable(context,
+                                                       expr,
+                                                       expected_type_ref,
+                                                       FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
         return true;
     }
 
@@ -10137,7 +10159,8 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
                                              expr->as.call.args,
                                              expr->as.call.arg_count,
                                              constructor_member->as.callable.params,
-                                             constructor_member->as.callable.param_count);
+                                             constructor_member->as.callable.param_count,
+                                             FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
         }
     }
     return true;
@@ -10209,7 +10232,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,
                                                      resolution.callable->params,
-                                                     resolution.callable->param_count);
+                                                     resolution.callable->param_count,
+                                                     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -10419,7 +10443,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,
                                                      resolution.callable->params,
-                                                     resolution.callable->param_count);
+                                                     resolution.callable->param_count,
+                                                     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {

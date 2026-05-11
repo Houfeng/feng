@@ -8165,6 +8165,52 @@ static void test_spec_coercion_object_argument(void) {
     feng_program_free(program);
 }
 
+static void test_spec_coercion_object_scalar_argument_uses_borrow_local(void) {
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "fit i32: Named {\n"
+        "    fn name(): string { return \"i32\"; }\n"
+        "}\n"
+        "fn accept(n: Named): string {\n"
+        "    return n.name();\n"
+        "}\n"
+        "fn caller(): string {\n"
+        "    return accept((7));\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_scalar_arg.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *caller = find_function_decl_in_program(program, "caller");
+    ASSERT(caller != NULL);
+    const FengStmt *ret_stmt = caller->as.function_decl.body->statements[0];
+    ASSERT(ret_stmt->kind == FENG_STMT_RETURN);
+    const FengExpr *ret_expr = ret_stmt->as.return_value;
+    ASSERT(ret_expr != NULL);
+    ASSERT(ret_expr->kind == FENG_EXPR_CALL);
+    ASSERT(ret_expr->as.call.arg_count == 1U);
+
+    const FengExpr *arg = ret_expr->as.call.args[0];
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, arg);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(site->src_subject_key.as.builtin_canonical_name != NULL);
+    ASSERT(strcmp(site->src_subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_spec_coercion_object_return(void) {
     /* Return coercion: `return User{...};` from a function returning Named
      * records an OBJECT site on the returned expression. */
@@ -9680,6 +9726,7 @@ int main(void) {
     test_spec_coercion_object_builtin_let_binding();
     test_spec_coercion_object_array_let_binding();
     test_spec_coercion_object_argument();
+    test_spec_coercion_object_scalar_argument_uses_borrow_local();
     test_spec_coercion_object_return();
     test_spec_coercion_object_scalar_return_uses_box_owner();
     test_spec_coercion_callable_top_level_fn();

@@ -352,7 +352,7 @@ struct FengScalarBox {
 - [x] C5：coercion site 计算 subject key 时与 fit target 归一化逻辑一致（含 builtin/array 的 object-form spec coercion 入口）。
 - [x] C6：在 runtime 内新增 `FengScalarBox`，使用单一托管对象类型承载全部内建标量。
 - [x] C7：`FengScalarBox` 内部采用自然对齐的 `union` payload，而不是字节数组 payload。
-- [ ] C8：非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
+- [x] C8：非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
 - [x] C9：可逃逸 object-form spec 值（赋给 spec 局部、返回、存进字段/数组/闭包等）统一创建 `FengScalarBox`。
 - [x] C10：`subject` 仍保持单一 `FENG_SLOT_POINTER` 槽位，不新增第三字段，不改 fat spec 两字段 ABI。
 - [x] C11：补充 coercion site 分类规则（临时借用/可逃逸装箱）并在语义到 codegen 间打通标记传递。

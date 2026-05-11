@@ -124,6 +124,7 @@ fit *byte {
 - 该稳定承载由 runtime-internal `FengScalarBox` 提供, 仅用于内部 subject 物化, 不暴露给用户语言层。
 - `FengScalarBox` 不改变 fat spec 的两字段外层 ABI, 也不改变 direct-call 的零 boxing 约束。
 - 非逃逸的标量 `spec` 调用仍可借用局部物化地址, 不要求分配 `FengScalarBox`。
+- 当前阶段对“非逃逸”的可证明口径收敛为: 标量到 object-form `spec` 的调用实参临时 coercion 点只在当前调用栈帧内消费 subject, 不进入局部绑定、返回值或聚合字段/元素存储。
 - `FengScalarBox` 只服务于标量内建类型, 不作为 `string`、数组或用户 `type` 的通用承载模型。
 - `FengScalarBox` 必须是 runtime 内单一托管对象类型, 用同一套对象头与同一套 retain/release 生命周期承载全部标量内建类型。
 - `FengScalarBox` 的 payload 必须使用自然对齐的 `union` 成员布局（`bool` / 有符号整数 / 无符号整数 / 浮点）, 不得退化为字节数组 payload。

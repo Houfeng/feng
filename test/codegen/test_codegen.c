@@ -665,6 +665,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    let e: string = s3.name();\n"
         "    let c: string = call_name(s1);\n"
         "    let d: string = call_name(s2);\n"
+        "    let f: string = call_name((9));\n"
         "    return 1;\n"
         "}\n";
 
