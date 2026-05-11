@@ -4089,6 +4089,30 @@ static const UserMethod *cg_user_type_method_by_member(const UserType *t,
     return NULL;
 }
 
+/* Fit-body method lookup by name/member. Mirrors type-method lookup but uses
+ * the method table attached to a registered UserFit entry. */
+static const UserMethod *cg_user_fit_method(const UserFit *uf,
+                                            const char *name,
+                                            size_t len) {
+    if (uf == NULL) return NULL;
+    for (size_t i = 0; i < uf->method_count; i++) {
+        if (strlen(uf->methods[i].feng_name) == len &&
+            memcmp(uf->methods[i].feng_name, name, len) == 0) {
+            return &uf->methods[i];
+        }
+    }
+    return NULL;
+}
+
+static const UserMethod *cg_user_fit_method_by_member(const UserFit *uf,
+                                                      const FengTypeMember *m) {
+    if (uf == NULL || m == NULL) return NULL;
+    for (size_t i = 0; i < uf->method_count; i++) {
+        if (uf->methods[i].member == m) return &uf->methods[i];
+    }
+    return NULL;
+}
+
 /* ------------- Spec registration (Step 4b — value model) ------------- */
 
 static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
@@ -7388,12 +7412,34 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         const UserType *ut = recv.type->user;
         const UserMethod *um = NULL;
-        if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD && rc->member) {
-            um = cg_user_type_method_by_member(ut, rc->member);
-        }
-        if (!um) {
-            um = cg_user_type_method(ut,
-                ma->as.member.member.data, ma->as.member.member.length);
+        if (rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD) {
+            const UserFit *uf = NULL;
+
+            if (rc->fit_decl != NULL) {
+                uf = cg_find_user_fit_by_decl_and_target(cg, rc->fit_decl, ut);
+            }
+            if (uf != NULL && rc->member != NULL) {
+                um = cg_user_fit_method_by_member(uf, rc->member);
+            }
+            if (um == NULL && uf != NULL) {
+                um = cg_user_fit_method(uf,
+                    ma->as.member.member.data, ma->as.member.member.length);
+            }
+            if (um == NULL) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: type '%s' has no method '%.*s'",
+                    ut->feng_name,
+                    (int)ma->as.member.member.length, ma->as.member.member.data);
+            }
+        } else {
+            if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD && rc->member) {
+                um = cg_user_type_method_by_member(ut, rc->member);
+            }
+            if (!um) {
+                um = cg_user_type_method(ut,
+                    ma->as.member.member.data, ma->as.member.member.length);
+            }
         }
         if (!um) {
             er_free(&recv);

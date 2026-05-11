@@ -4,7 +4,8 @@
 > 本文档只定义“内建类型作为 `fit` 左侧目标”的补充规则。
 > `fit` 的通用语法、通用语义、通用冲突判定、通用可见性、导出与孤儿适配规则统一见 [feng-fit.md](./feng-fit.md)。
 > 内建类型本体语义统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
-> 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。> 开发指导见 [dev/feng-fit-optimize-pending.md](../dev/feng-fit-optimize-pending.md)。
+> 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。
+> 开发指导见 [dev/feng-fit-optimize-pending.md](../dev/feng-fit-optimize-pending.md)。
 ## 1 职责
 
 - 定义哪些内建类型可以作为 `fit` 左侧目标。
@@ -114,6 +115,14 @@ fit *byte {
 - witness 表必须在编译期静态确定。编译器不得为 witness 表解析生成任何运行时散列查找、动态分发或 JIT 路径。
 - 内建类型进入 witness 路径时, subject 必须携带实际值、实际字符串引用或实际数组引用。不得出现“只有 witness、subject 为空”的运行时模型。
 - builtin witness thunk 只允许执行一次按目标既有表示的取值或取指针, 然后直接调用对应的内建 `fit` 方法实现。不得通过 boxing 构造新的运行时对象。
+
+### 6.3 标量 subject 稳定承载
+
+- 当标量内建类型的 object-form `spec` 值需要逃逸到局部作用域之外时, 运行时必须提供稳定的 subject 承载。
+- 该稳定承载由 runtime-internal `FengScalarBox` 提供, 仅用于内部 subject 物化, 不暴露给用户语言层。
+- `FengScalarBox` 不改变 fat spec 的两字段外层 ABI, 也不改变 direct-call 的零 boxing 约束。
+- 非逃逸的标量 `spec` 调用仍可借用局部物化地址, 不要求分配 `FengScalarBox`。
+- `FengScalarBox` 只服务于标量内建类型, 不作为 `string`、数组或用户 `type` 的通用承载模型。
 
 ## 7 关联
 

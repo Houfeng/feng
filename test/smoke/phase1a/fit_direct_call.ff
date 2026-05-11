@@ -1,0 +1,30 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+type User {
+  let name: string;
+  let age: i32;
+
+  fn say(msg: string): void {
+    puts(msg);
+  }
+}
+
+fit User {
+  fn greet(): string {
+    return "Hello: " + self.name;
+  }
+
+  fn display_age(): void {
+    puts("Age OK");
+  }
+}
+
+fn main(args: string[]) {
+  let user = User { name: "Houfeng", age: 18 };
+  user.say("User created");
+  puts(user.greet());
+  user.display_age();
+}

@@ -39,6 +39,13 @@
 - 用户可见的 boxing 语义，或 direct-call 路径上的任何装箱
 - 将现有 `UserType.fitMethod()` direct-call 缺口留到"以后再修"
 
+### 1.6 分步交付原则
+
+- 每一步必须能独立进入实现与验证，不依赖后续步骤才能形成可复核结果。
+- 语义目标归一化、`self` 作用域、witness sidecar、运行时 subject 承载、codegen、符号导出分批推进，不在同一批次里混合多个抽象层的大改。
+- 每一步的验收只覆盖当前批次新增能力，不把后续批次的能力当作前置成功条件。
+- 现有 `UserType.fitMethod()` direct-call 缺口必须作为独立可验证修复项，不能拖到 builtin / array 支持完成之后再补。
+
 ## 2. 设计原则（已讨论确认）
 
 ### 2.1 fat spec 的外层 ABI 保持不动
@@ -267,17 +274,27 @@ struct FengScalarBox {
 
 `FengSpecWitness.type_decl` 是编译期语义分析用的查找键，不进入任何生成代码。扩展 key 的表达能力对运行时零影响。
 
-## 5. 实现步骤
+## 5. 交付批次
 
-### 步骤1：语义层 fit target 归一化 + 调用侧解锁 + UserType direct-call 修复
+### 5.1 批次划分
 
-> **目标**：让 analyzer 用一个统一结构描述“当前 fit 目标是什么”，并同时打通调用侧 member resolution 与现有 direct-call 缺口。
+| 批次 | 目标 | 主要交付物 | 依赖 |
+| --- | --- | --- | --- |
+| A | 先修稳现有 `fit` 主路径 | `UserType.fitMethod()` direct-call 修复，语义层 `fit` 目标归一化雏形 | 现有代码 |
+| B | 放开 builtin / array 的语义入口 | builtin / array 目标识别、`self` 入口、调用侧成员解析 | 批次 A |
+| C | 收口 witness / subject 模型 | witness sidecar key 统一、主体键扩展、标量 subject 物化、`FengScalarBox` | 批次 B |
+| D | 完成 codegen / 符号导出 / 回归 | direct-call 与 witness thunk 适配、符号导出、测试回归 | 批次 C |
 
-- [ ] 新增归一化 helper（建议 `resolve_fit_target(...)`），统一识别三类目标：用户 `type`、builtin、array。
-- [ ] builtin 统一转成 canonical name；array 拆出元素类型引用、rank、可写标记。
-- [ ] `validate_fit_declaration_contracts` 改为依赖归一化结果。
-- [ ] 调整成员访问 / 方法调用解析，让 builtin / array 也能通过统一 fit target 归一化查到 fit 方法。
-- [ ] **同时**：在 codegen 补齐 `FENG_RESOLVED_CALLABLE_FIT_METHOD` 的 direct-call 静态分派发码分支。
+### 5.2 详细步骤
+
+### 批次 A：先修稳现有主路径
+
+> **目标**：先把现有 `fit` 主路径修稳，再在同一份目标归一化结果上逐步放开 builtin / array。
+
+- [ ] A1：先补 `FENG_RESOLVED_CALLABLE_FIT_METHOD` 的 direct-call 静态分派发码分支，恢复现有 `UserType.fitMethod()` 的直接调用。
+- [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`），先统一识别用户 `type` 与 builtin / array 的目标形态。
+- [ ] A3：builtin 统一转成 canonical name；array 拆出元素类型引用、rank、可写标记。
+- [ ] A4：`validate_fit_declaration_contracts` 改为依赖归一化结果，并将调用侧 member resolution 接到同一份目标归一化结果上。
 
 **验收**：
 
@@ -285,158 +302,94 @@ struct FengScalarBox {
 - builtin / array 的 `it.some()` 在语义层能进入统一 fit 方法解析路径。
 - analyzer 只在一个位置决定 fit target 种类。
 
-### 步骤2：fit target 作用域与 self 绑定
+### 批次 B：放开 builtin / array 的语义入口
 
-> **目标**：让 `self` 在三类 target 上都能正确推断类型。
+> **目标**：让 `self` 在三类 target 上都能正确推断类型，并完成 spec 满足性与孤儿导出判定。
 
-- [ ] 为 fit target 解析补轻量“fit target scope”。
-- [ ] 对用户 `type`：继续沿用 `current_type_decl`。
-- [ ] 对 builtin / array：补 `current_fit_target` 或等价上下文。
-- [ ] 对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
-- [ ] 调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
+- [ ] B1：为 fit target 解析补轻量“fit target scope”。
+- [ ] B2：对用户 `type`：继续沿用 `current_type_decl`。
+- [ ] B3：对 builtin / array：补 `current_fit_target` 或等价上下文。
+- [ ] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
+- [ ] B5：调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
+- [ ] B6：拆开“目标有无自有实例成员”与“目标是不是用户 type”。
+- [ ] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
+- [ ] B8：builtin / array 自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
+- [ ] B9：孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
 
 **验收**：
 
 - `self` 在用户 type、builtin 标量、string、array 四类 target 上都能稳定推断出正确类型。
 - 数组 `T` 在整个 fit 声明内可见且不泄漏。
-
-### 步骤3：spec 满足性与孤儿导出
-
-> **目标**：让 builtin / array target 能正确判定 spec 满足性与导出规则。
-
-- [ ] 拆开“目标有无自有实例成员”与“目标是不是用户 type”。
-- [ ] 用户 `type`：继续复用现有自有成员 + visible fit members 满足性检查。
-- [ ] builtin / array：自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
-- [ ] 孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
-
-**验收**：
-
 - `pu fit i32: LocalSpec` 可导出；`pu fit i32: ExternalSpec` 会被移除导出并输出肯定式提示。
 - 用户 `type` 的原有孤儿规则不回归。
 
-### 步骤4：witness sidecar key 统一化
+### 批次 C：收口 witness / subject 模型
 
-> **目标**：让 builtin / array 使用同一套 witness 缓存，不另开表。
+> **目标**：让 builtin / array 使用同一套 witness 缓存，并把主体键扩展同步到所有语义侧数据结构。
 
-- [ ] 将 `FengSpecWitness` 的主体键从 `type_decl` 扩到统一 subject key：用户 type → `decl`，builtin → canonical name，array → 结构化签名。
-- [ ] 保留单套 `lookup/reserve/append` API。
-- [ ] 数组 target 用结构化 key（元素类型 + rank + 逐层可写性），不用拍平文本或 AST 指针比较。
-- [ ] coercion site 计算 subject key 时与 fit target 归一化逻辑一致。
+- [ ] C1：将 `FengSpecWitness` 的主体键从 `type_decl` 扩到统一 subject key：用户 type → `decl`，builtin → canonical name，array → 结构化签名。
+- [ ] C2：同步扩展 `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键，避免语义侧仍停留在 `type_decl`。
+- [ ] C3：保留单套 `lookup/reserve/append` API。
+- [ ] C4：数组 target 用结构化 key（元素类型 + rank + 逐层可写性），不用拍平文本或 AST 指针比较。
+- [ ] C5：coercion site 计算 subject key 时与 fit target 归一化逻辑一致。
+- [ ] C6：在 runtime 内新增 `FengScalarBox`，使用单一托管对象类型承载全部内建标量。
+- [ ] C7：`FengScalarBox` 内部采用自然对齐的 `union` payload，而不是字节数组 payload。
+- [ ] C8：非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
+- [ ] C9：可逃逸 object-form spec 值（赋给 spec 局部、返回、存进字段/数组/闭包等）统一创建 `FengScalarBox`。
+- [ ] C10：`subject` 仍保持单一 `FENG_SLOT_POINTER` 槽位，不新增第三字段，不改 fat spec 两字段 ABI。
 
 **验收**：
 
 - builtin / array / user type 三类 target 的 witness materialization 时机一致。
 - 语义层只有一份 witness 记录。
-
-### 步骤5：标量 spec subject 物化与 `FengScalarBox`
-
-> **目标**：在不改变 fat spec 外层 ABI 的前提下，为 escaping scalar spec 值提供稳定 subject 存储。
-
-- [ ] 在 runtime 内新增 `FengScalarBox`，使用单一托管对象类型承载全部内建标量。
-- [ ] `FengScalarBox` 内部采用自然对齐的 `union` payload，而不是字节数组 payload。
-- [ ] 非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
-- [ ] 可逃逸 object-form spec 值（赋给 spec 局部、返回、存进字段/数组/闭包等）统一创建 `FengScalarBox`。
-- [ ] `subject` 仍保持单一 `FENG_SLOT_POINTER` 槽位，不新增第三字段，不改 fat spec 两字段 ABI。
-
-**验收**：
-
 - fat spec 的外层 C ABI 仍为两字段按值 struct。
 - direct-call 路径不创建箱对象。
 - escaping scalar spec 值拥有稳定 subject 生命周期。
 
-### 步骤6：codegen direct-call 归一化
+### 批次 D：完成 codegen / 符号导出 / 回归
 
-> **目标**：三类 direct-call 均收敛到同一编译期静态分派模型，无运行时查表。
+> **目标**：三类 direct-call 与 witness thunk 均完成适配，并用 `.ft` 与回归测试收口。
 
-- [ ] 抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
-- [ ] 新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
-- [ ] `string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
-- [ ] direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
-- [ ] 不引入 synthetic object、wrapper struct 或新 runtime helper API。
+- [ ] D1：抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
+- [ ] D2：新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
+- [ ] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
+- [ ] D4：direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
+- [ ] D5：将 `cg_ensure_witness_instance` 从“只接受 `UserType`”推广到接受统一 subject target。
+- [ ] D6：对对象 target：继续 `(struct T *)_subject`。
+- [ ] D7：对 builtin 标量：从借用地址或 `FengScalarBox` 中只做一次原生类型取值。
+- [ ] D8：对 `string` / 数组：只做一次现有引用表示取指针。
+- [ ] D9：thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
+- [ ] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。
+- [ ] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
+- [ ] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 
 **验收**：
 
 - 所有 direct call 生成代码为直接静态函数调用，不存在运行时散列查找、动态分派、间接跳转或 witness 表查询。
 - 生成代码中 `it.some()` 调用成本不高于 `some(it)`。
-
-### 步骤7：witness thunk 类型适配
-
-> **目标**：让 spec 视角的 witness 调用支持所有目标类型。
-
-- [ ] 将 `cg_ensure_witness_instance` 从“只接受 `UserType`”推广到接受统一 subject target。
-- [ ] 对对象 target：继续 `(struct T *)_subject`。
-- [ ] 对 builtin 标量：从借用地址或 `FengScalarBox` 中只做一次原生类型取值。
-- [ ] 对 `string` / 数组：只做一次现有引用表示取指针。
-- [ ] thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
-
-**验收**：
-
 - 抽象 spec 调用只有一层 witness 间接调用。
 - witness 表编译期静态生成，代码中无运行时散列查找或动态分派。
-
-### 步骤8：符号导出
-
-> **目标**：`.ft` 正确导出 builtin / array fit target。
-
-- [ ] builtin 标量 / `string` 目标：复用 BUILTIN type node。
-- [ ] `T[]` / `T[]!` 目标：复用 ARRAY type node，保留元素类型引用与可写位图。
-- [ ] 数组元素类型引用 `T`：通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
-
-**验收**：
-
 - `.ft` 不新增 top-level type kind。
 - consumer 能区分 builtin fit target 与 array fit target。
-
-### 步骤9：测试与全量回归
-
-> **目标**：覆盖所有新增路径，保证原有功能不回归。
-
-- [ ] semantic 用例：`fit i32`、`fit string`、`fit T[]`、`fit T[]!`、孤儿导出正反例。
-- [ ] codegen 用例：`UserType.fitMethod()` direct call、builtin 标量 direct call、`string` direct call、array direct call、对应 witness thunk、escaping scalar spec coercion。
-- [ ] smoke 用例：
-  - `type User { ... }` + `fit User { fn say2(...) ... }` + `user.say2(...)`（验证现有 direct-call 修复）
-  - `fit i32 { ... }` + 标量 direct call
-  - `fit string: Spec { ... }` + spec witness 调用
-  - `fit T[] { fn slice(...) ... }` + `fit T[]! { fn readonly() ... }`
-  - 标量转 spec 后赋给局部、返回、参与 `==` / `!=`、存进数组或对象字段
-- [ ] 每步完成后执行全量回归（`make test`）。
-
-**验收**：
-
 - `make test` 全量通过。
 - 原有用户 `type` fit、witness、generic method 不回归。
 - direct-call 路径无 boxing、wrapper object、额外 carrier、运行时类型查询、方法选择或 witness 表散列查找。
 - escaping scalar spec 值仅通过 runtime-internal `FengScalarBox` 提供稳定 subject 存储，且不改变语言层 `self` 语义。
 - 所有 direct call 调用开销 ≤ 等价自由函数调用。
-- witness 表编译期静态生成。
 
 ## 6. 执行顺序
 
 ```text
-步骤1: fit target 归一化 + 调用侧解锁 + UserType direct-call 修复
-  │
-步骤2: fit target 作用域与 self 绑定
-  │
-步骤3: spec 满足性与孤儿导出
-  │
-步骤4: witness sidecar key 统一化
-  │
-步骤5: 标量 spec subject 物化与 FengScalarBox
-  │
-步骤6: codegen direct-call 归一化
-  │
-步骤7: witness thunk 类型适配
-  │
-步骤8: 符号导出
-  │
-步骤9: 测试与全量回归
+批次 A -> 批次 B -> 批次 C -> 批次 D
 ```
 
 ## 7. 交付约束
 
-- 每一步先更新对应 `docs/` 或 `dev/` 文档，再改代码，最后补测试。
+- 每一批次先更新对应 `docs/` 或 `dev/` 文档，再改代码，最后补测试，并执行全量回归。
 - 实现必须优先消除“只能处理 `type_decl`”这一根因，而非沿现有路径堆叠 builtin / array 特判。
-- 现有 `UserType.fitMethod()` direct-call 缺口修复必须与 builtin / array fit 支持同批完成。
+- `UserType.fitMethod()` direct-call 缺口修复是批次 A 的第一个独立验收子步，不得拖到 builtin / array 支持完成之后再补。
 - direct-call 任何时候都不能通过 boxing 作为过渡方案。
 - fat spec 的外层运行时结构（value struct、vtable、coercion 包装模型）保持不动；escaping scalar spec 值允许引入 runtime-internal `FengScalarBox` 作为 stable subject owner。
+- `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键扩展必须与 witness sidecar key 扩展同步完成，不能让语义侧继续停留在 `type_decl`。
 - 若后续要放开更高 rank 数组 target 或其他内建类型 target，必须先更新规范再实现。
+- `FengScalarBox` 作为新增运行时内部结构，必须先在 [docs/feng-fit-builtin-type-draft.md](../docs/feng-fit-builtin-type-draft.md) 中补充运行时约束定义，再进入批次 C 实现。
