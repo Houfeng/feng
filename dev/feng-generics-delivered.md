@@ -17,10 +17,10 @@
 - [x] **G1**：词法分析确认与测试（见 [§G1](#g1-词法分析)）
 - [x] **G2**：AST 结构扩展（见 [§G2](#g2-ast-扩展)）
 - [x] **G3**：Parser 泛型语法解析（见 [§G3](#g3-语法分析parser扩展)）
-- [ ] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面按 union 语法落地后另行收口，见 [§当前问题总表](#当前问题总表)）
+- [x] **G4**：语义分析扩展收口（声明/推导基础已落地；generic 实例化点的 witness materialization、generic callable direct call、generic spec concrete instance、direct generic spec instance coercion、callable-form method coercion、callable-form lambda coercion，以及泛型类型上的泛型方法基础语义已完成；union 约束面按 union 语法落地后另行收口，见 [§当前问题总表](#当前问题总表)）
 - [x] **G5**：符号表导出 `.ft` 泛型支持（需 Phase 5.5 完成，见 [§G5](#g5-符号表导出ft-泛型支持)）
-- [ ] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion、generic-type generic-method 基础路径、约束面向上转发、open generic spec parent 替换，以及泛型 fit 均已完成；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
-- [ ] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter、generic spec parent codegen、约束面向上转发、open generic spec parent 替换，以及泛型 fit；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
+- [x] **G6**：代码生成收口（共享主体 ABI 已落地，object-form 约束 lowering、constrained spec generic arg slot witness、generic aggregate return、generic callable constraint invoke lowering、generic spec concrete instance、direct generic spec coercion、callable-form method coercion、callable-form lambda coercion、generic-type generic-method 基础路径、约束面向上转发、open generic spec parent 替换，以及泛型 fit 均已完成；union-form 和未来 tuple/value-struct 聚合值不纳入本轮既有形态验收，见 [§G6](#g6-代码生成)）
+- [x] **G7**：端到端测试与全量回归收口（现有 smoke 已覆盖基础路径、object-form 约束调用、generic aggregate return、泛型类型上的泛型方法、generic type shared body 内部 self-call、简化 Map/Hashable 场景、类型级 `K: Eq<K>`、函数级 `U: Eq<U>`、open generic 返回值 witness adapter、generic spec parent codegen、约束面向上转发、open generic spec parent 替换，以及泛型 fit；union-form 随 union 阶段另行验收，见 [§G7](#g7-测试与验证)）
 
 ---
 
@@ -67,9 +67,9 @@
 
 #### Phase A. 文档与验收口径收口
 
-- [ ] A1. 在本文件锁定四项缺口的最终完成定义：aggregate spec field、if/match aggregate result、callable OTHER coercion、aggregate generic arg。
-- [ ] A2. 如 aggregate spec field / if-match aggregate result 的值语义与现有权威文档不一致，先更新主规范，再继续编码。
-- [ ] A3. 明确本轮只覆盖当前既有语言形态；future tuple / value-struct / union carrier 继续留在后续阶段。
+- [x] A1. 在本文件锁定四项缺口的最终完成定义：aggregate spec field、if/match aggregate result、callable OTHER coercion、aggregate generic arg。
+- [x] A2. 如 aggregate spec field / if-match aggregate result 的值语义与现有权威文档不一致，先更新主规范，再继续编码。
+- [x] A3. 明确本轮只覆盖当前既有语言形态；future tuple / value-struct / union carrier 继续留在后续阶段。
 
 #### Phase B. 全局 codegen：aggregate spec field
 
