@@ -1,0 +1,26 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec MapperA(x: int): int;
+spec MapperB(x: int): int;
+
+fn add1(x: int): int {
+    return x + 1;
+}
+
+fn use_mapper(input: MapperA): int {
+    let local: MapperA = input;
+    let remapped: MapperB = local;
+    return remapped(41);
+}
+
+fn main(args: string[]) {
+    let mapper: MapperA = add1;
+    if use_mapper(mapper) == 42 {
+        puts("other-coercion-ok");
+    } else {
+        puts("other-coercion-fail");
+    }
+}

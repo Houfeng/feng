@@ -99,10 +99,17 @@
 
 #### Phase D. 全局 codegen：callable OTHER coercion
 
-- [ ] D1. 抽取 callable-form `spec` 的统一 closure/adaptor builder，保留 top-level fn / method / lambda 快路径。
-- [ ] D2. 为 `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 增加“已是 callable value 但 target surface 不同”时的重包装 lowering。
-- [ ] D3. 如现有 coercion site 元数据不足，补 semantic sidecar 字段而不是在 codegen 猜测来源。
-- [ ] D4. 新增 focused codegen regression，覆盖 local binding / parameter / field-return 等 OTHER 来源的 coercion。
+- [x] D1. 抽取 callable-form `spec` 的统一 closure/adaptor builder，保留 top-level fn / method / lambda 快路径。
+- [x] D2. 为 `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 增加“已是 callable value 但 target surface 不同”时的重包装 lowering。
+- [x] D3. 复核 coercion site 元数据后确认当前字段已足够区分 source 形态，本轮无需新增 semantic sidecar。
+- [x] D4. 新增 focused codegen regression 与 smoke，覆盖 local binding / parameter 来源的 OTHER coercion。
+
+本轮 Phase D 已完成的实现要点：
+
+1. `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 分支不再直接报 not yet supported；当 source 已是 callable value 且与 target callable spec 仅 surface 不同，会生成统一的 rewrap closure。
+2. rewrap closure 复用 callable-form 统一对象布局（`_hdr`/`_self`/`invoke`），通过 adaptor `invoke` 桥接到 source callable 的 `invoke`，并通过 `feng_assign` 管理 `_self` 生命周期。
+3. top-level fn / method / lambda 既有快路径保持不变；OTHER 仅补齐缺口路径，不回退已有行为。
+4. 已新增 focused codegen regression 与 smoke，覆盖 parameter -> local binding -> target callable spec 的连续 coercion 路径。
 
 #### Phase E. 泛型特有路径：aggregate generic arg
 

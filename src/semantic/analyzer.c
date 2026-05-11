@@ -2520,6 +2520,10 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
     return false;
 }
 
+static bool function_type_refs_have_equal_signature(const ResolveContext *context,
+                                                    const FengTypeRef *src_ref,
+                                                    const FengTypeRef *dst_ref);
+
 static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                                                 InferredExprType expr_type,
                                                 const FengTypeRef *type_ref) {
@@ -2537,6 +2541,11 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
             if (expr_type.type_ref != NULL &&
                 type_refs_semantically_equal(context, expr_type.type_ref, type_ref)) {
+                return true;
+            }
+            if (function_type_refs_have_equal_signature(context,
+                                                        expr_type.type_ref,
+                                                        type_ref)) {
                 return true;
             }
             {
@@ -2712,6 +2721,62 @@ static bool function_type_decl_return_matches_inferred_type(const ResolveContext
     }
 
     return inferred_expr_type_matches_type_ref(context, return_type, expected_return_type);
+}
+
+/* Callable-form specs are assignment-compatible when their fully-substituted
+ * signatures match exactly (same parameter count, parameter types, and return
+ * type). This keeps callable coercion nominally strict on signature while
+ * allowing value-to-value surface remapping (e.g. MapperA -> MapperB). */
+static bool function_type_refs_have_equal_signature(const ResolveContext *context,
+                                                    const FengTypeRef *src_ref,
+                                                    const FengTypeRef *dst_ref) {
+    const FengDecl *src_decl;
+    const FengDecl *dst_decl;
+    size_t i;
+
+    if (src_ref == NULL || dst_ref == NULL) {
+        return false;
+    }
+    src_decl = resolve_type_ref_decl(context, src_ref);
+    dst_decl = resolve_type_ref_decl(context, dst_ref);
+    if (!decl_is_function_type(src_decl) || !decl_is_function_type(dst_decl)) {
+        return false;
+    }
+    if (src_decl->as.spec_decl.as.callable.param_count !=
+        dst_decl->as.spec_decl.as.callable.param_count) {
+        return false;
+    }
+    for (i = 0U; i < src_decl->as.spec_decl.as.callable.param_count; ++i) {
+        const FengTypeRef *src_param = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            src_decl,
+            src_ref,
+            src_decl->as.spec_decl.as.callable.params[i].type);
+        const FengTypeRef *dst_param = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            dst_decl,
+            dst_ref,
+            dst_decl->as.spec_decl.as.callable.params[i].type);
+
+        if (!type_refs_semantically_equal(context, src_param, dst_param)) {
+            return false;
+        }
+    }
+
+    {
+        const FengTypeRef *src_ret = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            src_decl,
+            src_ref,
+            src_decl->as.spec_decl.as.callable.return_type);
+        const FengTypeRef *dst_ret = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            dst_decl,
+            dst_ref,
+            dst_decl->as.spec_decl.as.callable.return_type);
+
+        return type_refs_semantically_equal(context, src_ret, dst_ret);
+    }
 }
 
 static bool function_type_decl_matches_callable_signature(const ResolveContext *context,

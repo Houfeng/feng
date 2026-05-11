@@ -733,6 +733,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_types_equal(const CGType *a, const CGType *b);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
@@ -6065,6 +6066,139 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     return true;
 }
 
+static bool cg_callable_specs_signature_compatible(const UserSpec *src,
+                                                   const UserSpec *dst) {
+    if (src == NULL || dst == NULL ||
+        src->form != FENG_SPEC_FORM_CALLABLE ||
+        dst->form != FENG_SPEC_FORM_CALLABLE) {
+        return false;
+    }
+    if (src->callable_param_count != dst->callable_param_count) {
+        return false;
+    }
+    for (size_t i = 0U; i < src->callable_param_count; ++i) {
+        if (!cg_types_equal(src->callable_param_types[i],
+                            dst->callable_param_types[i])) {
+            return false;
+        }
+    }
+    return cg_types_equal(src->callable_return_type, dst->callable_return_type);
+}
+
+static bool cg_emit_callable_other_rewrap(CG *cg,
+                                          const FengExpr *e,
+                                          ExprResult *source,
+                                          const UserSpec *src_spec,
+                                          const UserSpec *dst_spec,
+                                          ExprResult *out) {
+    FengToken blame = e ? e->token : (FengToken){0};
+    char *adapter_name = NULL;
+    char *closure_var = NULL;
+
+    if (!cg_callable_specs_signature_compatible(src_spec, dst_spec)) {
+        return cg_fail(cg, blame,
+            "codegen: callable-form coercion requires source/target callable signatures to match");
+    }
+    if (cgtype_is_managed(source->type) && source->owns_ref) {
+        cg_materialize_to_local(cg, source, "_t");
+    }
+
+    {
+        size_t rewrap_id = cg->lambda_counter++;
+        Buf ab;
+        buf_init(&ab);
+        buf_append_fmt(&ab, "FengCallableRewrap__%s__to__%s__%zu",
+                       src_spec->c_closure_struct_name,
+                       dst_spec->c_closure_struct_name,
+                       rewrap_id);
+        adapter_name = ab.data;
+    }
+    closure_var = cg_fresh_temp(cg, "_callable");
+    if (adapter_name == NULL || closure_var == NULL) {
+        free(adapter_name);
+        free(closure_var);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    /* Prototype emitted early because fn_defs are emitted before witness_defs. */
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_c_type(&cg->headers, dst_spec->callable_return_type);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t i = 0U; i < dst_spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_c_type(&cg->headers, dst_spec->callable_param_types[i]);
+        buf_append_fmt(&cg->headers, " _arg%zu", i);
+    }
+    buf_append_cstr(&cg->headers, ");\n");
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_c_type(&cg->witness_defs, dst_spec->callable_return_type);
+    buf_append_fmt(&cg->witness_defs, " %s(void *_closure", adapter_name);
+    for (size_t i = 0U; i < dst_spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_c_type(&cg->witness_defs, dst_spec->callable_param_types[i]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", i);
+    }
+    buf_append_fmt(&cg->witness_defs,
+        ") {\n"
+        "    struct %s *_dst = (struct %s *)_closure;\n"
+        "    struct %s *_src = (struct %s *)_dst->_self;\n"
+        "    ",
+        dst_spec->c_closure_struct_name,
+        dst_spec->c_closure_struct_name,
+        src_spec->c_closure_struct_name,
+        src_spec->c_closure_struct_name);
+    if (dst_spec->callable_return_type != NULL &&
+        dst_spec->callable_return_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(&cg->witness_defs, "return ");
+    }
+    buf_append_cstr(&cg->witness_defs, "_src->invoke((void *)_src");
+    for (size_t i = 0U; i < dst_spec->callable_param_count; ++i) {
+        buf_append_fmt(&cg->witness_defs, ", _arg%zu", i);
+    }
+    buf_append_cstr(&cg->witness_defs, ");\n}\n\n");
+
+    buf_append_fmt(cg->cur_body,
+        "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n"
+        "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+        "    %s->_self = NULL;\n"
+        "    feng_assign((void **)&%s->_self, (void *)%s);\n"
+        "    %s->invoke = %s;\n",
+        dst_spec->c_closure_struct_name,
+        closure_var,
+        dst_spec->c_closure_struct_name,
+        dst_spec->c_closure_desc_name,
+        closure_var,
+        closure_var,
+        closure_var,
+        source->c_expr,
+        closure_var,
+        adapter_name);
+
+    er_init(out);
+    {
+        Buf b;
+        buf_init(&b);
+        buf_append_fmt(&b, "(struct %s *)%s",
+                       dst_spec->c_closure_struct_name,
+                       closure_var);
+        out->c_expr = b.data;
+    }
+    out->type = cgtype_new(CG_TYPE_CALLABLE);
+    if (out->c_expr == NULL || out->type == NULL) {
+        free(adapter_name);
+        free(closure_var);
+        er_free(out);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    out->type->user_spec = dst_spec;
+    out->owns_ref = true;
+
+    free(adapter_name);
+    free(closure_var);
+    return true;
+}
+
 static bool cg_emit_callable_spec_coercion(CG *cg,
                                            const FengExpr *e,
                                            const FengSpecCoercionSite *cs,
@@ -6080,22 +6214,33 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
     }
     if (cs->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER) {
         const UserSpec *target_spec = NULL;
+        ExprResult src;
         if (cs->callable_lambda_expr != NULL) {
             return cg_emit_callable_lambda_coercion(cg, e, cs->callable_lambda_expr, cs, out);
         }
         if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
             return false;
         }
-        if (!cg_emit_expr_raw(cg, e, out)) {
+        if (!cg_emit_expr_raw(cg, e, &src)) {
             return false;
         }
-        if (target_spec != NULL && out->type != NULL && out->type->kind == CG_TYPE_CALLABLE &&
-            out->type->user_spec == target_spec) {
+        if (target_spec != NULL && src.type != NULL && src.type->kind == CG_TYPE_CALLABLE &&
+            src.type->user_spec == target_spec) {
+            *out = src;
             return true;
         }
-        er_free(out);
+        if (target_spec != NULL && src.type != NULL && src.type->kind == CG_TYPE_CALLABLE &&
+            src.type->user_spec != NULL) {
+            bool ok = cg_emit_callable_other_rewrap(cg, e, &src,
+                                                    src.type->user_spec,
+                                                    target_spec,
+                                                    out);
+            er_free(&src);
+            return ok;
+        }
+        er_free(&src);
         return cg_fail(cg, e->token,
-            "codegen: callable-form spec coercion across distinct callable value types is not yet supported in this step");
+            "codegen: callable-form coercion source must be a callable value");
     }
     return cg_fail(cg, e->token,
         "codegen: callable-form lambda/method coercion not yet supported in this step");
