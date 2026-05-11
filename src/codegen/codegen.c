@@ -208,6 +208,49 @@ static bool cgtype_is_numeric(CGTypeKind k) {
     return cgtype_is_integer(k) || cgtype_is_float(k);
 }
 
+static bool cg_type_kind_is_scalar_builtin(CGTypeKind k) {
+    return k == CG_TYPE_BOOL ||
+           k == CG_TYPE_I8 || k == CG_TYPE_I16 || k == CG_TYPE_I32 || k == CG_TYPE_I64 ||
+           k == CG_TYPE_U8 || k == CG_TYPE_U16 || k == CG_TYPE_U32 || k == CG_TYPE_U64 ||
+           k == CG_TYPE_F32 || k == CG_TYPE_F64;
+}
+
+static bool cg_scalar_box_payload_field(CGTypeKind kind, const char **out_field) {
+    if (out_field == NULL) return false;
+    switch (kind) {
+        case CG_TYPE_BOOL: *out_field = "b"; return true;
+        case CG_TYPE_I8: *out_field = "i8"; return true;
+        case CG_TYPE_I16: *out_field = "i16"; return true;
+        case CG_TYPE_I32: *out_field = "i32"; return true;
+        case CG_TYPE_I64: *out_field = "i64"; return true;
+        case CG_TYPE_U8: *out_field = "u8"; return true;
+        case CG_TYPE_U16: *out_field = "u16"; return true;
+        case CG_TYPE_U32: *out_field = "u32"; return true;
+        case CG_TYPE_U64: *out_field = "u64"; return true;
+        case CG_TYPE_F32: *out_field = "f32"; return true;
+        case CG_TYPE_F64: *out_field = "f64"; return true;
+        default: return false;
+    }
+}
+
+static bool cg_scalar_box_ctor_name(CGTypeKind kind, const char **out_name) {
+    if (out_name == NULL) return false;
+    switch (kind) {
+        case CG_TYPE_BOOL: *out_name = "feng_scalar_box_new_bool"; return true;
+        case CG_TYPE_I8: *out_name = "feng_scalar_box_new_i8"; return true;
+        case CG_TYPE_I16: *out_name = "feng_scalar_box_new_i16"; return true;
+        case CG_TYPE_I32: *out_name = "feng_scalar_box_new_i32"; return true;
+        case CG_TYPE_I64: *out_name = "feng_scalar_box_new_i64"; return true;
+        case CG_TYPE_U8: *out_name = "feng_scalar_box_new_u8"; return true;
+        case CG_TYPE_U16: *out_name = "feng_scalar_box_new_u16"; return true;
+        case CG_TYPE_U32: *out_name = "feng_scalar_box_new_u32"; return true;
+        case CG_TYPE_U64: *out_name = "feng_scalar_box_new_u64"; return true;
+        case CG_TYPE_F32: *out_name = "feng_scalar_box_new_f32"; return true;
+        case CG_TYPE_F64: *out_name = "feng_scalar_box_new_f64"; return true;
+        default: return false;
+    }
+}
+
 static int cgtype_int_rank(CGTypeKind k) {
     switch (k) {
         case CG_TYPE_I8: case CG_TYPE_U8:  return 1;
@@ -659,6 +702,8 @@ typedef struct CG {
     } *spec_slot_witness_tables;
     size_t spec_slot_witness_table_count;
     size_t spec_slot_witness_table_capacity;
+    bool scalar_box_support_emitted;
+    size_t subject_witness_counter;
     ModuleBinding *module_bindings;
     size_t         module_binding_count;
     size_t         module_binding_capacity;
@@ -802,6 +847,13 @@ static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl)
 static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                                        const UserSpec *s, FengToken blame,
                                        const char **out_var);
+static bool cg_ensure_witness_instance_for_subject_key(
+    CG *cg,
+    const FengSemanticSubjectKey *subject_key,
+    const UserSpec *s,
+    FengToken blame,
+    const char **out_var);
+static bool cg_emit_scalar_box_support(CG *cg);
 static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const UserSpec *dst, FengToken blame,
                                         const char **out_var);
@@ -4458,10 +4510,6 @@ static bool cg_register_builtin_fit_shell(CG *cg,
     if (decl == NULL || target_ref == NULL) {
         return false;
     }
-    if (decl->as.fit_decl.spec_count > 0U) {
-        return cg_fail(cg, decl->token,
-            "codegen: builtin/array fit specs clause is not supported yet");
-    }
     if (cg->builtin_fit_count + 1 > cg->builtin_fit_capacity) {
         size_t cap = cg->builtin_fit_capacity ? cg->builtin_fit_capacity * 2 : 4;
         void *p = realloc(cg->builtin_fits, cap * sizeof *cg->builtin_fits);
@@ -4483,8 +4531,36 @@ static bool cg_register_builtin_fit_shell(CG *cg,
     memset(bf, 0, sizeof *bf);
     bf->decl = decl;
     bf->target_type = target_type;
-    bf->spec_count = 0U;
-    bf->specs = NULL;
+    bf->spec_count = decl->as.fit_decl.spec_count;
+    bf->specs = bf->spec_count ? calloc(bf->spec_count, sizeof *bf->specs) : NULL;
+    if (bf->spec_count > 0U && bf->specs == NULL) {
+        cgtype_free(target_type);
+        memset(bf, 0, sizeof *bf);
+        return false;
+    }
+    for (size_t spec_index = 0; spec_index < bf->spec_count; ++spec_index) {
+        const FengTypeRef *spec_ref = decl->as.fit_decl.specs[spec_index];
+        CGType *spec_type = NULL;
+
+        if (!cg_resolve_type(cg, spec_ref, &decl->token, &spec_type)) {
+            free(bf->specs);
+            cgtype_free(target_type);
+            memset(bf, 0, sizeof *bf);
+            return false;
+        }
+        if (spec_type == NULL ||
+            (spec_type->kind != CG_TYPE_SPEC && spec_type->kind != CG_TYPE_CALLABLE) ||
+            spec_type->user_spec == NULL) {
+            cgtype_free(spec_type);
+            free(bf->specs);
+            cgtype_free(target_type);
+            memset(bf, 0, sizeof *bf);
+            return cg_fail(cg, decl->token,
+                "codegen: fit spec did not resolve to a known user spec");
+        }
+        bf->specs[spec_index] = spec_type->user_spec;
+        cgtype_free(spec_type);
+    }
     bf->index = cg->builtin_fit_count;
     bf->owner_program = cg->cur_program;
     {
@@ -5125,6 +5201,71 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_value_struct_name,
         s->c_aggregate_default_name,
         s->c_aggregate_slots_name);
+}
+
+static bool cg_emit_scalar_box_support(CG *cg) {
+    if (cg->scalar_box_support_emitted) {
+        return true;
+    }
+
+    Buf *td = &cg->type_defs;
+    buf_append_cstr(td,
+        "struct FengScalarBox {\n"
+        "    FengManagedHeader _hdr;\n"
+        "    union {\n"
+        "        bool b;\n"
+        "        int8_t i8;\n"
+        "        int16_t i16;\n"
+        "        int32_t i32;\n"
+        "        int64_t i64;\n"
+        "        uint8_t u8;\n"
+        "        uint16_t u16;\n"
+        "        uint32_t u32;\n"
+        "        uint64_t u64;\n"
+        "        float f32;\n"
+        "        double f64;\n"
+        "    } payload;\n"
+        "};\n\n");
+    buf_append_cstr(td,
+        "static const FengTypeDescriptor feng_scalar_box_descriptor = {\n"
+        "    .name = \"feng.<internal>.scalar_box\",\n"
+        "    .size = sizeof(struct FengScalarBox),\n"
+        "    .finalizer = NULL,\n"
+        "    .release_children = NULL,\n"
+        "    .is_potentially_cyclic = false,\n"
+        "    .managed_field_count = 0,\n"
+        "    .managed_fields = NULL,\n"
+        "};\n\n");
+
+    CGTypeKind kinds[] = {
+        CG_TYPE_BOOL,
+        CG_TYPE_I8, CG_TYPE_I16, CG_TYPE_I32, CG_TYPE_I64,
+        CG_TYPE_U8, CG_TYPE_U16, CG_TYPE_U32, CG_TYPE_U64,
+        CG_TYPE_F32, CG_TYPE_F64
+    };
+    for (size_t i = 0U; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
+        const char *ctor_name = NULL;
+        const char *field_name = NULL;
+
+        if (!cg_scalar_box_ctor_name(kinds[i], &ctor_name) ||
+            !cg_scalar_box_payload_field(kinds[i], &field_name)) {
+            return false;
+        }
+
+        buf_append_fmt(td, "static struct FengScalarBox *%s(", ctor_name);
+        buf_append_cstr(td, cgtype_to_c(kinds[i]));
+        buf_append_cstr(td, " value) {\n");
+        buf_append_fmt(td,
+            "    struct FengScalarBox *_o = (struct FengScalarBox *)"
+            "feng_object_new(&feng_scalar_box_descriptor);\n"
+            "    _o->payload.%s = value;\n"
+            "    return _o;\n"
+            "}\n\n",
+            field_name);
+    }
+
+    cg->scalar_box_support_emitted = true;
+    return true;
 }
 
 /* ----- module bindings ----- */
@@ -9020,44 +9161,97 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
      * a coercion site. For object-form, we wrap the produced object reference
      * into a fat-spec value `{ .subject = expr, .witness = &Witness }`. */
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT) {
-        if (!out->type || out->type->kind != CG_TYPE_OBJECT || !out->type->user) {
+        if (out->type == NULL) {
             return cg_fail(cg, e->token,
-                "codegen: spec coercion source must be an object value");
+                "codegen: spec coercion source type is missing");
         }
-        if (cs->src_subject_key.kind != FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
-            return cg_fail(cg, e->token,
-                "codegen: object-form spec coercion with non-type_decl subject key not yet supported");
-        }
-        const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_subject_key.as.type_decl);
         const UserSpec *tgt_s = NULL;
         if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &tgt_s)) {
             return false;
         }
-        if (!src_t || !tgt_s) {
+        if (tgt_s == NULL) {
             return cg_fail(cg, e->token,
-                "codegen: spec coercion references decl outside current module (Step 4b-α only handles single-module)");
+                "codegen: coercion target did not resolve to a concrete spec instance");
         }
         const char *witness_var = NULL;
-        if (!cg_ensure_witness_instance(cg, src_t, tgt_s, e->token, &witness_var)) {
-            return false;
+        bool subject_owned = false;
+        char *subject_expr = NULL;
+
+        if (cs->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
+            const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_subject_key.as.type_decl);
+
+            if (!src_t) {
+                return cg_fail(cg, e->token,
+                    "codegen: spec coercion references type outside current codegen scope");
+            }
+            if (!cg_ensure_witness_instance(cg, src_t, tgt_s, e->token, &witness_var)) {
+                return false;
+            }
+            /* Materialise the source so the subject expression evaluates exactly
+             * once; object-form spec borrows that managed reference. */
+            cg_materialize_to_local(cg, out, "_t");
+            subject_expr = strdup(out->c_expr);
+            subject_owned = false;
+        } else {
+            if (!cg_ensure_witness_instance_for_subject_key(cg,
+                                                            &cs->src_subject_key,
+                                                            tgt_s,
+                                                            e->token,
+                                                            &witness_var)) {
+                return false;
+            }
+
+            if (out->type->kind == CG_TYPE_BOOL ||
+                out->type->kind == CG_TYPE_I8 || out->type->kind == CG_TYPE_I16 ||
+                out->type->kind == CG_TYPE_I32 || out->type->kind == CG_TYPE_I64 ||
+                out->type->kind == CG_TYPE_U8 || out->type->kind == CG_TYPE_U16 ||
+                out->type->kind == CG_TYPE_U32 || out->type->kind == CG_TYPE_U64 ||
+                out->type->kind == CG_TYPE_F32 || out->type->kind == CG_TYPE_F64) {
+                const char *ctor_name = NULL;
+
+                if (!cg_emit_scalar_box_support(cg)) {
+                    return false;
+                }
+                if (!cg_scalar_box_ctor_name(out->type->kind, &ctor_name) || ctor_name == NULL) {
+                    return cg_fail(cg, e->token,
+                        "codegen: scalar spec coercion has unsupported source kind");
+                }
+                cg_materialize_to_local(cg, out, "_t");
+                char *box_tmp = cg_fresh_temp(cg, "_sb");
+                if (box_tmp == NULL) {
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+                buf_append_fmt(cg->cur_body,
+                    "    struct FengScalarBox *%s = %s(%s);\n",
+                    box_tmp, ctor_name, out->c_expr);
+                subject_expr = box_tmp;
+                subject_owned = true;
+            } else if (out->type->kind == CG_TYPE_STRING || out->type->kind == CG_TYPE_ARRAY) {
+                cg_materialize_to_local(cg, out, "_t");
+                subject_expr = strdup(out->c_expr);
+                subject_owned = false;
+            } else {
+                return cg_fail(cg, e->token,
+                    "codegen: object-form spec coercion source kind is invalid");
+            }
         }
-        /* Materialise the source so the subject expression evaluates exactly
-         * once, then wrap it. The fat-spec value owns the +1 on `subject`. */
-        cg_materialize_to_local(cg, out, "_t");
+        if (subject_expr == NULL) {
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+
         Buf b; buf_init(&b);
         buf_append_fmt(&b,
             "((struct %s){ .subject = (void *)%s, .witness = &%s })",
-            tgt_s->c_value_struct_name, out->c_expr, witness_var);
+            tgt_s->c_value_struct_name, subject_expr, witness_var);
+        free(subject_expr);
         free(out->c_expr); out->c_expr = b.data;
         cgtype_free(out->type);
         out->type = cgtype_new(CG_TYPE_SPEC);
         if (!out->type) return false;
         out->type->user_spec = tgt_s;
-        /* The materialised local already retains subject; the spec value
-         * borrows that reference, so the value itself is NOT owns_ref — the
-         * receiving slot must retain `subject` if it wants to outlive the
-         * source local's scope. */
-        out->owns_ref = false;
+        /* User/string/array subjects borrow from a materialised local; scalar
+         * subjects are boxed and produced with a fresh +1 ref. */
+        out->owns_ref = subject_owned;
     }
     return true;
 }
@@ -12298,6 +12492,44 @@ static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
     return false;
 }
 
+static bool cg_builtin_fit_targets_spec(const BuiltinFit *fit, const UserSpec *spec) {
+    if (fit == NULL || spec == NULL) return false;
+    for (size_t i = 0; i < fit->spec_count; ++i) {
+        if (fit->specs[i] == spec) return true;
+    }
+    return false;
+}
+
+static bool cg_subject_key_to_target_kind(const FengSemanticSubjectKey *subject_key,
+                                          CGTypeKind *out_kind) {
+    if (subject_key == NULL || out_kind == NULL) {
+        return false;
+    }
+    if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+        *out_kind = CG_TYPE_ARRAY;
+        return true;
+    }
+    if (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_BUILTIN ||
+        subject_key->as.builtin_canonical_name == NULL) {
+        return false;
+    }
+
+    const char *name = subject_key->as.builtin_canonical_name;
+    if (strcmp(name, "bool") == 0) { *out_kind = CG_TYPE_BOOL; return true; }
+    if (strcmp(name, "i8") == 0) { *out_kind = CG_TYPE_I8; return true; }
+    if (strcmp(name, "i16") == 0) { *out_kind = CG_TYPE_I16; return true; }
+    if (strcmp(name, "i32") == 0) { *out_kind = CG_TYPE_I32; return true; }
+    if (strcmp(name, "i64") == 0) { *out_kind = CG_TYPE_I64; return true; }
+    if (strcmp(name, "u8") == 0) { *out_kind = CG_TYPE_U8; return true; }
+    if (strcmp(name, "u16") == 0) { *out_kind = CG_TYPE_U16; return true; }
+    if (strcmp(name, "u32") == 0) { *out_kind = CG_TYPE_U32; return true; }
+    if (strcmp(name, "u64") == 0) { *out_kind = CG_TYPE_U64; return true; }
+    if (strcmp(name, "f32") == 0) { *out_kind = CG_TYPE_F32; return true; }
+    if (strcmp(name, "f64") == 0) { *out_kind = CG_TYPE_F64; return true; }
+    if (strcmp(name, "string") == 0) { *out_kind = CG_TYPE_STRING; return true; }
+    return false;
+}
+
 static bool cg_user_spec_member_compatible(const UserSpecMember *src,
                                            const UserSpecMember *dst) {
     if (src == NULL || dst == NULL || src->kind != dst->kind) {
@@ -12628,6 +12860,282 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
     }
 
     out->source_kind = FENG_SPEC_WITNESS_SOURCE_FIT_METHOD;
+    return true;
+}
+
+static bool cg_ensure_witness_instance_for_subject_key(
+    CG *cg,
+    const FengSemanticSubjectKey *subject_key,
+    const UserSpec *s,
+    FengToken blame,
+    const char **out_var) {
+    if (cg == NULL || subject_key == NULL || s == NULL || out_var == NULL) {
+        return false;
+    }
+    if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
+        const UserType *t = cg_find_user_type_by_decl(cg, subject_key->as.type_decl);
+
+        if (t == NULL) {
+            return cg_fail(cg, blame,
+                "codegen: witness source type is not registered in current module");
+        }
+        return cg_ensure_witness_instance(cg, t, s, blame, out_var);
+    }
+    if (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_BUILTIN &&
+        subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+        return cg_fail(cg, blame,
+            "codegen: invalid subject key for object-form spec coercion");
+    }
+
+    CGTypeKind subject_kind;
+    if (!cg_subject_key_to_target_kind(subject_key, &subject_kind)) {
+        return cg_fail(cg, blame,
+            "codegen: object-form spec coercion has unknown subject key");
+    }
+    if (cg_type_kind_is_scalar_builtin(subject_kind) && !cg_emit_scalar_box_support(cg)) {
+        return false;
+    }
+
+    const FengSpecWitness *witness = feng_semantic_lookup_spec_witness(
+        cg->analysis, subject_key, s->decl);
+    if (witness == NULL) {
+        return cg_fail(cg, blame,
+            "codegen: missing semantic witness for object-form spec coercion");
+    }
+
+    const size_t witness_id = cg->subject_witness_counter++;
+    const char *spec_unique_name =
+        (s->generic_context_type_param_count > 0U && s->c_witness_struct_name)
+            ? s->c_witness_struct_name
+            : s->feng_name;
+    char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
+    if (s_san == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    Buf prefix;
+    buf_init(&prefix);
+    buf_append_fmt(&prefix, "FengSpecThunk__%s__subject_%zu__as__%s__%s",
+                   cg->module_mangle, witness_id, cg->module_mangle, s_san);
+    if (prefix.data == NULL) {
+        free(s_san);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    for (size_t i = 0U; i < s->member_count; ++i) {
+        const UserSpecMember *sm = &s->members[i];
+
+        if (i >= witness->member_count) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: internal: witness slot count mismatch for non-type subject");
+        }
+
+        const FengSpecWitnessMember *wm = &witness->members[i];
+        if (wm->impl_member == NULL) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: missing implementation for spec member '%s'", sm->feng_name);
+        }
+        if (sm->kind != USM_KIND_METHOD ||
+            wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
+            wm->via_fit_decl == NULL) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: non-type subject key currently supports fit-method spec members only");
+        }
+
+        const BuiltinFit *bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
+        if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) || bf->target_type == NULL ||
+            bf->target_type->kind != subject_kind) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: fit implementation does not match object-form spec coercion source");
+        }
+
+        const UserMethod *fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
+        if (fm == NULL) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: fit method '%s' was not registered", sm->feng_name);
+        }
+
+        if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            Buf *fp = &cg->fn_protos;
+            buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                           prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fp, ", ");
+                cg_emit_c_type(fp, sm->param_types[pi]);
+                buf_append_fmt(fp, " p%zu", pi);
+            }
+            buf_append_cstr(fp, ", void *_out);\n");
+
+            Buf *fd = &cg->witness_defs;
+            buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                           prefix.data, sm->c_field_name);
+            for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fd, ", ");
+                cg_emit_c_type(fd, sm->param_types[pi]);
+                buf_append_fmt(fd, " p%zu", pi);
+            }
+            buf_append_cstr(fd, ", void *_out) {\n    ");
+            cg_emit_c_type(fd, fm->return_type);
+            if (cg_type_kind_is_scalar_builtin(subject_kind)) {
+                const char *field_name = NULL;
+                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                }
+                buf_append_fmt(fd,
+                    " _ret = %s(((const struct FengScalarBox *)_subject)->payload.%s",
+                    fm->c_name,
+                    field_name);
+            } else {
+                char *self_cty = cg_ctype_dup(bf->target_type);
+                if (self_cty == NULL) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: out of memory");
+                }
+                buf_append_fmt(fd, " _ret = %s((%s)_subject", fm->c_name, self_cty);
+                free(self_cty);
+            }
+            for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                char pname[32];
+                snprintf(pname, sizeof pname, "p%zu", pi);
+                buf_append_cstr(fd, ", ");
+                if (!cg_append_witness_forward_arg(cg,
+                                                   fd,
+                                                   sm->param_types[pi],
+                                                   fm->param_types[pi],
+                                                   pname,
+                                                   blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
+            }
+            buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+            continue;
+        }
+
+        Buf *fp = &cg->fn_protos;
+        buf_append_cstr(fp, "static ");
+        cg_emit_c_type(fp, sm->type);
+        buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+        for (size_t pi = 0; pi < sm->param_count; ++pi) {
+            buf_append_cstr(fp, ", ");
+            cg_emit_c_type(fp, sm->param_types[pi]);
+            buf_append_fmt(fp, " p%zu", pi);
+        }
+        buf_append_cstr(fp, ");\n");
+
+        Buf *fd = &cg->witness_defs;
+        buf_append_cstr(fd, "static ");
+        cg_emit_c_type(fd, sm->type);
+        buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+        for (size_t pi = 0; pi < sm->param_count; ++pi) {
+            buf_append_cstr(fd, ", ");
+            cg_emit_c_type(fd, sm->param_types[pi]);
+            buf_append_fmt(fd, " p%zu", pi);
+        }
+        buf_append_cstr(fd, ") {\n");
+        if (sm->type->kind == CG_TYPE_VOID) {
+            if (cg_type_kind_is_scalar_builtin(subject_kind)) {
+                const char *field_name = NULL;
+                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                }
+                buf_append_fmt(fd,
+                    "    %s(((const struct FengScalarBox *)_subject)->payload.%s",
+                    fm->c_name,
+                    field_name);
+            } else {
+                char *self_cty = cg_ctype_dup(bf->target_type);
+                if (self_cty == NULL) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: out of memory");
+                }
+                buf_append_fmt(fd, "    %s((%s)_subject", fm->c_name, self_cty);
+                free(self_cty);
+            }
+        } else {
+            if (cg_type_kind_is_scalar_builtin(subject_kind)) {
+                const char *field_name = NULL;
+                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                }
+                buf_append_fmt(fd,
+                    "    return %s(((const struct FengScalarBox *)_subject)->payload.%s",
+                    fm->c_name,
+                    field_name);
+            } else {
+                char *self_cty = cg_ctype_dup(bf->target_type);
+                if (self_cty == NULL) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: out of memory");
+                }
+                buf_append_fmt(fd, "    return %s((%s)_subject", fm->c_name, self_cty);
+                free(self_cty);
+            }
+        }
+        for (size_t pi = 0; pi < sm->param_count; ++pi) {
+            char pname[32];
+            snprintf(pname, sizeof pname, "p%zu", pi);
+            buf_append_cstr(fd, ", ");
+            if (!cg_append_witness_forward_arg(cg,
+                                               fd,
+                                               sm->param_types[pi],
+                                               fm->param_types[pi],
+                                               pname,
+                                               blame)) {
+                buf_free(&prefix);
+                free(s_san);
+                return false;
+            }
+        }
+        buf_append_cstr(fd, ");\n}\n\n");
+    }
+
+    Buf var;
+    buf_init(&var);
+    buf_append_fmt(&var, "FengWitness__%s__subject_%zu__as__%s__%s",
+                   cg->module_mangle, witness_id, cg->module_mangle, s_san);
+    if (var.data == NULL) {
+        buf_free(&prefix);
+        free(s_san);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    buf_append_fmt(&cg->fn_protos, "static const struct %s %s;\n",
+                   s->c_witness_struct_name, var.data);
+
+    Buf *fd = &cg->witness_defs;
+    buf_append_fmt(fd, "static const struct %s %s = {\n",
+                   s->c_witness_struct_name, var.data);
+    for (size_t i = 0U; i < s->member_count; ++i) {
+        const UserSpecMember *sm = &s->members[i];
+        buf_append_fmt(fd, "    .%s = &%s__%s,\n",
+                       sm->c_field_name, prefix.data, sm->c_field_name);
+    }
+    buf_append_cstr(fd, "};\n\n");
+
+    *out_var = var.data;
+    buf_free(&prefix);
+    free(s_san);
     return true;
 }
 

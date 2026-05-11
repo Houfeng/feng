@@ -635,6 +635,70 @@ static void test_fit_builtin_direct_call_codegen_shape(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.fit_builtin_spec;\n"
+        "spec Named { fn name(): string; }\n"
+        "fit i32: Named {\n"
+        "    fn name(): string {\n"
+        "        return \"i32\";\n"
+        "    }\n"
+        "}\n"
+        "fit int[]: Named {\n"
+        "    fn name(): string {\n"
+        "        return \"arr\";\n"
+        "    }\n"
+        "}\n"
+        "fn call_name(v: Named): string {\n"
+        "    return v.name();\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let xs: int[] = [1, 2];\n"
+        "    let a: string = (7).name();\n"
+        "    let b: string = xs.name();\n"
+        "    return 1;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/fit_builtin_spec_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (builtin/array object spec coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
+    ASSERT(strstr(out.c_source, "__name") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* ---- G6 generic codegen tests ------------------------------------------ */
 
 static const char *kGenericFnSrc =
@@ -1821,6 +1885,7 @@ int main(void) {
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();
+    test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();
