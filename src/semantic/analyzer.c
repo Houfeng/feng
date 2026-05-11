@@ -2519,6 +2519,51 @@ static bool fit_target_collect_array_local_type_param(const ResolveContext *cont
     return true;
 }
 
+static bool maybe_downgrade_orphan_fit_export(ResolveContext *context,
+                                              const FengDecl *fit_decl,
+                                              FitTargetResolution fit_target,
+                                              const FengDecl *const *closure,
+                                              size_t closure_count) {
+    bool is_local = false;
+    size_t i;
+
+    if (fit_decl == NULL || fit_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return true;
+    }
+
+    if (fit_target.kind == FIT_TARGET_KIND_USER_TYPE && fit_target.type_decl != NULL) {
+        const FengSemanticModule *target_module =
+            find_decl_provider_module(context->analysis, fit_target.type_decl);
+
+        is_local = (target_module == context->module);
+    }
+
+    for (i = 0U; i < closure_count && !is_local; ++i) {
+        const FengSemanticModule *spec_module =
+            find_decl_provider_module(context->analysis, closure[i]);
+        if (spec_module == context->module) {
+            is_local = true;
+        }
+    }
+
+    if (!is_local) {
+        FengDecl *mutable_decl = (FengDecl *)fit_decl;
+        char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
+        char *message = format_message(
+            "orphan fit for '%s' cannot be exported; downgraded to module-local visibility",
+            target_name != NULL ? target_name : "<unknown>");
+
+        free(target_name);
+        mutable_decl->visibility = FENG_VISIBILITY_PRIVATE;
+        if (!analysis_append_info(context->analysis, context->program->path,
+                                  fit_decl->token, message)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static InferredExprType inferred_expr_type_from_fit_target_type_ref(const FengTypeRef *type_ref) {
     InferredExprType type = inferred_expr_type_unknown();
 
@@ -12247,6 +12292,62 @@ static const FengTypeMember *type_find_method_by_name(
     return NULL;
 }
 
+typedef struct VisibleFitMethodMatchCtx {
+    const ResolveContext *ctx;
+    const FengDecl *spec_decl;
+    const FengTypeRef *spec_type_ref;
+    const FengCallableSignature *spec_sig;
+    const FengTypeMember *match;
+} VisibleFitMethodMatchCtx;
+
+static bool visible_fit_matching_method_visitor(const FengTypeMember *member,
+                                                const FengSemanticModule *fit_module,
+                                                const FengDecl *fit_decl,
+                                                void *userdata) {
+    VisibleFitMethodMatchCtx *st = (VisibleFitMethodMatchCtx *)userdata;
+
+    (void)fit_module;
+    (void)fit_decl;
+    if (callable_signatures_match_for_satisfaction_in_spec_ref(
+            (ResolveContext *)st->ctx,
+            st->spec_decl,
+            st->spec_type_ref,
+            st->spec_sig,
+            &member->as.callable)) {
+        st->match = member;
+        return false;
+    }
+    return true;
+}
+
+static const FengTypeMember *find_visible_fit_matching_method_in_spec_ref(
+    const ResolveContext *ctx,
+    const FengDecl *type_decl,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengCallableSignature *spec_sig) {
+    VisibleFitMethodMatchCtx st;
+
+    if (ctx == NULL || type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        spec_decl == NULL || spec_sig == NULL) {
+        return NULL;
+    }
+
+    memset(&st, 0, sizeof(st));
+    st.ctx = ctx;
+    st.spec_decl = spec_decl;
+    st.spec_type_ref = spec_type_ref;
+    st.spec_sig = spec_sig;
+
+    (void)visit_visible_fit_methods_for_type(ctx,
+                                             type_decl,
+                                             spec_sig->name,
+                                             true,
+                                             visible_fit_matching_method_visitor,
+                                             &st);
+    return st.match;
+}
+
 static bool verify_type_satisfies_spec(ResolveContext *ctx,
                                        const FengDecl *type_decl,
                                        const FengDecl *spec_decl,
@@ -12326,8 +12427,24 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                 extra_count);
 
             if (match == NULL) {
+                match = find_visible_fit_matching_method_in_spec_ref(
+                    ctx,
+                    type_decl,
+                    spec_decl,
+                    spec_type_ref,
+                    &spec_m->as.callable);
+            }
+
+            if (match == NULL) {
                 const FengTypeMember *named = type_find_method_by_name(
                     type_decl, spec_m->as.callable.name, extra_methods, extra_count);
+
+                if (named == NULL) {
+                    named = find_fit_method_member_for_type(
+                        ctx,
+                        type_decl,
+                        spec_m->as.callable.name);
+                }
 
                 if (named != NULL) {
                     return resolver_append_error(
@@ -13396,7 +13513,11 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                                    ? fit_target.builtin_canonical_name
                                    : "array"));
         }
-        return true;
+        return maybe_downgrade_orphan_fit_export(context,
+                                                 fit_decl,
+                                                 fit_target,
+                                                 NULL,
+                                                 0U);
     }
 
     if (fit_target.kind != FIT_TARGET_KIND_USER_TYPE || target == NULL) {
@@ -13560,35 +13681,11 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                                                 fit_decl->token);
     }
     if (ok) {
-        /* Orphan-fit detection: a fit is an orphan when neither its target type
-         * nor any of its specs originates in the current module. The spec mandates
-         * that orphan fits cannot be exported across the package boundary, so we
-         * emit an info note and downgrade `pu` to module-local visibility. */
-        const FengSemanticModule *target_module =
-            find_decl_provider_module(context->analysis, target);
-        bool is_local = (target_module == context->module);
-
-        for (i = 0U; i < closure_count && !is_local; ++i) {
-            const FengSemanticModule *spec_module =
-                find_decl_provider_module(context->analysis, closure[i]);
-            if (spec_module == context->module) {
-                is_local = true;
-            }
-        }
-        if (!is_local && fit_decl->visibility == FENG_VISIBILITY_PUBLIC) {
-            FengDecl *mutable_decl = (FengDecl *)fit_decl;
-            char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
-            char *message = format_message(
-                "orphan fit for '%s' cannot be exported; downgraded to module-local visibility",
-                target_name != NULL ? target_name : "<unknown>");
-
-            free(target_name);
-            mutable_decl->visibility = FENG_VISIBILITY_PRIVATE;
-            if (!analysis_append_info(context->analysis, context->program->path,
-                                      fit_decl->token, message)) {
-                ok = false;
-            }
-        }
+        ok = maybe_downgrade_orphan_fit_export(context,
+                                               fit_decl,
+                                               fit_target,
+                                               closure,
+                                               closure_count);
     }
     free(closure);
     return ok;

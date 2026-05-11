@@ -313,9 +313,9 @@ struct FengScalarBox {
 - [x] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
 - [x] B5：调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
 - [x] B6：拆开“目标有无自有实例成员”与“目标是不是用户 type”。
-- [ ] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
+- [x] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
 - [x] B8：builtin / array 自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
-- [ ] B9：孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
+- [x] B9：孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
 - [x] B10：`validate_fit_declaration_contracts` 改为依赖归一化 target 结果，并与调用侧 member resolution 使用同一份 target 语义。
 
 **验收**：

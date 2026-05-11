@@ -6435,6 +6435,68 @@ static void test_fit_user_type_path_still_uses_current_type_decl(void) {
     feng_program_free(program);
 }
 
+static void test_fit_user_type_satisfaction_reuses_visible_fit_members(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "type User {}\n"
+        "fit User {\n"
+        "    fn greet(): string {\n"
+        "        return \"hi\";\n"
+        "    }\n"
+        "}\n"
+        "fit User: Named;\n";
+    FengProgram *program = parse_program_or_die("fit_user_visible_fit_member_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_orphan_pu_builtin_fit_emits_info_and_downgrades(void) {
+    const char *source =
+        "pu mod demo.main;\n"
+        "pu fit i32 {\n"
+        "    fn double(): i32 {\n"
+        "        return self * 2;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_builtin_orphan_export.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *fit_decl = NULL;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(analysis != NULL);
+    ASSERT(analysis->info_count == 1U);
+    ASSERT(strstr(analysis->infos[0].message, "orphan fit") != NULL);
+    ASSERT(strstr(analysis->infos[0].message, "downgraded to module-local") != NULL);
+
+    for (size_t i = 0U; i < program->declaration_count; ++i) {
+        if (program->declarations[i]->kind == FENG_DECL_FIT) {
+            fit_decl = program->declarations[i];
+            break;
+        }
+    }
+    ASSERT(fit_decl != NULL);
+    ASSERT(fit_decl->visibility == FENG_VISIBILITY_PRIVATE);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fit_method_unknown_member_still_rejected(void) {
     const char *source =
         "mod demo.main;\n"
@@ -9535,6 +9597,8 @@ int main(void) {
     test_fit_array_target_element_type_param_visible_in_body();
     test_fit_array_target_element_type_param_does_not_leak();
     test_fit_user_type_path_still_uses_current_type_decl();
+    test_fit_user_type_satisfaction_reuses_visible_fit_members();
+    test_orphan_pu_builtin_fit_emits_info_and_downgrades();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();
     test_fit_body_rejects_self_private_method_access();
