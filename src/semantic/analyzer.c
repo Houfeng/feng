@@ -2487,6 +2487,38 @@ static FitTargetResolution resolve_fit_target(const ResolveContext *context,
     return result;
 }
 
+static bool fit_target_collect_array_local_type_param(const ResolveContext *context,
+                                                      const FengTypeRef *target_ref,
+                                                      FengTypeParam *out_type_param) {
+    const FengTypeRef *element_ref;
+    FengSlice element_name;
+
+    if (out_type_param == NULL || target_ref == NULL ||
+        target_ref->kind != FENG_TYPE_REF_ARRAY) {
+        return false;
+    }
+
+    element_ref = target_ref->as.inner;
+    if (element_ref == NULL || element_ref->kind != FENG_TYPE_REF_NAMED ||
+        element_ref->as.named.segment_count != 1U ||
+        element_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+
+    element_name = element_ref->as.named.segments[0];
+    if (is_builtin_type_name(element_name) ||
+        resolve_type_ref_decl(context, element_ref) != NULL ||
+        find_type_param(context, element_name) != NULL) {
+        return false;
+    }
+
+    memset(out_type_param, 0, sizeof(*out_type_param));
+    out_type_param->token = element_ref->token;
+    out_type_param->name = element_name;
+    out_type_param->constraint = NULL;
+    return true;
+}
+
 static InferredExprType inferred_expr_type_from_fit_target_type_ref(const FengTypeRef *type_ref) {
     InferredExprType type = inferred_expr_type_unknown();
 
@@ -13822,7 +13854,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             const FengDecl *fit_target_decl;
             const TypeParamEntry *prev_tp = NULL;
             size_t prev_tp_count = 0U;
+            const TypeParamEntry *prev_fit_tp = NULL;
+            size_t prev_fit_tp_count = 0U;
+            bool fit_scope_pushed = false;
             bool ok = true;
+            FengTypeParam fit_local_type_param;
 
             fit_target = resolve_fit_target(context, decl->as.fit_decl.target);
             fit_target_decl = fit_target.kind == FIT_TARGET_KIND_USER_TYPE
@@ -13838,12 +13874,31 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     return false;
                 }
             }
+            if (fit_target_collect_array_local_type_param(context,
+                                                          decl->as.fit_decl.target,
+                                                          &fit_local_type_param)) {
+                if (!resolver_push_type_params(context,
+                                               &fit_local_type_param,
+                                               1U,
+                                               &prev_fit_tp,
+                                               &prev_fit_tp_count)) {
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                    return false;
+                }
+                fit_scope_pushed = true;
+            }
             if (!resolve_type_ref(context, decl->as.fit_decl.target, false)) {
+                if (fit_scope_pushed) {
+                    resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                }
                 resolver_pop_type_params(context, prev_tp, prev_tp_count);
                 return false;
             }
             for (fit_index = 0U; fit_index < decl->as.fit_decl.spec_count; ++fit_index) {
                 if (!resolve_type_ref(context, decl->as.fit_decl.specs[fit_index], false)) {
+                    if (fit_scope_pushed) {
+                        resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                    }
                     resolver_pop_type_params(context, prev_tp, prev_tp_count);
                     return false;
                 }
@@ -13879,11 +13934,17 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 context->current_type_decl = previous_type_decl;
 
                 if (!member_ok) {
+                    if (fit_scope_pushed) {
+                        resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                    }
                     resolver_pop_type_params(context, prev_tp, prev_tp_count);
                     return false;
                 }
             }
             ok = validate_fit_declaration_contracts(context, decl);
+            if (fit_scope_pushed) {
+                resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+            }
             resolver_pop_type_params(context, prev_tp, prev_tp_count);
             return ok;
         }

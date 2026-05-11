@@ -6358,6 +6358,83 @@ static void test_fit_array_target_rejects_specs_clause(void) {
     feng_program_free(program);
 }
 
+static void test_fit_array_target_element_type_param_visible_in_body(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fit T[]! {\n"
+        "    fn head(): T {\n"
+        "        return self[0];\n"
+        "    }\n"
+        "}\n"
+        "fn run(xs: int[]!): void {\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_array_t_scope_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_array_target_element_type_param_does_not_leak(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fit T[] {\n"
+        "    fn head(): T {\n"
+        "        return self[0];\n"
+        "    }\n"
+        "}\n"
+        "fn bad(x: T): T {\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_array_t_scope_no_leak.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "unknown type 'T'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_user_type_path_still_uses_current_type_decl(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box<T> {\n"
+        "    let value: T;\n"
+        "}\n"
+        "fit Box<T> {\n"
+        "    fn get(): T {\n"
+        "        return self.value;\n"
+        "    }\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let b: Box<int> = Box:<int>();\n"
+        "    return b.get();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_user_type_path_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fit_method_unknown_member_still_rejected(void) {
     const char *source =
         "mod demo.main;\n"
@@ -9455,6 +9532,9 @@ int main(void) {
     test_fit_array_method_callable_on_value();
     test_fit_builtin_target_rejects_specs_clause();
     test_fit_array_target_rejects_specs_clause();
+    test_fit_array_target_element_type_param_visible_in_body();
+    test_fit_array_target_element_type_param_does_not_leak();
+    test_fit_user_type_path_still_uses_current_type_decl();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();
     test_fit_body_rejects_self_private_method_access();

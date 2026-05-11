@@ -306,11 +306,11 @@ struct FengScalarBox {
 
 > **目标**：让 `self` 在三类 target 上都能正确推断类型，并完成 spec 满足性与孤儿导出判定。
 
-- [ ] B1：为 fit target 解析补轻量“fit target scope”。
+- [x] B1：为 fit target 解析补轻量“fit target scope”。
 - [x] B0：在 A 批次统一 target 结构上放开 builtin canonical name 与 array 结构化 target（元素类型引用、rank、可写标记）识别。
-- [ ] B2：对用户 `type`：继续沿用 `current_type_decl`。
+- [x] B2：对用户 `type`：继续沿用 `current_type_decl`。
 - [x] B3：对 builtin / array：补 `current_fit_target` 或等价上下文。
-- [ ] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
+- [x] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
 - [x] B5：调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
 - [x] B6：拆开“目标有无自有实例成员”与“目标是不是用户 type”。
 - [ ] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
