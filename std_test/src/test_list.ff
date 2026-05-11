@@ -82,7 +82,7 @@ fn list_entities_order() {
   l.add(100);
   l.add(200);
   l.add(300);
-  let ents = l.entities();
+  let ents = l.entries();
   check(ents[0] == 100, "list/entities-order-0");
   check(ents[1] == 200, "list/entities-order-1");
   check(ents[2] == 300, "list/entities-order-2");
