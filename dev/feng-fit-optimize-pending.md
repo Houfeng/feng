@@ -24,6 +24,9 @@
 
 - **直接调用**：`it.some()` 编译期完成全部分派决策，运行时开销不得大于等价自由函数调用 `some(it)`。不得在调用路径中插入任何运行时类型查询、方法选择或 witness 解析。
 - **spec witness 调用**：witness 表必须在编译期静态确定，不得生成运行时散列查找、动态分派或 JIT 路径。
+- **标量 direct-call 硬约束**：标量目标的 `it.some()` 必须与非标量 direct-call 走同级静态调用路径；不得出现运行时装箱、运行时查表或额外间接分派。
+- **标量 spec 视角硬约束**：标量进入 spec 视角时允许在 coercion site 产生 subject 封装；之后的 spec 调用路径必须与非标量 spec 调用保持同一开销模型（`subject + witness + 单层 thunk`），不得引入额外运行时层级。
+- **泛型单态化硬约束**：`Set<int>` 等标量泛型实例必须在编译期完成 wrapper/实例单态化；泛型直接调用路径不得产生运行时装箱，其开销必须与非标量泛型实例一致。
 
 ### 1.4 当前切片
 
@@ -345,6 +348,8 @@ struct FengScalarBox {
 - fat spec 的外层 C ABI 仍为两字段按值 struct。
 - direct-call 路径不创建箱对象。
 - escaping scalar spec 值拥有稳定 subject 生命周期。
+- 标量从具体值进入 spec 视角只在 coercion site 产生 subject 封装，不在每次 spec 方法调用时重复封装。
+- 标量 spec 调用路径与非标量 spec 调用路径保持同构：`subject + witness` 与单层 thunk，不新增额外运行时查表或分派层。
 
 ### 批次 D：完成 codegen / 符号导出 / 回归
 
@@ -369,6 +374,8 @@ struct FengScalarBox {
 - 生成代码中 `it.some()` 调用成本不高于 `some(it)`。
 - 抽象 spec 调用只有一层 witness 间接调用。
 - witness 表编译期静态生成，代码中无运行时散列查找或动态分派。
+- 标量 direct-call 不出现运行时装箱，调用成本与等价非标量 direct-call 保持同级。
+- `Set<int>` 等标量泛型实例的 wrapper 在编译期单态化完成，直接调用路径不开启运行时装箱，开销与非标量泛型实例一致。
 - `.ft` 不新增 top-level type kind。
 - consumer 能区分 builtin fit target 与 array fit target。
 - `make test` 全量通过。
@@ -389,6 +396,9 @@ struct FengScalarBox {
 - 实现必须优先消除“只能处理 `type_decl`”这一根因，而非沿现有路径堆叠 builtin / array 特判。
 - `UserType.fitMethod()` direct-call 缺口修复是批次 A 的第一个独立验收子步，不得拖到 builtin / array 支持完成之后再补。
 - direct-call 任何时候都不能通过 boxing 作为过渡方案。
+- 标量 direct-call 任何时候都不能通过运行时装箱、运行时查表或额外动态分派作为过渡方案。
+- 标量进入 spec 视角时的 subject 封装仅允许发生在 coercion site；spec 调用阶段的开销模型必须与非标量 spec 调用一致。
+- 泛型标量实例（如 `Set<int>`）必须编译期单态化；直接泛型调用路径不得引入运行时装箱。
 - fat spec 的外层运行时结构（value struct、vtable、coercion 包装模型）保持不动；escaping scalar spec 值允许引入 runtime-internal `FengScalarBox` 作为 stable subject owner。
 - `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键扩展必须与 witness sidecar key 扩展同步完成，不能让语义侧继续停留在 `type_decl`。
 - 若后续要放开更高 rank 数组 target 或其他内建类型 target，必须先更新规范再实现。
