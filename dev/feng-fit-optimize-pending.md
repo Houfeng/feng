@@ -282,8 +282,8 @@ struct FengScalarBox {
 
 | 批次 | 目标 | 主要交付物 | 依赖 |
 | --- | --- | --- | --- |
-| A | 先修稳现有 `fit` 主路径 | 当前 direct-call 能力的回归守护，语义层 `fit` 目标归一化雏形 | 现有代码 |
-| B | 放开 builtin / array 的语义入口 | builtin / array 目标识别、`self` 入口、调用侧成员解析 | 批次 A |
+| A | 先修稳现有 `fit` 主路径 | 当前 direct-call 能力的回归守护，语义层 `fit` 目标归一化结构（不改变行为） | 现有代码 |
+| B | 放开 builtin / array 的语义入口 | builtin / array 目标识别、`self` 入口、调用侧成员解析、契约校验接线 | 批次 A |
 | C | 收口 witness / subject 模型 | witness sidecar key 统一、主体键扩展、标量 subject 物化、`FengScalarBox` | 批次 B |
 | D | 完成 codegen / 符号导出 / 回归 | direct-call 与 witness thunk 适配、符号导出、测试回归 | 批次 C |
 
@@ -294,14 +294,12 @@ struct FengScalarBox {
 > **目标**：先把现有 `fit` 主路径修稳，再在同一份目标归一化结果上逐步放开 builtin / array。
 
 - [ ] A1：固化 `UserType.fitMethod()` direct-call 当前能力回归守护（smoke + codegen 形态检查），防止后续批次退化。
-- [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`），先统一识别用户 `type` 与 builtin / array 的目标形态。
-- [ ] A3：builtin 统一转成 canonical name；array 拆出元素类型引用、rank、可写标记。
-- [ ] A4：`validate_fit_declaration_contracts` 改为依赖归一化结果，并将调用侧 member resolution 接到同一份目标归一化结果上。
+- [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`）与统一 target 数据结构，先只接入用户 `type` 主路径，不放开 builtin / array 行为。
+- [ ] A3：将 analyzer 内部“fit target 分类决策点”收敛到单一入口，确保后续批次只在该入口扩展 builtin / array。
 
 **验收**：
 
 - `user.say2(...)`/等价用例稳定走 direct-call，回归用例持续通过且无退化。
-- builtin / array 的 `it.some()` 在语义层能进入统一 fit 方法解析路径。
 - analyzer 只在一个位置决定 fit target 种类。
 
 ### 批次 B：放开 builtin / array 的语义入口
@@ -309,6 +307,7 @@ struct FengScalarBox {
 > **目标**：让 `self` 在三类 target 上都能正确推断类型，并完成 spec 满足性与孤儿导出判定。
 
 - [ ] B1：为 fit target 解析补轻量“fit target scope”。
+- [ ] B0：在 A 批次统一 target 结构上放开 builtin canonical name 与 array 结构化 target（元素类型引用、rank、可写标记）识别。
 - [ ] B2：对用户 `type`：继续沿用 `current_type_decl`。
 - [ ] B3：对 builtin / array：补 `current_fit_target` 或等价上下文。
 - [ ] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
@@ -317,6 +316,7 @@ struct FengScalarBox {
 - [ ] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
 - [ ] B8：builtin / array 自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
 - [ ] B9：孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
+- [ ] B10：`validate_fit_declaration_contracts` 改为依赖归一化 target 结果，并与调用侧 member resolution 使用同一份 target 语义。
 
 **验收**：
 

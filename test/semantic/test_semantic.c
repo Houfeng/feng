@@ -6271,6 +6271,51 @@ static void test_fit_method_callable_on_instance(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_method_callable_on_literal(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fit i32 {\n"
+        "    fn double(): i32 { return self * 2; }\n"
+        "}\n"
+        "fn run(): i32 {\n"
+        "    return 21.double();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_builtin_call.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_array_method_callable_on_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fit int[] {\n"
+        "    fn head(): int { return self[0]; }\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let xs: int[] = [3, 4];\n"
+        "    return xs.head();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_array_call.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fit_method_unknown_member_still_rejected(void) {
     const char *source =
         "mod demo.main;\n"
@@ -9364,6 +9409,8 @@ int main(void) {
     test_imported_pu_fit_satisfies_spec_typed_parameter();
     test_pu_fit_visible_via_alias_use();
     test_fit_method_callable_on_instance();
+    test_fit_builtin_method_callable_on_literal();
+    test_fit_array_method_callable_on_value();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();
     test_fit_body_rejects_self_private_method_access();

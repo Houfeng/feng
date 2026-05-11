@@ -217,6 +217,7 @@ typedef struct ResolveContext {
      * to enforce that fit-body code cannot reach the target type's private
      * members regardless of whether the target lives in the same package. */
     const FengDecl *current_fit_decl;
+    const FengTypeRef *current_fit_target_type_ref;
     const FengTypeMember *current_callable_member;
     const FengCallableSignature *current_callable_signature;
     InferredExprType current_callable_inferred_return_type;
@@ -2435,6 +2436,59 @@ static const char *type_ref_builtin_canonical_name(const FengTypeRef *type_ref) 
     }
 
     return canonical_builtin_type_name(type_ref->as.named.segments[0]);
+}
+
+static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
+                                             const FengTypeRef *type_ref);
+static bool type_refs_semantically_equal(const ResolveContext *context,
+                                         const FengTypeRef *left,
+                                         const FengTypeRef *right);
+
+static InferredExprType inferred_expr_type_from_fit_target_type_ref(const FengTypeRef *type_ref) {
+    InferredExprType type = inferred_expr_type_unknown();
+
+    if (type_ref == NULL) {
+        return type;
+    }
+
+    type.kind = FENG_INFERRED_EXPR_TYPE_TYPE_REF;
+    type.type_ref = type_ref;
+    return type;
+}
+
+static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
+                                               const FengDecl *fit_decl,
+                                               const FengDecl *owner_type_decl,
+                                               InferredExprType owner_type) {
+    const FengTypeRef *fit_target;
+
+    if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        return false;
+    }
+
+    fit_target = fit_decl->as.fit_decl.target;
+    if (fit_target == NULL) {
+        return false;
+    }
+
+    if (owner_type_decl != NULL) {
+        return resolve_type_ref_decl(context, fit_target) == owner_type_decl;
+    }
+
+    if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+        owner_type.type_ref != NULL) {
+        return type_refs_semantically_equal(context, fit_target, owner_type.type_ref);
+    }
+
+    if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
+        const char *target_builtin = type_ref_builtin_canonical_name(fit_target);
+        const char *owner_builtin = canonical_builtin_type_name(owner_type.builtin_name);
+
+        return target_builtin != NULL && owner_builtin != NULL &&
+               strcmp(target_builtin, owner_builtin) == 0;
+    }
+
+    return false;
 }
 
 static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
@@ -5384,6 +5438,63 @@ static bool visit_visible_fit_methods_for_type(const ResolveContext *ctx,
     return true;
 }
 
+static bool visit_visible_fit_methods_for_owner_type(const ResolveContext *ctx,
+                                                     const FengDecl *owner_type_decl,
+                                                     InferredExprType owner_type,
+                                                     FengSlice name,
+                                                     bool require_name_match,
+                                                     FitMethodVisitor visitor,
+                                                     void *userdata) {
+    size_t module_index;
+    size_t program_index;
+    size_t decl_index;
+    size_t member_index;
+
+    if (ctx == NULL || ctx->analysis == NULL) {
+        return true;
+    }
+
+    for (module_index = 0U; module_index < ctx->analysis->module_count; ++module_index) {
+        const FengSemanticModule *m = &ctx->analysis->modules[module_index];
+
+        for (program_index = 0U; program_index < m->program_count; ++program_index) {
+            const FengProgram *prog = m->programs[program_index];
+
+            if (prog == NULL) {
+                continue;
+            }
+            for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
+                const FengDecl *fd = prog->declarations[decl_index];
+
+                if (fd == NULL || fd->kind != FENG_DECL_FIT) {
+                    continue;
+                }
+                if (!fit_decl_is_visible_from(ctx, m, fd)) {
+                    continue;
+                }
+                if (!fit_decl_target_matches_owner_type(ctx, fd, owner_type_decl, owner_type)) {
+                    continue;
+                }
+                for (member_index = 0U; member_index < fd->as.fit_decl.member_count; ++member_index) {
+                    const FengTypeMember *member = fd->as.fit_decl.members[member_index];
+
+                    if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
+                        continue;
+                    }
+                    if (require_name_match &&
+                        !slice_equals(member->as.callable.name, name)) {
+                        continue;
+                    }
+                    if (!visitor(member, m, fd, userdata)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 typedef struct FitFirstMethodCtx {
     const FengTypeMember *result;
 } FitFirstMethodCtx;
@@ -5408,6 +5519,23 @@ static const FengTypeMember *find_fit_method_member_for_type(const ResolveContex
     st.result = NULL;
     (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true,
                                              fit_first_method_visitor, &st);
+    return st.result;
+}
+
+static const FengTypeMember *find_fit_method_member_for_owner_type(const ResolveContext *ctx,
+                                                                   const FengDecl *owner_type_decl,
+                                                                   InferredExprType owner_type,
+                                                                   FengSlice name) {
+    FitFirstMethodCtx st;
+
+    st.result = NULL;
+    (void)visit_visible_fit_methods_for_owner_type(ctx,
+                                                    owner_type_decl,
+                                                    owner_type,
+                                                    name,
+                                                    true,
+                                                    fit_first_method_visitor,
+                                                    &st);
     return st.result;
 }
 
@@ -5578,7 +5706,20 @@ static FunctionCallResolution resolve_accessible_method_overload(
 
     memset(&result, 0, sizeof(result));
     if (type_decl == NULL) {
-        return result;
+        st.context = context;
+        st.owner_type_decl = NULL;
+        st.owner_type = owner_type;
+        st.args = args;
+        st.arg_count = arg_count;
+        st.result = result;
+        (void)visit_visible_fit_methods_for_owner_type(context,
+                                                       NULL,
+                                                       owner_type,
+                                                       name,
+                                                       true,
+                                                       fit_overload_resolve_visitor,
+                                                       &st);
+        return st.result;
     }
 
     if (type_decl->kind == FENG_DECL_SPEC) {
@@ -6466,9 +6607,41 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     }
 
     if (owner_type_decl == NULL) {
+        char *owner_name = NULL;
+
+        if (find_fit_method_member_for_owner_type(context,
+                                                  NULL,
+                                                  owner_type,
+                                                  expr->as.member.member) != NULL) {
+            return true;
+        }
+
         builtin_name = inferred_expr_type_builtin_canonical_name(owner_type);
         if (builtin_name == NULL) {
-            return true;
+            if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                owner_type.type_ref != NULL &&
+                owner_type.type_ref->kind == FENG_TYPE_REF_NAMED &&
+                owner_type.type_ref->as.named.segment_count == 1U &&
+                owner_type.type_ref->as.named.type_arg_count == 0U &&
+                find_type_param(context, owner_type.type_ref->as.named.segments[0]) != NULL) {
+                return true;
+            }
+            owner_name = format_inferred_expr_type_name(owner_type);
+            if (owner_name == NULL) {
+                return true;
+            }
+            {
+                bool ok = resolver_append_error(
+                    context,
+                    expr->token,
+                    format_message("type '%s' has no member '%.*s'",
+                                   owner_name,
+                                   (int)expr->as.member.member.length,
+                                   expr->as.member.member.data));
+
+                free(owner_name);
+                return ok;
+            }
         }
 
         return resolver_append_error(
@@ -7242,6 +7415,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         case FENG_EXPR_SELF:
             return context->current_type_decl != NULL
                        ? inferred_expr_type_from_decl(context->current_type_decl)
+                       : context->current_fit_target_type_ref != NULL
+                           ? inferred_expr_type_from_fit_target_type_ref(
+                                 context->current_fit_target_type_ref)
                        : inferred_expr_type_unknown();
 
         case FENG_EXPR_BOOL:
@@ -9969,6 +10145,45 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             }
         }
 
+        if (owner_type_decl == NULL) {
+            resolution = resolve_accessible_method_overload(context,
+                                                            NULL,
+                                                            NULL,
+                                                            owner_type,
+                                                            callee->as.member.member,
+                                                            expr->as.call.args,
+                                                            expr->as.call.arg_count);
+
+            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                note_callable_exception_escape(context, resolution.callable);
+                materialize_callable_type_param_constraint_witnesses(context,
+                                                                    expr,
+                                                                    resolution.callable);
+                record_resolved_callable_from_resolution(expr, &resolution);
+                record_object_arg_coercion_sites_for_owner_instance(context,
+                                                                    expr->as.call.args,
+                                                                    expr->as.call.arg_count,
+                                                                    resolution.callable->params,
+                                                                    resolution.callable->param_count,
+                                                                    NULL,
+                                                                    owner_type);
+                return true;
+            }
+            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+                char *owner_name = format_inferred_expr_type_name(owner_type);
+                bool ok = resolver_append_error(
+                    context,
+                    callee->token,
+                    format_message("method '%s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                   owner_name != NULL ? owner_name : "<type>",
+                                   (int)callee->as.member.member.length,
+                                   callee->as.member.member.data,
+                                   expr->as.call.arg_count));
+                free(owner_name);
+                return ok;
+            }
+        }
+
         return validate_callable_typed_expr_call(context,
                                                  callee,
                                                  expr->as.call.args,
@@ -10158,6 +10373,19 @@ static bool resolve_self_member_expr(ResolveContext *context,
     }
 
     if (!allow_self || context->current_type_decl == NULL) {
+        if (allow_self && context->current_type_decl == NULL &&
+            context->current_fit_target_type_ref != NULL &&
+            find_fit_method_member_for_owner_type(
+                context,
+                NULL,
+                inferred_expr_type_from_fit_target_type_ref(
+                    context->current_fit_target_type_ref),
+                expr->as.member.member) != NULL) {
+            if (context->lambda_frame_count > 0U) {
+                resolver_record_self_capture(context);
+            }
+            return true;
+        }
         return resolve_expr(context, expr->as.member.object, allow_self);
     }
 
@@ -13070,13 +13298,28 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 
 static bool validate_fit_declaration_contracts(ResolveContext *context,
                                                const FengDecl *fit_decl) {
+    const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
     const FengDecl *target = resolve_type_ref_decl(context, fit_decl->as.fit_decl.target);
+    const char *target_builtin = type_ref_builtin_canonical_name(target_ref);
+    bool target_is_array = target_ref != NULL && target_ref->kind == FENG_TYPE_REF_ARRAY;
     size_t i;
     size_t j;
     const FengDecl **closure = NULL;
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
     bool ok = true;
+
+    if (target == NULL && (target_builtin != NULL || target_is_array)) {
+        if (fit_decl->as.fit_decl.spec_count > 0U) {
+            return resolver_append_error(
+                context,
+                fit_decl->token,
+                format_message("fit target '%s' does not support specs clause yet",
+                               target_builtin != NULL ? target_builtin : "array"));
+        }
+        return true;
+    }
+
     if (target == NULL || target->kind != FENG_DECL_TYPE) {
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
@@ -13564,6 +13807,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengTypeMember *member = decl->as.fit_decl.members[fit_index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
                 const FengDecl *previous_fit_decl = context->current_fit_decl;
+                const FengTypeRef *previous_fit_target_type_ref =
+                    context->current_fit_target_type_ref;
                 const FengTypeMember *previous_callable_member =
                     context->current_callable_member;
                 bool member_ok;
@@ -13572,12 +13817,14 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     context->current_type_decl = fit_target_decl;
                 }
                 context->current_fit_decl = decl;
+                context->current_fit_target_type_ref = decl->as.fit_decl.target;
                 context->current_callable_member = member;
 
                 member_ok = resolve_callable(context, &member->as.callable, true);
 
                 context->current_callable_member = previous_callable_member;
                 context->current_fit_decl = previous_fit_decl;
+                context->current_fit_target_type_ref = previous_fit_target_type_ref;
                 context->current_type_decl = previous_type_decl;
 
                 if (!member_ok) {

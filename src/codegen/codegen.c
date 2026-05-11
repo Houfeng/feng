@@ -389,6 +389,18 @@ typedef struct UserFit {
     const FengProgram *owner_program;
 } UserFit;
 
+typedef struct BuiltinFit {
+    const FengDecl *decl;
+    CGType         *target_type;
+    const UserSpec **specs;
+    size_t          spec_count;
+    UserMethod     *methods;
+    size_t          method_count;
+    size_t          index;
+    char           *c_prefix;
+    const FengProgram *owner_program;
+} BuiltinFit;
+
 
 static char *cg_user_type_c_name(const CGType *t) __attribute__((unused));
 static char *cg_user_type_c_name(const CGType *t) {
@@ -627,6 +639,9 @@ typedef struct CG {
     struct UserFit  *user_fits;
     size_t           user_fit_count;
     size_t           user_fit_capacity;
+    struct BuiltinFit *builtin_fits;
+    size_t             builtin_fit_count;
+    size_t             builtin_fit_capacity;
     /* Witness-table emission cache (Step 4b): one entry per (type, spec) pair
      * for which a witness instance has been emitted into fn_protos/fn_defs.
      * Avoids duplicate emission across multiple coercion sites. */
@@ -742,6 +757,7 @@ static const char *cg_aggregate_field_desc_name(const CGType *t);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
+static bool cg_emit_builtin_fit_method(CG *cg, const BuiltinFit *bf, const UserMethod *m);
 static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 static bool cg_current_callable_captures_name(const CG *cg,
                                               const char *name,
@@ -2056,6 +2072,16 @@ static const UserFit *cg_find_user_fit_by_decl_and_target(const CG *cg,
     for (size_t i = 0; i < cg->user_fit_count; i++) {
         if (cg->user_fits[i].decl == decl && cg->user_fits[i].target == target) {
             return &cg->user_fits[i];
+        }
+    }
+    return NULL;
+}
+
+static const BuiltinFit *cg_find_builtin_fit_by_decl(const CG *cg,
+                                                     const FengDecl *decl) {
+    for (size_t i = 0; i < cg->builtin_fit_count; i++) {
+        if (cg->builtin_fits[i].decl == decl) {
+            return &cg->builtin_fits[i];
         }
     }
     return NULL;
@@ -4113,6 +4139,28 @@ static const UserMethod *cg_user_fit_method_by_member(const UserFit *uf,
     return NULL;
 }
 
+static const UserMethod *cg_builtin_fit_method(const BuiltinFit *bf,
+                                               const char *name,
+                                               size_t len) {
+    if (bf == NULL) return NULL;
+    for (size_t i = 0; i < bf->method_count; i++) {
+        if (strlen(bf->methods[i].feng_name) == len &&
+            memcmp(bf->methods[i].feng_name, name, len) == 0) {
+            return &bf->methods[i];
+        }
+    }
+    return NULL;
+}
+
+static const UserMethod *cg_builtin_fit_method_by_member(const BuiltinFit *bf,
+                                                         const FengTypeMember *m) {
+    if (bf == NULL || m == NULL) return NULL;
+    for (size_t i = 0; i < bf->method_count; i++) {
+        if (bf->methods[i].member == m) return &bf->methods[i];
+    }
+    return NULL;
+}
+
 /* ------------- Spec registration (Step 4b — value model) ------------- */
 
 static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
@@ -4401,6 +4449,78 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
     return true;
 }
 
+static bool cg_register_builtin_fit_shell(CG *cg,
+                                          const FengDecl *decl,
+                                          const FengTypeRef *target_ref) {
+    BuiltinFit *bf;
+    CGType *target_type = NULL;
+
+    if (decl == NULL || target_ref == NULL) {
+        return false;
+    }
+    if (decl->as.fit_decl.spec_count > 0U) {
+        return cg_fail(cg, decl->token,
+            "codegen: builtin/array fit specs clause is not supported yet");
+    }
+    if (cg->builtin_fit_count + 1 > cg->builtin_fit_capacity) {
+        size_t cap = cg->builtin_fit_capacity ? cg->builtin_fit_capacity * 2 : 4;
+        void *p = realloc(cg->builtin_fits, cap * sizeof *cg->builtin_fits);
+
+        if (p == NULL) {
+            return false;
+        }
+        cg->builtin_fits = p;
+        cg->builtin_fit_capacity = cap;
+    }
+
+    if (!cg_resolve_type(cg, target_ref, &decl->token, &target_type) || target_type == NULL) {
+        cgtype_free(target_type);
+        return cg_fail(cg, decl->token,
+            "codegen: fit target did not resolve to a builtin/array type");
+    }
+
+    bf = &cg->builtin_fits[cg->builtin_fit_count];
+    memset(bf, 0, sizeof *bf);
+    bf->decl = decl;
+    bf->target_type = target_type;
+    bf->spec_count = 0U;
+    bf->specs = NULL;
+    bf->index = cg->builtin_fit_count;
+    bf->owner_program = cg->cur_program;
+    {
+        Buf pb;
+        buf_init(&pb);
+        buf_append_fmt(&pb, "FengFitBuiltin_%zu__%s", bf->index, cg->module_mangle);
+        bf->c_prefix = pb.data;
+    }
+    if (bf->c_prefix == NULL) {
+        cgtype_free(target_type);
+        memset(bf, 0, sizeof *bf);
+        return false;
+    }
+
+    cg->builtin_fit_count++;
+    return true;
+}
+
+static bool cg_is_builtin_named_fit_target(FengSlice name) {
+    static const char *kBuiltinNames[] = {
+        "i8", "i16", "i32", "i64",
+        "u8", "u16", "u32", "u64",
+        "f32", "f64",
+        "bool", "string",
+        "int", "long", "byte", "float", "double"
+    };
+    for (size_t i = 0; i < sizeof(kBuiltinNames) / sizeof(kBuiltinNames[0]); ++i) {
+        size_t len = strlen(kBuiltinNames[i]);
+
+        if (name.length == len && strncmp(name.data, kBuiltinNames[i], len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     if (!decl->as.fit_decl.has_body) {
         /* `fit T :: S, U;` (head-only) carries no methods to emit; semantic
@@ -4408,10 +4528,22 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
          * an empty entry so witness lookup by decl returns a stable handle. */
     }
     const FengTypeRef *target_ref = decl->as.fit_decl.target;
-    if (!target_ref || target_ref->kind != FENG_TYPE_REF_NAMED ||
+    if (!target_ref) {
+        return cg_fail(cg, decl->token,
+            "codegen: fit target is missing");
+    }
+
+    if (target_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return cg_register_builtin_fit_shell(cg, decl, target_ref);
+    }
+
+    if (target_ref->kind != FENG_TYPE_REF_NAMED ||
         target_ref->as.named.segment_count != 1) {
         return cg_fail(cg, decl->token,
-            "codegen: only single-segment named fit targets are supported");
+            "codegen: only single-segment named or array fit targets are supported");
+    }
+    if (cg_is_builtin_named_fit_target(target_ref->as.named.segments[0])) {
+        return cg_register_builtin_fit_shell(cg, decl, target_ref);
     }
     if (target_ref->as.named.type_arg_count > 0U) {
         const GenericTypeDecl *generic_target = cg_find_generic_type_decl(cg, target_ref);
@@ -4444,6 +4576,15 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     const FengSlice *seg = &target_ref->as.named.segments[0];
     const UserType *target = cg_find_user_type(cg, seg->data, seg->length);
     if (!target) {
+        CGType *resolved_target = NULL;
+
+        if (cg_resolve_type(cg, target_ref, &decl->token, &resolved_target) &&
+            resolved_target != NULL &&
+            (resolved_target->kind != CG_TYPE_OBJECT || resolved_target->user == NULL)) {
+            cgtype_free(resolved_target);
+            return cg_register_builtin_fit_shell(cg, decl, target_ref);
+        }
+        cgtype_free(resolved_target);
         return cg_fail(cg, decl->token,
             "codegen: fit target type '%.*s' is not a known user type",
             (int)seg->length, seg->data);
@@ -4530,6 +4671,58 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         if (!um->c_name) return false;
     }
     uf->method_count = mi;
+    return true;
+}
+
+static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
+    const FengDecl *decl = bf->decl;
+    size_t mc = 0;
+
+    for (size_t i = 0; i < decl->as.fit_decl.member_count; i++) {
+        if (decl->as.fit_decl.members[i]->kind == FENG_TYPE_MEMBER_METHOD) mc++;
+    }
+    bf->methods = mc ? calloc(mc, sizeof *bf->methods) : NULL;
+    if (mc && !bf->methods) return false;
+
+    size_t mi = 0;
+    for (size_t i = 0; i < decl->as.fit_decl.member_count; i++) {
+        const FengTypeMember *m = decl->as.fit_decl.members[i];
+
+        if (m->kind != FENG_TYPE_MEMBER_METHOD) {
+            return cg_fail(cg, m->token,
+                "codegen: only methods are supported in fit bodies");
+        }
+        UserMethod *um = &bf->methods[mi++];
+        const FengCallableSignature *sig = &m->as.callable;
+
+        um->member = m;
+        um->feng_name = strndup(sig->name.data, sig->name.length);
+        char *msan = cg_sanitize(sig->name.data, sig->name.length);
+        if (!um->feng_name || !msan) {
+            free(msan);
+            return false;
+        }
+        Buf cb;
+        buf_init(&cb);
+        buf_append_fmt(&cb, "%s__%s", bf->c_prefix, msan);
+        um->c_name = cb.data;
+        free(msan);
+        um->param_count = sig->param_count;
+        um->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType *)) : NULL;
+        um->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char *)) : NULL;
+        for (size_t pi = 0; pi < sig->param_count; pi++) {
+            if (!cg_resolve_type(cg,
+                                 sig->params[pi].type,
+                                 &sig->params[pi].token,
+                                 &um->param_types[pi])) {
+                return false;
+            }
+            um->param_names[pi] = strndup(sig->params[pi].name.data,
+                                          sig->params[pi].name.length);
+        }
+        if (!cg_resolve_type(cg, sig->return_type, &m->token, &um->return_type)) return false;
+    }
+    bf->method_count = mi;
     return true;
 }
 
@@ -7405,13 +7598,66 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             ma->as.member.object->kind == FENG_EXPR_SELF) {
             return cg_emit_generic_type_self_method_call(cg, e, ma, &recv, out);
         }
+        const UserMethod *um = NULL;
+        if (rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD &&
+            (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user)) {
+            const BuiltinFit *bf = NULL;
+
+            if (rc->fit_decl != NULL) {
+                bf = cg_find_builtin_fit_by_decl(cg, rc->fit_decl);
+            }
+            if (bf != NULL && rc->member != NULL) {
+                um = cg_builtin_fit_method_by_member(bf, rc->member);
+            }
+            if (um == NULL && bf != NULL) {
+                um = cg_builtin_fit_method(bf,
+                    ma->as.member.member.data, ma->as.member.member.length);
+            }
+            if (um == NULL) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: builtin/array fit has no method '%.*s'",
+                    (int)ma->as.member.member.length, ma->as.member.member.data);
+            }
+            if (e->as.call.arg_count != um->param_count) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                    um->feng_name, um->param_count, e->as.call.arg_count);
+            }
+            if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+                cg_materialize_to_local(cg, &recv, "_t");
+            }
+            Buf args_buf; buf_init(&args_buf);
+            for (size_t i = 0; i < e->as.call.arg_count; i++) {
+                ExprResult ar;
+                if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+                    buf_free(&args_buf); er_free(&recv); return false;
+                }
+                if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+                    cg_materialize_to_local(cg, &ar, "_t");
+                }
+                buf_append_cstr(&args_buf, ", ");
+                buf_append_cstr(&args_buf, ar.c_expr);
+                er_free(&ar);
+            }
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b, "%s(%s%s)", um->c_name, recv.c_expr,
+                           args_buf.data ? args_buf.data : "");
+            buf_free(&args_buf);
+            out->c_expr = b.data;
+            out->type = cgtype_clone(um->return_type);
+            out->owns_ref = cgtype_is_managed(out->type);
+            er_free(&recv);
+            return out->c_expr && out->type;
+        }
+
         if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
             er_free(&recv);
             return cg_fail(cg, e->token,
                 "codegen: method call on non-object value");
         }
         const UserType *ut = recv.type->user;
-        const UserMethod *um = NULL;
         if (rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD) {
             const UserFit *uf = NULL;
 
@@ -13469,6 +13715,15 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (!cg_emit_user_method(cg, uf->target, &uf->methods[mi])) return false;
                     }
                 }
+                for (size_t fit_index = 0; fit_index < cg->builtin_fit_count; ++fit_index) {
+                    const BuiltinFit *bf = &cg->builtin_fits[fit_index];
+
+                    if (bf->decl != d) continue;
+                    emitted_fit = true;
+                    for (size_t mi = 0; mi < bf->method_count; mi++) {
+                        if (!cg_emit_builtin_fit_method(cg, bf, &bf->methods[mi])) return false;
+                    }
+                }
                 if (!emitted_fit) return cg_fail(cg, d->token,
                     "codegen: internal: fit not registered");
                 break;
@@ -13562,6 +13817,21 @@ static bool cg_emit_all_programs(CG *cg,
         }
         cg->cur_program = owner;
         bool ok = cg_register_user_fit_members(cg, &cg->user_fits[i]);
+        cg->cur_program = NULL;
+        if (!ok) return false;
+    }
+    for (size_t i = 0; i < cg->builtin_fit_count; i++) {
+        const FengProgram *owner = NULL;
+        for (size_t p = 0; p < program_count && !owner; p++) {
+            for (size_t k = 0; k < programs[p]->declaration_count; k++) {
+                if (programs[p]->declarations[k] == cg->builtin_fits[i].decl) {
+                    owner = programs[p];
+                    break;
+                }
+            }
+        }
+        cg->cur_program = owner;
+        bool ok = cg_register_builtin_fit_members(cg, &cg->builtin_fits[i]);
         cg->cur_program = NULL;
         if (!ok) return false;
     }
@@ -14960,6 +15230,149 @@ cleanup:
     return ok;
 }
 
+static bool cg_emit_builtin_fit_method(CG *cg, const BuiltinFit *bf, const UserMethod *m) {
+    char **captured_names = NULL;
+    size_t captured_name_count = 0U;
+    char **saved_captured_names = cg->captured_binding_names;
+    size_t saved_captured_name_count = cg->captured_binding_name_count;
+    bool saved_captures_self = cg->current_callable_captures_self;
+    Scope *fn_scope = NULL;
+    bool ok = false;
+    FengSlice self_name = {"self", 4U};
+
+    if (bf == NULL || bf->target_type == NULL || m == NULL) {
+        return false;
+    }
+
+    Buf *proto = &cg->fn_protos;
+    buf_append_cstr(proto, "static ");
+    cg_emit_c_type(proto, m->return_type);
+    buf_append_fmt(proto, " %s(", m->c_name);
+    cg_emit_c_type(proto, bf->target_type);
+    buf_append_cstr(proto, " self");
+    for (size_t i = 0; i < m->param_count; i++) {
+        buf_append_cstr(proto, ", ");
+        cg_emit_c_type(proto, m->param_types[i]);
+        buf_append_fmt(proto, " %s", m->param_names[i] ? m->param_names[i] : "_p");
+    }
+    buf_append_cstr(proto, ");\n");
+
+    Buf *body = &cg->fn_defs;
+    cg->cur_body = body;
+    cg->cur_return_type = m->return_type;
+    cg->cur_fn_is_main = false;
+    buf_append_cstr(body, "static ");
+    cg_emit_c_type(body, m->return_type);
+    buf_append_fmt(body, " %s(", m->c_name);
+    cg_emit_c_type(body, bf->target_type);
+    buf_append_cstr(body, " self");
+
+    fn_scope = scope_push(NULL);
+    if (!fn_scope) {
+        cg_fail(cg, m->member->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->cur_scope = fn_scope;
+    cg->tmp_counter = 0;
+    cg->loop_depth = 0;
+    cg->try_depth = 0;
+
+    for (size_t i = 0; i < m->param_count; i++) {
+        buf_append_cstr(body, ", ");
+        cg_emit_c_type(body, m->param_types[i]);
+        buf_append_fmt(body, " %s", m->param_names[i] ? m->param_names[i] : "_p");
+    }
+    buf_append_cstr(body, ") {\n");
+
+    if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
+                                                  &captured_names,
+                                                  &captured_name_count,
+                                                  &cg->current_callable_captures_self)) {
+        cg_fail(cg, m->member->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->captured_binding_names = captured_names;
+    cg->captured_binding_name_count = captured_name_count;
+
+    buf_append_cstr(body, "    (void)self;\n");
+    for (size_t i = 0; i < m->param_count; i++) {
+        const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
+        buf_append_fmt(body, "    (void)%s;\n", pn);
+    }
+
+    if (cg->current_callable_captures_self) {
+        if (!cg_scope_bind_capture_cell(cg,
+                                        fn_scope,
+                                        self_name,
+                                        bf->target_type,
+                                        m->member->token,
+                                        "self",
+                                        true,
+                                        false)) {
+            goto cleanup;
+        }
+    } else {
+        CGType *self_t = cgtype_clone(bf->target_type);
+        if (!self_t) {
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        if (!scope_add(fn_scope, "self", "self", self_t, true)) {
+            cgtype_free(self_t);
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    for (size_t i = 0; i < m->param_count; i++) {
+        const char *pn = m->param_names[i] ? m->param_names[i] : "_p";
+        if (cg_current_callable_captures_name(cg, pn, strlen(pn))) {
+            if (!cg_scope_bind_capture_cell(cg,
+                                            fn_scope,
+                                            m->member->as.callable.params[i].name,
+                                            m->param_types[i],
+                                            m->member->as.callable.params[i].token,
+                                            pn,
+                                            true,
+                                            false)) {
+                goto cleanup;
+            }
+            continue;
+        }
+        CGType *pt = cgtype_clone(m->param_types[i]);
+        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+            cgtype_free(pt);
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
+    cg_release_scope(cg, fn_scope);
+    if (m->return_type->kind == CG_TYPE_VOID) {
+        buf_append_cstr(body, "    return;\n");
+    } else {
+        buf_append_cstr(body,
+            "    feng_panic(\"method reached end without return\");\n");
+    }
+    buf_append_cstr(body, "}\n\n");
+    ok = true;
+
+cleanup:
+    cg->captured_binding_names = saved_captured_names;
+    cg->captured_binding_name_count = saved_captured_name_count;
+    cg->current_callable_captures_self = saved_captures_self;
+    for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
+    free(captured_names);
+    if (fn_scope != NULL) {
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+    }
+    cg->cur_body = NULL;
+    cg->cur_return_type = NULL;
+    return ok;
+}
+
 /* Emit the user finalizer thunk body. Mirrors cg_emit_user_method but with
  * the runtime FengFinalizerFn(void *self) entry signature and a synthetic
  * `self` binding. The forward declaration is emitted earlier in
@@ -15191,6 +15604,26 @@ static void cg_dispose(CG *cg) {
         free(uf->c_prefix);
     }
     free(cg->user_fits);
+    for (size_t i = 0; i < cg->builtin_fit_count; i++) {
+        BuiltinFit *bf = &cg->builtin_fits[i];
+        cgtype_free(bf->target_type);
+        free(bf->specs);
+        for (size_t j = 0; j < bf->method_count; j++) {
+            UserMethod *um = &bf->methods[j];
+            free(um->feng_name);
+            free(um->c_name);
+            cgtype_free(um->return_type);
+            for (size_t k = 0; k < um->param_count; k++) {
+                cgtype_free(um->param_types[k]);
+                free(um->param_names[k]);
+            }
+            free(um->param_types);
+            free(um->param_names);
+        }
+        free(bf->methods);
+        free(bf->c_prefix);
+    }
+    free(cg->builtin_fits);
     for (size_t i = 0; i < cg->witness_table_count; i++) {
         free(cg->witness_tables[i].c_var);
     }

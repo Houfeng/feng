@@ -1,0 +1,31 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+fit i32 {
+  fn double(): i32 {
+    return self * 2;
+  }
+}
+
+fit int[] {
+  fn head(): int {
+    return self[0];
+  }
+}
+
+fn main(args: string[]) {
+  if 21.double() != 42 {
+    puts("fit builtin fail");
+    return;
+  }
+
+  let xs: int[] = [7, 9];
+  if xs.head() != 7 {
+    puts("fit array fail");
+    return;
+  }
+
+  puts("fit builtin ok");
+}
