@@ -294,8 +294,8 @@ struct FengScalarBox {
 > **目标**：先把现有 `fit` 主路径修稳，再在同一份目标归一化结果上逐步放开 builtin / array。
 
 - [x] A1：固化 `UserType.fitMethod()` direct-call 当前能力回归守护（smoke + codegen 形态检查），防止后续批次退化。
-- [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`）与统一 target 数据结构，先只接入用户 `type` 主路径，不放开 builtin / array 行为。
-- [ ] A3：将 analyzer 内部“fit target 分类决策点”收敛到单一入口，确保后续批次只在该入口扩展 builtin / array。
+- [x] A2：新增归一化 helper（建议 `resolve_fit_target(...)`）与统一 target 数据结构，先只接入用户 `type` 主路径，不放开 builtin / array 行为。
+- [x] A3：将 analyzer 内部“fit target 分类决策点”收敛到单一入口，确保后续批次只在该入口扩展 builtin / array。
 
 **验收**：
 

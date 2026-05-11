@@ -6316,6 +6316,48 @@ static void test_fit_array_method_callable_on_value(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_target_rejects_specs_clause(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "fit i32: Named;\n";
+    FengProgram *program = parse_program_or_die("fit_builtin_specs_reject.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "does not support specs clause yet") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_array_target_rejects_specs_clause(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn greet(): string;\n"
+        "}\n"
+        "fit int[]: Named;\n";
+    FengProgram *program = parse_program_or_die("fit_array_specs_reject.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "does not support specs clause yet") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fit_method_unknown_member_still_rejected(void) {
     const char *source =
         "mod demo.main;\n"
@@ -9411,6 +9453,8 @@ int main(void) {
     test_fit_method_callable_on_instance();
     test_fit_builtin_method_callable_on_literal();
     test_fit_array_method_callable_on_value();
+    test_fit_builtin_target_rejects_specs_clause();
+    test_fit_array_target_rejects_specs_clause();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();
     test_fit_body_rejects_self_private_method_access();

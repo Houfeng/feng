@@ -2438,11 +2438,54 @@ static const char *type_ref_builtin_canonical_name(const FengTypeRef *type_ref) 
     return canonical_builtin_type_name(type_ref->as.named.segments[0]);
 }
 
+typedef enum FitTargetKind {
+    FIT_TARGET_KIND_INVALID = 0,
+    FIT_TARGET_KIND_USER_TYPE,
+    FIT_TARGET_KIND_BUILTIN,
+    FIT_TARGET_KIND_ARRAY,
+} FitTargetKind;
+
+typedef struct FitTargetResolution {
+    FitTargetKind kind;
+    const FengTypeRef *target_ref;
+    const FengDecl *type_decl;
+    const char *builtin_canonical_name;
+} FitTargetResolution;
+
 static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
                                              const FengTypeRef *type_ref);
 static bool type_refs_semantically_equal(const ResolveContext *context,
                                          const FengTypeRef *left,
                                          const FengTypeRef *right);
+
+static FitTargetResolution resolve_fit_target(const ResolveContext *context,
+                                              const FengTypeRef *target_ref) {
+    FitTargetResolution result;
+
+    memset(&result, 0, sizeof(result));
+    result.kind = FIT_TARGET_KIND_INVALID;
+    result.target_ref = target_ref;
+    if (target_ref == NULL) {
+        return result;
+    }
+    if (target_ref->kind == FENG_TYPE_REF_ARRAY) {
+        result.kind = FIT_TARGET_KIND_ARRAY;
+        return result;
+    }
+    result.builtin_canonical_name = type_ref_builtin_canonical_name(target_ref);
+    if (result.builtin_canonical_name != NULL) {
+        result.kind = FIT_TARGET_KIND_BUILTIN;
+        return result;
+    }
+
+    result.type_decl = resolve_type_ref_decl(context, target_ref);
+    if (result.type_decl != NULL && result.type_decl->kind == FENG_DECL_TYPE) {
+        result.kind = FIT_TARGET_KIND_USER_TYPE;
+        return result;
+    }
+
+    return result;
+}
 
 static InferredExprType inferred_expr_type_from_fit_target_type_ref(const FengTypeRef *type_ref) {
     InferredExprType type = inferred_expr_type_unknown();
@@ -2460,32 +2503,34 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
                                                const FengDecl *fit_decl,
                                                const FengDecl *owner_type_decl,
                                                InferredExprType owner_type) {
-    const FengTypeRef *fit_target;
+    FitTargetResolution fit_target;
 
     if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
         return false;
     }
 
-    fit_target = fit_decl->as.fit_decl.target;
-    if (fit_target == NULL) {
+    fit_target = resolve_fit_target(context, fit_decl->as.fit_decl.target);
+    if (fit_target.target_ref == NULL) {
         return false;
     }
 
     if (owner_type_decl != NULL) {
-        return resolve_type_ref_decl(context, fit_target) == owner_type_decl;
+        return fit_target.kind == FIT_TARGET_KIND_USER_TYPE &&
+               fit_target.type_decl == owner_type_decl;
     }
 
     if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
         owner_type.type_ref != NULL) {
-        return type_refs_semantically_equal(context, fit_target, owner_type.type_ref);
+        return type_refs_semantically_equal(context, fit_target.target_ref, owner_type.type_ref);
     }
 
     if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
-        const char *target_builtin = type_ref_builtin_canonical_name(fit_target);
         const char *owner_builtin = canonical_builtin_type_name(owner_type.builtin_name);
 
-        return target_builtin != NULL && owner_builtin != NULL &&
-               strcmp(target_builtin, owner_builtin) == 0;
+        return fit_target.kind == FIT_TARGET_KIND_BUILTIN &&
+               fit_target.builtin_canonical_name != NULL &&
+               owner_builtin != NULL &&
+               strcmp(fit_target.builtin_canonical_name, owner_builtin) == 0;
     }
 
     return false;
@@ -13299,9 +13344,8 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 static bool validate_fit_declaration_contracts(ResolveContext *context,
                                                const FengDecl *fit_decl) {
     const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
-    const FengDecl *target = resolve_type_ref_decl(context, fit_decl->as.fit_decl.target);
-    const char *target_builtin = type_ref_builtin_canonical_name(target_ref);
-    bool target_is_array = target_ref != NULL && target_ref->kind == FENG_TYPE_REF_ARRAY;
+    FitTargetResolution fit_target = resolve_fit_target(context, target_ref);
+    const FengDecl *target = fit_target.type_decl;
     size_t i;
     size_t j;
     const FengDecl **closure = NULL;
@@ -13309,18 +13353,21 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     size_t closure_capacity = 0U;
     bool ok = true;
 
-    if (target == NULL && (target_builtin != NULL || target_is_array)) {
+    if (fit_target.kind == FIT_TARGET_KIND_BUILTIN ||
+        fit_target.kind == FIT_TARGET_KIND_ARRAY) {
         if (fit_decl->as.fit_decl.spec_count > 0U) {
             return resolver_append_error(
                 context,
                 fit_decl->token,
                 format_message("fit target '%s' does not support specs clause yet",
-                               target_builtin != NULL ? target_builtin : "array"));
+                               fit_target.builtin_canonical_name != NULL
+                                   ? fit_target.builtin_canonical_name
+                                   : "array"));
         }
         return true;
     }
 
-    if (target == NULL || target->kind != FENG_DECL_TYPE) {
+    if (fit_target.kind != FIT_TARGET_KIND_USER_TYPE || target == NULL) {
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
             context, fit_decl->as.fit_decl.target->token,
@@ -13771,12 +13818,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
 
         case FENG_DECL_FIT: {
             size_t fit_index;
+            FitTargetResolution fit_target;
             const FengDecl *fit_target_decl;
             const TypeParamEntry *prev_tp = NULL;
             size_t prev_tp_count = 0U;
             bool ok = true;
 
-            fit_target_decl = resolve_type_ref_decl(context, decl->as.fit_decl.target);
+            fit_target = resolve_fit_target(context, decl->as.fit_decl.target);
+            fit_target_decl = fit_target.kind == FIT_TARGET_KIND_USER_TYPE
+                                  ? fit_target.type_decl
+                                  : NULL;
             if (fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE &&
                 fit_target_decl->as.type_decl.type_param_count > 0U) {
                 if (!resolver_push_type_params(context,
