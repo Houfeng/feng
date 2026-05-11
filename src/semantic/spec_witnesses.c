@@ -1,6 +1,6 @@
 /* Phase S3 — SpecWitness sidecar.
  *
- * Stores one entry per (type_decl, spec_decl) pair that the analyzer has
+ * Stores one entry per (subject_key, spec_decl) pair that the analyzer has
  * been asked to materialise (per §8.2 — on-demand cache, populated the first
  * time a coercion site for the (T, S) pair is recorded). Each entry holds
  * the per-member implementation source resolved against T's visible face
@@ -24,15 +24,209 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool slice_equals_local(FengSlice left, FengSlice right) {
+    return left.length == right.length &&
+           (left.length == 0U || memcmp(left.data, right.data, left.length) == 0);
+}
+
+static bool slice_equals_cstr_local(FengSlice slice, const char *text) {
+    size_t text_len = strlen(text);
+
+    return slice.length == text_len &&
+           (text_len == 0U || memcmp(slice.data, text, text_len) == 0);
+}
+
+static const char *canonical_builtin_type_name_local(FengSlice name) {
+    if (slice_equals_cstr_local(name, "int") || slice_equals_cstr_local(name, "i32")) {
+        return "i32";
+    }
+    if (slice_equals_cstr_local(name, "long") || slice_equals_cstr_local(name, "i64")) {
+        return "i64";
+    }
+    if (slice_equals_cstr_local(name, "byte") || slice_equals_cstr_local(name, "u8")) {
+        return "u8";
+    }
+    if (slice_equals_cstr_local(name, "float") || slice_equals_cstr_local(name, "f32")) {
+        return "f32";
+    }
+    if (slice_equals_cstr_local(name, "double") || slice_equals_cstr_local(name, "f64")) {
+        return "f64";
+    }
+    if (slice_equals_cstr_local(name, "i8")) {
+        return "i8";
+    }
+    if (slice_equals_cstr_local(name, "i16")) {
+        return "i16";
+    }
+    if (slice_equals_cstr_local(name, "u16")) {
+        return "u16";
+    }
+    if (slice_equals_cstr_local(name, "u32")) {
+        return "u32";
+    }
+    if (slice_equals_cstr_local(name, "u64")) {
+        return "u64";
+    }
+    if (slice_equals_cstr_local(name, "bool")) {
+        return "bool";
+    }
+    if (slice_equals_cstr_local(name, "string")) {
+        return "string";
+    }
+    if (slice_equals_cstr_local(name, "void")) {
+        return "void";
+    }
+    return NULL;
+}
+
+static const char *builtin_canonical_name_for_type_ref(const FengTypeRef *type_ref) {
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U || type_ref->as.named.type_arg_count != 0U) {
+        return NULL;
+    }
+    return canonical_builtin_type_name_local(type_ref->as.named.segments[0]);
+}
+
+static bool type_ref_subject_key_equal(const FengTypeRef *left,
+                                       const FengTypeRef *right) {
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_TYPE_REF_NAMED: {
+            const char *left_builtin = builtin_canonical_name_for_type_ref(left);
+            const char *right_builtin = builtin_canonical_name_for_type_ref(right);
+
+            if (left_builtin != NULL || right_builtin != NULL) {
+                return left_builtin != NULL && right_builtin != NULL &&
+                       strcmp(left_builtin, right_builtin) == 0;
+            }
+            if (left->as.named.segment_count != right->as.named.segment_count ||
+                left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t i = 0U; i < left->as.named.segment_count; ++i) {
+                if (!slice_equals_local(left->as.named.segments[i],
+                                        right->as.named.segments[i])) {
+                    return false;
+                }
+            }
+            for (size_t i = 0U; i < left->as.named.type_arg_count; ++i) {
+                if (!type_ref_subject_key_equal(left->as.named.type_args[i],
+                                                right->as.named.type_args[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case FENG_TYPE_REF_POINTER:
+            return type_ref_subject_key_equal(left->as.inner, right->as.inner);
+        case FENG_TYPE_REF_ARRAY:
+            return left->array_element_writable == right->array_element_writable &&
+                   type_ref_subject_key_equal(left->as.inner, right->as.inner);
+        default:
+            return false;
+    }
+}
+
+static bool subject_key_equals(const FengSemanticSubjectKey *left,
+                               const FengSemanticSubjectKey *right) {
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_SEMANTIC_SUBJECT_KEY_INVALID:
+            return true;
+        case FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL:
+            return left->as.type_decl == right->as.type_decl;
+        case FENG_SEMANTIC_SUBJECT_KEY_BUILTIN:
+            return left->as.builtin_canonical_name != NULL &&
+                   right->as.builtin_canonical_name != NULL &&
+                   strcmp(left->as.builtin_canonical_name,
+                          right->as.builtin_canonical_name) == 0;
+        case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
+            return left->as.array.rank == right->as.array.rank &&
+                   left->as.array.writable_mask == right->as.array.writable_mask &&
+                   type_ref_subject_key_equal(left->as.array.element_type_ref,
+                                              right->as.array.element_type_ref);
+        default:
+            return false;
+    }
+}
+
+FengSemanticSubjectKey feng_semantic_subject_key_for_type_decl(
+        const FengDecl *type_decl) {
+    FengSemanticSubjectKey key;
+
+    memset(&key, 0, sizeof(key));
+    if (type_decl != NULL && type_decl->kind == FENG_DECL_TYPE) {
+        key.kind = FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL;
+        key.as.type_decl = type_decl;
+    }
+    return key;
+}
+
+FengSemanticSubjectKey feng_semantic_subject_key_for_builtin(
+        const char *builtin_canonical_name) {
+    FengSemanticSubjectKey key;
+
+    memset(&key, 0, sizeof(key));
+    if (builtin_canonical_name != NULL) {
+        key.kind = FENG_SEMANTIC_SUBJECT_KEY_BUILTIN;
+        key.as.builtin_canonical_name = builtin_canonical_name;
+    }
+    return key;
+}
+
+bool feng_semantic_subject_key_init_array_from_type_ref(
+        FengSemanticSubjectKey *out_key,
+        const FengTypeRef *type_ref) {
+    const FengTypeRef *element_type_ref = type_ref;
+    size_t rank = 0U;
+    uint64_t writable_mask = 0U;
+
+    if (out_key == NULL || type_ref == NULL) {
+        return false;
+    }
+    memset(out_key, 0, sizeof(*out_key));
+    while (element_type_ref != NULL && element_type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        if (rank >= 64U) {
+            return false;
+        }
+        if (element_type_ref->array_element_writable) {
+            writable_mask |= (uint64_t)1U << rank;
+        }
+        ++rank;
+        element_type_ref = element_type_ref->as.inner;
+    }
+    if (rank == 0U || element_type_ref == NULL) {
+        return false;
+    }
+    out_key->kind = FENG_SEMANTIC_SUBJECT_KEY_ARRAY;
+    out_key->as.array.element_type_ref = element_type_ref;
+    out_key->as.array.rank = rank;
+    out_key->as.array.writable_mask = writable_mask;
+    return true;
+}
+
 static FengSpecWitness *find_entry_mut(FengSemanticAnalysis *analysis,
-                                       const FengDecl *type_decl,
+                                       const FengSemanticSubjectKey *subject_key,
                                        const FengDecl *spec_decl) {
-    if (analysis == NULL || type_decl == NULL || spec_decl == NULL) {
+    if (analysis == NULL || subject_key == NULL ||
+        subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
+        spec_decl == NULL) {
         return NULL;
     }
     for (size_t i = 0U; i < analysis->spec_witness_count; ++i) {
         FengSpecWitness *entry = &analysis->spec_witnesses[i];
-        if (entry->type_decl == type_decl && entry->spec_decl == spec_decl) {
+        if (subject_key_equals(&entry->subject_key, subject_key) &&
+            entry->spec_decl == spec_decl) {
             return entry;
         }
     }
@@ -41,27 +235,28 @@ static FengSpecWitness *find_entry_mut(FengSemanticAnalysis *analysis,
 
 const FengSpecWitness *feng_semantic_lookup_spec_witness(
         const FengSemanticAnalysis *analysis_const,
-        const FengDecl *type_decl,
+        const FengSemanticSubjectKey *subject_key,
         const FengDecl *spec_decl) {
     if (analysis_const == NULL) {
         return NULL;
     }
     return find_entry_mut((FengSemanticAnalysis *)analysis_const,
-                          type_decl, spec_decl);
+                          subject_key, spec_decl);
 }
 
 FengSpecWitness *feng_semantic_reserve_spec_witness(
         const FengSemanticAnalysis *analysis_const,
-        const FengDecl *type_decl,
+        const FengSemanticSubjectKey *subject_key,
         const FengDecl *spec_decl) {
-    if (analysis_const == NULL || type_decl == NULL || spec_decl == NULL) {
+    if (analysis_const == NULL || subject_key == NULL || spec_decl == NULL) {
         return NULL;
     }
-    if (type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
+    if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
+        spec_decl->kind != FENG_DECL_SPEC) {
         return NULL;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
-    if (find_entry_mut(analysis, type_decl, spec_decl) != NULL) {
+    if (find_entry_mut(analysis, subject_key, spec_decl) != NULL) {
         return NULL;
     }
     if (analysis->spec_witness_count == analysis->spec_witness_capacity) {
@@ -78,7 +273,7 @@ FengSpecWitness *feng_semantic_reserve_spec_witness(
     }
     FengSpecWitness *slot = &analysis->spec_witnesses[analysis->spec_witness_count++];
     memset(slot, 0, sizeof(*slot));
-    slot->type_decl = type_decl;
+    slot->subject_key = *subject_key;
     slot->spec_decl = spec_decl;
     slot->members = NULL;
     slot->member_count = 0U;

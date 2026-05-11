@@ -276,6 +276,22 @@ struct FengScalarBox {
 
 `FengSpecWitness.type_decl` 是编译期语义分析用的查找键，不进入任何生成代码。扩展 key 的表达能力对运行时零影响。
 
+### 4.9 统一 subject key 的当前落点
+
+批次 C 的主体键统一，先收敛为一份公共 compile-time `subject key` 载体，供 witness / relation / coercion sidecar 逐步复用：
+
+- 用户 `type`：键值为目标 `decl`。
+- builtin：键值为 canonical builtin name。
+- array：键值为数组结构载体，至少包含 `element_type_ref`、`rank` 与逐层可写位。
+
+当前阶段对 array key 的要求是：
+
+- 先把数组键从单一 `type_decl` 假设中拆出来，进入统一 `subject key` 载体。
+- witness sidecar 不再把 array target 退回到“只能是用户 `type`”的键模型。
+- array key 的后续强化仍由 C4 收口；若当前实现还保留 `element_type_ref` 的借用表示，比较逻辑也必须基于结构字段而不是拍平文本。
+
+该键仍然只服务编译期 sidecar 查找，不进入 fat spec ABI，不改变 witness 生成模型，也不引入运行时成本。
+
 ## 5. 交付批次
 
 ### 5.1 批次划分
@@ -329,7 +345,7 @@ struct FengScalarBox {
 
 > **目标**：让 builtin / array 使用同一套 witness 缓存，并把主体键扩展同步到所有语义侧数据结构。
 
-- [ ] C1：将 `FengSpecWitness` 的主体键从 `type_decl` 扩到统一 subject key：用户 type → `decl`，builtin → canonical name，array → 结构化签名。
+- [x] C1：将 `FengSpecWitness` 的主体键从 `type_decl` 扩到统一 subject key：用户 type → `decl`，builtin → canonical name，array → 结构化签名。
 - [ ] C2：同步扩展 `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键，避免语义侧仍停留在 `type_decl`。
 - [ ] C3：保留单套 `lookup/reserve/append` API。
 - [ ] C4：数组 target 用结构化 key（元素类型 + rank + 逐层可写性），不用拍平文本或 AST 指针比较。

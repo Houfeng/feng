@@ -12756,6 +12756,27 @@ static bool witness_fit_collect_visitor(const FengTypeMember *member,
     return true;
 }
 
+static bool init_spec_witness_subject_key(const FengDecl *type_decl,
+                                          const FengTypeRef *source_type_ref,
+                                          FengSemanticSubjectKey *out_key) {
+    const char *builtin_name;
+
+    if (out_key == NULL) {
+        return false;
+    }
+    if (type_decl != NULL && type_decl->kind == FENG_DECL_TYPE) {
+        *out_key = feng_semantic_subject_key_for_type_decl(type_decl);
+        return true;
+    }
+    builtin_name = type_ref_builtin_canonical_name(source_type_ref);
+    if (builtin_name != NULL) {
+        *out_key = feng_semantic_subject_key_for_builtin(builtin_name);
+        return true;
+    }
+    return feng_semantic_subject_key_init_array_from_type_ref(out_key,
+                                                              source_type_ref);
+}
+
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
                                            const FengTypeRef *source_type_ref,
@@ -12769,6 +12790,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
     size_t seen_count = 0U;
     size_t seen_capacity = 0U;
     FengSpecWitness *witness;
+    FengSemanticSubjectKey subject_key;
     size_t ci;
 
     if (context == NULL || context->analysis == NULL ||
@@ -12778,16 +12800,17 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
     if (type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
         return;
     }
-    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+    if (!init_spec_witness_subject_key(type_decl, source_type_ref, &subject_key) ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }
     if (feng_semantic_lookup_spec_witness(context->analysis,
-                                          type_decl, spec_decl) != NULL) {
+                                          &subject_key, spec_decl) != NULL) {
         return;
     }
 
     witness = feng_semantic_reserve_spec_witness(context->analysis,
-                                                 type_decl, spec_decl);
+                                                 &subject_key, spec_decl);
     if (witness == NULL) {
         return;
     }

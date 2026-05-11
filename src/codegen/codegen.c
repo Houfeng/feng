@@ -12638,8 +12638,10 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
     const char *cached = cg_witness_table_lookup(cg, t, s);
     if (cached) { *out_var = cached; return true; }
 
+    FengSemanticSubjectKey subject_key =
+        feng_semantic_subject_key_for_type_decl(t->decl);
     const FengSpecWitness *witness = feng_semantic_lookup_spec_witness(
-        cg->analysis, t->decl, s->decl);
+        cg->analysis, &subject_key, s->decl);
 
     /* Emit one thunk per spec method member (in spec member order). Field
      * accessor thunks are deferred to 4b-β. */

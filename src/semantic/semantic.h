@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "parser/parser.h"
 
@@ -103,6 +104,28 @@ typedef struct FengSpecRelationSource {
     /* Module that owns via_fit_decl. NULL for DECLARED_*. */
     const FengSemanticModule *provider_module;
 } FengSpecRelationSource;
+
+typedef enum FengSemanticSubjectKeyKind {
+    FENG_SEMANTIC_SUBJECT_KEY_INVALID = 0,
+    FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL,
+    FENG_SEMANTIC_SUBJECT_KEY_BUILTIN,
+    FENG_SEMANTIC_SUBJECT_KEY_ARRAY
+} FengSemanticSubjectKeyKind;
+
+typedef struct FengSemanticArraySubjectKey {
+    const FengTypeRef *element_type_ref;
+    size_t rank;
+    uint64_t writable_mask;
+} FengSemanticArraySubjectKey;
+
+typedef struct FengSemanticSubjectKey {
+    FengSemanticSubjectKeyKind kind;
+    union {
+        const FengDecl *type_decl;
+        const char *builtin_canonical_name;
+        FengSemanticArraySubjectKey array;
+    } as;
+} FengSemanticSubjectKey;
 
 /* One relation entry per (type_decl, spec_decl) pair that has at least one
  * source (declared, transitive, or via any fit anywhere in the analysis).
@@ -488,7 +511,7 @@ typedef struct FengSpecWitnessMember {
     const FengSemanticModule *provider_module;
 } FengSpecWitnessMember;
 
-/* One witness entry per (type_decl, spec_decl) pair that has been demanded
+/* One witness entry per (subject_key, spec_decl) pair that has been demanded
  * by at least one coercion site (per §8.2 — on-demand cache). The members
  * array follows the iteration order of S's member closure. The entry
  * pointer is stable until feng_semantic_analysis_free.
@@ -500,28 +523,36 @@ typedef struct FengSpecWitnessMember {
  * that triggered the witness compute; subsequent lookups simply observe
  * the NULL slot. */
 typedef struct FengSpecWitness {
-    const FengDecl *type_decl;
+    FengSemanticSubjectKey subject_key;
     const FengDecl *spec_decl;
     FengSpecWitnessMember *members;
     size_t member_count;
     size_t member_capacity;
 } FengSpecWitness;
 
-/* Look up the witness entry for (type_decl, spec_decl). Returns NULL when
+FengSemanticSubjectKey feng_semantic_subject_key_for_type_decl(
+    const FengDecl *type_decl);
+FengSemanticSubjectKey feng_semantic_subject_key_for_builtin(
+    const char *builtin_canonical_name);
+bool feng_semantic_subject_key_init_array_from_type_ref(
+    FengSemanticSubjectKey *out_key,
+    const FengTypeRef *type_ref);
+
+/* Look up the witness entry for (subject_key, spec_decl). Returns NULL when
  * no coercion has yet demanded this (T, S) pair (per §8.2). */
 const FengSpecWitness *feng_semantic_lookup_spec_witness(
     const FengSemanticAnalysis *analysis,
-    const FengDecl *type_decl,
+    const FengSemanticSubjectKey *subject_key,
     const FengDecl *spec_decl);
 
-/* Reserve and return a fresh witness entry for (type_decl, spec_decl). The
+/* Reserve and return a fresh witness entry for (subject_key, spec_decl). The
  * caller is expected to populate `members` via
  * feng_semantic_spec_witness_append_member after reservation. Returns NULL
  * on allocation failure or when an entry already exists (callers should
  * check feng_semantic_lookup_spec_witness first). */
 FengSpecWitness *feng_semantic_reserve_spec_witness(
     const FengSemanticAnalysis *analysis,
-    const FengDecl *type_decl,
+    const FengSemanticSubjectKey *subject_key,
     const FengDecl *spec_decl);
 
 /* Append one member entry to a witness reserved by

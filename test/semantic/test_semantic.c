@@ -8359,9 +8359,11 @@ static void test_spec_witness_via_declared_head(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
-    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, &user_key, named);
     ASSERT(w != NULL);
-    ASSERT(w->type_decl == user);
+    ASSERT(w->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
+    ASSERT(w->subject_key.as.type_decl == user);
     ASSERT(w->spec_decl == named);
     ASSERT(w->member_count == 1U);
     ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD);
@@ -8398,7 +8400,8 @@ static void test_spec_witness_via_fit(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
-    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, &user_key, named);
     ASSERT(w != NULL);
     ASSERT(w->member_count == 1U);
     ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD);
@@ -8434,7 +8437,8 @@ static void test_spec_witness_field_member(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
-    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, user, named);
+    FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
+    const FengSpecWitness *w = feng_semantic_lookup_spec_witness(analysis, &user_key, named);
     ASSERT(w != NULL);
     ASSERT(w->member_count == 1U);
     ASSERT(w->members[0].source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD);
@@ -8467,10 +8471,11 @@ static void test_spec_witness_on_demand_only(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
     /* Relation exists (declared head). */
     ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
     /* Witness does not — no coercion site demanded it. */
-    ASSERT(feng_semantic_lookup_spec_witness(analysis, user, named) == NULL);
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, &user_key, named) == NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -8506,9 +8511,68 @@ static void test_spec_witness_via_generic_instantiation(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
 
     ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
-    ASSERT(feng_semantic_lookup_spec_witness(analysis, user, named) != NULL);
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, &user_key, named) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
+    const char *src =
+        "pu mod demo.witness;\n"
+        "spec Named { fn name(): string; }\n"
+        "fn take(xs: int[]!): int { return 0; }\n"
+        "fn take2(xs: i32[]!): int { return 0; }\n";
+    FengProgram *program = parse_program_or_die("witness_subject_keys.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *named;
+    const FengDecl *take_decl;
+    const FengDecl *take2_decl;
+    const FengTypeRef *take_array_ref;
+    const FengTypeRef *take2_array_ref;
+    FengSemanticSubjectKey builtin_key = feng_semantic_subject_key_for_builtin("i32");
+    FengSemanticSubjectKey take_array_key;
+    FengSemanticSubjectKey take2_array_key;
+    FengSpecWitness *builtin_witness;
+    FengSpecWitness *array_witness;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    named = find_spec_decl_by_name(analysis, "Named");
+    take_decl = find_function_decl_by_name(program, "take");
+    take2_decl = find_function_decl_by_name(program, "take2");
+    ASSERT(named != NULL);
+    ASSERT(take_decl != NULL);
+    ASSERT(take2_decl != NULL);
+
+    builtin_witness = feng_semantic_reserve_spec_witness(analysis, &builtin_key, named);
+    ASSERT(builtin_witness != NULL);
+    ASSERT(builtin_witness->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(strcmp(builtin_witness->subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, &builtin_key, named) == builtin_witness);
+
+    take_array_ref = take_decl->as.function_decl.params[0].type;
+    take2_array_ref = take2_decl->as.function_decl.params[0].type;
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take_array_key,
+                                                              take_array_ref));
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take2_array_key,
+                                                              take2_array_ref));
+    array_witness = feng_semantic_reserve_spec_witness(analysis, &take_array_key, named);
+    ASSERT(array_witness != NULL);
+    ASSERT(array_witness->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
+    ASSERT(array_witness->subject_key.as.array.rank == 1U);
+    ASSERT(array_witness->subject_key.as.array.writable_mask == 1U);
+    ASSERT(feng_semantic_lookup_spec_witness(analysis, &take2_array_key, named) ==
+           array_witness);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -9348,6 +9412,7 @@ int main(void) {
     test_spec_witness_field_member();
     test_spec_witness_on_demand_only();
     test_spec_witness_via_generic_instantiation();
+    test_spec_witness_subject_key_supports_builtin_and_array();
     test_spec_witness_multi_fit_conflict();
     test_spec_equality_object_eq_recorded();
     test_spec_equality_object_neq_recorded();
