@@ -5207,63 +5207,8 @@ static bool cg_emit_scalar_box_support(CG *cg) {
     if (cg->scalar_box_support_emitted) {
         return true;
     }
-
-    Buf *td = &cg->type_defs;
-    buf_append_cstr(td,
-        "struct FengScalarBox {\n"
-        "    FengManagedHeader _hdr;\n"
-        "    union {\n"
-        "        bool b;\n"
-        "        int8_t i8;\n"
-        "        int16_t i16;\n"
-        "        int32_t i32;\n"
-        "        int64_t i64;\n"
-        "        uint8_t u8;\n"
-        "        uint16_t u16;\n"
-        "        uint32_t u32;\n"
-        "        uint64_t u64;\n"
-        "        float f32;\n"
-        "        double f64;\n"
-        "    } payload;\n"
-        "};\n\n");
-    buf_append_cstr(td,
-        "static const FengTypeDescriptor feng_scalar_box_descriptor = {\n"
-        "    .name = \"feng.<internal>.scalar_box\",\n"
-        "    .size = sizeof(struct FengScalarBox),\n"
-        "    .finalizer = NULL,\n"
-        "    .release_children = NULL,\n"
-        "    .is_potentially_cyclic = false,\n"
-        "    .managed_field_count = 0,\n"
-        "    .managed_fields = NULL,\n"
-        "};\n\n");
-
-    CGTypeKind kinds[] = {
-        CG_TYPE_BOOL,
-        CG_TYPE_I8, CG_TYPE_I16, CG_TYPE_I32, CG_TYPE_I64,
-        CG_TYPE_U8, CG_TYPE_U16, CG_TYPE_U32, CG_TYPE_U64,
-        CG_TYPE_F32, CG_TYPE_F64
-    };
-    for (size_t i = 0U; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
-        const char *ctor_name = NULL;
-        const char *field_name = NULL;
-
-        if (!cg_scalar_box_ctor_name(kinds[i], &ctor_name) ||
-            !cg_scalar_box_payload_field(kinds[i], &field_name)) {
-            return false;
-        }
-
-        buf_append_fmt(td, "static struct FengScalarBox *%s(", ctor_name);
-        buf_append_cstr(td, cgtype_to_c(kinds[i]));
-        buf_append_cstr(td, " value) {\n");
-        buf_append_fmt(td,
-            "    struct FengScalarBox *_o = (struct FengScalarBox *)"
-            "feng_object_new(&feng_scalar_box_descriptor);\n"
-            "    _o->payload.%s = value;\n"
-            "    return _o;\n"
-            "}\n\n",
-            field_name);
-    }
-
+    /* Scalar-box runtime support is provided by libfeng_runtime. Generated
+     * code only references the runtime ABI declared in feng_runtime.h. */
     cg->scalar_box_support_emitted = true;
     return true;
 }

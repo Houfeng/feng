@@ -122,6 +122,55 @@ typedef struct FengManagedHeader {
     uint32_t cycle_state;
 } FengManagedHeader;
 
+/* Runtime-internal stable subject owner for escaping scalar spec values.
+ * Codegen reads payload directly in witness thunks and invokes the typed
+ * constructors below at coercion sites. */
+typedef enum FengBuiltinScalarKind {
+    FENG_BUILTIN_SCALAR_BOOL = 1,
+    FENG_BUILTIN_SCALAR_I8 = 2,
+    FENG_BUILTIN_SCALAR_I16 = 3,
+    FENG_BUILTIN_SCALAR_I32 = 4,
+    FENG_BUILTIN_SCALAR_I64 = 5,
+    FENG_BUILTIN_SCALAR_U8 = 6,
+    FENG_BUILTIN_SCALAR_U16 = 7,
+    FENG_BUILTIN_SCALAR_U32 = 8,
+    FENG_BUILTIN_SCALAR_U64 = 9,
+    FENG_BUILTIN_SCALAR_F32 = 10,
+    FENG_BUILTIN_SCALAR_F64 = 11
+} FengBuiltinScalarKind;
+
+typedef struct FengScalarBox {
+    FengManagedHeader header;
+    FengBuiltinScalarKind kind;
+    union {
+        bool b;
+        int8_t i8;
+        int16_t i16;
+        int32_t i32;
+        int64_t i64;
+        uint8_t u8;
+        uint16_t u16;
+        uint32_t u32;
+        uint64_t u64;
+        float f32;
+        double f64;
+    } payload;
+} FengScalarBox;
+
+extern const FengTypeDescriptor feng_scalar_box_descriptor;
+
+FengScalarBox *feng_scalar_box_new_bool(bool value);
+FengScalarBox *feng_scalar_box_new_i8(int8_t value);
+FengScalarBox *feng_scalar_box_new_i16(int16_t value);
+FengScalarBox *feng_scalar_box_new_i32(int32_t value);
+FengScalarBox *feng_scalar_box_new_i64(int64_t value);
+FengScalarBox *feng_scalar_box_new_u8(uint8_t value);
+FengScalarBox *feng_scalar_box_new_u16(uint16_t value);
+FengScalarBox *feng_scalar_box_new_u32(uint32_t value);
+FengScalarBox *feng_scalar_box_new_u64(uint64_t value);
+FengScalarBox *feng_scalar_box_new_f32(float value);
+FengScalarBox *feng_scalar_box_new_f64(double value);
+
 #define FENG_REFCOUNT_IMMORTAL ((uint32_t)0xFFFFFFFFu)
 
 /* --- retain / release / barriers --------------------------------------- */

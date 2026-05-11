@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 #define ASSERT(expr)                                                                  \
     do {                                                                              \
@@ -117,6 +118,40 @@ static void test_take(void) {
     ASSERT(a->header.refcount == 1U);
     feng_release(a);
     ASSERT(g_finalize_count == 1);
+}
+
+static void test_scalar_box_runtime_contract(void) {
+    FengScalarBox *i32_box;
+    FengScalarBox *bool_box;
+    FengScalarBox *f64_box;
+
+    ASSERT(feng_scalar_box_descriptor.is_potentially_cyclic == false);
+    ASSERT(feng_scalar_box_descriptor.managed_field_count == 0U);
+    ASSERT(offsetof(FengScalarBox, payload) % _Alignof(double) == 0U);
+
+    i32_box = feng_scalar_box_new_i32(7);
+    ASSERT(i32_box != NULL);
+    ASSERT(i32_box->header.desc == &feng_scalar_box_descriptor);
+    ASSERT(i32_box->header.tag == FENG_TYPE_TAG_OBJECT);
+    ASSERT(i32_box->header.refcount == 1U);
+    ASSERT(i32_box->kind == FENG_BUILTIN_SCALAR_I32);
+    ASSERT(i32_box->payload.i32 == 7);
+
+    bool_box = feng_scalar_box_new_bool(true);
+    ASSERT(bool_box != NULL);
+    ASSERT(bool_box->header.desc == &feng_scalar_box_descriptor);
+    ASSERT(bool_box->kind == FENG_BUILTIN_SCALAR_BOOL);
+    ASSERT(bool_box->payload.b == true);
+
+    f64_box = feng_scalar_box_new_f64(3.5);
+    ASSERT(f64_box != NULL);
+    ASSERT(f64_box->header.desc == &feng_scalar_box_descriptor);
+    ASSERT(f64_box->kind == FENG_BUILTIN_SCALAR_F64);
+    ASSERT(f64_box->payload.f64 == 3.5);
+
+    feng_release(i32_box);
+    feng_release(bool_box);
+    feng_release(f64_box);
 }
 
 static void test_string_literal_immortal(void) {
@@ -1349,6 +1384,7 @@ int main(void) {
     test_retain_release_nullsafe();
     test_assign_barrier();
     test_take();
+    test_scalar_box_runtime_contract();
     test_string_literal_immortal();
     test_string_concat();
     test_array_primitive();

@@ -694,7 +694,8 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
     ASSERT(strstr(out.c_source, "__name") != NULL);
-    ASSERT(strstr(out.c_source, "feng_scalar_box_new_i32") != NULL);
+    ASSERT(strstr(out.c_source, "static const FengTypeDescriptor feng_scalar_box_descriptor") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengScalarBox {") == NULL);
     ASSERT(strstr(out.c_source, "subject_") != NULL);
     compile_generated_c_or_die(out.c_source);
 
