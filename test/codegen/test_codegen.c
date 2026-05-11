@@ -575,6 +575,66 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_direct_call_codegen_shape(void) {
+    static const char *kFitBuiltinSource =
+        "mod feng.codegen.fitbuiltin;\n"
+        "fit i32 {\n"
+        "    fn double(): i32 {\n"
+        "        return self * 2;\n"
+        "    }\n"
+        "}\n"
+        "fit int[] {\n"
+        "    fn head(): int {\n"
+        "        return self[0];\n"
+        "    }\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let xs: int[] = [7, 9];\n"
+        "    return 21.double() + xs.head();\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kFitBuiltinSource, "tests/fit_builtin_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (fit builtin direct-call shape): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
+    ASSERT(strstr(out.c_source, "__double") != NULL);
+    ASSERT(strstr(out.c_source, "__head") != NULL);
+    ASSERT(strstr(out.c_source, "witness->") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* ---- G6 generic codegen tests ------------------------------------------ */
 
 static const char *kGenericFnSrc =
@@ -1760,6 +1820,7 @@ int main(void) {
     test_imported_feng_function_prototypes_compile();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
+    test_fit_builtin_direct_call_codegen_shape();
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();

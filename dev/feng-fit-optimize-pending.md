@@ -293,7 +293,7 @@ struct FengScalarBox {
 
 > **目标**：先把现有 `fit` 主路径修稳，再在同一份目标归一化结果上逐步放开 builtin / array。
 
-- [ ] A1：固化 `UserType.fitMethod()` direct-call 当前能力回归守护（smoke + codegen 形态检查），防止后续批次退化。
+- [x] A1：固化 `UserType.fitMethod()` direct-call 当前能力回归守护（smoke + codegen 形态检查），防止后续批次退化。
 - [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`）与统一 target 数据结构，先只接入用户 `type` 主路径，不放开 builtin / array 行为。
 - [ ] A3：将 analyzer 内部“fit target 分类决策点”收敛到单一入口，确保后续批次只在该入口扩展 builtin / array。
 
@@ -307,16 +307,16 @@ struct FengScalarBox {
 > **目标**：让 `self` 在三类 target 上都能正确推断类型，并完成 spec 满足性与孤儿导出判定。
 
 - [ ] B1：为 fit target 解析补轻量“fit target scope”。
-- [ ] B0：在 A 批次统一 target 结构上放开 builtin canonical name 与 array 结构化 target（元素类型引用、rank、可写标记）识别。
+- [x] B0：在 A 批次统一 target 结构上放开 builtin canonical name 与 array 结构化 target（元素类型引用、rank、可写标记）识别。
 - [ ] B2：对用户 `type`：继续沿用 `current_type_decl`。
-- [ ] B3：对 builtin / array：补 `current_fit_target` 或等价上下文。
+- [x] B3：对 builtin / array：补 `current_fit_target` 或等价上下文。
 - [ ] B4：对 `fit T[]` / `fit T[]!`：将 `T` 压入 fit 局部类型参数作用域，作用域不泄漏。
-- [ ] B5：调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
-- [ ] B6：拆开“目标有无自有实例成员”与“目标是不是用户 type”。
+- [x] B5：调整 `resolve_self_member_expr`，让 builtin / array 走统一 self 入口。
+- [x] B6：拆开“目标有无自有实例成员”与“目标是不是用户 type”。
 - [ ] B7：用户 `type` 继续复用现有自有成员 + visible fit members 满足性检查。
-- [ ] B8：builtin / array 自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
+- [x] B8：builtin / array 自有成员集合视为空，只由 fit body 方法与可见 fit 关系组成可见实现面。
 - [ ] B9：孤儿适配导出判定通过归一化 target 计算 locality；所有内建类型目标按外部类型处理。
-- [ ] B10：`validate_fit_declaration_contracts` 改为依赖归一化 target 结果，并与调用侧 member resolution 使用同一份 target 语义。
+- [x] B10：`validate_fit_declaration_contracts` 改为依赖归一化 target 结果，并与调用侧 member resolution 使用同一份 target 语义。
 
 **验收**：
 
@@ -357,9 +357,9 @@ struct FengScalarBox {
 
 > **目标**：三类 direct-call 与 witness thunk 均完成适配，并用 `.ft` 与回归测试收口。
 
-- [ ] D1：抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
-- [ ] D2：新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
-- [ ] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
+- [x] D1：抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
+- [x] D2：新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
+- [x] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
 - [ ] D4：direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
 - [ ] D5：将 `cg_ensure_witness_instance` 从“只接受 `UserType`”推广到接受统一 subject target。
 - [ ] D6：对对象 target：继续 `(struct T *)_subject`。
@@ -368,7 +368,7 @@ struct FengScalarBox {
 - [ ] D9：thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
 - [ ] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。
 - [ ] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
-- [ ] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
+- [x] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 - [ ] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
 - [ ] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。
 - [ ] D15：新增 IR/代码形态检查：`Set<int>` direct-call 路径不得出现运行时装箱与运行时查表。
