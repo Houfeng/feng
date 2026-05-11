@@ -40,14 +40,13 @@
 - 多维数组目标形式（`T[][]`、`T[]![]` 等）
 - 为 builtin / array 单独发明第二套运行时模型
 - 用户可见的 boxing 语义，或 direct-call 路径上的任何装箱
-- 将现有 `UserType.fitMethod()` direct-call 缺口留到"以后再修"
 
 ### 1.6 分步交付原则
 
 - 每一步必须能独立进入实现与验证，不依赖后续步骤才能形成可复核结果。
 - 语义目标归一化、`self` 作用域、witness sidecar、运行时 subject 承载、codegen、符号导出分批推进，不在同一批次里混合多个抽象层的大改。
 - 每一步的验收只覆盖当前批次新增能力，不把后续批次的能力当作前置成功条件。
-- 现有 `UserType.fitMethod()` direct-call 缺口必须作为独立可验证修复项，不能拖到 builtin / array 支持完成之后再补。
+- `UserType.fitMethod()` direct-call 当前能力必须保留独立回归守护，不得在后续批次退化。
 
 ## 2. 设计原则（已讨论确认）
 
@@ -122,13 +121,13 @@
 
 > 结果：builtin / array target 没有 codegen 入口。
 
-### 3.6 UserType.fitMethod() direct-call 缺口（已验证）
+### 3.6 UserType.fitMethod() direct-call 当前能力（需保障不退化）
 
-- fit 方法单独注册在 `UserFit.methods`，但 codegen 的 direct-call 发码路径按 `UserType.methods` 查找。
-- `FENG_RESOLVED_CALLABLE_FIT_METHOD` 已在语义层标记，但 codegen 缺少对应的 static dispatch 发码分支。
-- 已验证：`examples/src/hello_world.ff` 中 `user.say2(123)` 语义层能解析为 fit method，但 codegen 报 `type 'User' has no method 'say2'`。
+- 当前机制：fit 方法注册在 `UserFit.methods`，direct-call 发码通过 `FENG_RESOLVED_CALLABLE_FIT_METHOD` 走静态分派路径。
+- 当前能力：`UserType.fitMethod()` 可正确 direct-call。
+- 当前要求：该能力纳入独立回归守护，在本次 builtin / array 优化过程中持续保持。
 
-> 结果：现有 `UserType.fitMethod()` direct call 已确认存在缺口，不是理论风险。
+> 结果：该路径不作为本轮前置阻断项，但属于必须持续通过的能力约束。
 
 ### 3.7 当前 fat spec 仍把 subject 当成托管指针槽位
 
@@ -283,7 +282,7 @@ struct FengScalarBox {
 
 | 批次 | 目标 | 主要交付物 | 依赖 |
 | --- | --- | --- | --- |
-| A | 先修稳现有 `fit` 主路径 | `UserType.fitMethod()` direct-call 修复，语义层 `fit` 目标归一化雏形 | 现有代码 |
+| A | 先修稳现有 `fit` 主路径 | 当前 direct-call 能力的回归守护，语义层 `fit` 目标归一化雏形 | 现有代码 |
 | B | 放开 builtin / array 的语义入口 | builtin / array 目标识别、`self` 入口、调用侧成员解析 | 批次 A |
 | C | 收口 witness / subject 模型 | witness sidecar key 统一、主体键扩展、标量 subject 物化、`FengScalarBox` | 批次 B |
 | D | 完成 codegen / 符号导出 / 回归 | direct-call 与 witness thunk 适配、符号导出、测试回归 | 批次 C |
@@ -294,14 +293,14 @@ struct FengScalarBox {
 
 > **目标**：先把现有 `fit` 主路径修稳，再在同一份目标归一化结果上逐步放开 builtin / array。
 
-- [ ] A1：先补 `FENG_RESOLVED_CALLABLE_FIT_METHOD` 的 direct-call 静态分派发码分支，恢复现有 `UserType.fitMethod()` 的直接调用。
+- [ ] A1：固化 `UserType.fitMethod()` direct-call 当前能力回归守护（smoke + codegen 形态检查），防止后续批次退化。
 - [ ] A2：新增归一化 helper（建议 `resolve_fit_target(...)`），先统一识别用户 `type` 与 builtin / array 的目标形态。
 - [ ] A3：builtin 统一转成 canonical name；array 拆出元素类型引用、rank、可写标记。
 - [ ] A4：`validate_fit_declaration_contracts` 改为依赖归一化结果，并将调用侧 member resolution 接到同一份目标归一化结果上。
 
 **验收**：
 
-- `user.say2(...)` 直接生成对 fit 方法静态符号的调用，不再报 `type 'User' has no method 'say2'`。
+- `user.say2(...)`/等价用例稳定走 direct-call，回归用例持续通过且无退化。
 - builtin / array 的 `it.some()` 在语义层能进入统一 fit 方法解析路径。
 - analyzer 只在一个位置决定 fit target 种类。
 
@@ -340,6 +339,9 @@ struct FengScalarBox {
 - [ ] C8：非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
 - [ ] C9：可逃逸 object-form spec 值（赋给 spec 局部、返回、存进字段/数组/闭包等）统一创建 `FengScalarBox`。
 - [ ] C10：`subject` 仍保持单一 `FENG_SLOT_POINTER` 槽位，不新增第三字段，不改 fat spec 两字段 ABI。
+- [ ] C11：补充 coercion site 分类规则（临时借用/可逃逸装箱）并在语义到 codegen 间打通标记传递。
+- [ ] C12：新增标量 spec 视角回归用例，覆盖“重复调用不重复封装”的行为断言。
+- [ ] C13：新增 codegen 形态断言：spec 调用路径固定为 `subject + witness + 单层 thunk`。
 
 **验收**：
 
@@ -367,6 +369,10 @@ struct FengScalarBox {
 - [ ] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。
 - [ ] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
 - [ ] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
+- [ ] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
+- [ ] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。
+- [ ] D15：新增 IR/代码形态检查：`Set<int>` direct-call 路径不得出现运行时装箱与运行时查表。
+- [ ] D16：统一整理性能约束检查清单（direct-call/spec-call/泛型）并纳入 CI 回归脚本。
 
 **验收**：
 
@@ -394,7 +400,7 @@ struct FengScalarBox {
 
 - 每一批次先更新对应 `docs/` 或 `dev/` 文档，再改代码，最后补测试，并执行全量回归。
 - 实现必须优先消除“只能处理 `type_decl`”这一根因，而非沿现有路径堆叠 builtin / array 特判。
-- `UserType.fitMethod()` direct-call 缺口修复是批次 A 的第一个独立验收子步，不得拖到 builtin / array 支持完成之后再补。
+- `UserType.fitMethod()` direct-call 当前能力必须保持回归守护通过，严禁退化。
 - direct-call 任何时候都不能通过 boxing 作为过渡方案。
 - 标量 direct-call 任何时候都不能通过运行时装箱、运行时查表或额外动态分派作为过渡方案。
 - 标量进入 spec 视角时的 subject 封装仅允许发生在 coercion site；spec 调用阶段的开销模型必须与非标量 spec 调用一致。
