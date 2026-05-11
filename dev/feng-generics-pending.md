@@ -113,9 +113,21 @@
 
 #### Phase E. 泛型特有路径：aggregate generic arg
 
-- [ ] E1. 基于已稳定的 aggregate descriptor / witness 规则，扩展 generic descriptor 生成，让 aggregate type arg 产出完整 `FengGenericParamDescriptor`。
-- [ ] E2. 保证 aggregate generic arg 在 generic function、generic method、generic type instantiation 三个入口上走同一条 descriptor 路径。
-- [ ] E3. focused regression 先锁定当前语言里已存在的 aggregate surface（object-form `spec` fat value），不要把 future tuple/value-struct 一并卷入。
+- [x] E1. 基于已稳定的 aggregate descriptor / witness 规则，扩展 generic descriptor 生成，让 aggregate type arg 产出完整 `FengGenericParamDescriptor`。
+- [x] E2. 保证 aggregate generic arg 在 generic function、generic method、generic type instantiation 三个入口上走同一条 descriptor 路径。
+- [x] E3. focused regression 先锁定当前语言里已存在的 aggregate surface（object-form `spec` fat value），不要把 future tuple/value-struct 一并卷入。
+
+本轮 Phase E 实施切片（当前进行中）：
+
+1. 仅覆盖当前既有 aggregate surface：object-form `spec` fat value；future tuple/value-struct/union carrier 不纳入本轮。
+2. 以 `cg_generic_descriptor_expr` 为唯一 descriptor 生成入口，验证 generic function / generic method / generic type instantiation 三个路径对 aggregate type arg 的一致性。
+3. 先补 focused regression，再补 smoke 端到端，最后执行全量回归。
+
+本轮 Phase E 已完成的实现要点：
+
+1. aggregate type arg（当前既有形态：object-form `spec` fat value）在 descriptor 生成上统一通过 `cg_generic_descriptor_expr`，产出的 `FengGenericParamDescriptor` 同时携带 aggregate descriptor 与约束 witness。
+2. 三个入口（generic function / generic method / generic type instantiation）均走同一 descriptor 生成路径；没有新增并行特判路径。
+3. 已新增 focused codegen regression 与 smoke：锁定 object-form `spec` fat value 的 aggregate generic arg 三入口组合路径，并通过全量回归验证。
 
 #### Phase F. 泛型组合回归与全量验证
 

@@ -1,0 +1,49 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+fn idNamed<T: Named>(value: T): T {
+    return value;
+}
+
+type Holder<T: Named> {
+    var value: T;
+
+    fn set(next: T) {
+        self.value = next;
+    }
+
+    fn read(): string {
+        return self.value.greet();
+    }
+
+    fn relay<U: Named>(item: U): string {
+        return item.greet();
+    }
+}
+
+fn main(args: string[]) {
+    let named: Named = User{name: "phase-e-ok"};
+
+    let fromFn: Named = idNamed:<Named>(named);
+
+    let holder: Holder<Named> = Holder:<Named>();
+    holder.set(fromFn);
+
+    let fromMethod: string = holder.relay:<Named>(fromFn);
+    puts(fromMethod);
+    puts(holder.read());
+}
