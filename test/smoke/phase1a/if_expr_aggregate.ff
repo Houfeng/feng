@@ -1,0 +1,31 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+fn pick(flag: bool, left: Named, right: Named): Named {
+    return if flag {
+        left;
+    } else {
+        right;
+    };
+}
+
+fn main(args: string[]) {
+    let left: Named = User{name: "if-left"};
+    let right: Named = User{name: "if-right"};
+    puts(pick(true, left, right).greet());
+    puts(pick(false, left, right).greet());
+}

@@ -61,6 +61,61 @@
 2. 外部包公开泛型类型后，consumer 构造具体实例并调用成员方法时，必须正确生成实例类型、默认零值构造符声明/实现引用以及对应成员方法符号。
 3. 外部包公开泛型 `spec` 后，consumer 必须能通过 `use` 引入该 spec，实现 `type Key: Eq<Key>`，并把 imported generic spec 作为本地泛型约束使用。
 
+### 2026-05-11 全量修复拆分（先全局 codegen，再泛型特有路径）
+
+以下拆分用于本轮“完全修复”实施，目标是先补齐全局 codegen 值模型与 coercion 能力，再把泛型入口接入同一套稳定抽象，避免在泛型层堆叠一次性特判。
+
+#### Phase A. 文档与验收口径收口
+
+- [ ] A1. 在本文件锁定四项缺口的最终完成定义：aggregate spec field、if/match aggregate result、callable OTHER coercion、aggregate generic arg。
+- [ ] A2. 如 aggregate spec field / if-match aggregate result 的值语义与现有权威文档不一致，先更新主规范，再继续编码。
+- [ ] A3. 明确本轮只覆盖当前既有语言形态；future tuple / value-struct / union carrier 继续留在后续阶段。
+
+#### Phase B. 全局 codegen：aggregate spec field
+
+- [x] B1. 放开 object-form `spec` 成员注册时对 aggregate field 的拒绝，改为进入统一 witness/member 生成路径。
+- [x] B2. 扩展 witness struct 中 aggregate field getter/setter 的 ABI，使其可以表达 borrowed read、var store 与必要的 retain/take/assign 语义。
+- [x] B3. 扩展 default witness / concrete witness / slot witness adapter，使 aggregate field 在默认值、真实实现、spec-to-spec 转发三条路径上一致闭环。
+- [x] B4. 扩展 default subject release / managed field descriptors，确保 aggregate field 的 managed slot 会被 cycle collector 与 cleanup 正确看到。
+- [x] B5. 新增 focused codegen regression，覆盖 object-form `spec` 的 aggregate field getter/setter 与 slot witness forwarding。
+
+本轮 Phase B 已完成的实现要点：
+
+1. object-form `spec` 的 aggregate field 已不再被 codegen 护栏拒绝；default witness、concrete witness、slot witness forwarding 均已支持 aggregate getter/setter。
+2. object literal / default subject factory 对 aggregate field 不能再使用直接结构体赋值或普通 default value expression，必须统一走 `feng_aggregate_assign` / `feng_aggregate_default_init`，否则会在运行期出现引用计数失衡。
+3. 已补 focused codegen regression 与 smoke：既覆盖 aggregate field 自身，也覆盖 aggregate field 经 generic constrained spec value / slot witness adapter 转发的真实执行路径。
+
+#### Phase C. 全局 codegen：if/match aggregate result
+
+- [x] C1. 扩展 if-expression result slot，使其支持 aggregate 结果的 default-init、分支写入、cleanup 与 owns/borrow 语义。
+- [x] C2. 扩展 match-expression result slot，复用与 if-expression 相同的 aggregate 写入/释放协议。
+- [x] C3. 新增 focused codegen regression 与 smoke，覆盖 object-form `spec` aggregate 结果在 if/match 中的真实执行路径。
+
+本轮 Phase C 已完成的实现要点：
+
+1. if-expression / match-expression 的结果槽位在 aggregate 场景不再报 not yet supported，而是统一走 `feng_aggregate_default_init` + 分支 `feng_aggregate_assign`/`feng_aggregate_take` + scope cleanup。
+2. 分支表达式对 aggregate 结果的 owns/borrow 语义与既有 value-model 保持一致：borrow 走 assign，owns 走 materialize + take。
+3. 已补 focused codegen regression 与 smoke，覆盖 if/match 两条 aggregate result 路径，并通过全量回归验证。
+
+#### Phase D. 全局 codegen：callable OTHER coercion
+
+- [ ] D1. 抽取 callable-form `spec` 的统一 closure/adaptor builder，保留 top-level fn / method / lambda 快路径。
+- [ ] D2. 为 `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 增加“已是 callable value 但 target surface 不同”时的重包装 lowering。
+- [ ] D3. 如现有 coercion site 元数据不足，补 semantic sidecar 字段而不是在 codegen 猜测来源。
+- [ ] D4. 新增 focused codegen regression，覆盖 local binding / parameter / field-return 等 OTHER 来源的 coercion。
+
+#### Phase E. 泛型特有路径：aggregate generic arg
+
+- [ ] E1. 基于已稳定的 aggregate descriptor / witness 规则，扩展 generic descriptor 生成，让 aggregate type arg 产出完整 `FengGenericParamDescriptor`。
+- [ ] E2. 保证 aggregate generic arg 在 generic function、generic method、generic type instantiation 三个入口上走同一条 descriptor 路径。
+- [ ] E3. focused regression 先锁定当前语言里已存在的 aggregate surface（object-form `spec` fat value），不要把 future tuple/value-struct 一并卷入。
+
+#### Phase F. 泛型组合回归与全量验证
+
+- [ ] F1. 新增 generic callable/coercion 组合回归，覆盖 callable 参数、局部绑定、字段读取后的 target spec coercion。
+- [ ] F2. 新增 aggregate generic arg 端到端 smoke，覆盖实参、字段、返回值与约束 witness 传递。
+- [ ] F3. 阶段性 focused validation 全绿后，执行 `make smoke`、`make test`，必要时补 CLI/package 回归。
+
 ### 一、当前已经验证可工作的范围
 
 - 泛型声明、类型引用、显式类型实参、基本推导、名称与 arity 校验，已经具备可用基础。

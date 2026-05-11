@@ -1235,6 +1235,242 @@ static void test_generic_constrained_spec_value_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kSpecAggregateFieldSrc =
+    "mod feng.codegen.sfagg1;\n"
+    "spec Named {\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "spec HasChild {\n"
+    "    var child: Named;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    let name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "type Holder: HasChild {\n"
+    "    var child: Named;\n"
+    "}\n"
+    "fn read_child(box: HasChild): string {\n"
+    "    return box.child.greet();\n"
+    "}\n"
+    "fn write_child(box: HasChild, child: Named) {\n"
+    "    box.child = child;\n"
+    "}\n"
+    "fn use_it(): string {\n"
+    "    let holder: Holder = Holder{child: User{name: \"before\"}};\n"
+    "    let box: HasChild = holder;\n"
+    "    write_child(box, User{name: \"after\"});\n"
+    "    return read_child(box);\n"
+    "}\n";
+
+static void test_spec_aggregate_field_codegen(void) {
+    FengProgram *program = parse_or_die(kSpecAggregateFieldSrc, "sfagg1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (spec aggregate field): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "__get_child") != NULL);
+    ASSERT(strstr(out.c_source, "__set_child") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_assign(&((struct") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericConstrainedAggregateSpecValueSrc =
+    "mod feng.codegen.gf9;\n"
+    "spec Named {\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "spec HasChild {\n"
+    "    var child: Named;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    let name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "type Holder: HasChild {\n"
+    "    var child: Named;\n"
+    "}\n"
+    "fn rewrite<T: HasChild>(box: T, next: Named): string {\n"
+    "    box.child = next;\n"
+    "    return box.child.greet();\n"
+    "}\n"
+    "fn use_it(): string {\n"
+    "    let holder: Holder = Holder{child: User{name: \"before\"}};\n"
+    "    let box: HasChild = holder;\n"
+    "    return rewrite:<HasChild>(box, User{name: \"after\"});\n"
+    "}\n";
+
+static void test_generic_constrained_aggregate_spec_value_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericConstrainedAggregateSpecValueSrc, "gf9.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic constrained aggregate spec value): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecSlotWitness__") != NULL);
+    ASSERT(strstr(out.c_source, "_value->witness->get_child") != NULL);
+    ASSERT(strstr(out.c_source, "_value->witness->set_child") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kIfExprAggregateResultSrc =
+    "mod feng.codegen.ifagg1;\n"
+    "spec Named {\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    let name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "fn pick(flag: bool, left: Named, right: Named): Named {\n"
+    "    return if flag {\n"
+    "        left;\n"
+    "    } else {\n"
+    "        right;\n"
+    "    };\n"
+    "}\n"
+    "fn use_it(): string {\n"
+    "    let left: Named = User{name: \"L\"};\n"
+    "    let right: Named = User{name: \"R\"};\n"
+    "    let selected = pick(true, left, right);\n"
+    "    return selected.greet();\n"
+    "}\n";
+
+static void test_if_expr_aggregate_result_codegen(void) {
+    FengProgram *program = parse_or_die(kIfExprAggregateResultSrc, "ifagg1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (if-expression aggregate result): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_default_init(&_ifv") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_assign(&_ifv") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kMatchExprAggregateResultSrc =
+    "mod feng.codegen.matchagg1;\n"
+    "spec Named {\n"
+    "    fn greet(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    let name: string;\n"
+    "    fn greet(): string {\n"
+    "        return self.name;\n"
+    "    }\n"
+    "}\n"
+    "fn pick(tag: i32, left: Named, right: Named): Named {\n"
+    "    return if tag {\n"
+    "        0 { left; }\n"
+    "        else { right; }\n"
+    "    };\n"
+    "}\n"
+    "fn use_it(): string {\n"
+    "    let left: Named = User{name: \"L\"};\n"
+    "    let right: Named = User{name: \"R\"};\n"
+    "    let selected = pick(1, left, right);\n"
+    "    return selected.greet();\n"
+    "}\n";
+
+static void test_match_expr_aggregate_result_codegen(void) {
+    FengProgram *program = parse_or_die(kMatchExprAggregateResultSrc, "matchagg1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (match-expression aggregate result): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_default_init(&_ifv") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_assign(&_ifv") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericAggregateReturnSrc =
     "mod feng.codegen.gf6;\n"
     "spec Named {\n"
@@ -1367,6 +1603,10 @@ int main(void) {
     test_callable_spec_lambda_self_capture_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
+    test_spec_aggregate_field_codegen();
+    test_generic_constrained_aggregate_spec_value_codegen();
+    test_if_expr_aggregate_result_codegen();
+    test_match_expr_aggregate_result_codegen();
     test_generic_aggregate_return_codegen();
     test_generic_type_generic_method_codegen();
     fprintf(stdout, "codegen tests passed\n");

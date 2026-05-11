@@ -3807,10 +3807,6 @@ static bool cg_user_spec_append_decl_member(CG *cg,
         sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
         if (!cg_resolve_type_for_user_spec_member(cg, s, m->as.field.type,
                                                   &m->token, &sm->type)) return false;
-        if (cgtype_value_kind(sm->type) == CG_VK_AGGREGATE) {
-            return cg_fail(cg, m->token,
-                "codegen: spec field of aggregate type not yet supported (Step 4b-γ)");
-        }
     } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
         sm->kind = USM_KIND_METHOD;
         const FengCallableSignature *sig = &m->as.callable;
@@ -4619,7 +4615,8 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             buf_append_fmt(td, " (*get_%s)(void *_subject);\n", sm->c_field_name);
             emitted++;
             if (sm->is_var) {
-                /* Setter — owning store via feng_assign for managed slots. */
+                /* Setter — stores via direct assignment / feng_assign /
+                 * feng_aggregate_assign depending on the field value model. */
                 buf_append_cstr(td, "    void (*set_");
                 buf_append_cstr(td, sm->c_field_name);
                 buf_append_cstr(td, ")(void *_subject, ");
@@ -4666,9 +4663,8 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     }
     buf_append_cstr(td, "};\n\n");
 
-    /* Subject release_children — one drop per managed FIELD (aggregate spec
-     * fields are rejected at registration, so each managed field is exactly
-     * one pointer slot here). */
+    /* Subject release_children — one drop per managed FIELD. Aggregate fields
+     * reuse the aggregate descriptor flatten rules through cg_emit_field_release. */
     bool subject_any_managed = false;
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
@@ -4764,6 +4760,16 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         if (sm->kind != USM_KIND_FIELD) continue;
         /* Trivial: feng_object_new already zeroed. */
         if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL) continue;
+        if (cgtype_is_aggregate(sm->type)) {
+            const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
+            if (agg_desc == NULL) {
+                return;
+            }
+            buf_append_fmt(td,
+                "    feng_aggregate_default_init(&_o->%s, &%s);\n",
+                sm->c_field_name, agg_desc);
+            continue;
+        }
         char *expr = NULL;
         if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
             free(expr);
@@ -4799,6 +4805,14 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                     buf_append_fmt(td,
                         "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
                         s->c_default_subject_struct_name, sm->c_field_name);
+                } else if (cgtype_is_aggregate(sm->type)) {
+                    const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
+                    if (agg_desc == NULL) {
+                        return;
+                    }
+                    buf_append_fmt(td,
+                        "    feng_aggregate_assign(&((struct %s *)_subject)->%s, &value, &%s);\n",
+                        s->c_default_subject_struct_name, sm->c_field_name, agg_desc);
                 } else {
                     buf_append_fmt(td,
                         "    ((struct %s *)_subject)->%s = value;\n",
@@ -7681,6 +7695,18 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     "    %s->%s = %s; feng_retain(%s->%s);\n",
                     tmp, uf->c_name, v.c_expr, tmp, uf->c_name);
             }
+        } else if (cgtype_is_aggregate(uf->type)) {
+            const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+            if (agg_desc == NULL) {
+                er_free(&v);
+                free(assigned); free(tmp);
+                return cg_fail(cg, fi->token,
+                    "codegen: missing aggregate descriptor for object literal field '%s'",
+                    uf->feng_name);
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s->%s, &%s, &%s);\n",
+                tmp, uf->c_name, v.c_expr, agg_desc);
         } else {
             char *cty = cg_ctype_dup(uf->type);
             buf_append_fmt(cg->cur_body, "    %s->%s = (%s)(%s);\n",
@@ -7696,6 +7722,19 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     for (size_t k = 0; k < ut->field_count; k++) {
         if (assigned[k]) continue;
         const UserField *uf = &ut->fields[k];
+        if (cgtype_is_aggregate(uf->type)) {
+            const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+            if (agg_desc == NULL) {
+                free(assigned); free(tmp);
+                return cg_fail(cg, e->token,
+                    "codegen: missing aggregate descriptor for object literal default field '%s'",
+                    uf->feng_name);
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_default_init(&%s->%s, &%s);\n",
+                tmp, uf->c_name, agg_desc);
+            continue;
+        }
         char *def_expr = NULL;
         if (!cg_default_value_expr(cg, uf->type, &e->token, &def_expr)) {
             free(assigned); free(tmp);
@@ -8114,9 +8153,10 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
  *      `_ifv_N` with the standard +1 transfer (steal on owns_ref, retain on
  *      borrow); release the branch scope before joining.
  *
- * Aggregate (fat-spec) results require the move-by-take machinery used in
- * cg_emit_return; that path is intentionally rejected with an explicit error
- * until a smoke exercises it.
+ * Aggregate (fat-spec) results reuse the value-model aggregate slot protocol:
+ * the outer slot is default-initialised once, each branch writes through
+ * feng_aggregate_assign / feng_aggregate_take, and scope cleanup releases the
+ * slot exactly once on exit.
  */
 
 static const FengExpr *cg_branch_yield_expr(const FengBlock *block) {
@@ -8131,6 +8171,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
                                      const char *ifv_name,
                                      const CGType *result_type,
                                      bool managed,
+                                     bool aggregate,
                                      FengToken err_token) {
     Scope *bsc = scope_push(cg->cur_scope);
     if (!bsc) return cg_fail(cg, err_token, "codegen: out of memory");
@@ -8162,6 +8203,25 @@ static bool cg_emit_branch_into_slot(CG *cg,
                     buf_append_fmt(cg->cur_body,
                         "        %s = %s; if (%s) feng_retain(%s);\n",
                         ifv_name, r.c_expr, ifv_name, ifv_name);
+                }
+            } else if (aggregate) {
+                const char *agg_desc = cg_aggregate_field_desc_name(result_type);
+                if (agg_desc == NULL) {
+                    er_free(&r);
+                    cg->cur_scope = bsc->parent;
+                    scope_pop_free(bsc);
+                    return cg_fail(cg, err_token,
+                        "codegen: missing aggregate descriptor for if/match result slot");
+                }
+                if (r.owns_ref) {
+                    cg_materialize_to_local(cg, &r, "_t");
+                    buf_append_fmt(cg->cur_body,
+                        "        feng_aggregate_take(&%s, &%s, &%s);\n",
+                        ifv_name, r.c_expr, agg_desc);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "        feng_aggregate_assign(&%s, &%s, &%s);\n",
+                        ifv_name, r.c_expr, agg_desc);
                 }
             } else {
                 char *cty = cg_ctype_dup(result_type);
@@ -8227,12 +8287,14 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     CGType *result_type = cg_probe_branch_yield_type(cg, then_yield);
     if (!result_type) return false;
 
-    if (cgtype_is_aggregate(result_type)) {
+    bool managed = cgtype_is_managed(result_type);
+    bool aggregate = cgtype_is_aggregate(result_type);
+    const char *agg_desc = aggregate ? cg_aggregate_field_desc_name(result_type) : NULL;
+    if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
-            "codegen: if-expression of spec (aggregate) type not yet supported");
+            "codegen: missing aggregate descriptor for if-expression result");
     }
-    bool managed = cgtype_is_managed(result_type);
 
     char *cond_tmp = cg_fresh_temp(cg, "_cond");
     char *ifv = cg_fresh_temp(cg, "_ifv");
@@ -8271,18 +8333,28 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
+    } else if (aggregate) {
+        buf_append_fmt(cg->cur_body,
+            "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
+            cty, ifv, ifv, agg_desc);
+        cg_emit_cleanup_push_for_aggregate_local(cg, ifv);
+        if (!scope_add(cg->cur_scope, ifv, ifv,
+                       cgtype_clone(result_type), false)) {
+            free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
     } else {
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
     }
     free(cty);
 
     buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
-    if (!cg_emit_branch_into_slot(cg, then_b, ifv, result_type, managed, e->token)) {
+    if (!cg_emit_branch_into_slot(cg, then_b, ifv, result_type, managed, aggregate, e->token)) {
         free(cond_tmp); free(ifv); cgtype_free(result_type);
         return false;
     }
     buf_append_cstr(cg->cur_body, "    } else {\n");
-    if (!cg_emit_branch_into_slot(cg, else_b, ifv, result_type, managed, e->token)) {
+    if (!cg_emit_branch_into_slot(cg, else_b, ifv, result_type, managed, aggregate, e->token)) {
         free(cond_tmp); free(ifv); cgtype_free(result_type);
         return false;
     }
@@ -8370,12 +8442,14 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     CGType *result_type = cg_probe_branch_yield_type(cg, else_yield);
     if (!result_type) return false;
-    if (cgtype_is_aggregate(result_type)) {
+    bool managed = cgtype_is_managed(result_type);
+    bool aggregate = cgtype_is_aggregate(result_type);
+    const char *agg_desc = aggregate ? cg_aggregate_field_desc_name(result_type) : NULL;
+    if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
-            "codegen: match expression of spec (aggregate) type not yet supported");
+            "codegen: missing aggregate descriptor for match expression result");
     }
-    bool managed = cgtype_is_managed(result_type);
 
     /* Materialise the target so it is evaluated exactly once and (for managed
      * targets like `string`) stays alive across every label comparison. */
@@ -8420,6 +8494,16 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
+    } else if (aggregate) {
+        buf_append_fmt(cg->cur_body,
+            "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
+            cty, ifv, ifv, agg_desc);
+        cg_emit_cleanup_push_for_aggregate_local(cg, ifv);
+        if (!scope_add(cg->cur_scope, ifv, ifv,
+                       cgtype_clone(result_type), false)) {
+            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
     } else {
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
     }
@@ -8454,7 +8538,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
         }
         buf_free(&cond);
-        if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed,
+        if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed, aggregate,
                                       e->token)) {
             free(ifv); free(tgt_tmp); cgtype_free(result_type);
             return false;
@@ -8468,7 +8552,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         buf_append_cstr(cg->cur_body, "    } else {\n");
     }
     if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
-                                  result_type, managed, e->token)) {
+                                  result_type, managed, aggregate, e->token)) {
         free(ifv); free(tgt_tmp); cgtype_free(result_type);
         return false;
     }
@@ -12464,6 +12548,16 @@ static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
                     buf_append_fmt(fd,
                         "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
                         t->c_struct_name, uf->c_name);
+                } else if (cgtype_is_aggregate(sm->type)) {
+                    const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
+                    if (agg_desc == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: missing aggregate descriptor for spec field write");
+                    }
+                    buf_append_fmt(fd,
+                        "    feng_aggregate_assign(&((struct %s *)_subject)->%s, &value, &%s);\n",
+                        t->c_struct_name, uf->c_name, agg_desc);
                 } else {
                     buf_append_fmt(fd,
                         "    ((struct %s *)_subject)->%s = value;\n",

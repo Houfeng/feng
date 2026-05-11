@@ -1,0 +1,37 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec Named {
+    fn greet(): string;
+}
+
+spec HasChild {
+    var child: Named;
+}
+
+type User: Named {
+    let name: string;
+
+    fn greet(): string {
+        return self.name;
+    }
+}
+
+type Holder: HasChild {
+    var child: Named;
+}
+
+fn rewrite<T: HasChild>(box: T, next: Named): string {
+    box.child = next;
+    return box.child.greet();
+}
+
+fn main(args: string[]) {
+    let holder: Holder = Holder{child: User{name: "before"}};
+    let box: HasChild = holder;
+    puts(box.child.greet());
+    puts(rewrite:<HasChild>(box, User{name: "after"}));
+    puts(box.child.greet());
+}
