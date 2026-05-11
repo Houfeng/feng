@@ -844,9 +844,16 @@ static bool cg_scope_bind_capture_cell(CG *cg,
 static void cg_free_cstr_array(char **items, size_t count);
 static void cg_free_const_cstr_array(const char **items, size_t count);
 static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl);
-static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
-                                       const UserSpec *s, FengToken blame,
+static bool cg_ensure_witness_instance(CG *cg,
+                                       const FengSemanticSubjectKey *subject_key,
+                                       const UserSpec *s,
+                                       FengToken blame,
                                        const char **out_var);
+static bool cg_ensure_witness_instance_for_type(CG *cg,
+                                                const UserType *t,
+                                                const UserSpec *s,
+                                                FengToken blame,
+                                                const char **out_var);
 static bool cg_ensure_witness_instance_for_subject_key(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
@@ -9129,7 +9136,11 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, e->token,
                     "codegen: spec coercion references type outside current codegen scope");
             }
-            if (!cg_ensure_witness_instance(cg, src_t, tgt_s, e->token, &witness_var)) {
+            if (!cg_ensure_witness_instance(cg,
+                                            &cs->src_subject_key,
+                                            tgt_s,
+                                            e->token,
+                                            &witness_var)) {
                 return false;
             }
             /* Materialise the source so the subject expression evaluates exactly
@@ -11478,8 +11489,13 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
     if (constraint_spec) {
         if (t && t->kind == CG_TYPE_OBJECT && t->user) {
             const char *witness_var = NULL;
-            if (!cg_ensure_witness_instance(cg, t->user, constraint_spec,
-                                            *tok, &witness_var)) {
+            FengSemanticSubjectKey subject_key =
+                feng_semantic_subject_key_for_type_decl(t->user->decl);
+            if (!cg_ensure_witness_instance(cg,
+                                            &subject_key,
+                                            constraint_spec,
+                                            *tok,
+                                            &witness_var)) {
                 buf_free(&b);
                 return false;
             }
@@ -12817,7 +12833,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
     return true;
 }
 
-static bool cg_ensure_witness_instance_for_subject_key(
+static bool cg_ensure_witness_instance(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
     const UserSpec *s,
@@ -12833,7 +12849,7 @@ static bool cg_ensure_witness_instance_for_subject_key(
             return cg_fail(cg, blame,
                 "codegen: witness source type is not registered in current module");
         }
-        return cg_ensure_witness_instance(cg, t, s, blame, out_var);
+        return cg_ensure_witness_instance_for_type(cg, t, s, blame, out_var);
     }
     if (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_BUILTIN &&
         subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
@@ -13096,14 +13112,23 @@ static bool cg_ensure_witness_instance_for_subject_key(
     return true;
 }
 
+static bool cg_ensure_witness_instance_for_subject_key(
+    CG *cg,
+    const FengSemanticSubjectKey *subject_key,
+    const UserSpec *s,
+    FengToken blame,
+    const char **out_var) {
+    return cg_ensure_witness_instance(cg, subject_key, s, blame, out_var);
+}
+
 /* Ensure a witness table for (T, S) has been materialised in fn_protos /
  * fn_defs and write its C variable name to *out_var (borrowed pointer into
  * the cache). The preferred source is the semantic witness sidecar. When the
  * analyzer has not demanded `(T, S)` yet, codegen falls back to the already
  * registered type/spec/fit metadata and synthesizes the same static witness. */
-static bool cg_ensure_witness_instance(CG *cg, const UserType *t,
-                                       const UserSpec *s, FengToken blame,
-                                       const char **out_var) {
+static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
+                                                const UserSpec *s, FengToken blame,
+                                                const char **out_var) {
     const char *cached = cg_witness_table_lookup(cg, t, s);
     if (cached) { *out_var = cached; return true; }
 
