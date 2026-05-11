@@ -64,7 +64,8 @@ bool feng_semantic_record_object_spec_coercion_site(
         const FengSemanticSubjectKey *src_subject_key,
         const FengDecl *target_spec_decl,
         const FengTypeRef *target_spec_type_ref,
-        const FengSpecRelation *relation) {
+    const FengSpecRelation *relation,
+    FengSpecObjectSubjectStorageKind object_subject_storage) {
     if (analysis_const == NULL || expr == NULL || src_subject_key == NULL ||
         src_subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
         target_spec_decl == NULL || target_spec_type_ref == NULL || relation == NULL) {
@@ -81,6 +82,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = relation;
+    slot->object_subject_storage = object_subject_storage;
     slot->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER; /* unused */
     return true;
 }
@@ -111,6 +113,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = NULL;
+    slot->object_subject_storage = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER; /* unused */
     slot->callable_source = callable_source;
     slot->callable_decl = callable_decl;
     slot->callable_member = callable_member;

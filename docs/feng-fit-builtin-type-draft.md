@@ -96,8 +96,10 @@ fit *byte {
 - 编译器必须把内建类型别名规范化为同一个 canonical builtin target, 不得把 `fit int` 与 `fit i32` 视为两个不同目标。
 - 编译器必须在内建类型的 `fit` 块中把 `self` 解析为对应的内建类型表达式。不得把 `self` 伪装成对象类型, 也不得要求额外用户可见载体。
 - 编译器必须允许内建类型通过 `fit` 建立 object-form `spec` 契约关系, 并继续遵循现有 `spec` 满足性、冲突检测与 witness materialization 主路径。
+- 编译器必须在 object-form spec coercion sidecar 中记录 subject 承载策略（临时借用或稳定 owner）, 并把该策略从语义阶段传递到 codegen 阶段；codegen 不得自行重判该站点的承载语义。
 - 编译器必须在孤儿适配导出判定中把内建类型目标视为外部类型；因此当目标 `spec` 在当前包外时, `pu fit` 必须移除导出, 当目标 `spec` 在当前包内时则允许公开导出关系声明。
 - 编译器必须按 [feng-symbol-table.md](./feng-symbol-table.md) 的既有类型节点规则导出内建类型 fit 目标: 标量与 `string` 使用 BUILTIN type node, 数组目标使用 ARRAY type node。不得把数组 fit target 错导为 builtin type node, 也不得把任何内建 fit target 错导为普通 named type。
+- 编译器在数组 fit target 的 subject key 构建与 sidecar 查找中, 必须使用结构化数组键（元素类型结构、数组层级 rank、逐层可写位图）进行比较；不得退化为拍平文本比较或 AST 指针比较。
 
 ## 6 运行时
 

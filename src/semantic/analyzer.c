@@ -8812,7 +8812,8 @@ static void record_object_spec_coercion_site_if_applicable(
                                                           &subject_key_for_coercion,
                                                           target_decl,
                                                           expected_type_ref,
-                                                          relation);
+                                                          relation,
+                                                          FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
 
     /* Phase S3 — materialise the (T, S) witness on first demand (§8.2). The
      * compute helper is idempotent: subsequent coercions for the same pair

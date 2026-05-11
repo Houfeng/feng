@@ -8060,6 +8060,7 @@ static void test_spec_coercion_object_builtin_let_binding(void) {
     ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
     ASSERT(site->src_subject_key.as.builtin_canonical_name != NULL);
     ASSERT(strcmp(site->src_subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
     ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
     ASSERT(site->relation != NULL);
     ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
@@ -8104,6 +8105,7 @@ static void test_spec_coercion_object_array_let_binding(void) {
     ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
     ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
     ASSERT(site->src_subject_key.as.array.rank == 1U);
+    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
     ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
     ASSERT(site->relation != NULL);
     ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
@@ -8744,7 +8746,9 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
         "pu mod demo.witness;\n"
         "spec Named { fn name(): string; }\n"
         "fn take(xs: int[]!): int { return 0; }\n"
-        "fn take2(xs: i32[]!): int { return 0; }\n";
+        "fn take2(xs: i32[]!): int { return 0; }\n"
+        "fn take_ro(xs: i32[]): int { return 0; }\n"
+        "fn take2d(xs: i32[][]): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("witness_subject_keys.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -8753,11 +8757,17 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     const FengDecl *named;
     const FengDecl *take_decl;
     const FengDecl *take2_decl;
+    const FengDecl *take_ro_decl;
+    const FengDecl *take2d_decl;
     const FengTypeRef *take_array_ref;
     const FengTypeRef *take2_array_ref;
+    const FengTypeRef *take_ro_array_ref;
+    const FengTypeRef *take2d_array_ref;
     FengSemanticSubjectKey builtin_key = feng_semantic_subject_key_for_builtin("i32");
     FengSemanticSubjectKey take_array_key;
     FengSemanticSubjectKey take2_array_key;
+    FengSemanticSubjectKey take_ro_array_key;
+    FengSemanticSubjectKey take2d_array_key;
     FengSpecWitness *builtin_witness;
     FengSpecWitness *array_witness;
 
@@ -8768,9 +8778,13 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     named = find_spec_decl_by_name(analysis, "Named");
     take_decl = find_function_decl_by_name(program, "take");
     take2_decl = find_function_decl_by_name(program, "take2");
+    take_ro_decl = find_function_decl_by_name(program, "take_ro");
+    take2d_decl = find_function_decl_by_name(program, "take2d");
     ASSERT(named != NULL);
     ASSERT(take_decl != NULL);
     ASSERT(take2_decl != NULL);
+    ASSERT(take_ro_decl != NULL);
+    ASSERT(take2d_decl != NULL);
 
     builtin_witness = feng_semantic_reserve_spec_witness(analysis, &builtin_key, named);
     ASSERT(builtin_witness != NULL);
@@ -8780,10 +8794,16 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
 
     take_array_ref = take_decl->as.function_decl.params[0].type;
     take2_array_ref = take2_decl->as.function_decl.params[0].type;
+        take_ro_array_ref = take_ro_decl->as.function_decl.params[0].type;
+        take2d_array_ref = take2d_decl->as.function_decl.params[0].type;
     ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take_array_key,
                                                               take_array_ref));
     ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take2_array_key,
                                                               take2_array_ref));
+        ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take_ro_array_key,
+                                          take_ro_array_ref));
+        ASSERT(feng_semantic_subject_key_init_array_from_type_ref(&take2d_array_key,
+                                          take2d_array_ref));
     array_witness = feng_semantic_reserve_spec_witness(analysis, &take_array_key, named);
     ASSERT(array_witness != NULL);
     ASSERT(array_witness->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
@@ -8791,6 +8811,8 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     ASSERT(array_witness->subject_key.as.array.writable_mask == 1U);
     ASSERT(feng_semantic_lookup_spec_witness(analysis, &take2_array_key, named) ==
            array_witness);
+        ASSERT(feng_semantic_lookup_spec_witness(analysis, &take_ro_array_key, named) == NULL);
+        ASSERT(feng_semantic_lookup_spec_witness(analysis, &take2d_array_key, named) == NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);

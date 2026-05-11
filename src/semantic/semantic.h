@@ -167,6 +167,15 @@ typedef enum FengSpecCoercionCallableSource {
     FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER
 } FengSpecCoercionCallableSource;
 
+/* Object-form coercion site 的 subject 承载策略。
+ * - BORROW_LOCAL: 仅允许在可证明不逃逸的临时调用点借用局部物化地址。
+ * - BOX_OWNER: 需要稳定 owner 生命周期时使用 FengScalarBox。
+ */
+typedef enum FengSpecObjectSubjectStorageKind {
+    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL = 0,
+    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER = 1
+} FengSpecObjectSubjectStorageKind;
+
 /* Per-site decision for a single coercion point. Stored in a sidecar table
  * keyed by AST FengExpr pointer to keep parser/AST free of semantic
  * back-references. Populated incrementally during resolution by the analyzer
@@ -195,6 +204,9 @@ typedef struct FengSpecCoercionSite {
      * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
      * before recording). NULL for FORM_CALLABLE per §8.4. */
     const FengSpecRelation *relation;
+    /* OBJECT form only: subject 承载策略（借用局部地址或装箱 owner）。
+     * CALLABLE form 下未使用。 */
+    FengSpecObjectSubjectStorageKind object_subject_storage;
     /* CALLABLE form only: classification of the value source. Unspecified
      * for FORM_OBJECT. */
     FengSpecCoercionCallableSource callable_source;
@@ -349,7 +361,8 @@ bool feng_semantic_record_object_spec_coercion_site(
     const FengSemanticSubjectKey *src_subject_key,
     const FengDecl *target_spec_decl,
     const FengTypeRef *target_spec_type_ref,
-    const FengSpecRelation *relation);
+    const FengSpecRelation *relation,
+    FengSpecObjectSubjectStorageKind object_subject_storage);
 
 /* Record a callable-form coercion site. `target_spec_decl` is the
  * callable-form spec decl (or function-type decl). `callable_source`

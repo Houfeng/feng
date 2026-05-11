@@ -9152,25 +9152,34 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 out->type->kind == CG_TYPE_U8 || out->type->kind == CG_TYPE_U16 ||
                 out->type->kind == CG_TYPE_U32 || out->type->kind == CG_TYPE_U64 ||
                 out->type->kind == CG_TYPE_F32 || out->type->kind == CG_TYPE_F64) {
-                const char *ctor_name = NULL;
-
-                if (!cg_emit_scalar_box_support(cg)) {
-                    return false;
-                }
-                if (!cg_scalar_box_ctor_name(out->type->kind, &ctor_name) || ctor_name == NULL) {
-                    return cg_fail(cg, e->token,
-                        "codegen: scalar spec coercion has unsupported source kind");
-                }
                 cg_materialize_to_local(cg, out, "_t");
-                char *box_tmp = cg_fresh_temp(cg, "_sb");
-                if (box_tmp == NULL) {
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                if (cs->object_subject_storage ==
+                    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL) {
+                    Buf sb; buf_init(&sb);
+                    buf_append_fmt(&sb, "&(%s)", out->c_expr);
+                    subject_expr = sb.data;
+                    subject_owned = false;
+                } else {
+                    const char *ctor_name = NULL;
+                    char *box_tmp = NULL;
+
+                    if (!cg_emit_scalar_box_support(cg)) {
+                        return false;
+                    }
+                    if (!cg_scalar_box_ctor_name(out->type->kind, &ctor_name) || ctor_name == NULL) {
+                        return cg_fail(cg, e->token,
+                            "codegen: scalar spec coercion has unsupported source kind");
+                    }
+                    box_tmp = cg_fresh_temp(cg, "_sb");
+                    if (box_tmp == NULL) {
+                        return cg_fail(cg, e->token, "codegen: out of memory");
+                    }
+                    buf_append_fmt(cg->cur_body,
+                        "    struct FengScalarBox *%s = %s(%s);\n",
+                        box_tmp, ctor_name, out->c_expr);
+                    subject_expr = box_tmp;
+                    subject_owned = true;
                 }
-                buf_append_fmt(cg->cur_body,
-                    "    struct FengScalarBox *%s = %s(%s);\n",
-                    box_tmp, ctor_name, out->c_expr);
-                subject_expr = box_tmp;
-                subject_owned = true;
             } else if (out->type->kind == CG_TYPE_STRING || out->type->kind == CG_TYPE_ARRAY) {
                 cg_materialize_to_local(cg, out, "_t");
                 subject_expr = strdup(out->c_expr);
