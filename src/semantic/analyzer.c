@@ -8667,6 +8667,7 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
                                                const FengTypeRef *expected_type_ref) {
     const FengDecl *target_decl;
     CallableValueResolution resolution;
+    FengSpecCoercionCallableSource source;
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
@@ -8680,12 +8681,20 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
     if (resolution.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
         return;
     }
+    source = classify_callable_source(context, expr);
+    /* Member expressions can denote either method values or plain callable-
+     * typed fields/values. Only keep METHOD_VALUE when semantic resolution
+     * actually identified a method binding; otherwise route as OTHER. */
+    if (source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE &&
+        resolution.callable_member == NULL) {
+        source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+    }
     (void)feng_semantic_record_callable_spec_coercion_site(
         context->analysis,
         expr,
         target_decl,
         expected_type_ref,
-        classify_callable_source(context, expr),
+        source,
         resolution.callable_decl,
         resolution.callable_member,
         resolution.callable_owner_type_decl,

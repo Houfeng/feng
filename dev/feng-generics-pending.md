@@ -131,9 +131,15 @@
 
 #### Phase F. 泛型组合回归与全量验证
 
-- [ ] F1. 新增 generic callable/coercion 组合回归，覆盖 callable 参数、局部绑定、字段读取后的 target spec coercion。
-- [ ] F2. 新增 aggregate generic arg 端到端 smoke，覆盖实参、字段、返回值与约束 witness 传递。
-- [ ] F3. 阶段性 focused validation 全绿后，执行 `make smoke`、`make test`，必要时补 CLI/package 回归。
+- [x] F1. 新增 generic callable/coercion 组合回归，覆盖 callable 参数、局部绑定、字段读取后的 target spec coercion。
+- [x] F2. 新增 aggregate generic arg 端到端 smoke，覆盖实参、字段、返回值与约束 witness 传递。
+- [x] F3. 阶段性 focused validation 全绿后，执行 `make smoke`、`make test`，必要时补 CLI/package 回归。
+
+本轮 Phase F 已完成的实现要点：
+
+1. 新增 callable OTHER coercion 组合回归，覆盖 parameter -> local binding -> field read -> target callable spec coercion 的完整路径。
+2. 修复 callable coercion source 分类边界：member 表达式仅在语义解析出 method 绑定时才归类为 METHOD_VALUE；callable-typed field read 归类为 OTHER，避免误走 method coercion。
+3. aggregate generic arg 端到端 smoke 已覆盖实参、字段、返回值与约束 witness 传递路径，并与 focused 回归共同通过 `make smoke`、`make test` 全量验证。
 
 ### 一、当前已经验证可工作的范围
 

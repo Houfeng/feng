@@ -1232,6 +1232,60 @@ static void test_callable_spec_other_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kCallableSpecOtherFieldReadCoercionSrc =
+    "mod feng.codegen.gs9;\n"
+    "spec MapperA(x: int): int;\n"
+    "spec MapperB(x: int): int;\n"
+    "fn add1(x: int): int {\n"
+    "    return x + 1;\n"
+    "}\n"
+    "type Holder {\n"
+    "    let mapper: MapperA;\n"
+    "}\n"
+    "fn use_it(input: MapperA): int {\n"
+    "    let local: MapperA = input;\n"
+    "    let holder: Holder = Holder{mapper: local};\n"
+    "    let from_field: MapperA = holder.mapper;\n"
+    "    let remapped: MapperB = from_field;\n"
+    "    return remapped(41);\n"
+    "}\n"
+    "fn entry(): int {\n"
+    "    let start: MapperA = add1;\n"
+    "    return use_it(start);\n"
+    "}\n";
+
+static void test_callable_spec_other_field_read_coercion_codegen(void) {
+    FengProgram *program = parse_or_die(kCallableSpecOtherFieldReadCoercionSrc, "gs9.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (callable spec OTHER field-read coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengCallableRewrap__") != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs9__MapperB") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedSpecValueSrc =
     "mod feng.codegen.gf7;\n"
     "spec Named {\n"
@@ -1720,6 +1774,7 @@ int main(void) {
     test_callable_spec_lambda_local_capture_codegen();
     test_callable_spec_lambda_self_capture_codegen();
     test_callable_spec_other_coercion_codegen();
+    test_callable_spec_other_field_read_coercion_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();

@@ -1,0 +1,32 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string): int;
+
+spec MapperA(x: int): int;
+spec MapperB(x: int): int;
+
+fn add1(x: int): int {
+    return x + 1;
+}
+
+type Holder {
+    let mapper: MapperA;
+}
+
+fn use_mapper(input: MapperA): int {
+    let local: MapperA = input;
+    let holder: Holder = Holder{mapper: local};
+    let fromField: MapperA = holder.mapper;
+    let remapped: MapperB = fromField;
+    return remapped(41);
+}
+
+fn main(args: string[]) {
+    let mapper: MapperA = add1;
+    if use_mapper(mapper) == 42 {
+        puts("other-field-ok");
+    } else {
+        puts("other-field-fail");
+    }
+}
