@@ -7960,6 +7960,24 @@ static const FengExpr *first_let_initializer(const FengCallableSignature *fn) {
     return NULL;
 }
 
+static const FengExpr *nth_let_initializer(const FengCallableSignature *fn,
+                                           size_t binding_index) {
+    size_t seen = 0U;
+
+    for (size_t i = 0U; i < fn->body->statement_count; ++i) {
+        const FengStmt *s = fn->body->statements[i];
+
+        if (s->kind != FENG_STMT_BINDING) {
+            continue;
+        }
+        if (seen == binding_index) {
+            return s->as.binding.initializer;
+        }
+        ++seen;
+    }
+    return NULL;
+}
+
 static void test_spec_coercion_object_let_binding(void) {
     /* `let x: Named = User{...};` records an OBJECT-form coercion site on
      * the initializer expression, with the SpecRelation entry that
@@ -8002,6 +8020,93 @@ static void test_spec_coercion_object_let_binding(void) {
     ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
     ASSERT(site->relation->subject_key.as.type_decl == user);
     ASSERT(site->relation->spec_decl == named);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_object_builtin_let_binding(void) {
+    /* `let x: Named = 7;` should record OBJECT coercion with BUILTIN subject
+     * key once a visible `fit i32: Named { ... }` exists. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "fit i32: Named {\n"
+        "    fn name(): string { return \"i32\"; }\n"
+        "}\n"
+        "fn make(): int {\n"
+        "    let x: Named = (7);\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_builtin_let.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengExpr *init = first_let_initializer(&make->as.function_decl);
+    ASSERT(init != NULL);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(site->src_subject_key.as.builtin_canonical_name != NULL);
+    ASSERT(strcmp(site->src_subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->relation != NULL);
+    ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(strcmp(site->relation->subject_key.as.builtin_canonical_name, "i32") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_object_array_let_binding(void) {
+    /* `let x: Named = xs;` where xs: int[] should record OBJECT coercion with
+     * ARRAY subject key when `fit int[]: Named { ... }` exists. */
+    const char *src =
+        "pu mod demo.coerce;\n"
+        "spec Named { fn name(): string; }\n"
+        "fit int[]: Named {\n"
+        "    fn name(): string { return \"arr\"; }\n"
+        "}\n"
+        "fn make(): int {\n"
+        "    let xs: int[] = [1, 2];\n"
+        "    let x: Named = xs;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_array_let.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *make = find_function_decl_in_program(program, "make");
+    ASSERT(make != NULL);
+    const FengExpr *init = nth_let_initializer(&make->as.function_decl, 1U);
+    ASSERT(init != NULL);
+
+    const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
+    ASSERT(site->src_subject_key.as.array.rank == 1U);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
+    ASSERT(site->relation != NULL);
+    ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -9511,6 +9616,8 @@ int main(void) {
         test_spec_relation_fit_builtin_target();
         test_spec_relation_fit_array_target();
     test_spec_coercion_object_let_binding();
+    test_spec_coercion_object_builtin_let_binding();
+    test_spec_coercion_object_array_let_binding();
     test_spec_coercion_object_argument();
     test_spec_coercion_object_return();
     test_spec_coercion_callable_top_level_fn();

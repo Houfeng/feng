@@ -2287,6 +2287,14 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
 static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
                                               const FengDecl *type_decl,
                                               const FengTypeRef *spec_type_ref);
+static bool subject_key_satisfies_spec_decl(const ResolveContext *ctx,
+                                            const FengSemanticSubjectKey *subject_key,
+                                            const FengDecl *spec_decl);
+static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
+                                                   const FengDecl *source_type_decl,
+                                                   const FengTypeRef *source_type_ref,
+                                                   const FengDecl *spec_decl,
+                                                   const FengTypeRef *spec_type_ref);
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *source_type_ref,
                                              const FengTypeRef *spec_type_ref);
@@ -2717,8 +2725,40 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
             expr_builtin = canonical_builtin_type_name(expr_type.builtin_name);
             target_builtin = type_ref_builtin_canonical_name(type_ref);
-            return expr_builtin != NULL && target_builtin != NULL &&
-                   strcmp(expr_builtin, target_builtin) == 0;
+            if (expr_builtin != NULL && target_builtin != NULL &&
+                strcmp(expr_builtin, target_builtin) == 0) {
+                return true;
+            }
+            target_decl = resolve_type_ref_decl(context, type_ref);
+            if (expr_builtin != NULL && target_decl != NULL &&
+                target_decl->kind == FENG_DECL_SPEC) {
+                FengSemanticSubjectKey sk =
+                    feng_semantic_subject_key_for_builtin(expr_builtin);
+
+                if (!subject_key_satisfies_spec_decl(context, &sk, target_decl)) {
+                    return false;
+                }
+                if (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+                    type_ref->kind != FENG_TYPE_REF_NAMED ||
+                    type_ref->as.named.type_arg_count == 0U) {
+                    return true;
+                }
+                FengSlice seg = slice_from_cstr(expr_builtin);
+                FengTypeRef src_ref;
+
+                memset(&src_ref, 0, sizeof(src_ref));
+                src_ref.kind = FENG_TYPE_REF_NAMED;
+                src_ref.as.named.segments = &seg;
+                src_ref.as.named.segment_count = 1U;
+                src_ref.as.named.type_args = NULL;
+                src_ref.as.named.type_arg_count = 0U;
+                return visible_fit_instantiates_spec_type_ref(context,
+                                                              NULL,
+                                                              &src_ref,
+                                                              target_decl,
+                                                              type_ref);
+            }
+            return false;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
             if (expr_type.type_ref != NULL &&
@@ -2731,16 +2771,13 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                 return true;
             }
             {
-                const FengDecl *src_decl = resolve_type_ref_decl(context, expr_type.type_ref);
                 const FengDecl *dst_decl = resolve_type_ref_decl(context, type_ref);
 
                 /* Object-form spec satisfaction is nominal: the source type must explicitly
                  * declare the spec (in its declared spec list, transitively, or via a visible
                  * fit). Structural shape match alone is not sufficient — duck typing is not
                  * supported here. See type_decl_satisfies_spec_decl for the lookup. */
-                if (src_decl != NULL && dst_decl != NULL &&
-                    src_decl->kind == FENG_DECL_TYPE &&
-                    dst_decl->kind == FENG_DECL_SPEC &&
+                if (dst_decl != NULL && dst_decl->kind == FENG_DECL_SPEC &&
                     type_ref_satisfies_spec_type_ref(context, expr_type.type_ref, type_ref)) {
                     return true;
                 }
@@ -5988,6 +6025,7 @@ static void record_spec_member_access(ResolveContext *context,
 
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
+                                           InferredExprType source_type,
                                            const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
@@ -8731,8 +8769,20 @@ static void record_object_spec_coercion_site_if_applicable(
                 ? expr_type.type_ref
                 : NULL;
 
-        if (!init_spec_witness_subject_key(src_type_decl, src_type_ref,
-                                           &subject_key_for_coercion)) {
+        if (src_type_decl != NULL || src_type_ref != NULL) {
+            if (!init_spec_witness_subject_key(src_type_decl,
+                                               src_type_ref,
+                                               &subject_key_for_coercion)) {
+                return;
+            }
+        } else if (expr_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
+            const char *builtin_name = canonical_builtin_type_name(expr_type.builtin_name);
+
+            if (builtin_name == NULL) {
+                return;
+            }
+            subject_key_for_coercion = feng_semantic_subject_key_for_builtin(builtin_name);
+        } else {
             return;
         }
     }
@@ -8771,6 +8821,7 @@ static void record_object_spec_coercion_site_if_applicable(
      * (per §8.1 / §8.2 — "复用同一份 SpecWitness 结果"). */
     compute_spec_witness_if_absent(context,
                                    src_type_decl,
+                                   expr_type,
                                    expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
                                        ? expr_type.type_ref
                                        : NULL,
@@ -8849,6 +8900,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
 
     compute_spec_witness_if_absent(context,
                                    actual_type_decl,
+                                   inferred_expr_type_from_type_ref(actual_type_ref),
                                    actual_type_ref,
                                    constraint_decl,
                                    type_param->constraint,
@@ -12569,17 +12621,23 @@ static bool fit_decl_instantiates_spec_type_ref(const ResolveContext *ctx,
     size_t spec_index;
 
     if (ctx == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
-        source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE ||
+        (source_type_decl == NULL && source_type_ref == NULL) ||
         spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC || spec_type_ref == NULL) {
         return false;
     }
     fit_target_decl = resolve_type_ref_decl(ctx, fit_decl->as.fit_decl.target);
-    if (fit_target_decl != source_type_decl) {
+    if (source_type_decl != NULL) {
+        if (source_type_decl->kind != FENG_DECL_TYPE || fit_target_decl != source_type_decl) {
+            return false;
+        }
+        type_params = source_type_decl->as.type_decl.type_params;
+        type_param_count = source_type_decl->as.type_decl.type_param_count;
+    } else if (!type_refs_semantically_equal(ctx,
+                                              fit_decl->as.fit_decl.target,
+                                              source_type_ref)) {
         return false;
     }
-    type_params = source_type_decl->as.type_decl.type_params;
-    type_param_count = source_type_decl->as.type_decl.type_param_count;
-    if (type_param_count > 0U) {
+    if (source_type_decl != NULL && type_param_count > 0U) {
         const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
 
         if (source_type_ref == NULL || source_type_ref->kind != FENG_TYPE_REF_NAMED ||
@@ -12677,22 +12735,34 @@ static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *spec_type_ref) {
     const FengDecl *source_type_decl;
     const FengDecl *spec_decl;
+    FengSemanticSubjectKey subject_key;
 
     if (ctx == NULL || source_type_ref == NULL || spec_type_ref == NULL) {
         return false;
     }
     source_type_decl = resolve_type_ref_decl(ctx, source_type_ref);
     spec_decl = resolve_type_ref_decl(ctx, spec_type_ref);
-    if (source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE ||
-        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
         return false;
     }
-    if (type_decl_satisfies_spec_type_ref(ctx, source_type_decl, spec_type_ref)) {
-        return true;
+
+    if (source_type_decl != NULL) {
+        if (source_type_decl->kind != FENG_DECL_TYPE) {
+            return false;
+        }
+        if (type_decl_satisfies_spec_type_ref(ctx, source_type_decl, spec_type_ref)) {
+            return true;
+        }
+        if (!type_decl_satisfies_spec_decl(ctx, source_type_decl, spec_decl)) {
+            return false;
+        }
+    } else {
+        if (!init_spec_witness_subject_key(NULL, source_type_ref, &subject_key) ||
+            !subject_key_satisfies_spec_decl(ctx, &subject_key, spec_decl)) {
+            return false;
+        }
     }
-    if (!type_decl_satisfies_spec_decl(ctx, source_type_decl, spec_decl)) {
-        return false;
-    }
+
     if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
         spec_type_ref->kind != FENG_TYPE_REF_NAMED ||
         spec_type_ref->as.named.type_arg_count == 0U) {
@@ -12802,6 +12872,7 @@ static bool init_spec_witness_subject_key(const FengDecl *type_decl,
 
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
+                                           InferredExprType source_type,
                                            const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
@@ -12816,14 +12887,42 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
     FengSemanticSubjectKey subject_key;
     size_t ci;
 
-    if (context == NULL || context->analysis == NULL ||
-        type_decl == NULL || spec_decl == NULL) {
+    if (context == NULL || context->analysis == NULL || spec_decl == NULL) {
         return;
     }
-    if (type_decl->kind != FENG_DECL_TYPE || spec_decl->kind != FENG_DECL_SPEC) {
+    if ((type_decl != NULL && type_decl->kind != FENG_DECL_TYPE) ||
+        spec_decl->kind != FENG_DECL_SPEC) {
         return;
     }
-    if (!init_spec_witness_subject_key(type_decl, source_type_ref, &subject_key) ||
+    if (source_type.kind == FENG_INFERRED_EXPR_TYPE_UNKNOWN && source_type_ref != NULL) {
+        source_type = inferred_expr_type_from_type_ref(source_type_ref);
+    }
+    if (source_type.kind == FENG_INFERRED_EXPR_TYPE_UNKNOWN && type_decl != NULL) {
+        source_type = inferred_expr_type_from_decl(type_decl);
+    }
+    if (source_type.kind == FENG_INFERRED_EXPR_TYPE_UNKNOWN) {
+        return;
+    }
+
+    if (type_decl != NULL) {
+        if (!init_spec_witness_subject_key(type_decl, source_type_ref, &subject_key)) {
+            return;
+        }
+    } else if (source_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
+        const char *builtin_name = canonical_builtin_type_name(source_type.builtin_name);
+        if (builtin_name == NULL) {
+            return;
+        }
+        subject_key = feng_semantic_subject_key_for_builtin(builtin_name);
+    } else if (source_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        if (!init_spec_witness_subject_key(NULL, source_type.type_ref, &subject_key)) {
+            return;
+        }
+    } else {
+        return;
+    }
+
+    if (subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
         spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }
@@ -12890,7 +12989,8 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
             seen_names[seen_count++] = name;
 
             if (sm->kind == FENG_TYPE_MEMBER_FIELD) {
-                const FengTypeMember *t_field = type_find_field(type_decl, name);
+                const FengTypeMember *t_field =
+                    (type_decl != NULL) ? type_find_field(type_decl, name) : NULL;
 
                 (void)feng_semantic_spec_witness_append_member(
                     witness, sm, t_field,
@@ -12902,12 +13002,15 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
             /* Method member — collect signature-matching candidates from T
              * and from every visible fit. */
             {
-                const FengTypeMember *t_method = type_find_matching_method(
-                    context, type_decl, &sm->as.callable, NULL, 0U);
+                const FengTypeMember *t_method =
+                    (type_decl != NULL)
+                        ? type_find_matching_method(
+                              context, type_decl, &sm->as.callable, NULL, 0U)
+                        : NULL;
                 WitnessFitCollectCtx fit_st;
                 size_t total;
 
-                if (cur == spec_decl && spec_type_ref != NULL) {
+                if (type_decl != NULL && cur == spec_decl && spec_type_ref != NULL) {
                     t_method = type_find_matching_method_in_spec_ref(
                         context,
                         type_decl,
@@ -12927,7 +13030,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                               spec_type_ref,
                               cur);
 
-                if (cur_spec_type_ref != NULL) {
+                if (type_decl != NULL && cur_spec_type_ref != NULL) {
                     t_method = type_find_matching_method_in_spec_ref(
                         context,
                         type_decl,
@@ -12948,9 +13051,23 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                 fit_st.count = 0U;
                 fit_st.capacity = 0U;
                 fit_st.oom = false;
-                (void)visit_visible_fit_methods_for_type(
-                    context, type_decl, name, true,
-                    witness_fit_collect_visitor, &fit_st);
+                if (type_decl != NULL) {
+                    (void)visit_visible_fit_methods_for_type(
+                        context, type_decl, name, true,
+                        witness_fit_collect_visitor, &fit_st);
+                } else {
+                    const FengDecl *owner_type_decl = resolve_inferred_expr_type_decl(
+                        context, source_type);
+
+                    (void)visit_visible_fit_methods_for_owner_type(
+                        context,
+                        owner_type_decl,
+                        source_type,
+                        name,
+                        true,
+                        witness_fit_collect_visitor,
+                        &fit_st);
+                }
                 if (fit_st.oom) {
                     free(fit_st.items);
                     free(seen_names);
@@ -12983,15 +13100,29 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                     /* §8.1 — multiple visible-face implementations of the
                      * same (name, params, return). Report once, at the
                      * triggering coercion site. */
-                    (void)resolver_append_error(
-                        context, err_token,
-                        format_message(
-                            "type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself)",
-                            (int)decl_typeish_name(type_decl).length,
-                            decl_typeish_name(type_decl).data,
-                            (int)name.length, name.data,
-                            (int)spec_decl->as.spec_decl.name.length,
-                            spec_decl->as.spec_decl.name.data));
+                    if (type_decl != NULL) {
+                        (void)resolver_append_error(
+                            context,
+                            err_token,
+                            format_message(
+                                "type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself)",
+                                (int)decl_typeish_name(type_decl).length,
+                                decl_typeish_name(type_decl).data,
+                                (int)name.length,
+                                name.data,
+                                (int)spec_decl->as.spec_decl.name.length,
+                                spec_decl->as.spec_decl.name.data));
+                    } else {
+                        (void)resolver_append_error(
+                            context,
+                            err_token,
+                            format_message(
+                                "fit target has multiple visible implementations of method '%.*s' required by spec '%.*s'",
+                                (int)name.length,
+                                name.data,
+                                (int)spec_decl->as.spec_decl.name.length,
+                                spec_decl->as.spec_decl.name.data));
+                    }
                     (void)feng_semantic_spec_witness_append_member(
                         witness, sm, NULL,
                         FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
@@ -13099,10 +13230,33 @@ static bool spec_relation_source_visible_from_context(const ResolveContext *ctx,
     return false;
 }
 
+static bool subject_key_satisfies_spec_decl(const ResolveContext *ctx,
+                                            const FengSemanticSubjectKey *subject_key,
+                                            const FengDecl *spec_decl) {
+    const FengSpecRelation *relation;
+    size_t i;
+
+    if (ctx == NULL || ctx->analysis == NULL || subject_key == NULL ||
+        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID) {
+        return false;
+    }
+
+    relation = feng_semantic_lookup_spec_relation(ctx->analysis, subject_key, spec_decl);
+    if (relation == NULL) {
+        return false;
+    }
+    for (i = 0U; i < relation->source_count; ++i) {
+        if (spec_relation_source_visible_from_context(ctx, &relation->sources[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
                                           const FengDecl *type_decl,
                                           const FengDecl *spec_decl) {
-    const FengSpecRelation *relation;
     const FengDecl **closure = NULL;
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
@@ -13117,16 +13271,7 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
     if (ctx != NULL && ctx->analysis != NULL) {
         FengSemanticSubjectKey sk = feng_semantic_subject_key_for_type_decl(type_decl);
 
-        relation = feng_semantic_lookup_spec_relation(ctx->analysis, &sk, spec_decl);
-        if (relation == NULL) {
-            return false;
-        }
-        for (i = 0U; i < relation->source_count; ++i) {
-            if (spec_relation_source_visible_from_context(ctx, &relation->sources[i])) {
-                return true;
-            }
-        }
-        return false;
+        return subject_key_satisfies_spec_decl(ctx, &sk, spec_decl);
     }
 
     if (!collect_type_decl_satisfied_specs(ctx, type_decl, &closure,

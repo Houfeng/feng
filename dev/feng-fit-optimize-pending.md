@@ -349,7 +349,7 @@ struct FengScalarBox {
 - [x] C2：同步扩展 `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键，避免语义侧仍停留在 `type_decl`。
 - [x] C3：保留单套 `lookup/reserve/append` API。
 - [ ] C4：数组 target 用结构化 key（元素类型 + rank + 逐层可写性），不用拍平文本或 AST 指针比较。
-- [ ] C5：coercion site 计算 subject key 时与 fit target 归一化逻辑一致。
+- [x] C5：coercion site 计算 subject key 时与 fit target 归一化逻辑一致（含 builtin/array 的 object-form spec coercion 入口）。
 - [ ] C6：在 runtime 内新增 `FengScalarBox`，使用单一托管对象类型承载全部内建标量。
 - [ ] C7：`FengScalarBox` 内部采用自然对齐的 `union` payload，而不是字节数组 payload。
 - [ ] C8：非逃逸临时 spec 调用继续允许借用局部物化地址，不分配 `FengScalarBox`。
