@@ -61,11 +61,12 @@ static FengSpecCoercionSite *reserve_site_slot(FengSemanticAnalysis *analysis,
 bool feng_semantic_record_object_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
-        const FengDecl *src_type_decl,
+        const FengSemanticSubjectKey *src_subject_key,
         const FengDecl *target_spec_decl,
         const FengTypeRef *target_spec_type_ref,
         const FengSpecRelation *relation) {
-    if (analysis_const == NULL || expr == NULL || src_type_decl == NULL ||
+    if (analysis_const == NULL || expr == NULL || src_subject_key == NULL ||
+        src_subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
         target_spec_decl == NULL || target_spec_type_ref == NULL || relation == NULL) {
         return false;
     }
@@ -76,7 +77,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     }
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_OBJECT;
-    slot->src_type_decl = src_type_decl;
+    slot->src_subject_key = *src_subject_key;
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = relation;
@@ -106,7 +107,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     }
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_CALLABLE;
-    slot->src_type_decl = NULL;
+    memset(&slot->src_subject_key, 0, sizeof(slot->src_subject_key)); /* INVALID — unused for CALLABLE */
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = target_spec_type_ref;
     slot->relation = NULL;

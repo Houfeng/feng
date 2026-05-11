@@ -17,6 +17,12 @@ static inline bool decl_is_function_type(const FengDecl *decl) {
            decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE;
 }
 
+/* Forward declaration — defined later in this file alongside the witness
+ * materialisation helpers. */
+static bool init_spec_witness_subject_key(const FengDecl *type_decl,
+                                          const FengTypeRef *source_type_ref,
+                                          FengSemanticSubjectKey *out_key);
+
 static inline FengSlice decl_typeish_name(const FengDecl *decl) {
     if (decl->kind == FENG_DECL_SPEC) {
         return decl->as.spec_decl.name;
@@ -8686,6 +8692,7 @@ static void record_object_spec_coercion_site_if_applicable(
     const FengDecl *src_type_decl;
     InferredExprType expr_type;
     const FengSpecRelation *relation;
+    FengSemanticSubjectKey subject_key_for_coercion;
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
@@ -8715,10 +8722,22 @@ static void record_object_spec_coercion_site_if_applicable(
     }
     expr_type = infer_expr_type(context, expr);
     src_type_decl = concrete_type_decl_of_inferred(context, expr_type);
-    if (src_type_decl == NULL) {
-        return;
+    /* Build subject key: user type → TYPE_DECL key; builtin/array →
+     * derive from expr_type.type_ref using the same helper that
+     * compute_spec_witness_if_absent uses. */
+    {
+        const FengTypeRef *src_type_ref =
+            (expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF)
+                ? expr_type.type_ref
+                : NULL;
+
+        if (!init_spec_witness_subject_key(src_type_decl, src_type_ref,
+                                           &subject_key_for_coercion)) {
+            return;
+        }
     }
-    if (!type_decl_satisfies_spec_type_ref(context, src_type_decl, expected_type_ref)) {
+    if (src_type_decl != NULL &&
+        !type_decl_satisfies_spec_type_ref(context, src_type_decl, expected_type_ref)) {
         if (expr_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
             !type_ref_satisfies_spec_type_ref(context, expr_type.type_ref, expected_type_ref)) {
         /* Match must have been by exact type identity (src == target spec is
@@ -8727,16 +8746,20 @@ static void record_object_spec_coercion_site_if_applicable(
          * SPEC target check above). Defensive no-op. */
             return;
         }
+    } else if (src_type_decl == NULL) {
+        /* Builtin / array path: satisfaction was already confirmed by the
+         * type_ref_satisfies_spec_type_ref check in the outer resolver, so
+         * we do not re-check here. */
     }
     relation = feng_semantic_lookup_spec_relation(context->analysis,
-                                                  src_type_decl,
+                                                  &subject_key_for_coercion,
                                                   target_decl);
     if (relation == NULL) {
         return;
     }
     (void)feng_semantic_record_object_spec_coercion_site(context->analysis,
                                                           expr,
-                                                          src_type_decl,
+                                                          &subject_key_for_coercion,
                                                           target_decl,
                                                           expected_type_ref,
                                                           relation);
@@ -13092,7 +13115,9 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
     }
 
     if (ctx != NULL && ctx->analysis != NULL) {
-        relation = feng_semantic_lookup_spec_relation(ctx->analysis, type_decl, spec_decl);
+        FengSemanticSubjectKey sk = feng_semantic_subject_key_for_type_decl(type_decl);
+
+        relation = feng_semantic_lookup_spec_relation(ctx->analysis, &sk, spec_decl);
         if (relation == NULL) {
             return false;
         }
@@ -13527,20 +13552,56 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
     if (fit_target.kind == FIT_TARGET_KIND_BUILTIN ||
         fit_target.kind == FIT_TARGET_KIND_ARRAY) {
-        if (fit_decl->as.fit_decl.spec_count > 0U) {
+        /* Builtin and array fit targets support both method-only form (no
+         * spec_count) and spec-implementation form (spec_count > 0).  Both
+         * paths share the same orphan/export downgrade logic; the spec
+         * contract validation below (closure, duplicate-spec checks, etc.)
+         * requires a user-type target decl and is intentionally skipped here.
+         */
+        size_t spec_count = fit_decl->as.fit_decl.spec_count;
+        /* Require a body when specs are listed: `fit i32: Spec;` (stub without
+         * a body) is not valid — specs must be fully implemented by the fit. */
+        if (spec_count > 0U && !fit_decl->as.fit_decl.has_body) {
             return resolver_append_error(
                 context,
                 fit_decl->token,
-                format_message("fit target '%s' does not support specs clause yet",
+                format_message("fit with spec clause requires a body; "
+                               "use 'fit %s: %s { ... }' to provide the implementation",
                                fit_target.builtin_canonical_name != NULL
                                    ? fit_target.builtin_canonical_name
-                                   : "array"));
+                                   : "array",
+                               "Spec"));
         }
-        return maybe_downgrade_orphan_fit_export(context,
-                                                 fit_decl,
-                                                 fit_target,
-                                                 NULL,
-                                                 0U);
+        const FengDecl **specs = spec_count > 0U
+            ? (const FengDecl **)malloc(spec_count * sizeof(const FengDecl *))
+            : NULL;
+        bool spec_ok = true;
+
+        for (size_t si = 0U; si < spec_count && spec_ok; ++si) {
+            const FengTypeRef *sr = fit_decl->as.fit_decl.specs[si];
+            const FengDecl *sd = resolve_type_ref_decl(context, sr);
+            if (sd == NULL || sd->kind != FENG_DECL_SPEC) {
+                char *sname = format_type_ref_name(sr);
+                spec_ok = resolver_append_error(
+                    context, sr != NULL ? sr->token : fit_decl->token,
+                    format_message("fit spec '%s' could not be resolved",
+                                   sname != NULL ? sname : "<unknown>"));
+                free(sname);
+            } else if (specs != NULL) {
+                specs[si] = sd;
+            }
+        }
+        if (!spec_ok) {
+            free(specs);
+            return false;
+        }
+        bool result = maybe_downgrade_orphan_fit_export(context,
+                                                        fit_decl,
+                                                        fit_target,
+                                                        specs,
+                                                        spec_count);
+        free(specs);
+        return result;
     }
 
     if (fit_target.kind != FIT_TARGET_KIND_USER_TYPE || target == NULL) {

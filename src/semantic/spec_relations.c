@@ -25,6 +25,151 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* --- Subject key helpers (local, mirrors spec_witnesses.c) ------------ */
+
+static bool rel_slice_eq_cstr_local(FengSlice s, const char *text, size_t tlen) {
+    return s.length == tlen && memcmp(s.data, text, tlen) == 0;
+}
+
+#define REL_SEQ(s, lit) rel_slice_eq_cstr_local((s), (lit), sizeof(lit) - 1U)
+
+static const char *rel_builtin_canonical_name(FengSlice name) {
+    if (REL_SEQ(name, "int")    || REL_SEQ(name, "i32"))    { return "i32"; }
+    if (REL_SEQ(name, "long")   || REL_SEQ(name, "i64"))    { return "i64"; }
+    if (REL_SEQ(name, "byte")   || REL_SEQ(name, "u8"))     { return "u8"; }
+    if (REL_SEQ(name, "float")  || REL_SEQ(name, "f32"))    { return "f32"; }
+    if (REL_SEQ(name, "double") || REL_SEQ(name, "f64"))    { return "f64"; }
+    if (REL_SEQ(name, "i8"))                                 { return "i8"; }
+    if (REL_SEQ(name, "i16"))                                { return "i16"; }
+    if (REL_SEQ(name, "u16"))                                { return "u16"; }
+    if (REL_SEQ(name, "u32"))                                { return "u32"; }
+    if (REL_SEQ(name, "u64"))                                { return "u64"; }
+    if (REL_SEQ(name, "bool"))                               { return "bool"; }
+    if (REL_SEQ(name, "string"))                             { return "string"; }
+    if (REL_SEQ(name, "void"))                               { return "void"; }
+    return NULL;
+}
+
+/* Returns the canonical builtin name for a single-segment non-generic NAMED
+ * type ref, or NULL if the ref is not a builtin scalar/reference name. */
+static const char *rel_builtin_canonical_name_for_type_ref(
+        const FengTypeRef *type_ref) {
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U ||
+        type_ref->as.named.type_arg_count != 0U) {
+        return NULL;
+    }
+    return rel_builtin_canonical_name(type_ref->as.named.segments[0]);
+}
+
+/* Build a subject key from a fit target type ref.  Tries (in order):
+ *   1. User type decl (if `resolved_type_decl` is a FENG_DECL_TYPE).
+ *   2. Builtin canonical name (single-segment NAMED ref that maps to a
+ *      built-in type).
+ *   3. Structured array key (ARRAY ref chain).
+ * Returns false if none of the above apply (target should be skipped). */
+static bool rel_build_subject_key(
+        const FengDecl *resolved_type_decl,
+        const FengTypeRef *target_type_ref,
+        FengSemanticSubjectKey *out) {
+    if (out == NULL) {
+        return false;
+    }
+    if (resolved_type_decl != NULL &&
+        resolved_type_decl->kind == FENG_DECL_TYPE) {
+        *out = feng_semantic_subject_key_for_type_decl(resolved_type_decl);
+        return true;
+    }
+    {
+        const char *bname = rel_builtin_canonical_name_for_type_ref(target_type_ref);
+
+        if (bname != NULL) {
+            *out = feng_semantic_subject_key_for_builtin(bname);
+            return true;
+        }
+    }
+    return feng_semantic_subject_key_init_array_from_type_ref(out, target_type_ref);
+}
+
+static bool rel_type_ref_key_equal(const FengTypeRef *left, const FengTypeRef *right);
+static bool rel_slices_eq(const FengSlice *a, const FengSlice *b) {
+    return a->length == b->length &&
+           (a->length == 0U || memcmp(a->data, b->data, a->length) == 0);
+}
+
+
+static bool rel_type_ref_key_equal(const FengTypeRef *left, const FengTypeRef *right) {
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_TYPE_REF_NAMED: {
+            const char *lb = rel_builtin_canonical_name_for_type_ref(left);
+            const char *rb = rel_builtin_canonical_name_for_type_ref(right);
+
+            if (lb != NULL || rb != NULL) {
+                return lb != NULL && rb != NULL && strcmp(lb, rb) == 0;
+            }
+            if (left->as.named.segment_count != right->as.named.segment_count ||
+                left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t i = 0U; i < left->as.named.segment_count; ++i) {
+                if (!rel_slices_eq(&left->as.named.segments[i],
+                                   &right->as.named.segments[i])) {
+                    return false;
+                }
+            }
+            for (size_t i = 0U; i < left->as.named.type_arg_count; ++i) {
+                if (!rel_type_ref_key_equal(left->as.named.type_args[i],
+                                            right->as.named.type_args[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case FENG_TYPE_REF_POINTER:
+            return rel_type_ref_key_equal(left->as.inner, right->as.inner);
+        case FENG_TYPE_REF_ARRAY:
+            return left->array_element_writable == right->array_element_writable &&
+                   rel_type_ref_key_equal(left->as.inner, right->as.inner);
+        default:
+            return false;
+    }
+}
+
+static bool rel_subject_key_equals(
+        const FengSemanticSubjectKey *left,
+        const FengSemanticSubjectKey *right) {
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_SEMANTIC_SUBJECT_KEY_INVALID:
+            return true;
+        case FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL:
+            return left->as.type_decl == right->as.type_decl;
+        case FENG_SEMANTIC_SUBJECT_KEY_BUILTIN:
+            return left->as.builtin_canonical_name != NULL &&
+                   right->as.builtin_canonical_name != NULL &&
+                   strcmp(left->as.builtin_canonical_name,
+                          right->as.builtin_canonical_name) == 0;
+        case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
+            return left->as.array.rank == right->as.array.rank &&
+                   left->as.array.writable_mask == right->as.array.writable_mask &&
+                   rel_type_ref_key_equal(left->as.array.element_type_ref,
+                                          right->as.array.element_type_ref);
+        default:
+            return false;
+    }
+}
+
 /* --- Generic decl lookup ----------------------------------------------
  *
  * The post-pass runs without a ResolveContext, so we cannot reuse
@@ -160,15 +305,17 @@ static const FengDecl *resolve_named_type_or_spec(
 
 /* --- Relation table mutation ------------------------------------------ */
 
-static FengSpecRelation *find_or_append_relation(FengSemanticAnalysis *analysis,
-                                                 const FengDecl *type_decl,
-                                                 const FengDecl *spec_decl) {
+static FengSpecRelation *find_or_append_relation(
+        FengSemanticAnalysis *analysis,
+        const FengSemanticSubjectKey *subject_key,
+        const FengDecl *spec_decl) {
     size_t i;
 
     for (i = 0U; i < analysis->spec_relation_count; ++i) {
         FengSpecRelation *r = &analysis->spec_relations[i];
 
-        if (r->type_decl == type_decl && r->spec_decl == spec_decl) {
+        if (rel_subject_key_equals(&r->subject_key, subject_key) &&
+            r->spec_decl == spec_decl) {
             return r;
         }
     }
@@ -189,7 +336,7 @@ static FengSpecRelation *find_or_append_relation(FengSemanticAnalysis *analysis,
     {
         FengSpecRelation *r = &analysis->spec_relations[analysis->spec_relation_count++];
 
-        r->type_decl = type_decl;
+        r->subject_key = *subject_key;
         r->spec_decl = spec_decl;
         r->sources = NULL;
         r->source_count = 0U;
@@ -233,10 +380,10 @@ static bool relation_append_source(FengSpecRelation *relation,
 }
 
 static bool record_source(FengSemanticAnalysis *analysis,
-                          const FengDecl *type_decl,
+                          const FengSemanticSubjectKey *subject_key,
                           const FengDecl *spec_decl,
                           const FengSpecRelationSource *source) {
-    FengSpecRelation *r = find_or_append_relation(analysis, type_decl, spec_decl);
+    FengSpecRelation *r = find_or_append_relation(analysis, subject_key, spec_decl);
 
     if (r == NULL) {
         return false;
@@ -316,7 +463,7 @@ static bool collect_parent_specs(const FengSemanticAnalysis *analysis,
 /* --- Population ------------------------------------------------------- */
 
 static bool record_head_and_parents(FengSemanticAnalysis *analysis,
-                                    const FengDecl *type_decl,
+                                    const FengSemanticSubjectKey *subject_key,
                                     const FengDecl *head_spec,
                                     FengSpecRelationSourceKind head_kind,
                                     FengSpecRelationSourceKind parent_kind,
@@ -330,7 +477,7 @@ static bool record_head_and_parents(FengSemanticAnalysis *analysis,
     src.via_spec_decl = head_spec;
     src.via_fit_decl = via_fit_decl;
     src.provider_module = provider_module;
-    if (!record_source(analysis, type_decl, head_spec, &src)) {
+    if (!record_source(analysis, subject_key, head_spec, &src)) {
         return false;
     }
     if (!collect_parent_specs(analysis, head_spec, &parents)) {
@@ -344,7 +491,7 @@ static bool record_head_and_parents(FengSemanticAnalysis *analysis,
         psrc.via_spec_decl = head_spec;
         psrc.via_fit_decl = via_fit_decl;
         psrc.provider_module = provider_module;
-        if (!record_source(analysis, type_decl, parents.specs[i], &psrc)) {
+        if (!record_source(analysis, subject_key, parents.specs[i], &psrc)) {
             parent_closure_free(&parents);
             return false;
         }
@@ -356,6 +503,8 @@ static bool record_head_and_parents(FengSemanticAnalysis *analysis,
 static bool process_type_decl(FengSemanticAnalysis *analysis,
                               const FengDecl *type_decl) {
     size_t i;
+    FengSemanticSubjectKey subject_key =
+        feng_semantic_subject_key_for_type_decl(type_decl);
 
     for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
         const FengDecl *head = resolve_named_type_or_spec(
@@ -365,7 +514,7 @@ static bool process_type_decl(FengSemanticAnalysis *analysis,
             continue;
         }
         if (!record_head_and_parents(analysis,
-                                     type_decl,
+                                     &subject_key,
                                      head,
                                      FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD,
                                      FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT,
@@ -380,11 +529,19 @@ static bool process_type_decl(FengSemanticAnalysis *analysis,
 static bool process_fit_decl(FengSemanticAnalysis *analysis,
                              const FengSemanticModule *provider_module,
                              const FengDecl *fit_decl) {
-    const FengDecl *target = resolve_named_type_or_spec(analysis, fit_decl->as.fit_decl.target);
+    const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
+    const FengDecl *resolved_target = resolve_named_type_or_spec(analysis, target_ref);
+    FengSemanticSubjectKey subject_key;
     size_t i;
 
-    if (target == NULL || target->kind != FENG_DECL_TYPE) {
+    /* Skip fits that have no spec list (non-spec fit bodies). */
+    if (fit_decl->as.fit_decl.spec_count == 0U) {
         return true;
+    }
+    /* Build subject key from the fit target.  Handles user types, builtin
+     * canonical names, and structured array targets. */
+    if (!rel_build_subject_key(resolved_target, target_ref, &subject_key)) {
+        return true; /* unrecognised target form — skip gracefully */
     }
     for (i = 0U; i < fit_decl->as.fit_decl.spec_count; ++i) {
         const FengDecl *head = resolve_named_type_or_spec(
@@ -394,7 +551,7 @@ static bool process_fit_decl(FengSemanticAnalysis *analysis,
             continue;
         }
         if (!record_head_and_parents(analysis,
-                                     target,
+                                     &subject_key,
                                      head,
                                      FENG_SPEC_RELATION_SOURCE_FIT_HEAD,
                                      FENG_SPEC_RELATION_SOURCE_FIT_PARENT,
@@ -460,17 +617,20 @@ bool feng_semantic_compute_spec_relations(FengSemanticAnalysis *analysis) {
 
 const FengSpecRelation *feng_semantic_lookup_spec_relation(
     const FengSemanticAnalysis *analysis,
-    const FengDecl *type_decl,
+    const FengSemanticSubjectKey *subject_key,
     const FengDecl *spec_decl) {
     size_t i;
 
-    if (analysis == NULL || type_decl == NULL || spec_decl == NULL) {
+    if (analysis == NULL || subject_key == NULL ||
+        subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
+        spec_decl == NULL) {
         return NULL;
     }
     for (i = 0U; i < analysis->spec_relation_count; ++i) {
         const FengSpecRelation *r = &analysis->spec_relations[i];
 
-        if (r->type_decl == type_decl && r->spec_decl == spec_decl) {
+        if (rel_subject_key_equals(&r->subject_key, subject_key) &&
+            r->spec_decl == spec_decl) {
             return r;
         }
     }

@@ -127,12 +127,14 @@ typedef struct FengSemanticSubjectKey {
     } as;
 } FengSemanticSubjectKey;
 
-/* One relation entry per (type_decl, spec_decl) pair that has at least one
+/* One relation entry per (subject_key, spec_decl) pair that has at least one
  * source (declared, transitive, or via any fit anywhere in the analysis).
- * Visibility filtering by consumer module is the caller's responsibility —
- * see feng_semantic_spec_relation_source_visible_from. */
+ * The subject_key identifies the fit target: a user type decl, a builtin
+ * canonical name, or a structured array key. Visibility filtering by consumer
+ * module is the caller's responsibility — see
+ * feng_semantic_spec_relation_source_visible_from. */
 typedef struct FengSpecRelation {
-    const FengDecl *type_decl;
+    FengSemanticSubjectKey subject_key;
     const FengDecl *spec_decl;
     FengSpecRelationSource *sources;
     size_t source_count;
@@ -177,8 +179,10 @@ typedef enum FengSpecCoercionCallableSource {
 typedef struct FengSpecCoercionSite {
     const FengExpr *expr;
     FengSpecCoercionForm form;
-    /* OBJECT form: the concrete source `type` decl. Always non-NULL. */
-    const FengDecl *src_type_decl;
+    /* OBJECT form: subject key of the concrete source type (user type decl,
+     * builtin canonical name, or structured array key). Kind is never
+     * INVALID for FORM_OBJECT sites. */
+    FengSemanticSubjectKey src_subject_key;
     /* The target spec / function-type decl. Always non-NULL. */
     const FengDecl *target_spec_decl;
     /* The concrete target spec type ref at the coercion site. For generic
@@ -306,12 +310,12 @@ bool feng_semantic_compute_type_cyclicity(FengSemanticAnalysis *analysis);
  * success path of feng_semantic_analyze. */
 bool feng_semantic_compute_spec_relations(FengSemanticAnalysis *analysis);
 
-/* Look up the relation entry for (type_decl, spec_decl). Returns NULL if no
+/* Look up the relation entry for (subject_key, spec_decl). Returns NULL if no
  * source exists anywhere in the analysis. The returned pointer is stable
  * until feng_semantic_analysis_free. */
 const FengSpecRelation *feng_semantic_lookup_spec_relation(
     const FengSemanticAnalysis *analysis,
-    const FengDecl *type_decl,
+    const FengSemanticSubjectKey *subject_key,
     const FengDecl *spec_decl);
 
 /* Returns true iff `source` is visible from a consumer file located in
@@ -342,7 +346,7 @@ bool feng_semantic_spec_relation_source_visible_from(
 bool feng_semantic_record_object_spec_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr,
-    const FengDecl *src_type_decl,
+    const FengSemanticSubjectKey *src_subject_key,
     const FengDecl *target_spec_decl,
     const FengTypeRef *target_spec_type_ref,
     const FengSpecRelation *relation);

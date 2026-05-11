@@ -346,8 +346,8 @@ struct FengScalarBox {
 > **目标**：让 builtin / array 使用同一套 witness 缓存，并把主体键扩展同步到所有语义侧数据结构。
 
 - [x] C1：将 `FengSpecWitness` 的主体键从 `type_decl` 扩到统一 subject key：用户 type → `decl`，builtin → canonical name，array → 结构化签名。
-- [ ] C2：同步扩展 `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键，避免语义侧仍停留在 `type_decl`。
-- [ ] C3：保留单套 `lookup/reserve/append` API。
+- [x] C2：同步扩展 `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键，避免语义侧仍停留在 `type_decl`。
+- [x] C3：保留单套 `lookup/reserve/append` API。
 - [ ] C4：数组 target 用结构化 key（元素类型 + rank + 逐层可写性），不用拍平文本或 AST 指针比较。
 - [ ] C5：coercion site 计算 subject key 时与 fit target 归一化逻辑一致。
 - [ ] C6：在 runtime 内新增 `FengScalarBox`，使用单一托管对象类型承载全部内建标量。

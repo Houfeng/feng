@@ -9024,7 +9024,11 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token,
                 "codegen: spec coercion source must be an object value");
         }
-        const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_type_decl);
+        if (cs->src_subject_key.kind != FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
+            return cg_fail(cg, e->token,
+                "codegen: object-form spec coercion with non-type_decl subject key not yet supported");
+        }
+        const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_subject_key.as.type_decl);
         const UserSpec *tgt_s = NULL;
         if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &tgt_s)) {
             return false;

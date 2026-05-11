@@ -2450,7 +2450,10 @@ static bool build_spec_relations(BuildContext *ctx, FengSymbolError *out_error) 
 
     for (relation_index = 0U; relation_index < ctx->analysis->spec_relation_count; ++relation_index) {
         const FengSpecRelation *relation = &ctx->analysis->spec_relations[relation_index];
-        FengSymbolDeclView *left_type = find_source_decl(ctx->source_map, ctx->source_count, relation->type_decl);
+        const FengDecl *subject_type_decl =
+            (relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL)
+                ? relation->subject_key.as.type_decl : NULL;
+        FengSymbolDeclView *left_type = find_source_decl(ctx->source_map, ctx->source_count, subject_type_decl);
         FengSymbolDeclView *right_spec = find_source_decl(ctx->source_map, ctx->source_count, relation->spec_decl);
         size_t source_index;
 
@@ -2460,7 +2463,7 @@ static bool build_spec_relations(BuildContext *ctx, FengSymbolError *out_error) 
                                     left_type,
                                     right_spec,
                                     left_type,
-                                    relation->type_decl->token,
+                                    subject_type_decl->token,
                                     out_error)) {
             return false;
         }
@@ -2477,7 +2480,7 @@ static bool build_spec_relations(BuildContext *ctx, FengSymbolError *out_error) 
                                         fit_decl,
                                         right_spec,
                                         fit_decl,
-                                        source->via_fit_decl != NULL ? source->via_fit_decl->token : relation->type_decl->token,
+                                        source->via_fit_decl != NULL ? source->via_fit_decl->token : (subject_type_decl != NULL ? subject_type_decl->token : source->via_fit_decl->token),
                                         out_error)) {
                 return false;
             }
@@ -2487,7 +2490,7 @@ static bool build_spec_relations(BuildContext *ctx, FengSymbolError *out_error) 
                                         fit_decl,
                                         left_type,
                                         fit_decl,
-                                        source->via_fit_decl != NULL ? source->via_fit_decl->token : relation->type_decl->token,
+                                        source->via_fit_decl != NULL ? source->via_fit_decl->token : (subject_type_decl != NULL ? subject_type_decl->token : source->via_fit_decl->token),
                                         out_error)) {
                 return false;
             }

@@ -6316,7 +6316,9 @@ static void test_fit_array_method_callable_on_value(void) {
     feng_program_free(program);
 }
 
-static void test_fit_builtin_target_rejects_specs_clause(void) {
+/* C2: fit with spec clause for builtin/array targets is now valid when a body
+ * is provided.  A stub without a body (';' only) must still be rejected. */
+static void test_fit_builtin_target_rejects_specs_clause_without_body(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Named {\n"
@@ -6332,12 +6334,12 @@ static void test_fit_builtin_target_rejects_specs_clause(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "does not support specs clause yet") != NULL);
+    ASSERT(strstr(errors[0].message, "requires a body") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_fit_array_target_rejects_specs_clause(void) {
+static void test_fit_array_target_rejects_specs_clause_without_body(void) {
     const char *source =
         "mod demo.main;\n"
         "spec Named {\n"
@@ -6353,7 +6355,7 @@ static void test_fit_array_target_rejects_specs_clause(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "does not support specs clause yet") != NULL);
+    ASSERT(strstr(errors[0].message, "requires a body") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -7623,7 +7625,7 @@ static bool relation_has_source(const FengSpecRelation *rel,
                                 FengSpecRelationSourceKind kind,
                                 const FengDecl *via_spec_decl,
                                 const FengDecl *via_fit_decl) {
-    if (rel == NULL) return false;
+    if (rel == NULL) { return false; }
     for (size_t i = 0U; i < rel->source_count; ++i) {
         const FengSpecRelationSource *s = &rel->sources[i];
         if (s->kind == kind &&
@@ -7633,6 +7635,24 @@ static bool relation_has_source(const FengSpecRelation *rel,
         }
     }
     return false;
+}
+
+/* Convenience wrappers that build a subject key from the caller's preferred
+ * representation and forward to feng_semantic_lookup_spec_relation. */
+static const FengSpecRelation *lookup_relation_for_type_decl(
+        const FengSemanticAnalysis *analysis,
+        const FengDecl *type_decl,
+        const FengDecl *spec_decl) {
+    FengSemanticSubjectKey sk = feng_semantic_subject_key_for_type_decl(type_decl);
+    return feng_semantic_lookup_spec_relation(analysis, &sk, spec_decl);
+}
+
+static const FengSpecRelation *lookup_relation_for_builtin(
+        const FengSemanticAnalysis *analysis,
+        const char *canonical_name,
+        const FengDecl *spec_decl) {
+    FengSemanticSubjectKey sk = feng_semantic_subject_key_for_builtin(canonical_name);
+    return feng_semantic_lookup_spec_relation(analysis, &sk, spec_decl);
 }
 
 static void test_spec_relation_declared_head_recorded(void) {
@@ -7654,14 +7674,14 @@ static void test_spec_relation_declared_head_recorded(void) {
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
     ASSERT(user != NULL && named != NULL);
 
-    const FengSpecRelation *rel = feng_semantic_lookup_spec_relation(analysis, user, named);
+    const FengSpecRelation *rel = lookup_relation_for_type_decl(analysis, user, named);
     ASSERT(rel != NULL);
     ASSERT(rel->source_count == 1U);
     ASSERT(relation_has_source(rel, FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD,
                                named, NULL));
 
     /* Reverse direction must not exist. */
-    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, user) == NULL);
+    ASSERT(lookup_relation_for_type_decl(analysis, user, user) == NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -7692,12 +7712,12 @@ static void test_spec_relation_declared_parent_transitive(void) {
     const FengDecl *child = find_spec_decl_by_name(analysis, "Child");
     ASSERT(both && parent && child);
 
-    const FengSpecRelation *rel_child = feng_semantic_lookup_spec_relation(analysis, both, child);
+    const FengSpecRelation *rel_child = lookup_relation_for_type_decl(analysis, both, child);
     ASSERT(rel_child != NULL);
     ASSERT(relation_has_source(rel_child, FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD,
                                child, NULL));
 
-    const FengSpecRelation *rel_parent = feng_semantic_lookup_spec_relation(analysis, both, parent);
+    const FengSpecRelation *rel_parent = lookup_relation_for_type_decl(analysis, both, parent);
     ASSERT(rel_parent != NULL);
     ASSERT(relation_has_source(rel_parent, FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT,
                                child, NULL));
@@ -7744,12 +7764,12 @@ static void test_spec_relation_fit_head_and_parent(void) {
     }
     ASSERT(fit != NULL);
 
-    const FengSpecRelation *rel_child = feng_semantic_lookup_spec_relation(analysis, tag, child);
+    const FengSpecRelation *rel_child = lookup_relation_for_type_decl(analysis, tag, child);
     ASSERT(rel_child != NULL);
     ASSERT(relation_has_source(rel_child, FENG_SPEC_RELATION_SOURCE_FIT_HEAD,
                                child, fit));
 
-    const FengSpecRelation *rel_parent = feng_semantic_lookup_spec_relation(analysis, tag, parent);
+    const FengSpecRelation *rel_parent = lookup_relation_for_type_decl(analysis, tag, parent);
     ASSERT(rel_parent != NULL);
     ASSERT(relation_has_source(rel_parent, FENG_SPEC_RELATION_SOURCE_FIT_PARENT,
                                child, fit));
@@ -7797,7 +7817,7 @@ static void test_spec_relation_visibility_filter(void) {
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
     ASSERT(tag && named);
 
-    const FengSpecRelation *rel = feng_semantic_lookup_spec_relation(analysis, tag, named);
+    const FengSpecRelation *rel = lookup_relation_for_type_decl(analysis, tag, named);
     ASSERT(rel != NULL);
     ASSERT(rel->source_count == 1U);
 
@@ -7823,6 +7843,95 @@ static void test_spec_relation_visibility_filter(void) {
     feng_program_free(pa);
     feng_program_free(pb);
     feng_program_free(pc);
+}
+
+/* --- Phase S1b: SpecCoercionSite sidecar tests ----------------------- */
+static void test_spec_relation_fit_builtin_target(void) {
+    /* `fit i32: Named { ... }` should record a FIT_HEAD relation with a
+     * BUILTIN subject key for "i32". */
+    const char *src =
+        "pu mod demo.rel.builtin;\n"
+        "pu spec Named { fn name(): string; }\n"
+        "pu fit i32: Named { fn name(): string { return \"i32\"; } }\n";
+    FengProgram *program = parse_program_or_die("rel_builtin.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(named != NULL);
+
+    const FengSpecRelation *rel = lookup_relation_for_builtin(analysis, "i32", named);
+    ASSERT(rel != NULL);
+    ASSERT(rel->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
+    ASSERT(rel->subject_key.as.builtin_canonical_name != NULL);
+    ASSERT(strcmp(rel->subject_key.as.builtin_canonical_name, "i32") == 0);
+    ASSERT(rel->source_count >= 1U);
+    /* At least one source must be FIT_HEAD (no via_spec_decl since Named has
+     * no parent specs in this program). */
+    bool has_fit_head = false;
+    for (size_t i = 0U; i < rel->source_count; ++i) {
+        if (rel->sources[i].kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD) {
+            has_fit_head = true;
+            break;
+        }
+    }
+    ASSERT(has_fit_head);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_relation_fit_array_target(void) {
+    /* `fit i32[]: Named { ... }` should record a FIT_HEAD relation with an
+     * ARRAY subject key whose element type is i32. */
+    const char *src =
+        "pu mod demo.rel.array;\n"
+        "pu spec Named { fn name(): string; }\n"
+        "pu fit i32[]: Named { fn name(): string { return \"arr\"; } }\n";
+    FengProgram *program = parse_program_or_die("rel_array.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
+    ASSERT(named != NULL);
+
+    /* Build the array subject key for i32[]. */
+    FengSemanticSubjectKey i32_key = feng_semantic_subject_key_for_builtin("i32");
+    FengSemanticSubjectKey arr_key;
+    /* We don't have direct access to the fit decl's type ref here;
+     * instead verify that a relation with ARRAY kind exists for the spec. */
+    (void)i32_key;
+    bool found_array_rel = false;
+    for (size_t i = 0U; i < analysis->spec_relation_count; ++i) {
+        const FengSpecRelation *r = &analysis->spec_relations[i];
+        if (r->spec_decl == named &&
+            r->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+            /* Verify there is at least one FIT_HEAD source. */
+            for (size_t j = 0U; j < r->source_count; ++j) {
+                if (r->sources[j].kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD) {
+                    found_array_rel = true;
+                    break;
+                }
+            }
+        }
+    }
+    ASSERT(found_array_rel);
+    (void)arr_key;
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 /* --- Phase S1b: SpecCoercionSite sidecar tests ----------------------- */
@@ -7886,10 +7995,12 @@ static void test_spec_coercion_object_let_binding(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
-    ASSERT(site->src_type_decl == user);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
+    ASSERT(site->src_subject_key.as.type_decl == user);
     ASSERT(site->target_spec_decl == named);
     ASSERT(site->relation != NULL);
-    ASSERT(site->relation->type_decl == user);
+    ASSERT(site->relation->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
+    ASSERT(site->relation->subject_key.as.type_decl == user);
     ASSERT(site->relation->spec_decl == named);
 
     feng_semantic_errors_free(errors, error_count);
@@ -7937,7 +8048,8 @@ static void test_spec_coercion_object_argument(void) {
 
     const FengDecl *user = find_type_decl_by_name(analysis, "User");
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
-    ASSERT(site->src_type_decl == user);
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
+    ASSERT(site->src_subject_key.as.type_decl == user);
     ASSERT(site->target_spec_decl == named);
     ASSERT(site->relation != NULL);
 
@@ -7979,7 +8091,8 @@ static void test_spec_coercion_object_return(void) {
     ASSERT(site != NULL);
     ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT);
     ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Named"));
-    ASSERT(site->src_type_decl == find_type_decl_by_name(analysis, "User"));
+    ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL);
+    ASSERT(site->src_subject_key.as.type_decl == find_type_decl_by_name(analysis, "User"));
     ASSERT(site->relation != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -8473,7 +8586,7 @@ static void test_spec_witness_on_demand_only(void) {
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
     FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
     /* Relation exists (declared head). */
-    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
+    ASSERT(lookup_relation_for_type_decl(analysis, user, named) != NULL);
     /* Witness does not — no coercion site demanded it. */
     ASSERT(feng_semantic_lookup_spec_witness(analysis, &user_key, named) == NULL);
 
@@ -8513,7 +8626,7 @@ static void test_spec_witness_via_generic_instantiation(void) {
     const FengDecl *named = find_spec_decl_by_name(analysis, "Named");
     FengSemanticSubjectKey user_key = feng_semantic_subject_key_for_type_decl(user);
 
-    ASSERT(feng_semantic_lookup_spec_relation(analysis, user, named) != NULL);
+    ASSERT(lookup_relation_for_type_decl(analysis, user, named) != NULL);
     ASSERT(feng_semantic_lookup_spec_witness(analysis, &user_key, named) != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -9395,6 +9508,8 @@ int main(void) {
     test_spec_relation_declared_parent_transitive();
     test_spec_relation_fit_head_and_parent();
     test_spec_relation_visibility_filter();
+        test_spec_relation_fit_builtin_target();
+        test_spec_relation_fit_array_target();
     test_spec_coercion_object_let_binding();
     test_spec_coercion_object_argument();
     test_spec_coercion_object_return();
@@ -9657,8 +9772,8 @@ int main(void) {
     test_fit_method_callable_on_instance();
     test_fit_builtin_method_callable_on_literal();
     test_fit_array_method_callable_on_value();
-    test_fit_builtin_target_rejects_specs_clause();
-    test_fit_array_target_rejects_specs_clause();
+    test_fit_builtin_target_rejects_specs_clause_without_body();
+    test_fit_array_target_rejects_specs_clause_without_body();
     test_fit_array_target_element_type_param_visible_in_body();
     test_fit_array_target_element_type_param_does_not_leak();
     test_fit_user_type_path_still_uses_current_type_decl();
