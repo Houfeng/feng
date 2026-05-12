@@ -132,7 +132,7 @@ fit *byte {
 - `FengScalarBox` 必须是 runtime 内单一托管对象类型, 用同一套对象头与同一套 retain/release 生命周期承载全部标量内建类型。
 - `FengScalarBox` 的 payload 必须使用自然对齐的 `union` 成员布局（`bool` / 有符号整数 / 无符号整数 / 浮点）, 不得退化为字节数组 payload。
 - `FengScalarBox` 必须标记为非循环对象且不包含 managed fields；其职责仅是稳定 subject ownership, 不参与额外运行时分派。
-- 标量 spec thunk 必须只做一次从 `FengScalarBox` payload 的原生取值后直接调用 fit 方法实现, 不得引入第二层 wrapper 或运行时查表。
+- 标量 spec thunk 必须只做一次原生类型取值后直接调用 fit 方法实现；当 coercion site 标记为临时借用时从借用地址取值, 当标记为稳定 owner 时从 `FengScalarBox` payload 取值。不得引入第二层 wrapper 或运行时查表。
 
 ## 7 关联
 

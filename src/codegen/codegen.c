@@ -847,6 +847,7 @@ static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl)
 static bool cg_ensure_witness_instance(CG *cg,
                                        const FengSemanticSubjectKey *subject_key,
                                        const UserSpec *s,
+                                       FengSpecObjectSubjectStorageKind scalar_subject_storage,
                                        FengToken blame,
                                        const char **out_var);
 static bool cg_ensure_witness_instance_for_type(CG *cg,
@@ -858,6 +859,7 @@ static bool cg_ensure_witness_instance_for_subject_key(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
     const UserSpec *s,
+    FengSpecObjectSubjectStorageKind scalar_subject_storage,
     FengToken blame,
     const char **out_var);
 static bool cg_emit_scalar_box_support(CG *cg);
@@ -9139,6 +9141,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!cg_ensure_witness_instance(cg,
                                             &cs->src_subject_key,
                                             tgt_s,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
                                             e->token,
                                             &witness_var)) {
                 return false;
@@ -9152,6 +9155,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!cg_ensure_witness_instance_for_subject_key(cg,
                                                             &cs->src_subject_key,
                                                             tgt_s,
+                                                            cs->object_subject_storage,
                                                             e->token,
                                                             &witness_var)) {
                 return false;
@@ -11494,6 +11498,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             if (!cg_ensure_witness_instance(cg,
                                             &subject_key,
                                             constraint_spec,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
                                             *tok,
                                             &witness_var)) {
                 buf_free(&b);
@@ -12500,6 +12505,42 @@ static bool cg_subject_key_to_target_kind(const FengSemanticSubjectKey *subject_
     return false;
 }
 
+static bool cg_emit_scalar_subject_load(CG *cg,
+                                        Buf *out,
+                                        CGTypeKind subject_kind,
+                                        FengSpecObjectSubjectStorageKind storage,
+                                        FengToken blame,
+                                        const char *value_name) {
+    if (cg == NULL || out == NULL || value_name == NULL) {
+        return false;
+    }
+    const char *self_cty = cgtype_to_c(subject_kind);
+    if (self_cty == NULL) {
+        return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+    }
+    if (storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL) {
+        buf_append_fmt(out,
+            "    %s %s = *(const %s *)_subject;\n",
+            self_cty,
+            value_name,
+            self_cty);
+        return true;
+    }
+    if (storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER) {
+        const char *field_name = NULL;
+        if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+            return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+        }
+        buf_append_fmt(out,
+            "    %s %s = ((const struct FengScalarBox *)_subject)->payload.%s;\n",
+            self_cty,
+            value_name,
+            field_name);
+        return true;
+    }
+    return cg_fail(cg, blame, "codegen: invalid scalar subject storage kind");
+}
+
 static bool cg_user_spec_member_compatible(const UserSpecMember *src,
                                            const UserSpecMember *dst) {
     if (src == NULL || dst == NULL || src->kind != dst->kind) {
@@ -12837,6 +12878,7 @@ static bool cg_ensure_witness_instance(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
     const UserSpec *s,
+    FengSpecObjectSubjectStorageKind scalar_subject_storage,
     FengToken blame,
     const char **out_var) {
     if (cg == NULL || subject_key == NULL || s == NULL || out_var == NULL) {
@@ -12959,17 +13001,19 @@ static bool cg_ensure_witness_instance(
             }
             buf_append_cstr(fd, ", void *_out) {\n    ");
             cg_emit_c_type(fd, fm->return_type);
+            buf_append_cstr(fd, " _ret;\n");
             if (cg_type_kind_is_scalar_builtin(subject_kind)) {
-                const char *field_name = NULL;
-                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                if (!cg_emit_scalar_subject_load(cg,
+                                                fd,
+                                                subject_kind,
+                                                scalar_subject_storage,
+                                                blame,
+                                                "_self_value")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                    return false;
                 }
-                buf_append_fmt(fd,
-                    " _ret = %s(((const struct FengScalarBox *)_subject)->payload.%s",
-                    fm->c_name,
-                    field_name);
+                buf_append_fmt(fd, "    _ret = %s(_self_value", fm->c_name);
             } else {
                 char *self_cty = cg_ctype_dup(bf->target_type);
                 if (self_cty == NULL) {
@@ -12977,7 +13021,7 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return cg_fail(cg, blame, "codegen: out of memory");
                 }
-                buf_append_fmt(fd, " _ret = %s((%s)_subject", fm->c_name, self_cty);
+                buf_append_fmt(fd, "    _ret = %s((%s)_subject", fm->c_name, self_cty);
                 free(self_cty);
             }
             for (size_t pi = 0; pi < sm->param_count; ++pi) {
@@ -13022,16 +13066,17 @@ static bool cg_ensure_witness_instance(
         buf_append_cstr(fd, ") {\n");
         if (sm->type->kind == CG_TYPE_VOID) {
             if (cg_type_kind_is_scalar_builtin(subject_kind)) {
-                const char *field_name = NULL;
-                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                if (!cg_emit_scalar_subject_load(cg,
+                                                fd,
+                                                subject_kind,
+                                                scalar_subject_storage,
+                                                blame,
+                                                "_self_value")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                    return false;
                 }
-                buf_append_fmt(fd,
-                    "    %s(((const struct FengScalarBox *)_subject)->payload.%s",
-                    fm->c_name,
-                    field_name);
+                buf_append_fmt(fd, "    %s(_self_value", fm->c_name);
             } else {
                 char *self_cty = cg_ctype_dup(bf->target_type);
                 if (self_cty == NULL) {
@@ -13044,16 +13089,17 @@ static bool cg_ensure_witness_instance(
             }
         } else {
             if (cg_type_kind_is_scalar_builtin(subject_kind)) {
-                const char *field_name = NULL;
-                if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
+                if (!cg_emit_scalar_subject_load(cg,
+                                                fd,
+                                                subject_kind,
+                                                scalar_subject_storage,
+                                                blame,
+                                                "_self_value")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+                    return false;
                 }
-                buf_append_fmt(fd,
-                    "    return %s(((const struct FengScalarBox *)_subject)->payload.%s",
-                    fm->c_name,
-                    field_name);
+                buf_append_fmt(fd, "    return %s(_self_value", fm->c_name);
             } else {
                 char *self_cty = cg_ctype_dup(bf->target_type);
                 if (self_cty == NULL) {
@@ -13116,9 +13162,15 @@ static bool cg_ensure_witness_instance_for_subject_key(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
     const UserSpec *s,
+    FengSpecObjectSubjectStorageKind scalar_subject_storage,
     FengToken blame,
     const char **out_var) {
-    return cg_ensure_witness_instance(cg, subject_key, s, blame, out_var);
+    return cg_ensure_witness_instance(cg,
+                                      subject_key,
+                                      s,
+                                      scalar_subject_storage,
+                                      blame,
+                                      out_var);
 }
 
 /* Ensure a witness table for (T, S) has been materialised in fn_protos /

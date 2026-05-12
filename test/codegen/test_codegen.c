@@ -731,6 +731,10 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(count_substr(out.c_source, "__twice_only_scalar(") >= 3U);
     ASSERT(strstr(out.c_source, "twice_only_scalar_box") == NULL);
     ASSERT(strstr(out.c_source, "subject_") != NULL);
+    ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") != NULL);
+    ASSERT(strstr(out.c_source, "_self_value = ((const struct FengScalarBox *)_subject)->payload.i32;") != NULL);
+    ASSERT(strstr(out.c_source, "__twice_only_scalar(((const struct FengScalarBox *)_subject)->payload.i32") == NULL);
+    ASSERT(strstr(out.c_source, "__twice_only_scalar(*(const int32_t *)_subject") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
