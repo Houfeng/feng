@@ -387,7 +387,8 @@ struct FengScalarBox {
 - [x] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 - [x] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
 - [x] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。
-- [ ] D15：新增 IR/代码形态检查：`Set<int>` direct-call 路径不得出现运行时装箱与运行时查表。
+- [x] D15：新增 IR/代码形态检查：`Set<int>` direct-call 路径不得出现运行时装箱与运行时查表。
+    D15 形态锚点：`use_it` 仅调用实例化 wrapper（如 `Set__G__int__put/get`），并且生成 C 中不得出现 `feng_scalar_box_new_*`、`FengSpecThunk__`、`FengSpecSlotWitness__`、`witness->`。
 - [ ] D16：统一整理性能约束检查清单（direct-call/spec-call/泛型）并纳入 CI 回归脚本。
 
 **验收**：

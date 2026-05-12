@@ -2016,8 +2016,12 @@ static void test_generic_scalar_instance_direct_call_codegen(void) {
     ASSERT(strstr(out.c_source, "const void *_p_next") != NULL);
     ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32") != NULL);
     ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32(_l_set_0") != NULL);
-    ASSERT(strstr(out.c_source, "feng_scalar_box_new_i32") == NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__get__from__void(_l_set_0") != NULL);
+    ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
     ASSERT(strstr(out.c_source, "struct FengScalarBox *_sb") == NULL);
+    ASSERT(strstr(out.c_source, "FengSpecThunk__") == NULL);
+    ASSERT(strstr(out.c_source, "FengSpecSlotWitness__") == NULL);
+    ASSERT(strstr(out.c_source, "witness->") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
