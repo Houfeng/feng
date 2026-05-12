@@ -849,6 +849,110 @@ static void test_generic_fit_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.fit_target_nodes;\n"
+        "\n"
+        "pu spec Label { fn label(): string; }\n"
+        "pu fit int: Label {\n"
+        "    pu fn label(): string { return \"i32\"; }\n"
+        "}\n"
+        "pu fit string: Label {\n"
+        "    pu fn label(): string { return self; }\n"
+        "}\n"
+        "pu fit int[]: Label {\n"
+        "    pu fn label(): string { return \"arr_ro\"; }\n"
+        "}\n"
+        "pu fit int[]!: Label {\n"
+        "    pu fn label(): string { return \"arr_rw\"; }\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die("fit_target_nodes.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    size_t fit_index = 0U;
+    size_t saw_i32 = 0U;
+    size_t saw_string = 0U;
+    size_t saw_arr_ro = 0U;
+    size_t saw_arr_rw = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("fit_target_nodes");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_fit_count(module) == 4U);
+
+    for (fit_index = 0U; fit_index < feng_symbol_module_fit_count(module); ++fit_index) {
+        const FengSymbolFitView *fit_view = feng_symbol_module_fit_at(module, fit_index);
+        const FengSymbolDeclView *fit_decl = feng_symbol_fit_decl(fit_view);
+        const FengSymbolTypeView *target_type = feng_symbol_decl_fit_target(fit_decl);
+
+        ASSERT(fit_decl != NULL);
+        ASSERT(feng_symbol_decl_kind(fit_decl) == FENG_SYMBOL_DECL_KIND_FIT);
+        ASSERT(target_type != NULL);
+
+        if (feng_symbol_type_kind(target_type) == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
+            FengSlice builtin = feng_symbol_type_builtin_name(target_type);
+            if (slice_equals_cstr(builtin, "i32")) {
+                saw_i32++;
+            } else if (slice_equals_cstr(builtin, "string")) {
+                saw_string++;
+            } else {
+                ASSERT(false);
+            }
+            continue;
+        }
+
+        ASSERT(feng_symbol_type_kind(target_type) == FENG_SYMBOL_TYPE_KIND_ARRAY);
+        ASSERT(feng_symbol_type_array_rank(target_type) == 1U);
+        {
+            const FengSymbolTypeView *elem = feng_symbol_type_inner(target_type);
+            ASSERT(elem != NULL);
+            ASSERT(feng_symbol_type_kind(elem) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
+            ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(elem), "i32"));
+        }
+        if (feng_symbol_type_array_layer_writable(target_type, 0U)) {
+            saw_arr_rw++;
+        } else {
+            saw_arr_ro++;
+        }
+    }
+
+    ASSERT(saw_i32 == 1U);
+    ASSERT(saw_string == 1U);
+    ASSERT(saw_arr_ro == 1U);
+    ASSERT(saw_arr_rw == 1U);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     test_roundtrip_public_module();
     test_roundtrip_public_module_docs();
@@ -861,6 +965,7 @@ int main(void) {
     test_generic_function_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
+    test_fit_builtin_and_array_target_nodes_ft_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

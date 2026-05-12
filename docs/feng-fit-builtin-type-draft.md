@@ -100,6 +100,7 @@ fit *byte {
 - 编译器必须在孤儿适配导出判定中把内建类型目标视为外部类型；因此当目标 `spec` 在当前包外时, `pu fit` 必须移除导出, 当目标 `spec` 在当前包内时则允许公开导出关系声明。
 - 编译器必须按 [feng-symbol-table.md](./feng-symbol-table.md) 的既有类型节点规则导出内建类型 fit 目标: 标量与 `string` 使用 BUILTIN type node, 数组目标使用 ARRAY type node。不得把数组 fit target 错导为 builtin type node, 也不得把任何内建 fit target 错导为普通 named type。
 - 编译器在数组 fit target 的 subject key 构建与 sidecar 查找中, 必须使用结构化数组键（元素类型结构、数组层级 rank、逐层可写位图）进行比较；不得退化为拍平文本比较或 AST 指针比较。
+- 编译器导出 `fit T[]` / `fit T[]!` 的符号类型节点时, 必须保留 ARRAY 节点的元素类型引用与逐层可写位图；读取 `.ft` 后该信息必须可无损还原。
 
 ## 6 运行时
 
