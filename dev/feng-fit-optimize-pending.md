@@ -383,7 +383,7 @@ struct FengScalarBox {
 - [x] D8：对 `string` / 数组：只做一次现有引用表示取指针。
 - [x] D9：thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
 - [x] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。
-- [ ] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
+- [x] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
 - [x] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 - [ ] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
 - [ ] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。

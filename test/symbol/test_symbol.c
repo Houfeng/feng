@@ -953,6 +953,87 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+static void test_fit_array_type_param_target_ft_roundtrip(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.fit_array_type_param_target;\n"
+        "\n"
+        "pu spec ArrTag<T> { fn count(): int; }\n"
+        "pu fit T[]!: ArrTag<T> {\n"
+        "    pu fn count(): int { return 0; }\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die("fit_array_type_param_target.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolFitView *fit_view = NULL;
+    const FengSymbolDeclView *fit_decl = NULL;
+    const FengSymbolTypeView *target_type = NULL;
+    const FengSymbolTypeView *target_element = NULL;
+    const FengSymbolTypeView *spec_type = NULL;
+    const FengSymbolTypeView *spec_arg = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("fit_array_type_param_target");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_fit_count(module) == 1U);
+
+    fit_view = feng_symbol_module_fit_at(module, 0U);
+    ASSERT(fit_view != NULL);
+    fit_decl = feng_symbol_fit_decl(fit_view);
+    ASSERT(fit_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(fit_decl) == FENG_SYMBOL_DECL_KIND_FIT);
+
+    target_type = feng_symbol_decl_fit_target(fit_decl);
+    ASSERT(target_type != NULL);
+    ASSERT(feng_symbol_type_kind(target_type) == FENG_SYMBOL_TYPE_KIND_ARRAY);
+    ASSERT(feng_symbol_type_array_rank(target_type) == 1U);
+    ASSERT(feng_symbol_type_array_layer_writable(target_type, 0U));
+    target_element = feng_symbol_type_inner(target_type);
+    ASSERT(target_element != NULL);
+    ASSERT(feng_symbol_type_kind(target_element) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(target_element), "T"));
+
+    ASSERT(feng_symbol_decl_declared_spec_count(fit_decl) == 1U);
+    spec_type = feng_symbol_decl_declared_spec_at(fit_decl, 0U);
+    ASSERT(spec_type != NULL);
+    ASSERT(feng_symbol_type_kind(spec_type) == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(spec_type) == 1U);
+    spec_arg = feng_symbol_type_generic_arg_at(spec_type, 0U);
+    ASSERT(spec_arg != NULL);
+    ASSERT(feng_symbol_type_kind(spec_arg) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(spec_arg), "T"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     test_roundtrip_public_module();
     test_roundtrip_public_module_docs();
@@ -966,6 +1047,7 @@ int main(void) {
     test_generic_type_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();
+    test_fit_array_type_param_target_ft_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

@@ -1485,6 +1485,38 @@ static const FengDecl *find_local_source_type_decl(const BuildContext *ctx,
     return NULL;
 }
 
+/* For `fit T[]` / `fit T[]!` targets, infer the fit-local array element type
+ * parameter name when the element is a single unresolved non-builtin name. */
+static bool infer_fit_array_target_type_param_name(const BuildContext *ctx,
+                                                   const FengTypeRef *target_ref,
+                                                   FengSlice *out_name) {
+    const FengTypeRef *cursor = target_ref;
+    bool has_array_layer = false;
+
+    if (ctx == NULL || target_ref == NULL || out_name == NULL) {
+        return false;
+    }
+    while (cursor != NULL && cursor->kind == FENG_TYPE_REF_ARRAY) {
+        has_array_layer = true;
+        cursor = cursor->as.inner;
+    }
+    if (!has_array_layer || cursor == NULL || cursor->kind != FENG_TYPE_REF_NAMED) {
+        return false;
+    }
+    if (cursor->as.named.segment_count != 1U || cursor->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    if (canonical_builtin_name(cursor->as.named.segments[0]) != NULL) {
+        return false;
+    }
+    if (find_local_type_like_decl(ctx, cursor) != NULL) {
+        return false;
+    }
+
+    *out_name = cursor->as.named.segments[0];
+    return true;
+}
+
 static bool relation_exists(const FengSymbolModuleGraph *graph,
                             FengSymbolRelationKind kind,
                             const FengSymbolDeclView *left,
@@ -2163,12 +2195,25 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             char *name = fit_display_name(source_decl->as.fit_decl.target);
             const FengDecl *fit_target_source = find_local_source_type_decl(ctx,
                                                                             source_decl->as.fit_decl.target);
+            FengTypeParam inferred_fit_target_type_param = {0};
+            FengSlice inferred_fit_target_type_param_name = {0};
             const FengTypeParam *fit_type_params = fit_target_source != NULL
                 ? fit_target_source->as.type_decl.type_params
                 : NULL;
             size_t fit_type_param_count = fit_target_source != NULL
                 ? fit_target_source->as.type_decl.type_param_count
                 : 0U;
+
+            if (fit_type_param_count == 0U &&
+                infer_fit_array_target_type_param_name(ctx,
+                                                       source_decl->as.fit_decl.target,
+                                                       &inferred_fit_target_type_param_name)) {
+                inferred_fit_target_type_param.token = source_decl->token;
+                inferred_fit_target_type_param.name = inferred_fit_target_type_param_name;
+                inferred_fit_target_type_param.constraint = NULL;
+                fit_type_params = &inferred_fit_target_type_param;
+                fit_type_param_count = 1U;
+            }
             if (name == NULL) {
                 feng_symbol_internal_set_error(out_error, path, source_decl->token, "out of memory building fit name");
                 return NULL;
