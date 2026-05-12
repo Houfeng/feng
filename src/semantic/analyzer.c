@@ -8519,6 +8519,35 @@ static bool evaluate_constant_expr(ResolveContext *context,
     return evaluate_constant_expr_inner(context, expr, out, NULL);
 }
 
+static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengExpr *expr) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+            return true;
+
+        case FENG_EXPR_UNARY:
+            return expr_is_pure_numeric_literal_expr_for_target_adaptation(
+                expr->as.unary.operand);
+
+        case FENG_EXPR_BINARY:
+            return expr_is_pure_numeric_literal_expr_for_target_adaptation(
+                       expr->as.binary.left) &&
+                   expr_is_pure_numeric_literal_expr_for_target_adaptation(
+                       expr->as.binary.right);
+
+        case FENG_EXPR_CAST:
+            return expr_is_pure_numeric_literal_expr_for_target_adaptation(
+                expr->as.cast.value);
+
+        default:
+            return false;
+    }
+}
+
 /* Numeric literal adaptation: an integer/float literal may be implicitly retyped to any
  * compatible numeric target type, subject to compile-time range checks. This realises the
  * "如需其他精度或宽度，必须显式标注类型" contract from docs/feng-builtin-type.md §16-§17,
@@ -8528,18 +8557,24 @@ static bool numeric_literal_adapts_to_target(ResolveContext *context,
                                              const FengTypeRef *target) {
     const char *canonical_target = type_ref_builtin_canonical_name(target);
     FengConstValue value;
+    bool target_is_float;
 
     if (canonical_target == NULL) {
         return false;
     }
+    target_is_float = strcmp(canonical_target, "f32") == 0 ||
+                      strcmp(canonical_target, "f64") == 0;
     if (!evaluate_constant_expr(context, expr, &value)) {
         return false;
     }
     if (value.kind == FENG_CONST_INT) {
+        if (target_is_float) {
+            return true;
+        }
         return integer_literal_fits_canonical_target(value.i, canonical_target);
     }
     if (value.kind == FENG_CONST_FLOAT) {
-        return strcmp(canonical_target, "f32") == 0 || strcmp(canonical_target, "f64") == 0;
+        return target_is_float;
     }
     return false;
 }
@@ -8576,7 +8611,8 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
         FengConstValue value;
         size_t errors_before = *context->error_count;
 
-        if (evaluate_constant_expr(context, expr, &value) &&
+        if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr) &&
+            evaluate_constant_expr(context, expr, &value) &&
             (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
             return numeric_literal_adapts_to_target(context, expr, expected_type_ref);
         }

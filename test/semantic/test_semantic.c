@@ -4022,7 +4022,7 @@ static void test_const_fold_cast_truncation_then_target_check(void) {
     feng_program_free(program);
 }
 
-static void test_const_fold_propagates_immutable_local_binding(void) {
+static void test_const_fold_immutable_local_binding_requires_explicit_cast(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
@@ -4035,10 +4035,10 @@ static void test_const_fold_propagates_immutable_local_binding(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -5119,6 +5119,218 @@ static void test_numeric_literal_overflows_default_int_target(void) {
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_integer_adapts_to_explicit_float_targets(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: f32 = 1;\n"
+        "    let b: f64 = 1;\n"
+        "    let c: float = 1;\n"
+        "    let d: double = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_int_to_float_targets_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_numeric_float_literal_to_integer_target_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let a: int = 1.0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_float_literal_to_int_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_typed_numeric_binding_requires_explicit_conversion_on_let_assignment(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let x: int = 1;\n"
+        "    let y: f64 = x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("typed_numeric_binding_to_float_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'f64'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_numeric_literal_argument_adapts_to_float_targets(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    var value: f64;\n"
+        "    fn Box(v: f64) { self.value = v; }\n"
+        "    fn set(v: f64): void { self.value = v; }\n"
+        "}\n"
+        "fn takes(v: f64): void {}\n"
+        "fn run(): void {\n"
+        "    let b = Box(1);\n"
+        "    b.set(1);\n"
+        "    takes(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_argument_to_float_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_typed_numeric_argument_requires_explicit_conversion_for_float_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn takes(v: f64): void {}\n"
+        "fn run(): void {\n"
+        "    let x: int = 1;\n"
+        "    takes(x);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("typed_numeric_argument_to_float_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "has no overload accepting 1 argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_member_assignment_numeric_literal_adapts_to_float_field(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    var value: f64;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    var box = Box { value: 1 };\n"
+        "    box.value = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("member_assign_numeric_literal_to_float_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_member_assignment_typed_numeric_binding_requires_explicit_conversion(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Box {\n"
+        "    var value: f64;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    var box = Box { value: 1 };\n"
+        "    let x: int = 1;\n"
+        "    box.value = x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("member_assign_typed_numeric_to_float_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'f64'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_numeric_constant_expression_adapts_to_float_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let x: f64 = 100 + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_const_expr_to_float_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_numeric_expression_with_identifier_requires_explicit_conversion(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let base: int = 100;\n"
+        "    let x: f64 = base + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_expr_with_identifier_to_float_rejected.f",
+                                                 source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'f64'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -9902,7 +10114,7 @@ int main(void) {
     test_const_fold_i64_overflow_rejected();
     test_const_fold_shift_amount_via_const_expr();
     test_const_fold_cast_truncation_then_target_check();
-    test_const_fold_propagates_immutable_local_binding();
+    test_const_fold_immutable_local_binding_requires_explicit_cast();
     test_const_fold_does_not_propagate_var_binding();
     test_if_expression_rejects_non_bool_condition();
     test_if_expression_requires_matching_branch_types();
@@ -9942,6 +10154,15 @@ int main(void) {
     test_numeric_literal_overflowing_target_is_rejected();
     test_numeric_literal_negative_to_unsigned_target_is_rejected();
     test_numeric_literal_overflows_default_int_target();
+    test_numeric_literal_integer_adapts_to_explicit_float_targets();
+    test_numeric_float_literal_to_integer_target_is_rejected();
+    test_typed_numeric_binding_requires_explicit_conversion_on_let_assignment();
+    test_numeric_literal_argument_adapts_to_float_targets();
+    test_typed_numeric_argument_requires_explicit_conversion_for_float_parameter();
+    test_member_assignment_numeric_literal_adapts_to_float_field();
+    test_member_assignment_typed_numeric_binding_requires_explicit_conversion();
+    test_numeric_constant_expression_adapts_to_float_target();
+    test_numeric_expression_with_identifier_requires_explicit_conversion();
     test_object_literal_reports_unknown_field();
     test_object_literal_requires_object_type_target();
     test_object_literal_accepts_constructor_call_target();
