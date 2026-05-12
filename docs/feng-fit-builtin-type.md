@@ -5,7 +5,7 @@
 > `fit` 的通用语法、通用语义、通用冲突判定、通用可见性、导出与孤儿适配规则统一见 [feng-fit.md](./feng-fit.md)。
 > 内建类型本体语义统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
 > 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。
-> 开发指导见 [dev/feng-fit-optimize-pending.md](../dev/feng-fit-optimize-pending.md)。
+> 开发指导见 [dev/feng-fit-optimize-delivered.md](../dev/feng-fit-optimize-delivered.md)。
 ## 1 职责
 
 - 定义哪些内建类型可以作为 `fit` 左侧目标。

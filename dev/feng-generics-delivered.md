@@ -4,7 +4,7 @@
 > 语言规范权威来源：[docs/feng-generics-draft.md](../docs/feng-generics-draft.md)
 > 符号表规范权威来源：[docs/feng-symbol-table.md](../docs/feng-symbol-table.md)
 > 前置任务（Phase 5.5 符号表重构）见 [dev/feng-plan.md](./feng-plan.md)。
-> **当前阶段优先级调整（2026-05-08）**：暂停 [dev/feng-fit-optimize-pending.md](./feng-fit-optimize-pending.md) 中的“fit 值类型”推进，先把泛型本身补齐到可支撑标准库 `Map`、约束调用、值类型与各类契约场景的完整状态；fit 值类型工作在泛型完整后继续。
+> **当前阶段优先级调整（2026-05-08）**：暂停 [dev/feng-fit-optimize-delivered.md](./feng-fit-optimize-delivered.md) 中的“fit 值类型”推进，先把泛型本身补齐到可支撑标准库 `Map`、约束调用、值类型与各类契约场景的完整状态；fit 值类型工作在泛型完整后继续。
 
 ---
 
