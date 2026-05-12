@@ -165,6 +165,55 @@ static size_t count_substr(const char *haystack, const char *needle) {
     return count;
 }
 
+static void assert_builtin_subject_thunks_direct_fit_call(const char *c_source) {
+    const char *cursor = c_source;
+    size_t checked = 0U;
+
+    while ((cursor = strstr(cursor, "static ")) != NULL) {
+        const char *name = strstr(cursor, "FengSpecThunk__");
+        const char *open = strchr(cursor, '{');
+        const char *close = NULL;
+        const char *subject_marker = NULL;
+
+        if (name == NULL || (open != NULL && name > open)) {
+            cursor += 7;
+            continue;
+        }
+        subject_marker = strstr(name, "__subject_");
+        if (subject_marker == NULL || (open != NULL && subject_marker > open)) {
+            cursor += 7;
+            continue;
+        }
+        if (open == NULL) {
+            break;
+        }
+        close = strstr(open, "\n}\n\n");
+        ASSERT(close != NULL);
+
+        size_t body_len = (size_t)(close - open);
+        char *body = (char *)malloc(body_len + 1U);
+        ASSERT(body != NULL);
+        memcpy(body, open, body_len);
+        body[body_len] = '\0';
+
+        if (strstr(body, "_self_value") == NULL && strstr(body, "_self_ref") == NULL) {
+            free(body);
+            cursor = close + 1;
+            continue;
+        }
+
+        ASSERT(strstr(body, "FengFitBuiltin_") != NULL);
+        ASSERT(strstr(body, "witness->") == NULL);
+        ASSERT(strstr(body, "FengSpecThunk__") == NULL);
+
+        free(body);
+        checked++;
+        cursor = close + 1;
+    }
+
+    ASSERT(checked > 0U);
+}
+
 static void test_multi_file_bin(void) {
     FengProgram *prog_a = parse_or_die(kSourceA, "tests/mfa.ff");
     FengProgram *prog_b = parse_or_die(kSourceB, "tests/mfb.ff");
@@ -747,6 +796,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(strstr(out.c_source, "_self_ref = (FengString *)_subject;") != NULL);
     ASSERT(strstr(out.c_source, "__name((FengArray *)_subject") == NULL);
     ASSERT(strstr(out.c_source, "__name((FengString *)_subject") == NULL);
+    assert_builtin_subject_thunks_direct_fit_call(out.c_source);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
