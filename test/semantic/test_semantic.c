@@ -5190,6 +5190,52 @@ static void test_typed_numeric_binding_requires_explicit_conversion_on_let_assig
     feng_program_free(program);
 }
 
+static void test_numeric_literal_adapts_to_float_targets_on_var_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    var a: f32 = 1;\n"
+        "    var b: f64 = 1;\n"
+        "    var c: f64 = 100 + 50;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("numeric_literal_var_binding_to_float_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_typed_numeric_binding_requires_explicit_conversion_on_var_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    let x: int = 1;\n"
+        "    var y: f64 = x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("typed_numeric_var_binding_to_float_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'f64'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_numeric_literal_argument_adapts_to_float_targets(void) {
     const char *source =
         "mod demo.main;\n"
@@ -10157,6 +10203,8 @@ int main(void) {
     test_numeric_literal_integer_adapts_to_explicit_float_targets();
     test_numeric_float_literal_to_integer_target_is_rejected();
     test_typed_numeric_binding_requires_explicit_conversion_on_let_assignment();
+    test_numeric_literal_adapts_to_float_targets_on_var_binding();
+    test_typed_numeric_binding_requires_explicit_conversion_on_var_binding();
     test_numeric_literal_argument_adapts_to_float_targets();
     test_typed_numeric_argument_requires_explicit_conversion_for_float_parameter();
     test_member_assignment_numeric_literal_adapts_to_float_field();
