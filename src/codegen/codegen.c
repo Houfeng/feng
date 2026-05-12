@@ -12541,6 +12541,27 @@ static bool cg_emit_scalar_subject_load(CG *cg,
     return cg_fail(cg, blame, "codegen: invalid scalar subject storage kind");
 }
 
+static bool cg_emit_ref_subject_load(CG *cg,
+                                     Buf *out,
+                                     const CGType *target_type,
+                                     FengToken blame,
+                                     const char *value_name) {
+    if (cg == NULL || out == NULL || target_type == NULL || value_name == NULL) {
+        return false;
+    }
+    char *self_cty = cg_ctype_dup(target_type);
+    if (self_cty == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    buf_append_fmt(out,
+                   "    %s %s = (%s)_subject;\n",
+                   self_cty,
+                   value_name,
+                   self_cty);
+    free(self_cty);
+    return true;
+}
+
 static bool cg_user_spec_member_compatible(const UserSpecMember *src,
                                            const UserSpecMember *dst) {
     if (src == NULL || dst == NULL || src->kind != dst->kind) {
@@ -13015,14 +13036,16 @@ static bool cg_ensure_witness_instance(
                 }
                 buf_append_fmt(fd, "    _ret = %s(_self_value", fm->c_name);
             } else {
-                char *self_cty = cg_ctype_dup(bf->target_type);
-                if (self_cty == NULL) {
+                if (!cg_emit_ref_subject_load(cg,
+                                              fd,
+                                              bf->target_type,
+                                              blame,
+                                              "_self_ref")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: out of memory");
+                    return false;
                 }
-                buf_append_fmt(fd, "    _ret = %s((%s)_subject", fm->c_name, self_cty);
-                free(self_cty);
+                buf_append_fmt(fd, "    _ret = %s(_self_ref", fm->c_name);
             }
             for (size_t pi = 0; pi < sm->param_count; ++pi) {
                 char pname[32];
@@ -13078,14 +13101,16 @@ static bool cg_ensure_witness_instance(
                 }
                 buf_append_fmt(fd, "    %s(_self_value", fm->c_name);
             } else {
-                char *self_cty = cg_ctype_dup(bf->target_type);
-                if (self_cty == NULL) {
+                if (!cg_emit_ref_subject_load(cg,
+                                              fd,
+                                              bf->target_type,
+                                              blame,
+                                              "_self_ref")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: out of memory");
+                    return false;
                 }
-                buf_append_fmt(fd, "    %s((%s)_subject", fm->c_name, self_cty);
-                free(self_cty);
+                buf_append_fmt(fd, "    %s(_self_ref", fm->c_name);
             }
         } else {
             if (cg_type_kind_is_scalar_builtin(subject_kind)) {
@@ -13101,14 +13126,16 @@ static bool cg_ensure_witness_instance(
                 }
                 buf_append_fmt(fd, "    return %s(_self_value", fm->c_name);
             } else {
-                char *self_cty = cg_ctype_dup(bf->target_type);
-                if (self_cty == NULL) {
+                if (!cg_emit_ref_subject_load(cg,
+                                              fd,
+                                              bf->target_type,
+                                              blame,
+                                              "_self_ref")) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: out of memory");
+                    return false;
                 }
-                buf_append_fmt(fd, "    return %s((%s)_subject", fm->c_name, self_cty);
-                free(self_cty);
+                buf_append_fmt(fd, "    return %s(_self_ref", fm->c_name);
             }
         }
         for (size_t pi = 0; pi < sm->param_count; ++pi) {

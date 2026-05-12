@@ -654,6 +654,11 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "        return self + self;\n"
         "    }\n"
         "}\n"
+        "fit string: Named {\n"
+        "    fn name(): string {\n"
+        "        return self;\n"
+        "    }\n"
+        "}\n"
         "fit int[]: Named {\n"
         "    fn name(): string {\n"
         "        return \"arr\";\n"
@@ -677,13 +682,16 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    let s1: Named = (7);\n"
         "    let s2: Named = xs;\n"
         "    let s4: Named = u;\n"
+        "    let s5: Named = \"str\";\n"
         "    let s3: Named = make_scalar_named();\n"
         "    let a: string = s1.name();\n"
         "    let b: string = s2.name();\n"
         "    let h: string = s4.name();\n"
+        "    let i: string = s5.name();\n"
         "    let e: string = s3.name();\n"
         "    let c: string = call_name(s1);\n"
         "    let d: string = call_name(s2);\n"
+        "    let g: string = call_name((\"inline\"));\n"
         "    let f: string = call_name((9));\n"
         "    let t1: int = call_twice_direct(5);\n"
         "    let t2: int = call_twice_spec((5));\n"
@@ -735,6 +743,10 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(strstr(out.c_source, "_self_value = ((const struct FengScalarBox *)_subject)->payload.i32;") != NULL);
     ASSERT(strstr(out.c_source, "__twice_only_scalar(((const struct FengScalarBox *)_subject)->payload.i32") == NULL);
     ASSERT(strstr(out.c_source, "__twice_only_scalar(*(const int32_t *)_subject") == NULL);
+    ASSERT(strstr(out.c_source, "_self_ref = (FengArray *)_subject;") != NULL);
+    ASSERT(strstr(out.c_source, "_self_ref = (FengString *)_subject;") != NULL);
+    ASSERT(strstr(out.c_source, "__name((FengArray *)_subject") == NULL);
+    ASSERT(strstr(out.c_source, "__name((FengString *)_subject") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
