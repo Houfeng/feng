@@ -386,7 +386,7 @@ struct FengScalarBox {
 - [x] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
 - [x] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 - [x] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
-- [ ] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。
+- [x] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。
 - [ ] D15：新增 IR/代码形态检查：`Set<int>` direct-call 路径不得出现运行时装箱与运行时查表。
 - [ ] D16：统一整理性能约束检查清单（direct-call/spec-call/泛型）并纳入 CI 回归脚本。
 

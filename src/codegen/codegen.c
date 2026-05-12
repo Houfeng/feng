@@ -910,6 +910,24 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
 static bool cg_emit_field_release(CG *cg, Buf *td, const char *field_name,
                                   const CGType *t, FengToken blame);
 
+static const char *cg_builtin_canonical_name_for_kind(CGTypeKind kind) {
+    switch (kind) {
+        case CG_TYPE_BOOL: return "bool";
+        case CG_TYPE_I8: return "i8";
+        case CG_TYPE_I16: return "i16";
+        case CG_TYPE_I32: return "i32";
+        case CG_TYPE_I64: return "i64";
+        case CG_TYPE_U8: return "u8";
+        case CG_TYPE_U16: return "u16";
+        case CG_TYPE_U32: return "u32";
+        case CG_TYPE_U64: return "u64";
+        case CG_TYPE_F32: return "f32";
+        case CG_TYPE_F64: return "f64";
+        case CG_TYPE_STRING: return "string";
+        default: return NULL;
+    }
+}
+
 /* ===================== error helpers ===================== */
 
 static char *cg_vformat(const char *fmt, va_list ap) {
@@ -11498,7 +11516,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             if (!cg_ensure_witness_instance(cg,
                                             &subject_key,
                                             constraint_spec,
-                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
                                             *tok,
                                             &witness_var)) {
                 buf_free(&b);
@@ -11513,6 +11531,31 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             const char *witness_var = NULL;
             if (!cg_ensure_spec_slot_witness(cg, t->user_spec, constraint_spec,
                                              *tok, &witness_var)) {
+                buf_free(&b);
+                return false;
+            }
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "&%s", witness_var);
+            owned_witness_expr = wb.data;
+            witness_expr = owned_witness_expr;
+        } else if (t) {
+            const char *builtin_name =
+                cg_builtin_canonical_name_for_kind(t->kind);
+            if (builtin_name == NULL) {
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, matching outer generic parameter, or concrete builtin type");
+            }
+
+            const char *witness_var = NULL;
+            FengSemanticSubjectKey subject_key =
+                feng_semantic_subject_key_for_builtin(builtin_name);
+            if (!cg_ensure_witness_instance(cg,
+                                            &subject_key,
+                                            constraint_spec,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
+                                            *tok,
+                                            &witness_var)) {
                 buf_free(&b);
                 return false;
             }
@@ -12463,6 +12506,10 @@ static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
     if (fit == NULL || spec == NULL) return false;
     for (size_t i = 0; i < fit->spec_count; ++i) {
         if (fit->specs[i] == spec) return true;
+        if (fit->specs[i] != NULL && fit->specs[i]->decl != NULL &&
+            spec->decl != NULL && fit->specs[i]->decl == spec->decl) {
+            return true;
+        }
     }
     return false;
 }
@@ -12471,6 +12518,10 @@ static bool cg_builtin_fit_targets_spec(const BuiltinFit *fit, const UserSpec *s
     if (fit == NULL || spec == NULL) return false;
     for (size_t i = 0; i < fit->spec_count; ++i) {
         if (fit->specs[i] == spec) return true;
+        if (fit->specs[i] != NULL && fit->specs[i]->decl != NULL &&
+            spec->decl != NULL && fit->specs[i]->decl == spec->decl) {
+            return true;
+        }
     }
     return false;
 }
@@ -12982,6 +13033,36 @@ static bool cg_ensure_witness_instance(
         }
 
         const BuiltinFit *bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
+        const UserMethod *fm = NULL;
+        if (bf != NULL) {
+            fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
+            if (fm == NULL) {
+                fm = cg_builtin_fit_method(bf, sm->feng_name,
+                                           strlen(sm->feng_name));
+            }
+        }
+        if (bf == NULL) {
+            for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
+                const BuiltinFit *candidate = &cg->builtin_fits[bi];
+                if (candidate->target_type == NULL ||
+                    candidate->target_type->kind != subject_kind ||
+                    !cg_builtin_fit_targets_spec(candidate, s)) {
+                    continue;
+                }
+                const UserMethod *candidate_method =
+                    cg_builtin_fit_method_by_member(candidate, wm->impl_member);
+                if (candidate_method == NULL) {
+                    candidate_method = cg_builtin_fit_method(candidate,
+                                                            sm->feng_name,
+                                                            strlen(sm->feng_name));
+                }
+                if (candidate_method != NULL) {
+                    bf = candidate;
+                    fm = candidate_method;
+                    break;
+                }
+            }
+        }
         if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) || bf->target_type == NULL ||
             bf->target_type->kind != subject_kind) {
             buf_free(&prefix);
@@ -12990,7 +13071,6 @@ static bool cg_ensure_witness_instance(
                 "codegen: fit implementation does not match object-form spec coercion source");
         }
 
-        const UserMethod *fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
         if (fm == NULL) {
             buf_free(&prefix);
             free(s_san);

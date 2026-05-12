@@ -81,6 +81,20 @@ fn set_entities_two() {
   check((a == 13) || (b == 13), "set/entities-has-13");
 }
 
+fn set_int_direct_call() {
+  let h: Hashable<i32> = 7;
+  check(h.same(7), "set/int-hashable-same");
+  let s = Set:<int>();
+  s.add(7);
+  s.add(13);
+  check(s.count() == 2, "set/int-count-2");
+  let ents = s.entries();
+  let a = ents[0];
+  let b = ents[1];
+  check((a == 7) || (b == 7), "set/int-entries-has-7");
+  check((a == 13) || (b == 13), "set/int-entries-has-13");
+}
+
 pu fn run_set_tests() {
   set_add_has();
   set_has_false();
@@ -90,4 +104,5 @@ pu fn run_set_tests() {
   set_multiple_elements();
   set_count();
   set_entities_two();
+  set_int_direct_call();
 }

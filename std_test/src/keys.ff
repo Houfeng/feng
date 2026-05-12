@@ -17,3 +17,13 @@ pu type IntKey: Hashable<IntKey> {
     return self.value == other.value;
   }
 }
+
+fit i32: Hashable<i32> {
+  fn hash(): u64 {
+    return (u64)self;
+  }
+
+  fn same(other: i32): bool {
+    return self == other;
+  }
+}
