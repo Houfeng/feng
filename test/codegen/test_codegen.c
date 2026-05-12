@@ -1973,6 +1973,60 @@ static void test_generic_type_generic_method_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericScalarInstanceDirectCallSrc =
+    "mod feng.codegen.gd13;\n"
+    "type Set<T> {\n"
+    "    var value: T;\n"
+    "    fn put(next: T) {\n"
+    "        self.value = next;\n"
+    "    }\n"
+    "    fn get(): T {\n"
+    "        return self.value;\n"
+    "    }\n"
+    "}\n"
+    "fn use_it(): int {\n"
+    "    let set: Set<int> = Set:<int>();\n"
+    "    set.put(7);\n"
+    "    return set.get();\n"
+    "}\n";
+
+static void test_generic_scalar_instance_direct_call_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericScalarInstanceDirectCallSrc, "gd13.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (D13 generic scalar instance direct-call): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengGenericMethod__feng__codegen__gd13__Set__i0__put") != NULL);
+    ASSERT(strstr(out.c_source, "const void *_p_next") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32(_l_set_0") != NULL);
+    ASSERT(strstr(out.c_source, "feng_scalar_box_new_i32") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengScalarBox *_sb") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kPhaseEAggregateGenericArgThreeEntrancesSrc =
     "mod feng.codegen.ge1;\n"
     "spec Named {\n"
@@ -2075,6 +2129,7 @@ int main(void) {
     test_match_expr_aggregate_result_codegen();
     test_generic_aggregate_return_codegen();
     test_generic_type_generic_method_codegen();
+    test_generic_scalar_instance_direct_call_codegen();
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
