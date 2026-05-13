@@ -4,4 +4,5 @@ fn main(args: string[]) {
   run_map_tests();
   run_set_tests();
   run_list_tests();
+  run_length_tests();
 }

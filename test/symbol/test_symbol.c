@@ -133,6 +133,52 @@ static void export_public_source_or_die(const char *path,
     feng_program_free(program);
 }
 
+static void export_public_sources_or_die(const char *const *paths,
+                                         const char *const *sources,
+                                         size_t source_count,
+                                         const char *public_root) {
+    FengProgram **programs = NULL;
+    const FengProgram **program_views = NULL;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSymbolError error = {0};
+    FengSymbolExportOptions options = {0};
+    size_t index;
+
+    ASSERT(source_count > 0U);
+    programs = (FengProgram **)calloc(source_count, sizeof(*programs));
+    program_views = (const FengProgram **)calloc(source_count, sizeof(*program_views));
+    ASSERT(programs != NULL);
+    ASSERT(program_views != NULL);
+
+    for (index = 0U; index < source_count; ++index) {
+        programs[index] = parse_or_die(paths[index], sources[index]);
+        program_views[index] = programs[index];
+    }
+
+    ASSERT(feng_semantic_analyze(program_views,
+                                 source_count,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    options.public_root = public_root;
+    options.emit_docs = true;
+    ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    for (index = 0U; index < source_count; ++index) {
+        feng_program_free(programs[index]);
+    }
+    free(program_views);
+    free(programs);
+}
+
 static void write_bundle_with_file_or_die(const char *bundle_path,
                                           const char *entry_path,
                                           const char *source_path) {
@@ -625,6 +671,155 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
     free(tmp_dir);
 }
 
+static void test_imported_module_cache_keeps_bundle_fit_modules_alive(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.bundle_fit;\n"
+        "pu fit string {\n"
+        "    pu fn length(): i64 { return 1; }\n"
+        "}\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSemanticModule *module = NULL;
+    const FengProgram *program = NULL;
+    const FengDecl *decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_bundle_fit_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/bundle_fit.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_bundle_fit.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("bundle_fit.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/bundle_fit.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("bundle_fit");
+    module = query.get_module(query.user, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(module->program_count == 1U);
+
+    program = module->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl != NULL);
+    ASSERT(decl->kind == FENG_DECL_FIT);
+    ASSERT(decl->as.fit_decl.member_count == 1U);
+    ASSERT(decl->as.fit_decl.members[0] != NULL);
+    ASSERT(decl->as.fit_decl.members[0]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(slice_equals_cstr(decl->as.fit_decl.members[0]->as.callable.name, "length"));
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive(void) {
+    static const char *kPaths[] = {
+        "bundle_multi_fit_type.ff",
+        "bundle_multi_fit_ext.ff",
+    };
+    static const char *kSources[] = {
+        "pu mod feng.test.symbol.bundle_multi_fit;\n"
+        "pu type Marker {}\n",
+        "pu mod feng.test.symbol.bundle_multi_fit;\n"
+        "pu fit string {\n"
+        "    pu fn length(): i64 { return 1; }\n"
+        "}\n",
+    };
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSemanticModule *module = NULL;
+    const FengProgram *program = NULL;
+    bool found_type = false;
+    bool found_fit = false;
+    size_t index;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_bundle_multi_fit_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/bundle_multi_fit.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_bundle_multi_fit.fb", tmp_dir) > 0);
+
+    export_public_sources_or_die(kPaths, kSources, 2U, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/bundle_multi_fit.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("bundle_multi_fit");
+    module = query.get_module(query.user, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(module->program_count == 1U);
+
+    program = module->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    for (index = 0U; index < program->declaration_count; ++index) {
+        const FengDecl *decl = program->declarations[index];
+
+        ASSERT(decl != NULL);
+        if (decl->kind == FENG_DECL_TYPE) {
+            found_type = true;
+        }
+        if (decl->kind == FENG_DECL_FIT) {
+            found_fit = true;
+            ASSERT(decl->as.fit_decl.member_count == 1U);
+            ASSERT(decl->as.fit_decl.members[0] != NULL);
+            ASSERT(decl->as.fit_decl.members[0]->kind == FENG_TYPE_MEMBER_METHOD);
+            ASSERT(slice_equals_cstr(decl->as.fit_decl.members[0]->as.callable.name, "length"));
+        }
+    }
+    ASSERT(found_type);
+    ASSERT(found_fit);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_generic_function_ft_roundtrip(void) {
     /* pu fn identity<T>(x: T): T
      * After roundtrip: function decl should have type_param_count == 1,
@@ -1043,6 +1238,8 @@ int main(void) {
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();
+    test_imported_module_cache_keeps_bundle_fit_modules_alive();
+    test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive();
     test_generic_function_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_generic_fit_ft_roundtrip();

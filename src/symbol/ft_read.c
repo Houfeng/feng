@@ -729,6 +729,7 @@ static bool parse_symbols(ReadContext *ctx,
             }
             ctx->module->profile = (FengSymbolProfile)ctx->header.profile;
             ctx->module->root_decl = *decl;
+            ctx->module->visibility = ctx->module->root_decl.visibility;
             ctx->module_full_name_str = extra_ref;
             memset(decl, 0, sizeof(*decl));
             free(ctx->decls[symbol_index]);

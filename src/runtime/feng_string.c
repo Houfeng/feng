@@ -100,6 +100,15 @@ size_t feng_string_length(const FengString *s) {
     return s != NULL ? ((const struct FengString *)s)->length : 0U;
 }
 
+int64_t feng_string_utf8_length(const char *s) {
+    size_t length = s != NULL ? strlen(s) : 0U;
+
+    if (length > (size_t)INT64_MAX) {
+        feng_panic("feng_string_utf8_length: length overflow");
+    }
+    return (int64_t)length;
+}
+
 const char *feng_string_data(const FengString *s) {
     return s != NULL ? ((const struct FengString *)s)->data : "";
 }

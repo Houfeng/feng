@@ -1172,7 +1172,14 @@ static bool module_is_use_visible_from(const ResolveContext *ctx,
         return false;
     }
     for (i = 0U; i < ctx->imported_module_count; ++i) {
-        if (ctx->imported_modules[i].target_module == target) {
+        const FengSemanticModule *candidate = ctx->imported_modules[i].target_module;
+
+        if (candidate == target ||
+            (candidate != NULL &&
+             path_equals(candidate->segments,
+                         candidate->segment_count,
+                         target->segments,
+                         target->segment_count))) {
             return true;
         }
     }
@@ -2545,6 +2552,10 @@ static bool maybe_downgrade_orphan_fit_export(ResolveContext *context,
         return true;
     }
 
+    if (fit_decl->as.fit_decl.spec_count == 0U) {
+        return true;
+    }
+
     if (fit_target.kind == FIT_TARGET_KIND_USER_TYPE && fit_target.type_decl != NULL) {
         const FengSemanticModule *target_module =
             find_decl_provider_module(context->analysis, fit_target.type_decl);
@@ -2595,6 +2606,7 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
                                                const FengDecl *owner_type_decl,
                                                InferredExprType owner_type) {
     FitTargetResolution fit_target;
+    FengTypeParam fit_local_type_param;
 
     if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
         return false;
@@ -2612,6 +2624,14 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
 
     if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
         owner_type.type_ref != NULL) {
+        if (fit_target.kind == FIT_TARGET_KIND_ARRAY &&
+            fit_target_collect_array_local_type_param(context,
+                                                      fit_target.target_ref,
+                                                      &fit_local_type_param)) {
+            return owner_type.type_ref->kind == FENG_TYPE_REF_ARRAY &&
+                   owner_type.type_ref->array_element_writable ==
+                       fit_target.target_ref->array_element_writable;
+        }
         return type_refs_semantically_equal(context, fit_target.target_ref, owner_type.type_ref);
     }
 
@@ -5630,14 +5650,22 @@ static bool visit_visible_fit_methods_for_owner_type(const ResolveContext *ctx,
             }
             for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
                 const FengDecl *fd = prog->declarations[decl_index];
+                bool visible;
+                bool target_matches;
 
                 if (fd == NULL || fd->kind != FENG_DECL_FIT) {
                     continue;
                 }
-                if (!fit_decl_is_visible_from(ctx, m, fd)) {
+                visible = fit_decl_is_visible_from(ctx, m, fd);
+                target_matches = visible &&
+                                 fit_decl_target_matches_owner_type(ctx,
+                                                                    fd,
+                                                                    owner_type_decl,
+                                                                    owner_type);
+                if (!visible) {
                     continue;
                 }
-                if (!fit_decl_target_matches_owner_type(ctx, fd, owner_type_decl, owner_type)) {
+                if (!target_matches) {
                     continue;
                 }
                 for (member_index = 0U; member_index < fd->as.fit_decl.member_count; ++member_index) {
@@ -5753,13 +5781,22 @@ static bool fit_method_count_visitor(const FengTypeMember *member,
 static size_t count_accessible_method_overloads(ResolveContext *context,
                                                 const FengDecl *type_decl,
                                                 const FengSemanticModule *provider_module,
+                                                InferredExprType owner_type,
                                                 FengSlice name) {
     size_t member_index;
     size_t count = 0U;
     FitMethodCountCtx st;
 
     if (type_decl == NULL) {
-        return 0U;
+        st.count = 0U;
+        (void)visit_visible_fit_methods_for_owner_type(context,
+                                                       NULL,
+                                                       owner_type,
+                                                       name,
+                                                       true,
+                                                       fit_method_count_visitor,
+                                                       &st);
+        return st.count;
     }
 
     if (type_decl->kind == FENG_DECL_SPEC) {
@@ -8679,11 +8716,13 @@ static bool expr_requires_explicit_function_type_context(ResolveContext *context
             {
                 const FengDecl *owner_type_decl = NULL;
                 const FengSemanticModule *provider_module = NULL;
+                InferredExprType owner_type =
+                    resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
 
-                resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
                 return count_accessible_method_overloads(context,
                                                          owner_type_decl,
                                                          provider_module,
+                                                         owner_type,
                                                          expr->as.member.member) > 1U;
             }
         }
@@ -8727,11 +8766,13 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
             {
                 const FengDecl *owner_type_decl = NULL;
                 const FengSemanticModule *provider_module = NULL;
+                InferredExprType owner_type =
+                    resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
 
-                resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
                 return count_accessible_method_overloads(context,
                                                          owner_type_decl,
                                                          provider_module,
+                                                         owner_type,
                                                          expr->as.member.member) > 0U;
             }
         }
@@ -14818,8 +14859,17 @@ static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
             const FengProgram *program = module->programs[program_index];
             size_t decl_index;
 
+            if (program == NULL) {
+                continue;
+            }
+
             for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
                 const FengDecl *decl = program->declarations[decl_index];
+                size_t member_index;
+
+                if (decl == NULL) {
+                    continue;
+                }
 
                 if (decl->kind == FENG_DECL_FUNCTION) {
                     ++count;
@@ -14827,17 +14877,46 @@ static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
                 }
 
                 if (decl->kind == FENG_DECL_TYPE) {
-                    size_t member_index;
-
                     for (member_index = 0U;
                          member_index < decl->as.type_decl.member_count;
                          ++member_index) {
-                        const FengTypeMember *member =
-                            decl->as.type_decl.members[member_index];
+                        const FengTypeMember *member = decl->as.type_decl.members[member_index];
 
-                        if (member->kind == FENG_TYPE_MEMBER_METHOD ||
-                            member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
-                            member->kind == FENG_TYPE_MEMBER_FINALIZER) {
+                        if (member != NULL &&
+                            (member->kind == FENG_TYPE_MEMBER_METHOD ||
+                             member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+                             member->kind == FENG_TYPE_MEMBER_FINALIZER)) {
+                            ++count;
+                        }
+                    }
+                    continue;
+                }
+
+                if (decl->kind == FENG_DECL_SPEC) {
+                    if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                        ++count;
+                        continue;
+                    }
+                    for (member_index = 0U;
+                         member_index < decl->as.spec_decl.as.object.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member =
+                            decl->as.spec_decl.as.object.members[member_index];
+
+                        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
+                            ++count;
+                        }
+                    }
+                    continue;
+                }
+
+                if (decl->kind == FENG_DECL_FIT) {
+                    for (member_index = 0U;
+                         member_index < decl->as.fit_decl.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+
+                        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
                             ++count;
                         }
                     }

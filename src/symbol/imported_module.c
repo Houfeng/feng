@@ -771,6 +771,31 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
             }
             return true;
 
+        case FENG_SYMBOL_DECL_KIND_FIT:
+            synth_decl->decl.kind = FENG_DECL_FIT;
+            synth_decl->decl.as.fit_decl.target = synthesize_type_ref(symbol_decl->fit_target);
+            if (symbol_decl->fit_target != NULL && synth_decl->decl.as.fit_decl.target == NULL) {
+                break;
+            }
+            synth_decl->decl.as.fit_decl.specs =
+                synthesize_type_ref_list(symbol_decl->declared_specs,
+                                         symbol_decl->declared_spec_count);
+            if (symbol_decl->declared_spec_count > 0U &&
+                synth_decl->decl.as.fit_decl.specs == NULL) {
+                break;
+            }
+            synth_decl->decl.as.fit_decl.spec_count = symbol_decl->declared_spec_count;
+            synth_decl->decl.as.fit_decl.members =
+                synthesize_type_members(symbol_decl,
+                                        &synth_decl->decl.as.fit_decl.member_count);
+            if (symbol_decl->member_count > 0U &&
+                synth_decl->decl.as.fit_decl.members == NULL) {
+                break;
+            }
+            synth_decl->decl.as.fit_decl.has_body =
+                symbol_decl->member_count > 0U || symbol_decl->declared_spec_count == 0U;
+            return true;
+
         case FENG_SYMBOL_DECL_KIND_BINDING:
             synth_decl->decl.kind = FENG_DECL_GLOBAL_BINDING;
             synth_decl->decl.as.binding.token = symbol_decl->token;
@@ -883,6 +908,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
             case FENG_SYMBOL_DECL_KIND_TYPE:
             case FENG_SYMBOL_DECL_KIND_SPEC:
             case FENG_SYMBOL_DECL_KIND_FUNCTION:
+            case FENG_SYMBOL_DECL_KIND_FIT:
             case FENG_SYMBOL_DECL_KIND_BINDING:
                 break;
             default:

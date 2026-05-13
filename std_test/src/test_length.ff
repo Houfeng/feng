@@ -1,0 +1,39 @@
+mod std_test;
+
+use std.text;
+
+fn string_length_ascii() {
+  check("abc".length() == (long)3, "length/string-ascii");
+}
+
+fn string_length_utf8_bytes() {
+  check("你好".length() == (long)6, "length/string-utf8-bytes");
+}
+
+fn string_length_empty() {
+  check("".length() == (long)0, "length/string-empty");
+}
+
+fn array_length_readonly() {
+  let values: int[] = [1, 2, 3, 4];
+  check(values.length() == (long)4, "length/array-readonly");
+}
+
+fn array_length_writable() {
+  let values: int[!] = [10, 20];
+  check(values.length() == (long)2, "length/array-writable");
+}
+
+fn array_length_empty() {
+  let values: int[];
+  check(values.length() == (long)0, "length/array-empty");
+}
+
+pu fn run_length_tests() {
+  string_length_ascii();
+  string_length_utf8_bytes();
+  string_length_empty();
+  array_length_readonly();
+  array_length_writable();
+  array_length_empty();
+}

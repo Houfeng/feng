@@ -6787,7 +6787,7 @@ static void test_fit_user_type_satisfaction_reuses_visible_fit_members(void) {
     feng_program_free(program);
 }
 
-static void test_orphan_pu_builtin_fit_emits_info_and_downgrades(void) {
+static void test_pu_builtin_self_fit_emits_no_orphan_info(void) {
     const char *source =
         "pu mod demo.main;\n"
         "pu fit i32 {\n"
@@ -6806,9 +6806,7 @@ static void test_orphan_pu_builtin_fit_emits_info_and_downgrades(void) {
                                  &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     ASSERT(analysis != NULL);
-    ASSERT(analysis->info_count == 1U);
-    ASSERT(strstr(analysis->infos[0].message, "orphan fit") != NULL);
-    ASSERT(strstr(analysis->infos[0].message, "downgraded to module-local") != NULL);
+    ASSERT(analysis->info_count == 0U);
 
     for (size_t i = 0U; i < program->declaration_count; ++i) {
         if (program->declarations[i]->kind == FENG_DECL_FIT) {
@@ -6817,7 +6815,7 @@ static void test_orphan_pu_builtin_fit_emits_info_and_downgrades(void) {
         }
     }
     ASSERT(fit_decl != NULL);
-    ASSERT(fit_decl->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(fit_decl->visibility == FENG_VISIBILITY_PUBLIC);
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -9489,6 +9487,136 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
     }
 }
 
+
+    static void test_pu_builtin_self_fit_visible_after_use_enables_method_call(void) {
+        const char *src_adapter =
+            "pu mod demo.adapter;\n"
+            "pu fit string {\n"
+            "    pu fn length(): long {\n"
+            "        return 7;\n"
+            "    }\n"
+            "}\n";
+        const char *src_consumer =
+            "pu mod demo.consumer;\n"
+            "use demo.adapter;\n"
+            "fn run(): long {\n"
+            "    return \"abc\".length();\n"
+            "}\n";
+        FengProgram *p1 = parse_program_or_die("builtin_fit_adapter.f", src_adapter);
+        FengProgram *p2 = parse_program_or_die("builtin_fit_consumer.f", src_consumer);
+        const FengProgram *programs[] = {p1, p2};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                     &analysis, &errors, &error_count));
+        ASSERT(error_count == 0U);
+
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(p1);
+        feng_program_free(p2);
+    }
+
+    static void test_external_imported_builtin_self_fit_method_visible(void) {
+        const char *external_source =
+            "pu mod vendor.text;\n"
+            "pu fit string {\n"
+            "    pu fn length(): long {\n"
+            "        return 7;\n"
+            "    }\n"
+            "}\n";
+        const char *main_source =
+            "mod demo.main;\n"
+            "use vendor.text;\n"
+            "fn run(): long {\n"
+            "    return \"abc\".length();\n"
+            "}\n";
+        ImportedSourceFixture fixture;
+        FengSemanticImportedModuleQuery query;
+        FengSemanticAnalyzeOptions options;
+        FengProgram *program = NULL;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        imported_source_fixture_init(&fixture, "external_text.ff", external_source);
+        query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.imported_modules = &query;
+
+        program = parse_program_or_die("external_text_main.f", main_source);
+        programs[0] = program;
+        ASSERT(feng_semantic_analyze_with_options(programs,
+                                                  1U,
+                                                  &options,
+                                                  &analysis,
+                                                  &errors,
+                                                  &error_count));
+        ASSERT(analysis != NULL);
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        imported_source_fixture_dispose(&fixture);
+    }
+
+    static void test_external_imported_array_self_fit_method_visible(void) {
+        const char *external_source =
+            "pu mod vendor.text;\n"
+            "pu fit T[] {\n"
+            "    pu fn length(): long {\n"
+            "        return 7;\n"
+            "    }\n"
+            "}\n"
+            "pu fit T[!] {\n"
+            "    pu fn length(): long {\n"
+            "        return 9;\n"
+            "    }\n"
+            "}\n";
+        const char *main_source =
+            "mod demo.main;\n"
+            "use vendor.text;\n"
+            "fn mutable_len(): long {\n"
+            "    let values: int[] = [1, 2, 3];\n"
+            "    return values.length();\n"
+            "}\n"
+            "fn readonly_len(): long {\n"
+            "    let values: int[!] = [1, 2, 3];\n"
+            "    return values.length();\n"
+            "}\n";
+        ImportedSourceFixture fixture;
+        FengSemanticImportedModuleQuery query;
+        FengSemanticAnalyzeOptions options;
+        FengProgram *program = NULL;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        imported_source_fixture_init(&fixture, "external_array_length.ff", external_source);
+        query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.imported_modules = &query;
+
+        program = parse_program_or_die("external_array_length_main.f", main_source);
+        programs[0] = program;
+        ASSERT(feng_semantic_analyze_with_options(programs,
+                                                  1U,
+                                                  &options,
+                                                  &analysis,
+                                                  &errors,
+                                                  &error_count));
+        ASSERT(analysis != NULL);
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        imported_source_fixture_dispose(&fixture);
+    }
 static void test_value_kind_builtin_classifies_void_as_trivial(void) {
     ASSERT(feng_semantic_value_kind_of_builtin(slice_from_cstr("void")) ==
            FENG_SEMANTIC_VALUE_TRIVIAL);
@@ -10332,7 +10460,10 @@ int main(void) {
     test_fit_array_target_element_type_param_does_not_leak();
     test_fit_user_type_path_still_uses_current_type_decl();
     test_fit_user_type_satisfaction_reuses_visible_fit_members();
-    test_orphan_pu_builtin_fit_emits_info_and_downgrades();
+    test_pu_builtin_self_fit_emits_no_orphan_info();
+    test_pu_builtin_self_fit_visible_after_use_enables_method_call();
+    test_external_imported_builtin_self_fit_method_visible();
+    test_external_imported_array_self_fit_method_visible();
     test_fit_method_unknown_member_still_rejected();
     test_fit_body_rejects_self_private_field_access();
     test_fit_body_rejects_self_private_method_access();
