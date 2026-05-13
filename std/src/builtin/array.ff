@@ -1,6 +1,14 @@
 pu mod std;
 
+/**
+ * Extends immutable arrays with standard length-related operations.
+ * @param <T> - the element type
+ */
 pu fit T[] {
+  /**
+   * Returns the number of elements in this array.
+   * @return element count of this array
+   */
   pu fn length(): long {
     var total: long = 0;
     for let item in self {
@@ -10,7 +18,15 @@ pu fit T[] {
   }
 }
 
+/**
+ * Extends writable arrays with standard length-related operations.
+ * @param <T> - the element type
+ */
 pu fit T[!] {
+  /**
+   * Returns the number of elements in this array.
+   * @return element count of this array
+   */
   pu fn length(): long {
     var total: long = 0;
     for let item in self {
