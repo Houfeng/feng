@@ -441,7 +441,6 @@ typedef struct BuiltinFit {
     size_t          spec_count;
     UserMethod     *methods;
     size_t          method_count;
-    size_t          index;
     char           *c_prefix;
     const FengProgram *owner_program;
 } BuiltinFit;
@@ -4631,11 +4630,12 @@ static bool cg_fit_target_is_builtin_form(const FengTypeRef *target_ref) {
 static char *cg_builtin_fit_c_prefix(CG *cg, const FengDecl *decl) {
     const FengProgram *owner_program = cg->cur_program;
     char *owner_mangle = NULL;
+    Buf target_symbol;
     bool is_public;
     size_t ordinal = 0U;
     Buf b;
 
-    if (decl == NULL) {
+    if (decl == NULL || decl->kind != FENG_DECL_FIT || decl->as.fit_decl.target == NULL) {
         return NULL;
     }
 
@@ -4646,6 +4646,14 @@ static char *cg_builtin_fit_c_prefix(CG *cg, const FengDecl *decl) {
         owner_mangle = strdup(cg->module_mangle);
     }
     if (owner_mangle == NULL) {
+        return NULL;
+    }
+
+    buf_init(&target_symbol);
+    if (!cg_append_type_ref_symbol(&target_symbol, decl->as.fit_decl.target) ||
+        target_symbol.data == NULL) {
+        free(owner_mangle);
+        buf_free(&target_symbol);
         return NULL;
     }
 
@@ -4666,17 +4674,22 @@ static char *cg_builtin_fit_c_prefix(CG *cg, const FengDecl *decl) {
             if ((candidate->visibility == FENG_VISIBILITY_PUBLIC) != is_public) {
                 continue;
             }
+            if (!cg_type_ref_equal(candidate->as.fit_decl.target, decl->as.fit_decl.target)) {
+                continue;
+            }
             ++ordinal;
         }
     }
 
     buf_init(&b);
     buf_append_fmt(&b,
-                   "FengFitBuiltin__%s__%s%zu",
+                   "FengFitBuiltin__%s__%s__%s%zu",
                    owner_mangle,
+                   target_symbol.data,
                    is_public ? "m" : "i",
                    ordinal);
     free(owner_mangle);
+    buf_free(&target_symbol);
     return b.data;
 }
 
@@ -4761,7 +4774,6 @@ static bool cg_register_builtin_fit_shell(CG *cg,
         bf->specs[spec_index] = spec_type->user_spec;
         cgtype_free(spec_type);
     }
-    bf->index = cg->builtin_fit_count;
     bf->owner_program = cg->cur_program;
     bf->c_prefix = cg_builtin_fit_c_prefix(cg, decl);
     if (bf->c_prefix == NULL) {

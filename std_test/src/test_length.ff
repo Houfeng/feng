@@ -1,6 +1,6 @@
 mod std_test;
 
-use std.text;
+use std;
 
 fn string_length_ascii() {
   check("abc".length() == (long)3, "length/string-ascii");

@@ -1,13 +1,4 @@
-pu mod std.text;
-
-@cdecl("feng_runtime")
-extern fn feng_string_utf8_length(value: string): long;
-
-pu fit string {
-  pu fn length(): long {
-    return feng_string_utf8_length(self);
-  }
-}
+pu mod std;
 
 pu fit T[] {
   pu fn length(): long {
