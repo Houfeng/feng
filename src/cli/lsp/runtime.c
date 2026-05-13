@@ -5086,7 +5086,7 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
             return string_append_cstr(buffer, "*") && type_ref_to_string(buffer, type_ref->as.inner);
         case FENG_TYPE_REF_ARRAY:
             return type_ref_to_string(buffer, type_ref->as.inner) &&
-                   string_append_cstr(buffer, type_ref->array_element_writable ? "[]!" : "[]");
+                   string_append_cstr(buffer, type_ref->array_element_writable ? "[!]" : "[]");
     }
     return false;
 }
@@ -5548,7 +5548,7 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
             for (index = 0U; index < feng_symbol_type_array_rank(type); ++index) {
                 if (!string_append_cstr(buffer,
                                         feng_symbol_type_array_layer_writable(type, index)
-                                            ? "[]!"
+                                            ? "[!]"
                                             : "[]")) {
                     return false;
                 }

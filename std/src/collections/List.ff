@@ -11,19 +11,19 @@ pu mod std.collections;
  * - entities returns an immutable dense copy of all elements in order.
  */
 pu type List<T> {
-  pr var items: T[]!;
+  pr var items: T[!];
   pr var count: i32;
   pr var capacity: i32;
   pr var missing: T;
 
   pr fn grow() {
     if self.capacity == 0 {
-      self.items = T[8]!;
+      self.items = T[:8];
       self.capacity = 8;
       return;
     }
     let newCapacity: i32 = self.capacity * 2;
-    let newItems: T[]! = T[newCapacity]!;
+    let newItems: T[!] = T[:newCapacity];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
@@ -42,7 +42,7 @@ pu type List<T> {
     if newCapacity < 8 {
       newCapacity = 8;
     }
-    let newItems: T[]! = T[newCapacity]!;
+    let newItems: T[!] = T[:newCapacity];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
@@ -103,8 +103,8 @@ pu type List<T> {
    * Returns all elements as an immutable dense array in insertion order.
    * @return immutable array of all elements
    */
-  pu fn entries(): T[]! {
-    let result: T[]! = T[self.count]!;
+  pu fn entries(): T[!] {
+    let result: T[!] = T[:self.count];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       result[i] = self.items[i];
     }

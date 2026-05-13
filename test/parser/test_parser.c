@@ -845,6 +845,81 @@ static void test_block_yield_omits_trailing_semicolon(void) {
     feng_program_free(program);
 }
 
+static void test_non_generic_array_new_uses_colon_dimension_syntax(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Counter {\n"
+        "    var value: int;\n"
+        "}\n"
+        "fn run(n: int) {\n"
+        "    let a: Counter[!] = Counter[:3];\n"
+        "    let b: int[!] = int[:n];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengStmt *stmt_a;
+    const FengStmt *stmt_b;
+
+    ASSERT(feng_parse_source(source, strlen(source), "array_new_colon_dim.f", &program, &error));
+    ASSERT(program != NULL);
+    body = program->declarations[1]->as.function_decl.body;
+    ASSERT(body->statement_count == 2U);
+
+    stmt_a = body->statements[0];
+    ASSERT(stmt_a->kind == FENG_STMT_BINDING);
+    ASSERT(stmt_a->as.binding.initializer->kind == FENG_EXPR_ARRAY_NEW);
+
+    stmt_b = body->statements[1];
+    ASSERT(stmt_b->kind == FENG_STMT_BINDING);
+    ASSERT(stmt_b->as.binding.initializer->kind == FENG_EXPR_ARRAY_NEW);
+
+    feng_program_free(program);
+}
+
+static void test_index_expression_is_unambiguous_and_remains_value_brackets(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(items: int[]): int {\n"
+        "    return items[0];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengExpr *ret;
+
+    ASSERT(feng_parse_source(source, strlen(source), "index_unambiguous.f", &program, &error));
+    ASSERT(program != NULL);
+    ret = program->declarations[0]->as.function_decl.body->statements[0]->as.return_value;
+    ASSERT(ret->kind == FENG_EXPR_INDEX);
+
+    feng_program_free(program);
+}
+
+static void test_non_generic_type_brackets_without_colon_parses_as_index(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Counter {\n"
+        "    var value: int;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let x: Counter[!] = Counter[3];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengExpr *init;
+
+    ASSERT(feng_parse_source(source, strlen(source), "array_new_without_colon_is_index.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[1]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_BINDING);
+    init = stmt->as.binding.initializer;
+    ASSERT(init != NULL);
+    ASSERT(init->kind == FENG_EXPR_INDEX);
+
+    feng_program_free(program);
+}
+
 /* G3-9: Parser tests for generic declarations and type references. */
 
 static void test_generic_type_declaration(void) {
@@ -1185,6 +1260,9 @@ int main(void) {
     test_match_statement_form();
     test_for_in_loop();
     test_block_yield_omits_trailing_semicolon();
+    test_non_generic_array_new_uses_colon_dimension_syntax();
+    test_index_expression_is_unambiguous_and_remains_value_brackets();
+    test_non_generic_type_brackets_without_colon_parses_as_index();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
     test_doc_comments_bind_to_declarations_and_members();

@@ -11,9 +11,9 @@ pu mod std.collections;
  */
 pu type Set<K: Hashable<K>> {
 	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
-	pr var states: i32[]!;
-	pr var hashes: u64[]!;
-	pr var keys: K[]!;
+	pr var states: i32[!];
+	pr var hashes: u64[!];
+	pr var keys: K[!];
 	pr var size: i32;
 	pr var used: i32;
 	pr var capacity: i32;
@@ -47,13 +47,13 @@ pu type Set<K: Hashable<K>> {
 	}
 
 	pr fn rehash(newCapacity: i32) {
-		let oldStates: i32[]! = self.states;
-		let oldHashes: u64[]! = self.hashes;
-		let oldKeys: K[]! = self.keys;
+		let oldStates: i32[!] = self.states;
+		let oldHashes: u64[!] = self.hashes;
+		let oldKeys: K[!] = self.keys;
 		let oldCapacity: i32 = self.capacity;
-		self.states = i32[newCapacity]!;
-		self.hashes = u64[newCapacity]!;
-		self.keys = K[newCapacity]!;
+		self.states = i32[:newCapacity];
+		self.hashes = u64[:newCapacity];
+		self.keys = K[:newCapacity];
 		self.capacity = newCapacity;
 		self.size = 0;
 		self.used = 0;
@@ -197,8 +197,8 @@ pu type Set<K: Hashable<K>> {
 	 * Returns all keys as an immutable dense array.
 	 * @return immutable array of keys
 	 */
-	pu fn entries(): K[]! {
-		let items: K[]! = K[self.size]!;
+	pu fn entries(): K[!] {
+		let items: K[!] = K[:self.size];
 		var outputIndex: i32 = 0;
 		for var i: i32 = 0; i < self.capacity; i = i + 1 {
 			if self.states[i] == 1 {

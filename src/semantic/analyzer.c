@@ -7252,7 +7252,7 @@ static InferredExprType infer_array_literal_expr_type(ResolveContext *context, c
     }
 
     array_type_ref = synthesize_array_type_ref(context, &element_type,
-                                               expr->as.array_literal.element_writable,
+                                               false,
                                                expr->token);
     return array_type_ref != NULL ? inferred_expr_type_from_type_ref(array_type_ref)
                                   : inferred_expr_type_unknown();
@@ -7392,7 +7392,7 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
                 return false;
             }
             /* docs/feng-builtin-type.md §5: writes via `[i] =` are only legal
-             * when the indexed array layer is marked writable (`T[]!`). */
+             * when the indexed array layer is marked writable (`T[!]`). */
             {
                 InferredExprType object_type =
                     infer_expr_type(context, target->as.index.object);
@@ -7612,7 +7612,7 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             InferredExprType elem_type = inferred_expr_type_from_type_ref(elem_ref);
             const FengTypeRef *arr_ref = synthesize_array_type_ref(
                 context, &elem_type,
-                expr->as.array_new.element_writable,
+                false,
                 expr->token);
             return arr_ref != NULL ? inferred_expr_type_from_type_ref(arr_ref)
                                    : inferred_expr_type_unknown();
@@ -8025,13 +8025,21 @@ static bool expr_matches_expected_type_ref_when_inference_unknown(
     if (expr == NULL || expected_type_ref == NULL) {
         return false;
     }
-    if (expr->kind != FENG_EXPR_ARRAY_LITERAL || expected_type_ref->kind != FENG_TYPE_REF_ARRAY) {
+    if (expected_type_ref->kind != FENG_TYPE_REF_ARRAY) {
         return false;
     }
 
-    /* docs/feng-builtin-type.md §5: writable mark must match exactly per layer
-     * for type identity; only explicit casts may strip a `!`. */
-    if (expr->as.array_literal.element_writable != expected_type_ref->array_element_writable) {
+    if (expr->kind == FENG_EXPR_ARRAY_NEW) {
+        InferredExprType element_type =
+            inferred_expr_type_from_type_ref(expr->as.array_new.element_type);
+
+        return inferred_expr_type_is_known(element_type) &&
+               inferred_expr_type_matches_type_ref(context,
+                                                  element_type,
+                                                  expected_type_ref->as.inner);
+    }
+
+    if (expr->kind != FENG_EXPR_ARRAY_LITERAL) {
         return false;
     }
 
@@ -8590,12 +8598,11 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
                FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
     }
 
-    /* Step 4b-γ — array literals targeting an array type drive matching
-     * element-by-element so that per-element coercions (e.g. concrete object
-     * to spec) succeed even when the literal's inferred element type differs
-     * nominally from the expected element type. The recursion lives in
-     * expr_matches_expected_type_ref_when_inference_unknown. */
-    if (expr != NULL && expr->kind == FENG_EXPR_ARRAY_LITERAL &&
+    /* Step 4b-γ — arrays with an expected array target drive matching
+     * element-by-element / element-type-by-type so coercions can use the
+     * expected inner type directly instead of relying on default inference. */
+    if (expr != NULL &&
+        (expr->kind == FENG_EXPR_ARRAY_LITERAL || expr->kind == FENG_EXPR_ARRAY_NEW) &&
         expected_type_ref != NULL && expected_type_ref->kind == FENG_TYPE_REF_ARRAY) {
         return expr_matches_expected_type_ref_when_inference_unknown(context,
                                                                      expr,

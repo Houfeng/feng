@@ -49,7 +49,7 @@ fn main(args: string[]) {
 
     // Spec call inside an array literal: each element is a +1 aggregate
     // rvalue, materialised then assigned into the slot.
-    let arr: Named[]! = [make_named("delta"), make_named("epsilon")]!;
+    let arr: Named[!] = [make_named("delta"), make_named("epsilon")];
     puts(arr[0].greet());
     puts(arr[1].greet());
 

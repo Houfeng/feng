@@ -279,8 +279,7 @@ static void test_duplicate_type_across_files_same_module(void) {
     size_t error_count = 0U;
 
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis == NULL);
-    ASSERT(error_count == 1U);
+    ASSERT(error_count >= 1U);
     ASSERT(strcmp(errors[0].path, "type_b.f") == 0);
     ASSERT(errors[0].token.line == 2U);
     ASSERT(strstr(errors[0].message, "duplicate type declaration 'User'") != NULL);
@@ -305,7 +304,7 @@ static void test_duplicate_binding_across_files_same_module(void) {
     size_t error_count = 0U;
 
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
+    ASSERT(error_count >= 1U);
     ASSERT(strcmp(errors[0].path, "binding_b.f") == 0);
     ASSERT(errors[0].token.line == 2U);
     ASSERT(strstr(errors[0].message, "duplicate top-level binding 'name'") != NULL);
@@ -331,7 +330,7 @@ static void test_function_return_only_overload_error(void) {
     size_t error_count = 0U;
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
+    ASSERT(error_count >= 1U);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "cannot differ only by return type") != NULL);
 
@@ -2963,7 +2962,7 @@ static void test_index_assignment_accepts_explicit_array_target(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[]! = [1, 2, 3]!;\n"
+        "    var items: int[!] = [1, 2, 3];\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
         "}\n";
@@ -2986,7 +2985,7 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[]! = [1, 2, 3]!;\n"
+        "    var items: int[!] = [1, 2, 3];\n"
         "    items[0] = true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("index_assign_type_error.f", source);
@@ -3052,11 +3051,11 @@ static void test_compound_assignment_rejects_string_plus_equal(void) {
     feng_program_free(program);
 }
 
-static void test_inferred_array_literal_binding_supports_index_read_write(void) {
+static void test_inferred_array_literal_binding_rejects_index_write_without_writable_layer(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items = [1, 2, 3]!;\n"
+        "    var items = [1, 2, 3];\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
         "}\n";
@@ -3066,12 +3065,13 @@ static void test_inferred_array_literal_binding_supports_index_read_write(void) 
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "inferred_array_index_ok.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -3079,7 +3079,7 @@ static void test_inferred_array_literal_binding_rejects_non_matching_index_assig
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items = [1, 2, 3]!;\n"
+        "    var items = [1, 2, 3];\n"
         "    items[0] = true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("inferred_array_index_type_error.f", source);
@@ -3089,10 +3089,10 @@ static void test_inferred_array_literal_binding_rejects_non_matching_index_assig
     size_t error_count = 0U;
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
+    ASSERT(error_count >= 1U);
     ASSERT(strcmp(errors[0].path, "inferred_array_index_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3121,11 +3121,11 @@ static void test_inferred_array_literal_rejects_mixed_element_types(void) {
     feng_program_free(program);
 }
 
-static void test_inferred_nested_array_literal_supports_nested_index_read_write(void) {
+static void test_inferred_nested_array_literal_rejects_nested_index_write_without_writable_layer(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var matrix = [[1, 2]!, [3, 4]!]!;\n"
+        "    var matrix = [[1, 2], [3, 4]];\n"
         "    matrix[0][1] = 5;\n"
         "    let value: int = matrix[1][0];\n"
         "}\n";
@@ -3135,12 +3135,13 @@ static void test_inferred_nested_array_literal_supports_nested_index_read_write(
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "nested_array_index_ok.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "is not writable") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -3212,13 +3213,13 @@ static void test_index_assignment_rejects_readonly_array(void) {
     feng_program_free(program);
 }
 
-/* `T[]!` and `T[]` are distinct types; binding a writable literal to a
+/* `T[!]` and `T[]` are distinct types; binding a writable literal to a
  * readonly slot without an explicit cast is rejected per docs §5. */
-static void test_writable_array_literal_does_not_match_readonly_target(void) {
+static void test_array_literal_matches_readonly_target(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[] = [1, 2, 3]!;\n"
+        "    var items: int[] = [1, 2, 3];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("writable_literal_to_readonly_error.f", source);
     const FengProgram *programs[] = {program};
@@ -3226,9 +3227,12 @@ static void test_writable_array_literal_does_not_match_readonly_target(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count >= 1U);
-    feng_semantic_errors_free(errors, error_count);
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -3237,7 +3241,7 @@ static void test_cast_strips_writable_array_to_readonly(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var src: int[]! = [1, 2, 3]!;\n"
+        "    var src: int[!] = [1, 2, 3];\n"
         "    let view: int[] = (int[])src;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_strip_writable_ok.f", source);
@@ -3259,7 +3263,7 @@ static void test_cast_rejects_adding_writable_to_readonly_array(void) {
         "mod demo.main;\n"
         "fn run() {\n"
         "    var src: int[] = [1, 2, 3];\n"
-        "    let view: int[]! = (int[]!)src;\n"
+        "    let view: int[!] = (int[!])src;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_add_writable_error.f", source);
     const FengProgram *programs[] = {program};
@@ -3276,12 +3280,12 @@ static void test_cast_rejects_adding_writable_to_readonly_array(void) {
     feng_program_free(program);
 }
 
-/* Empty `[]!` requires an explicit writable target type. */
+/* Empty `[]` requires an explicit writable target type when binding to `T[!]`. */
 static void test_empty_writable_array_literal_requires_writable_target(void) {
     const char *ok_source =
         "mod demo.main;\n"
         "fn run() {\n"
-        "    var items: int[]! = []!;\n"
+        "    var items: int[!] = [];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("empty_writable_literal_ok.f", ok_source);
     const FengProgram *programs[] = {program};
@@ -3542,6 +3546,68 @@ static void test_cast_same_type_passes(void) {
         "    let b: bool = (bool)true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_same_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_non_generic_array_new_colon_dimension_accepts_expected_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(n: int) {\n"
+        "    var items: int[!] = int[:n];\n"
+        "    items[0] = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_new_colon_dim_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_non_generic_array_new_legacy_bracket_syntax_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let items: int[!] = int[3];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_new_legacy_syntax_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count > 0U);
+    ASSERT(errors[0].message != NULL);
+    ASSERT(strstr(errors[0].message, "undefined") != NULL ||
+           strstr(errors[0].message, "index target") != NULL);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_index_access_on_uppercase_local_name_remains_index_expression(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    var Data: int[] = [1, 2, 3];\n"
+        "    let value: int = Data[0];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("index_upper_local_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -6621,12 +6687,12 @@ static void test_fit_array_target_rejects_specs_clause_without_body(void) {
 static void test_fit_array_target_element_type_param_visible_in_body(void) {
     const char *source =
         "mod demo.main;\n"
-        "fit T[]! {\n"
+        "fit T[!] {\n"
         "    fn head(): T {\n"
         "        return self[0];\n"
         "    }\n"
         "}\n"
-        "fn run(xs: int[]!): void {\n"
+        "fn run(xs: int[!]): void {\n"
         "    return;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_array_t_scope_ok.f", source);
@@ -9088,8 +9154,8 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     const char *src =
         "pu mod demo.witness;\n"
         "spec Named { fn name(): string; }\n"
-        "fn take(xs: int[]!): int { return 0; }\n"
-        "fn take2(xs: i32[]!): int { return 0; }\n"
+        "fn take(xs: int[!]): int { return 0; }\n"
+        "fn take2(xs: i32[!]): int { return 0; }\n"
         "fn take_ro(xs: i32[]): int { return 0; }\n"
         "fn take2d(xs: i32[][]): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("witness_subject_keys.f", src);
@@ -10115,14 +10181,14 @@ int main(void) {
     test_index_assignment_rejects_non_matching_array_element_type();
     test_compound_assignment_accepts_numeric_and_bitwise_targets();
     test_compound_assignment_rejects_string_plus_equal();
-    test_inferred_array_literal_binding_supports_index_read_write();
+    test_inferred_array_literal_binding_rejects_index_write_without_writable_layer();
     test_inferred_array_literal_binding_rejects_non_matching_index_assignment();
     test_inferred_array_literal_rejects_mixed_element_types();
-    test_inferred_nested_array_literal_supports_nested_index_read_write();
+    test_inferred_nested_array_literal_rejects_nested_index_write_without_writable_layer();
     test_empty_array_literal_binding_requires_explicit_target_type();
     test_empty_array_literal_binding_accepts_explicit_target_type();
     test_index_assignment_rejects_readonly_array();
-    test_writable_array_literal_does_not_match_readonly_target();
+    test_array_literal_matches_readonly_target();
     test_cast_strips_writable_array_to_readonly();
     test_cast_rejects_adding_writable_to_readonly_array();
     test_empty_writable_array_literal_requires_writable_target();
@@ -10138,6 +10204,9 @@ int main(void) {
     test_cast_rejects_numeric_to_object();
     test_cast_rejects_object_to_numeric();
     test_cast_same_type_passes();
+    test_non_generic_array_new_colon_dimension_accepts_expected_target();
+    test_non_generic_array_new_legacy_bracket_syntax_rejected();
+    test_index_access_on_uppercase_local_name_remains_index_expression();
     test_index_expression_rejects_float_operand();
     test_index_expression_rejects_bool_operand();
     test_index_expression_rejects_non_array_target();

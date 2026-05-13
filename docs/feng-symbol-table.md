@@ -720,7 +720,7 @@ RELS
 
 **`FT_TYPE_KIND_ARRAY`**（数组类型）:
 
-- `string_ref`：逐层可写位图 `mutability_bitmap`（覆盖 `T[]`、`T[]!`、`T[]![]` 等语义）；
+- `string_ref`：逐层可写位图 `mutability_bitmap`（覆盖 `T[]`、`T[!]`、`T[!][]` 等语义）；
 - `elem_count`：数组层数 `rank`；`elem_start`：元素类型 TYPS.id；`sym_ref`、`reserved1` 为 `0`。
 
 **`FT_TYPE_KIND_C_POINTER`**（C 指针类型）:
@@ -752,7 +752,7 @@ RELS
 
 - `string` 作为 builtin 类型节点处理。
 - `*T` 作为 `c-pointer` 类型节点处理。
-- 数组的层数与逐层可写性必须进入类型节点,不能只把 `T[]![]` 抹平成一个字符串。
+- 数组的层数与逐层可写性必须进入类型节点,不能只把 `T[!][]` 抹平成一个字符串。
 
 ### 6.7 `TSEQ` 类型序列元素
 

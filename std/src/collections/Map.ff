@@ -24,10 +24,10 @@ pu type MapEntity<K, V> {
  */
 pu type Map<K: Hashable<K>, V> {
   // Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
-  pr var states: i32[]!;
-  pr var hashes: u64[]!;
-  pr var keys: K[]!;
-  pr var values: V[]!;
+  pr var states: i32[!];
+  pr var hashes: u64[!];
+  pr var keys: K[!];
+  pr var values: V[!];
   pr var size: i32;
   pr var used: i32;
   pr var capacity: i32;
@@ -63,15 +63,15 @@ pu type Map<K: Hashable<K>, V> {
   }
 
   pr fn rehash(newCapacity: i32) {
-    let oldStates: i32[]! = self.states;
-    let oldHashes: u64[]! = self.hashes;
-    let oldKeys: K[]! = self.keys;
-    let oldValues: V[]! = self.values;
+    let oldStates: i32[!] = self.states;
+    let oldHashes: u64[!] = self.hashes;
+    let oldKeys: K[!] = self.keys;
+    let oldValues: V[!] = self.values;
     let oldCapacity: i32 = self.capacity;
-    self.states = i32[newCapacity]!;
-    self.hashes = u64[newCapacity]!;
-    self.keys = K[newCapacity]!;
-    self.values = V[newCapacity]!;
+    self.states = i32[:newCapacity];
+    self.hashes = u64[:newCapacity];
+    self.keys = K[:newCapacity];
+    self.values = V[:newCapacity];
     self.capacity = newCapacity;
     self.size = 0;
     self.used = 0;
@@ -238,8 +238,8 @@ pu type Map<K: Hashable<K>, V> {
    * Returns all occupied entries as an immutable dense array.
    * @return immutable array of map entries
    */
-  pu fn entries(): MapEntity<K, V>[]! {
-    let items: MapEntity<K, V>[]! = MapEntity:<K, V>[self.size]!;
+  pu fn entries(): MapEntity<K, V>[!] {
+    let items: MapEntity<K, V>[!] = MapEntity:<K, V>[self.size];
     var outputIndex: i32 = 0;
     for var i: i32 = 0; i < self.capacity; i = i + 1 {
       if self.states[i] == 1 {

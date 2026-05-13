@@ -863,7 +863,7 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
         "pu fit int[]: Label {\n"
         "    pu fn label(): string { return \"arr_ro\"; }\n"
         "}\n"
-        "pu fit int[]!: Label {\n"
+        "pu fit int[!]: Label {\n"
         "    pu fn label(): string { return \"arr_rw\"; }\n"
         "}\n";
 
@@ -958,7 +958,7 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
         "pu mod feng.test.symbol.fit_array_type_param_target;\n"
         "\n"
         "pu spec ArrTag<T> { fn count(): int; }\n"
-        "pu fit T[]!: ArrTag<T> {\n"
+        "pu fit T[!]: ArrTag<T> {\n"
         "    pu fn count(): int { return 0; }\n"
         "}\n";
 

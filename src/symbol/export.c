@@ -1485,7 +1485,7 @@ static const FengDecl *find_local_source_type_decl(const BuildContext *ctx,
     return NULL;
 }
 
-/* For `fit T[]` / `fit T[]!` targets, infer the fit-local array element type
+/* For `fit T[]` / `fit T[!]` targets, infer the fit-local array element type
  * parameter name when the element is a single unresolved non-builtin name. */
 static bool infer_fit_array_target_type_param_name(const BuildContext *ctx,
                                                    const FengTypeRef *target_ref,

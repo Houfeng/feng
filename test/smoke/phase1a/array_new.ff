@@ -9,8 +9,8 @@ type Counter {
 }
 
 fn main(args: string[]) {
-    /* Non-generic array-new: Counter[n]! allocates n zero-initialized Counters. */
-    let counters: Counter[]! = Counter[3]!;
+    /* Non-generic array-new: Counter[:n] allocates n zero-initialized Counters. */
+    let counters: Counter[!] = Counter[:3];
 
     counters[0].value = 10;
     counters[1].value = 20;

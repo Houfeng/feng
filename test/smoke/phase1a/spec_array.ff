@@ -20,7 +20,7 @@ fn main(args: string[]) {
     let b: User = User { name: "beta" };
     let c: User = User { name: "gamma" };
 
-    let arr: Named[]! = [a, b]!;
+    let arr: Named[!] = [a, b];
 
     let n0: Named = arr[0];
     puts(n0.greet());

@@ -6,7 +6,7 @@ extern fn puts(msg: string): int;
 let greeting: string = "hello";
 
 fn main(args: string[]) {
-    let nums: i32[]! = [10, 20, 30]!;
+    let nums: i32[!] = [10, 20, 30];
     if nums[1] == 20 {
         puts("idx-ok");
     } else {

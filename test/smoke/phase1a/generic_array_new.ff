@@ -9,7 +9,7 @@ type Pair<A, B> {
 }
 
 fn main(args: string[]) {
-    let pairs: Pair<i32, i32>[]! = Pair:<i32, i32>[2]!;
+    let pairs: Pair<i32, i32>[!] = Pair:<i32, i32>[2];
     pairs[0].left = 10;
     pairs[0].right = 20;
 

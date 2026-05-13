@@ -83,10 +83,7 @@ static void dump_type_ref(FILE *stream, const FengTypeRef *type_ref) {
             break;
         case FENG_TYPE_REF_ARRAY:
             dump_type_ref(stream, type_ref->as.inner);
-            fputs("[]", stream);
-            if (type_ref->array_element_writable) {
-                fputc('!', stream);
-            }
+            fputs(type_ref->array_element_writable ? "[!]" : "[]", stream);
             break;
     }
 }
@@ -157,9 +154,6 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
                 dump_expr(stream, expr->as.array_literal.items[index], 0);
             }
             fputc(']', stream);
-            if (expr->as.array_literal.element_writable) {
-                fputc('!', stream);
-            }
             break;
         case FENG_EXPR_OBJECT_LITERAL:
             dump_expr(stream, expr->as.object_literal.target, 0);
@@ -269,9 +263,6 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             fputc('[', stream);
             dump_expr(stream, expr->as.array_new.size, 0);
             fputc(']', stream);
-            if (expr->as.array_new.element_writable) {
-                fputc('!', stream);
-            }
             break;
     }
 }

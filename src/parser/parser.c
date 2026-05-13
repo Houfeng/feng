@@ -576,10 +576,16 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
 
     while (parser_match(parser, FENG_TOKEN_LBRACKET)) {
         FengTypeRef *wrapper;
+        bool layer_writable = false;
 
+        if (parser_match(parser, FENG_TOKEN_NOT)) {
+            layer_writable = true;
+        }
         if (!parser_expect(parser,
-                   FENG_TOKEN_RBRACKET,
-                   "expected ']' to close array type suffix")) {
+                           FENG_TOKEN_RBRACKET,
+                           layer_writable
+                               ? "expected ']' after '[!' in array type suffix"
+                               : "expected ']' to close array type suffix")) {
             free_type_ref(type_ref);
             return NULL;
         }
@@ -590,12 +596,7 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
             return NULL;
         }
         wrapper->as.inner = type_ref;
-        /* Optional `!` marks this array layer's elements as writable
-         * (docs/feng-builtin-type.md §5). The flag binds to the nearest
-         * preceding `[]` only and does not propagate across layers. */
-        if (parser_match(parser, FENG_TOKEN_NOT)) {
-            wrapper->array_element_writable = true;
-        }
+        wrapper->array_element_writable = layer_writable;
         type_ref = wrapper;
     }
 
@@ -1776,15 +1777,13 @@ static bool looks_like_type_ref_at(const Parser *parser, size_t *index) {
 
     while (parser->tokens[cursor].kind == FENG_TOKEN_LBRACKET) {
         ++cursor;
+        if (parser->tokens[cursor].kind == FENG_TOKEN_NOT) {
+            ++cursor;
+        }
         if (parser->tokens[cursor].kind != FENG_TOKEN_RBRACKET) {
             return false;
         }
         ++cursor;
-        /* Optional `!` marks the array layer's elements writable; consume it
-         * so the cast/look-ahead does not stop in the middle of a typeref. */
-        if (parser->tokens[cursor].kind == FENG_TOKEN_NOT) {
-            ++cursor;
-        }
     }
 
     *index = cursor;
@@ -1912,12 +1911,6 @@ static FengExpr *parse_array_literal(Parser *parser) {
     if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' to close array literal")) {
         free_expr(expr);
         return NULL;
-    }
-
-    /* Optional trailing `!` marks the literal's element layer writable
-     * (docs/feng-expression.md §6.2; docs/feng-builtin-type.md §5). */
-    if (parser_match(parser, FENG_TOKEN_NOT)) {
-        expr->as.array_literal.element_writable = true;
     }
 
     return expr;
@@ -2412,7 +2405,7 @@ static FengExpr *parse_postfix(Parser *parser) {
     }
 
     for (;;) {
-        /* Explicit generic call or array-new: callee:<T1, T2>(...) / T:<T1,T2>[n]! */
+        /* Explicit generic call or array-new: callee:<T1, T2>(...) / T:<T1,T2>[n] */
         if (parser_check(parser, FENG_TOKEN_COLON) &&
             parser_peek(parser, 1U)->kind == FENG_TOKEN_LT) {
             FengToken op_token = expr->token;
@@ -2434,9 +2427,10 @@ static FengExpr *parse_postfix(Parser *parser) {
                 return NULL;
             }
 
-            /* After `:<TypeArgs>`, `[` → array-new; `(` → call. */
+            /* After `:<TypeArgs>`, `[` → array-new; `(` → call.
+             * Generic array-new keeps Type:<...>[n]; non-generic uses Type[:n]. */
             if (parser_check(parser, FENG_TOKEN_LBRACKET)) {
-                /* T:<TypeArgs>[n]! — array-new expression */
+                /* T:<TypeArgs>[n] — array-new expression */
                 if (expr->kind != FENG_EXPR_IDENTIFIER) {
                     for (size_t i = 0U; i < type_arg_count; i++) {
                         free_type_ref(type_args[i]);
@@ -2497,9 +2491,6 @@ static FengExpr *parse_postfix(Parser *parser) {
                         "expected ']' after array size")) {
                     free_expr(arr_new);
                     return NULL;
-                }
-                if (parser_match(parser, FENG_TOKEN_NOT)) {
-                    arr_new->as.array_new.element_writable = true;
                 }
                 expr = arr_new;
                 continue;
@@ -2618,53 +2609,94 @@ static FengExpr *parse_postfix(Parser *parser) {
         }
 
         if (parser_match(parser, FENG_TOKEN_LBRACKET)) {
-            /* Parse the expression inside brackets. */
-            FengExpr *inner = parse_expression(parser);
-            if (inner == NULL) {
-                free_expr(expr);
-                return NULL;
-            }
-            if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "expected ']' to close index/array-new expression")) {
-                free_expr(inner);
-                free_expr(expr);
-                return NULL;
-            }
+            if (parser_match(parser, FENG_TOKEN_COLON)) {
+                FengExpr *size_expr;
+                FengExpr *arr_new;
+                FengTypeRef *elem_type;
+                FengSlice *seg;
 
-            /* Type[n]! — non-generic array-new (base must be a simple identifier). */
-            if (parser_match(parser, FENG_TOKEN_NOT) &&
-                expr->kind == FENG_EXPR_IDENTIFIER) {
-                FengExpr *arr_new = new_expr(parser, FENG_EXPR_ARRAY_NEW, expr->token);
-                if (!arr_new) {
-                    free_expr(inner); free_expr(expr); return NULL;
+                /* Non-generic array-new now uses Type[:n]. */
+                if (expr->kind != FENG_EXPR_IDENTIFIER) {
+                    free_expr(expr);
+                    (void)parser_error_current(
+                        parser,
+                        "array-new segment '[:expr]' requires a type name");
+                    return NULL;
                 }
-                FengTypeRef *elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, expr->token);
-                if (!elem_type) {
-                    free_expr(arr_new); free_expr(inner); free_expr(expr); return NULL;
+
+                size_expr = parse_expression(parser);
+                if (size_expr == NULL) {
+                    free_expr(expr);
+                    return NULL;
                 }
-                FengSlice *seg = (FengSlice *)malloc(sizeof *seg);
-                if (!seg) {
-                    free_type_ref(elem_type); free_expr(arr_new); free_expr(inner); free_expr(expr); return NULL;
+                if (!parser_expect(parser,
+                                   FENG_TOKEN_RBRACKET,
+                                   "expected ']' after array size in '[:expr]'")) {
+                    free_expr(size_expr);
+                    free_expr(expr);
+                    return NULL;
                 }
+
+                arr_new = new_expr(parser, FENG_EXPR_ARRAY_NEW, expr->token);
+                if (arr_new == NULL) {
+                    free_expr(size_expr);
+                    free_expr(expr);
+                    return NULL;
+                }
+                elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, expr->token);
+                if (elem_type == NULL) {
+                    free_expr(arr_new);
+                    free_expr(size_expr);
+                    free_expr(expr);
+                    return NULL;
+                }
+                seg = (FengSlice *)malloc(sizeof *seg);
+                if (seg == NULL) {
+                    free_type_ref(elem_type);
+                    free_expr(arr_new);
+                    free_expr(size_expr);
+                    free_expr(expr);
+                    return NULL;
+                }
+
                 *seg = expr->as.identifier;
                 elem_type->as.named.segments = seg;
                 elem_type->as.named.segment_count = 1U;
                 arr_new->as.array_new.element_type = elem_type;
-                arr_new->as.array_new.size = inner;
-                arr_new->as.array_new.element_writable = true;
+                arr_new->as.array_new.size = size_expr;
                 free_expr(expr);
                 expr = arr_new;
                 continue;
             }
 
-            /* Otherwise: ordinary index expression. */
-            FengExpr *index = new_expr(parser, FENG_EXPR_INDEX, expr->token);
-            if (index == NULL) {
-                free_expr(inner); free_expr(expr); return NULL;
+            /* Ordinary index expression: value[index]. */
+            {
+                FengExpr *inner = parse_expression(parser);
+                FengExpr *index;
+
+                if (inner == NULL) {
+                    free_expr(expr);
+                    return NULL;
+                }
+                if (!parser_expect(parser,
+                                   FENG_TOKEN_RBRACKET,
+                                   "expected ']' to close index expression")) {
+                    free_expr(inner);
+                    free_expr(expr);
+                    return NULL;
+                }
+
+                index = new_expr(parser, FENG_EXPR_INDEX, expr->token);
+                if (index == NULL) {
+                    free_expr(inner);
+                    free_expr(expr);
+                    return NULL;
+                }
+                index->as.index.object = expr;
+                index->as.index.index = inner;
+                expr = index;
+                continue;
             }
-            index->as.index.object = expr;
-            index->as.index.index = inner;
-            expr = index;
-            continue;
         }
 
         break;

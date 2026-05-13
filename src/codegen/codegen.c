@@ -10664,7 +10664,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
  *
  * Limitations honoured here:
  *   - The semantic analyzer (analyzer.c) restricts the for/in sequence to
- *     `T[]` / `T[]!` and ensures the iter binding's mutability matches use.
+ *     `T[]` / `T[!]` and ensures the iter binding's mutability matches use.
  *   - try-frame crossing is rejected by cg_emit_break_continue (Phase 1A).
  */
 static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
