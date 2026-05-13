@@ -2,6 +2,8 @@
 
 本文档说明 Feng 中 `fit` 的职责、语法、语义与实现约束。`fit` 用于声明具体类型如何进入一个或多个 object-form `spec` 契约,或如何给类型自身补充额外能力。
 
+内建类型与数组目标（如 `fit int[]`、`fit T[]`、`fit T[!]`）的专门规则统一见 [feng-fit-builtin-type.md](./feng-fit-builtin-type.md)。
+
 ## 1 职责
 
 - `fit` 用于显式建立“具体类型满足 object-form 契约”的关系。
