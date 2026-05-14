@@ -273,10 +273,10 @@ typedef struct ResolvedTypeTarget {
     const FengSemanticModule *provider_module;
 } ResolvedTypeTarget;
 
-typedef struct FixedAbiTrace {
+typedef struct AbiTrace {
     const FengDecl *decl;
-    const struct FixedAbiTrace *parent;
-} FixedAbiTrace;
+    const struct AbiTrace *parent;
+} AbiTrace;
 
 static FengSlice slice_from_cstr(const char *text) {
     FengSlice slice;
@@ -1435,12 +1435,22 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         return true;
     }
 
+    if (annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI)) {
+        return resolver_append_error(
+            context,
+            decl->as.function_decl.token,
+            format_message(
+                "function '%.*s' cannot be marked as @abi because extern functions declare imported C symbols",
+                (int)decl->as.function_decl.name.length,
+                decl->as.function_decl.name.data));
+    }
+
     if (annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED)) {
         return resolver_append_error(
             context,
             decl->as.function_decl.token,
             format_message(
-                "function '%.*s' cannot be marked as @fixed because extern functions declare imported C symbols",
+                "function '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
     }
@@ -4608,7 +4618,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
 
     type_is_fixed = annotations_contain_kind(type_decl->annotations,
                                              type_decl->annotation_count,
-                                             FENG_ANNOTATION_FIXED);
+                                             FENG_ANNOTATION_ABI);
 
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
@@ -4622,7 +4632,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
                 context,
                 member->token,
                 format_message(
-                    "type '%.*s' is marked as @fixed and cannot declare a finalizer",
+                    "type '%.*s' is marked as @abi and cannot declare a finalizer",
                     (int)decl_typeish_name(type_decl).length,
                     decl_typeish_name(type_decl).data));
         }
@@ -4643,29 +4653,29 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
     return true;
 }
 
-static bool function_type_decl_is_fixed_abi_callable_type(const FengDecl *function_type_decl) {
+static bool function_type_decl_is_abi_callable_type(const FengDecl *function_type_decl) {
     return function_type_decl != NULL && decl_is_function_type(function_type_decl) &&
            annotations_contain_kind(function_type_decl->annotations,
                                     function_type_decl->annotation_count,
-                                    FENG_ANNOTATION_FIXED);
+                                    FENG_ANNOTATION_ABI);
 }
 
-static bool function_decl_is_fixed_abi_callable_value(const FengDecl *decl) {
+static bool function_decl_is_abi_callable_value(const FengDecl *decl) {
     return decl != NULL && decl->kind == FENG_DECL_FUNCTION &&
            (decl->is_extern ||
             annotations_contain_kind(decl->annotations,
                                      decl->annotation_count,
-                                     FENG_ANNOTATION_FIXED));
+                                     FENG_ANNOTATION_ABI));
 }
 
-static bool method_member_is_fixed_abi_callable_value(const FengTypeMember *member) {
+static bool method_member_is_abi_callable_value(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
            annotations_contain_kind(member->annotations,
                                     member->annotation_count,
-                                    FENG_ANNOTATION_FIXED);
+                                    FENG_ANNOTATION_ABI);
 }
 
-static bool inferred_expr_type_can_match_fixed_abi_callable_type(InferredExprType type) {
+static bool inferred_expr_type_can_match_abi_callable_type(InferredExprType type) {
     return type.kind != FENG_INFERRED_EXPR_TYPE_LAMBDA;
 }
 
@@ -5092,9 +5102,9 @@ static bool type_ref_is_throwable(const ResolveContext *context,
             if (decl != NULL && decl->kind == FENG_DECL_TYPE &&
                 annotations_contain_kind(decl->annotations,
                                          decl->annotation_count,
-                                         FENG_ANNOTATION_FIXED)) {
+                                         FENG_ANNOTATION_ABI)) {
                 if (out_reason != NULL) {
-                    *out_reason = "@fixed types are ABI-bound and cannot be thrown as exceptions";
+                    *out_reason = "@abi types are ABI-bound and cannot be thrown as exceptions";
                 }
                 return false;
             }
@@ -5124,9 +5134,9 @@ static bool inferred_expr_type_is_throwable(const ResolveContext *context,
             if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE &&
                 annotations_contain_kind(type.type_decl->annotations,
                                          type.type_decl->annotation_count,
-                                         FENG_ANNOTATION_FIXED)) {
+                                         FENG_ANNOTATION_ABI)) {
                 if (out_reason != NULL) {
-                    *out_reason = "@fixed types are ABI-bound and cannot be thrown as exceptions";
+                    *out_reason = "@abi types are ABI-bound and cannot be thrown as exceptions";
                 }
                 return false;
             }
@@ -5259,21 +5269,21 @@ static CallableValueResolution resolve_top_level_function_value_overload(
     const FengDecl *function_type_decl) {
     size_t decl_index;
     CallableValueResolution result;
-    bool requires_fixed_abi_callable;
+    bool requires_abi_callable;
 
     memset(&result, 0, sizeof(result));
     if (overload_set == NULL || function_type_decl == NULL) {
         return result;
     }
 
-    requires_fixed_abi_callable =
-        function_type_decl_is_fixed_abi_callable_type(function_type_decl);
+    requires_abi_callable =
+        function_type_decl_is_abi_callable_type(function_type_decl);
 
     for (decl_index = 0U; decl_index < overload_set->decl_count; ++decl_index) {
         const FengDecl *decl = overload_set->decls[decl_index];
 
         if (decl == NULL || decl->kind != FENG_DECL_FUNCTION ||
-            (requires_fixed_abi_callable && !function_decl_is_fixed_abi_callable_value(decl)) ||
+            (requires_abi_callable && !function_decl_is_abi_callable_value(decl)) ||
             !function_type_decl_matches_callable_signature_or_is_pending(context,
                                                                          expected_type_ref,
                                                                          function_type_decl,
@@ -5312,15 +5322,15 @@ static CallableValueResolution resolve_module_public_function_value_overload(
     const FengDecl *function_type_decl) {
     size_t program_index;
     CallableValueResolution result;
-    bool requires_fixed_abi_callable;
+    bool requires_abi_callable;
 
     memset(&result, 0, sizeof(result));
     if (module == NULL || function_type_decl == NULL) {
         return result;
     }
 
-    requires_fixed_abi_callable =
-        function_type_decl_is_fixed_abi_callable_type(function_type_decl);
+    requires_abi_callable =
+        function_type_decl_is_abi_callable_type(function_type_decl);
 
     for (program_index = 0U; program_index < module->program_count; ++program_index) {
         const FengProgram *program = module->programs[program_index];
@@ -5331,7 +5341,7 @@ static CallableValueResolution resolve_module_public_function_value_overload(
 
             if (decl->kind != FENG_DECL_FUNCTION || !decl_is_public(decl) ||
                 !slice_equals(decl->as.function_decl.name, name) ||
-                (requires_fixed_abi_callable && !function_decl_is_fixed_abi_callable_value(decl)) ||
+                (requires_abi_callable && !function_decl_is_abi_callable_value(decl)) ||
                 !function_type_decl_matches_callable_signature_or_is_pending(
                     context,
                     expected_type_ref,
@@ -5373,15 +5383,15 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     const FengDecl *function_type_decl) {
     size_t member_index;
     CallableValueResolution result;
-    bool requires_fixed_abi_callable;
+    bool requires_abi_callable;
 
     memset(&result, 0, sizeof(result));
     if (type_decl == NULL || function_type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
         return result;
     }
 
-    requires_fixed_abi_callable =
-        function_type_decl_is_fixed_abi_callable_type(function_type_decl);
+    requires_abi_callable =
+        function_type_decl_is_abi_callable_type(function_type_decl);
 
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
@@ -5390,7 +5400,7 @@ static CallableValueResolution resolve_accessible_method_value_overload(
             !slice_equals(member->as.callable.name, name) ||
             !type_member_is_accessible_from(context, provider_module, member) ||
             fit_body_blocks_private_access(context, type_decl, member) ||
-            (requires_fixed_abi_callable && !method_member_is_fixed_abi_callable_value(member)) ||
+            (requires_abi_callable && !method_member_is_abi_callable_value(member)) ||
             !function_type_decl_matches_callable_signature_or_is_pending(context,
                                                                          expected_type_ref,
                                                                          function_type_decl,
@@ -7901,7 +7911,7 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                                            const FengTypeRef *expected_type_ref) {
     CallableValueResolution result;
     const FengDecl *function_type_decl;
-    bool requires_fixed_abi_callable;
+    bool requires_abi_callable;
 
     memset(&result, 0, sizeof(result));
     function_type_decl = resolve_function_type_decl(context, expected_type_ref);
@@ -7909,8 +7919,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
         return result;
     }
 
-    requires_fixed_abi_callable =
-        function_type_decl_is_fixed_abi_callable_type(function_type_decl);
+    requires_abi_callable =
+        function_type_decl_is_abi_callable_type(function_type_decl);
 
     switch (expr->kind) {
         case FENG_EXPR_IDENTIFIER: {
@@ -7921,8 +7931,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
 
             if (local_entry != NULL) {
                 if (inferred_expr_type_matches_type_ref(context, local_entry->type, expected_type_ref) &&
-                    (!requires_fixed_abi_callable ||
-                     inferred_expr_type_can_match_fixed_abi_callable_type(local_entry->type))) {
+                    (!requires_abi_callable ||
+                     inferred_expr_type_can_match_abi_callable_type(local_entry->type))) {
                     result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
                     result.callable_decl = NULL;
                     result.callable_member = NULL;
@@ -8018,7 +8028,7 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
         }
 
         case FENG_EXPR_LAMBDA:
-            if (requires_fixed_abi_callable) {
+            if (requires_abi_callable) {
                 return result;
             }
             if (lambda_expr_matches_function_type(context, expr, function_type_decl)) {
@@ -9412,7 +9422,7 @@ static char *format_inferred_expr_type_name(InferredExprType type) {
     return duplicate_cstr("<type>");
 }
 
-static bool fixed_abi_trace_contains(const FixedAbiTrace *trace, const FengDecl *decl) {
+static bool abi_trace_contains(const AbiTrace *trace, const FengDecl *decl) {
     while (trace != NULL) {
         if (trace->decl == decl) {
             return true;
@@ -9423,14 +9433,14 @@ static bool fixed_abi_trace_contains(const FixedAbiTrace *trace, const FengDecl 
     return false;
 }
 
-static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
+static bool type_decl_is_abi_stable(const ResolveContext *context,
                                           const FengDecl *decl,
-                                          const FixedAbiTrace *trace);
+                                          const AbiTrace *trace);
 
-static bool type_ref_is_fixed_abi_stable(const ResolveContext *context,
+static bool type_ref_is_abi_stable(const ResolveContext *context,
                                          const FengTypeRef *type_ref,
                                          bool allow_void,
-                                         const FixedAbiTrace *trace) {
+                                         const AbiTrace *trace) {
     const FengDecl *type_decl;
     const char *builtin_name;
 
@@ -9451,7 +9461,7 @@ static bool type_ref_is_fixed_abi_stable(const ResolveContext *context,
             }
 
             type_decl = resolve_type_ref_decl(context, type_ref);
-            return type_decl_is_fixed_abi_stable(context, type_decl, trace);
+            return type_decl_is_abi_stable(context, type_decl, trace);
 
         case FENG_TYPE_REF_POINTER:
             return true;
@@ -9463,10 +9473,10 @@ static bool type_ref_is_fixed_abi_stable(const ResolveContext *context,
     return false;
 }
 
-static bool inferred_expr_type_is_fixed_abi_stable(const ResolveContext *context,
+static bool inferred_expr_type_is_abi_stable(const ResolveContext *context,
                                                    InferredExprType type,
                                                    bool allow_void,
-                                                   const FixedAbiTrace *trace) {
+                                                   const AbiTrace *trace) {
     const char *builtin_name;
 
     switch (type.kind) {
@@ -9481,10 +9491,10 @@ static bool inferred_expr_type_is_fixed_abi_stable(const ResolveContext *context
             return strcmp(builtin_name, "string") != 0;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return type_ref_is_fixed_abi_stable(context, type.type_ref, allow_void, trace);
+            return type_ref_is_abi_stable(context, type.type_ref, allow_void, trace);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
-            return type_decl_is_fixed_abi_stable(context, type.type_decl, trace);
+            return type_decl_is_abi_stable(context, type.type_decl, trace);
 
         case FENG_INFERRED_EXPR_TYPE_LAMBDA:
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
@@ -9494,23 +9504,23 @@ static bool inferred_expr_type_is_fixed_abi_stable(const ResolveContext *context
     return false;
 }
 
-static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
+static bool type_decl_is_abi_stable(const ResolveContext *context,
                                           const FengDecl *decl,
-                                          const FixedAbiTrace *trace) {
-    FixedAbiTrace next_trace;
+                                          const AbiTrace *trace) {
+    AbiTrace next_trace;
     size_t member_index;
     size_t param_index;
 
     if (decl == NULL || (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_SPEC) ||
-        !annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED) ||
-        fixed_abi_trace_contains(trace, decl)) {
+        !annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI) ||
+        abi_trace_contains(trace, decl)) {
         return false;
     }
 
     /* Object-form `spec` only constrains visible shape, not memory layout or
-     * ABI value layout, so it can never be a fixed ABI-stable type even if the
+     * ABI value layout, so it can never be an ABI-stable type even if the
      * annotation is present. The actual diagnostic is emitted by
-     * `validate_fixed_type_declaration`; here we simply refuse to treat it as
+     * `validate_abi_type_declaration`; here we simply refuse to treat it as
      * stable so dependent types do not transitively appear ABI-stable. */
     if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
         return false;
@@ -9529,7 +9539,7 @@ static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
         }
 
         for (param_index = 0U; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
-            if (!type_ref_is_fixed_abi_stable(context,
+            if (!type_ref_is_abi_stable(context,
                                               decl->as.spec_decl.as.callable.params[param_index].type,
                                               false,
                                               &next_trace)) {
@@ -9537,7 +9547,7 @@ static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
             }
         }
 
-        return type_ref_is_fixed_abi_stable(
+        return type_ref_is_abi_stable(
             context, decl->as.spec_decl.as.callable.return_type, true, &next_trace);
     }
 
@@ -9547,7 +9557,7 @@ static bool type_decl_is_fixed_abi_stable(const ResolveContext *context,
         if (member->kind != FENG_TYPE_MEMBER_FIELD) {
             continue;
         }
-        if (!type_ref_is_fixed_abi_stable(context, member->as.field.type, false, &next_trace)) {
+        if (!type_ref_is_abi_stable(context, member->as.field.type, false, &next_trace)) {
             return false;
         }
     }
@@ -9611,33 +9621,46 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
     return ok;
 }
 
-static bool validate_fixed_type_declaration(ResolveContext *context, const FengDecl *decl) {
-    FixedAbiTrace trace;
+static bool validate_abi_type_declaration(ResolveContext *context, const FengDecl *decl) {
+    AbiTrace trace;
     size_t callconv_count;
     size_t field_index;
     size_t param_index;
-    bool has_fixed;
+    bool has_abi;
+    bool has_legacy_fixed;
     bool has_union;
 
     if (context == NULL || decl == NULL || (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_SPEC)) {
         return true;
     }
 
-    has_fixed = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED);
+    has_abi = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI);
+    has_legacy_fixed =
+        annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED);
     has_union = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(decl->annotations, decl->annotation_count);
 
+    if (has_legacy_fixed) {
+        return resolver_append_error(
+            context,
+            decl->token,
+            format_message(
+                "type '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
+                (int)decl_typeish_name(decl).length,
+                decl_typeish_name(decl).data));
+    }
+
     /* Object-form `spec` only describes a visible shape contract; it does not
      * fix memory layout or ABI value layout, so it cannot enter the C ABI
-     * boundary. Reject @fixed, @union and calling-convention annotations on
+     * boundary. Reject @abi, @union and calling-convention annotations on
      * object-form spec declarations with an explicit, actionable diagnostic. */
     if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
-        if (has_fixed) {
+        if (has_abi) {
             return resolver_append_error(
                 context,
                 decl->token,
                 format_message(
-                    "object-form spec '%.*s' cannot be marked as @fixed; @fixed only applies to type declarations and callable-form spec",
+                    "object-form spec '%.*s' cannot be marked as @abi; @abi only applies to type declarations and callable-form spec",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -9646,7 +9669,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
                 context,
                 decl->token,
                 format_message(
-                    "spec '%.*s' cannot use @union; @union only applies to object-form @fixed type declarations",
+                    "spec '%.*s' cannot use @union; @union only applies to object-form @abi type declarations",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -9662,13 +9685,13 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
         return true;
     }
 
-    if (!has_fixed) {
+    if (!has_abi) {
         if (has_union) {
             return resolver_append_error(
                 context,
                 decl->token,
                 format_message(
-                    "type '%.*s' cannot use @union unless it is marked as @fixed and declared in object form",
+                    "type '%.*s' cannot use @union unless it is marked as @abi and declared in object form",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -9688,7 +9711,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
             context,
             decl->token,
             format_message(
-                "type '%.*s' cannot be marked as @fixed because calling convention annotations do not apply to type declarations",
+                "type '%.*s' cannot be marked as @abi because calling convention annotations do not apply to type declarations",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
     }
@@ -9698,7 +9721,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
             context,
             decl->token,
             format_message(
-                "type '%.*s' cannot be marked as @fixed because @union only applies to object-form @fixed type declarations",
+                "type '%.*s' cannot be marked as @abi because @union only applies to object-form @abi type declarations",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
     }
@@ -9712,7 +9735,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
             char *type_name;
             bool ok;
 
-            if (type_ref_is_fixed_abi_stable(context, param->type, false, &trace)) {
+            if (type_ref_is_abi_stable(context, param->type, false, &trace)) {
                 continue;
             }
 
@@ -9721,7 +9744,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
                 context,
                 param->token,
                 format_message(
-                    "type '%.*s' cannot be marked as @fixed because parameter '%.*s' uses non-ABI-stable type '%s'",
+                    "type '%.*s' cannot be marked as @abi because parameter '%.*s' uses non-ABI-stable type '%s'",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
                     (int)param->name.length,
@@ -9731,14 +9754,14 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
             return ok;
         }
 
-        if (!type_ref_is_fixed_abi_stable(
+        if (!type_ref_is_abi_stable(
                 context, decl->as.spec_decl.as.callable.return_type, true, &trace)) {
             char *type_name = format_type_ref_name(decl->as.spec_decl.as.callable.return_type);
             bool ok = resolver_append_error(
                 context,
                 decl->token,
                 format_message(
-                    "type '%.*s' cannot be marked as @fixed because return type '%s' is not ABI-stable",
+                    "type '%.*s' cannot be marked as @abi because return type '%s' is not ABI-stable",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
                     type_name != NULL ? type_name : "<type>"));
@@ -9755,7 +9778,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
         bool ok;
 
         if (member->kind != FENG_TYPE_MEMBER_FIELD ||
-            type_ref_is_fixed_abi_stable(context, member->as.field.type, false, &trace)) {
+            type_ref_is_abi_stable(context, member->as.field.type, false, &trace)) {
             continue;
         }
 
@@ -9764,7 +9787,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
             context,
             member->token,
             format_message(
-                "type '%.*s' cannot be marked as @fixed because field '%.*s' uses non-ABI-stable type '%s'",
+                "type '%.*s' cannot be marked as @abi because field '%.*s' uses non-ABI-stable type '%s'",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
                 (int)member->as.field.name.length,
@@ -9777,7 +9800,7 @@ static bool validate_fixed_type_declaration(ResolveContext *context, const FengD
     return true;
 }
 
-static bool validate_fixed_callable_signature(ResolveContext *context,
+static bool validate_abi_callable_signature(ResolveContext *context,
                                              FengToken token,
                                              FengSlice name,
                                              const FengAnnotation *annotations,
@@ -9787,7 +9810,8 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
                                              bool is_extern) {
     const FengAnnotation *calling_convention;
     size_t callconv_count;
-    bool has_fixed;
+    bool has_abi;
+    bool has_legacy_fixed;
     bool has_union;
     size_t param_index;
 
@@ -9795,12 +9819,24 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
         return true;
     }
 
-    has_fixed = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_FIXED);
+    has_abi = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
+    has_legacy_fixed = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_FIXED);
     has_union = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(annotations, annotation_count);
     calling_convention = find_calling_convention_annotation(annotations, annotation_count);
 
-    if (!has_fixed) {
+    if (has_legacy_fixed) {
+        return resolver_append_error(
+            context,
+            token,
+            format_message(
+                "%s '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
+                callable_kind,
+                (int)name.length,
+                name.data));
+    }
+
+    if (!has_abi) {
         if (has_union) {
             return resolver_append_error(
                 context,
@@ -9815,7 +9851,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
                 context,
                 calling_convention != NULL ? calling_convention->token : token,
                 format_message(
-                    "%s '%.*s' cannot use calling convention annotations unless it is marked as @fixed or declared extern",
+                    "%s '%.*s' cannot use calling convention annotations unless it is marked as @abi or declared extern",
                     callable_kind,
                     (int)name.length,
                     name.data));
@@ -9828,7 +9864,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because extern functions declare imported C symbols",
+                "%s '%.*s' cannot be marked as @abi because extern functions declare imported C symbols",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -9839,7 +9875,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because @union only applies to object-form @fixed type declarations",
+                "%s '%.*s' cannot be marked as @abi because @union only applies to object-form @abi type declarations",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -9850,7 +9886,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because it uses more than one calling convention annotation",
+                "%s '%.*s' cannot be marked as @abi because it uses more than one calling convention annotation",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -9861,7 +9897,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             calling_convention->token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because calling convention annotations on @fixed declarations must not take library arguments",
+                "%s '%.*s' cannot be marked as @abi because calling convention annotations on @abi declarations must not take library arguments",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -9872,7 +9908,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
         char *type_name;
         bool ok;
 
-        if (type_ref_is_fixed_abi_stable(context, param->type, false, NULL)) {
+        if (type_ref_is_abi_stable(context, param->type, false, NULL)) {
             continue;
         }
 
@@ -9881,7 +9917,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             param->token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because parameter '%.*s' uses non-ABI-stable type '%s'",
+                "%s '%.*s' cannot be marked as @abi because parameter '%.*s' uses non-ABI-stable type '%s'",
                 callable_kind,
                 (int)name.length,
                 name.data,
@@ -9896,14 +9932,14 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
         return true;
     }
 
-    if (!inferred_expr_type_is_fixed_abi_stable(
+    if (!inferred_expr_type_is_abi_stable(
             context, callable_effective_return_type(context, callable), true, NULL)) {
         char *type_name = format_inferred_expr_type_name(callable_effective_return_type(context, callable));
         bool ok = resolver_append_error(
             context,
             callable->return_type != NULL ? callable->return_type->token : token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because return type '%s' is not ABI-stable",
+                "%s '%.*s' cannot be marked as @abi because return type '%s' is not ABI-stable",
                 callable_kind,
                 (int)name.length,
                 name.data,
@@ -9917,7 +9953,7 @@ static bool validate_fixed_callable_signature(ResolveContext *context,
             context,
             token,
             format_message(
-                "%s '%.*s' cannot be marked as @fixed because uncaught exceptions must not cross the @fixed ABI boundary",
+                "%s '%.*s' cannot be marked as @abi because uncaught exceptions must not cross the @abi ABI boundary",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -9938,7 +9974,7 @@ static bool type_ref_is_extern_c_abi_compatible(const ResolveContext *context,
         }
     }
 
-    return type_ref_is_fixed_abi_stable(context, type_ref, allow_void, NULL);
+    return type_ref_is_abi_stable(context, type_ref, allow_void, NULL);
 }
 
 static bool validate_extern_function_signature(ResolveContext *context, const FengDecl *decl) {
@@ -9994,12 +10030,12 @@ static bool validate_extern_function_signature(ResolveContext *context, const Fe
     return true;
 }
 
-static bool validate_fixed_function_declaration(ResolveContext *context, const FengDecl *decl) {
+static bool validate_abi_function_declaration(ResolveContext *context, const FengDecl *decl) {
     if (decl == NULL || decl->kind != FENG_DECL_FUNCTION) {
         return true;
     }
 
-    return validate_fixed_callable_signature(context,
+    return validate_abi_callable_signature(context,
                                              decl->as.function_decl.token,
                                              decl->as.function_decl.name,
                                              decl->annotations,
@@ -10009,8 +10045,9 @@ static bool validate_fixed_function_declaration(ResolveContext *context, const F
                                              decl->is_extern);
 }
 
-static bool validate_fixed_callable_member(ResolveContext *context, const FengTypeMember *member) {
+static bool validate_abi_callable_member(ResolveContext *context, const FengTypeMember *member) {
     bool has_fixed;
+    bool has_legacy_fixed;
     bool has_union;
     size_t callconv_count;
 
@@ -10018,9 +10055,21 @@ static bool validate_fixed_callable_member(ResolveContext *context, const FengTy
         return true;
     }
 
-    has_fixed = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_FIXED);
+    has_fixed = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_ABI);
+    has_legacy_fixed =
+        annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_FIXED);
     has_union = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(member->annotations, member->annotation_count);
+
+    if (has_legacy_fixed) {
+        return resolver_append_error(
+            context,
+            member->token,
+            format_message(
+                "method '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
 
     if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
         if (!has_fixed && !has_union && callconv_count == 0U) {
@@ -10050,7 +10099,7 @@ static bool validate_fixed_callable_member(ResolveContext *context, const FengTy
                 member->as.callable.name.data));
     }
 
-    return validate_fixed_callable_signature(context,
+    return validate_abi_callable_signature(context,
                                              member->token,
                                              member->as.callable.name,
                                              member->annotations,
@@ -14176,7 +14225,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     ok = false;
                     break;
                 }
-                if (!validate_fixed_callable_member(context, member)) {
+                if (!validate_abi_callable_member(context, member)) {
                     context->current_callable_member = previous_callable_member;
                     context->current_type_decl = previous_type_decl;
                     ok = false;
@@ -14186,7 +14235,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 context->current_type_decl = previous_type_decl;
             }
 
-            if (ok && !validate_fixed_type_declaration(context, decl)) {
+            if (ok && !validate_abi_type_declaration(context, decl)) {
                 ok = false;
             }
             if (ok && !validate_type_member_overloads(context, decl)) {
@@ -14246,7 +14295,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     }
                 }
                 if (ok) {
-                    ok = validate_fixed_type_declaration(context, decl);
+                    ok = validate_abi_type_declaration(context, decl);
                 }
                 resolver_pop_type_params(context, prev_tp, prev_tp_count);
                 return ok;
@@ -14278,7 +14327,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 }
             }
             if (ok) {
-                ok = validate_fixed_type_declaration(context, decl);
+                ok = validate_abi_type_declaration(context, decl);
             }
             resolver_pop_type_params(context, prev_tp, prev_tp_count);
             return ok;
@@ -14395,7 +14444,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (!validate_extern_function_signature(context, decl)) {
                 return false;
             }
-            return validate_fixed_function_declaration(context, decl);
+            return validate_abi_function_declaration(context, decl);
     }
 
     return true;

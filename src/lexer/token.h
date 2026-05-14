@@ -52,6 +52,7 @@ extern "C" {
     X(PROP, "prop")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
+    X(ABI, "abi") \
     X(FIXED, "fixed") \
     X(UNION, "union") \
     X(CDECL, "cdecl") \

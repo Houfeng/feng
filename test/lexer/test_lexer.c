@@ -45,7 +45,7 @@ static void test_keyword_and_annotation_counts(void) {
 
     ASSERT(feng_keyword_count() == 26U);
     ASSERT(feng_reserved_word_count() == 12U);
-    ASSERT(feng_builtin_annotation_count() == 6U);
+    ASSERT(feng_builtin_annotation_count() == 7U);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_SPEC);
     ASSERT(feng_lookup_keyword("fit", 3U, &keyword_kind));
@@ -67,6 +67,8 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(feng_is_reserved_word("func", 4U));
     ASSERT(feng_is_reserved_word("prop", 4U));
     ASSERT(!feng_is_reserved_word("self", 4U));
+    ASSERT(feng_lookup_builtin_annotation("abi", 3U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_ABI);
     ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
     ASSERT(feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));

@@ -698,12 +698,12 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
 static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "spec PointCallback(p: Point): int;\n"
         "@cdecl(\"m\")\n"
         "extern fn run_point(point: Point, cb: PointCallback): int;\n";
@@ -722,10 +722,33 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_type_accepts_abi_stable_fields(void) {
+static void test_legacy_fixed_annotation_is_rejected(void) {
     const char *source =
         "mod demo.main;\n"
         "@fixed\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("legacy_fixed_annotation_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "legacy_fixed_annotation_error.f") == 0);
+    ASSERT(strstr(errors[0].message, "legacy annotation @fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "use @abi") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_type_accepts_abi_stable_fields(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
@@ -748,7 +771,7 @@ static void test_fixed_type_accepts_abi_stable_fields(void) {
 static void test_fixed_type_rejects_managed_field_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "type NameBox {\n"
         "    var name: string;\n"
         "}\n";
@@ -762,7 +785,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_type_managed_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "type 'NameBox' cannot be marked as @fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "type 'NameBox' cannot be marked as @abi") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -771,7 +794,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
 static void test_fixed_function_type_rejects_union_annotation(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "@union\n"
         "spec Cmp(a: int, b: int): int;\n";
     FengProgram *program = parse_program_or_die("fixed_function_type_union_error.f", source);
@@ -784,7 +807,7 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_function_type_union_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "type 'Cmp' cannot be marked as @fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "type 'Cmp' cannot be marked as @abi") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -793,7 +816,7 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
 static void test_fixed_function_accepts_abi_stable_signature(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "fn cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
@@ -815,7 +838,7 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
 static void test_fixed_function_rejects_parameterized_calling_convention(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "@cdecl(\"m\")\n"
         "fn cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
@@ -830,7 +853,7 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_callconv_arg_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "function 'cmp' cannot be marked as @fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "function 'cmp' cannot be marked as @abi") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -840,7 +863,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
     const char *source =
         "mod demo.main;\n"
         "type CallbackHolder {\n"
-        "    @fixed\n"
+        "    @abi\n"
         "    fn emit(msg: string) {\n"
         "    }\n"
         "}\n";
@@ -854,7 +877,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_method_managed_signature_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "method 'emit' cannot be marked as @fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "method 'emit' cannot be marked as @abi") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -863,9 +886,9 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
 static void test_fixed_function_type_accepts_fixed_function_value(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Callback(x: int): int;\n"
-        "@fixed\n"
+        "@abi\n"
         "fn add1(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
@@ -890,7 +913,7 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
 static void test_fixed_function_type_rejects_plain_function_value(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Callback(x: int): int;\n"
         "fn add1(x: int): int {\n"
         "    return x + 1;\n"
@@ -917,7 +940,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
 static void test_fixed_function_type_rejects_direct_lambda_value(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Callback(x: int): int;\n"
         "fn run() {\n"
         "    let cb: Callback = (x: int) -> x + 1;\n"
@@ -941,7 +964,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
 static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Callback(x: int): int;\n"
         "fn run(base: int) {\n"
         "    let add = (x: int) -> x + base;\n"
@@ -966,7 +989,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
 static void test_object_form_spec_rejects_fixed_annotation(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Shape {\n"
         "    var x: int;\n"
         "}\n";
@@ -980,7 +1003,7 @@ static void test_object_form_spec_rejects_fixed_annotation(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "object_spec_fixed_error.f") == 0);
     ASSERT(strstr(errors[0].message,
-                  "object-form spec 'Shape' cannot be marked as @fixed") != NULL);
+                  "object-form spec 'Shape' cannot be marked as @abi") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1011,12 +1034,12 @@ static void test_object_form_spec_rejects_union_annotation(void) {
 static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "spec PointHandler(p: Point): int;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -1038,7 +1061,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
         "type Bag {\n"
         "    var name: string;\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Cb(b: Bag): int;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_param_error.f", source);
     const FengProgram *programs[] = {program};
@@ -1049,7 +1072,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "type 'Cb' cannot be marked as @fixed because parameter 'b' uses non-ABI-stable type 'Bag'") != NULL);
+                  "type 'Cb' cannot be marked as @abi because parameter 'b' uses non-ABI-stable type 'Bag'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1061,7 +1084,7 @@ static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
         "spec Shape {\n"
         "    var x: int;\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Cb(s: Shape): int;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_object_spec_param_error.f", source);
     const FengProgram *programs[] = {program};
@@ -1072,7 +1095,7 @@ static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "type 'Cb' cannot be marked as @fixed because parameter 's' uses non-ABI-stable type 'Shape'") != NULL);
+                  "type 'Cb' cannot be marked as @abi because parameter 's' uses non-ABI-stable type 'Shape'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1084,7 +1107,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
         "type Bag {\n"
         "    var name: string;\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "spec Cb(x: int): Bag;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_return_error.f", source);
     const FengProgram *programs[] = {program};
@@ -1095,7 +1118,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "type 'Cb' cannot be marked as @fixed because return type 'Bag' is not ABI-stable") != NULL);
+                  "type 'Cb' cannot be marked as @abi because return type 'Bag' is not ABI-stable") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1104,7 +1127,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
 static void test_fixed_function_rejects_uncaught_throw(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "fn fail(): int {\n"
         "    throw \"boom\";\n"
         "}\n";
@@ -1118,7 +1141,7 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1127,7 +1150,7 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
 static void test_fixed_function_allows_locally_caught_throw(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "fn recover(): int {\n"
         "    try {\n"
         "        throw \"boom\";\n"
@@ -1156,7 +1179,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
         "fn helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    return helper();\n"
         "}\n";
@@ -1170,7 +1193,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
-    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1186,7 +1209,7 @@ static void test_fixed_function_allows_call_to_catching_function(void) {
         "        return 0;\n"
         "    }\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    return helper();\n"
         "}\n";
@@ -1209,7 +1232,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
     const char *source =
         "mod demo.main;\n"
         "type Worker {\n"
-        "    @fixed\n"
+        "    @abi\n"
         "    fn run() {\n"
         "        throw \"boom\";\n"
         "    }\n"
@@ -1224,7 +1247,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_method_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1236,7 +1259,7 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
         "fn helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    let wrap = (x: int) -> helper();\n"
         "    return 0;\n"
@@ -1262,7 +1285,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
         "fn helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    let wrap = (x: int) -> helper();\n"
         "    return wrap(1);\n"
@@ -1277,7 +1300,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_invoked_lambda_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
-    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1290,7 +1313,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
         "fn helper(x: int): int {\n"
         "    throw \"boom\";\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    let cb: Callback = helper;\n"
         "    return cb(1);\n"
@@ -1305,7 +1328,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_local_function_value_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
-    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @fixed ABI boundary") != NULL);
+    ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1321,7 +1344,7 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
         "        return 0;\n"
         "    }\n"
         "}\n"
-        "@fixed\n"
+        "@abi\n"
         "fn run(): int {\n"
         "    let wrap = (x: int) -> helper();\n"
         "    return wrap(1);\n"
@@ -1595,7 +1618,7 @@ static void test_throw_rejects_pointer_value(void) {
 static void test_throw_rejects_fixed_type_value(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed type Handle { let id: int; }\n"
+        "@abi type Handle { let id: int; }\n"
         "fn run(h: Handle) {\n"
         "    throw h;\n"
         "}\n";
@@ -1610,7 +1633,7 @@ static void test_throw_rejects_fixed_type_value(void) {
     ASSERT(strcmp(errors[0].path, "throw_fixed_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
-    ASSERT(strstr(errors[0].message, "@fixed types are ABI-bound") != NULL);
+    ASSERT(strstr(errors[0].message, "@abi types are ABI-bound") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -7231,7 +7254,7 @@ static void test_finalizer_rejects_multiple_per_type(void) {
 static void test_finalizer_rejected_on_fixed_type(void) {
     const char *source =
         "mod demo.main;\n"
-        "@fixed\n"
+        "@abi\n"
         "type Buffer {\n"
         "    pu let size: int;\n"
         "    fn ~Buffer() {}\n"
@@ -7244,7 +7267,7 @@ static void test_finalizer_rejected_on_fixed_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
-    ASSERT(strstr(errors[0].message, "@fixed") != NULL);
+    ASSERT(strstr(errors[0].message, "@abi") != NULL);
     ASSERT(strstr(errors[0].message, "finalizer") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -10218,6 +10241,7 @@ int main(void) {
     test_extern_function_rejects_array_return_type();
     test_extern_function_rejects_non_fixed_object_parameter();
     test_extern_function_accepts_fixed_object_and_callback_types();
+    test_legacy_fixed_annotation_is_rejected();
     test_fixed_type_accepts_abi_stable_fields();
     test_fixed_type_rejects_managed_field_type();
     test_fixed_function_type_rejects_union_annotation();

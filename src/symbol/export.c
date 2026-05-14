@@ -1296,7 +1296,7 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
                                    FengSymbolError *out_error) {
     const FengAnnotation *callconv = find_calling_convention_annotation(annotations, annotation_count);
 
-    decl->fixed_annotated = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_FIXED);
+    decl->fixed_annotated = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
     decl->union_annotated = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_UNION);
     if (callconv != NULL) {
         decl->calling_convention = callconv->builtin_kind;

@@ -38,6 +38,7 @@ static void test_top_level_declarations(void) {
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
+        "@abi\n"
         "spec PointCallback(p: Point): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -63,7 +64,8 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[2]->as.type_decl.member_count == 2U);
 
     ASSERT(program->declarations[3]->kind == FENG_DECL_SPEC);
-    ASSERT(program->declarations[3]->annotation_count == 0U);
+    ASSERT(program->declarations[3]->annotation_count == 1U);
+    ASSERT(program->declarations[3]->annotations[0].builtin_kind == FENG_ANNOTATION_ABI);
     ASSERT(program->declarations[3]->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE);
     ASSERT(program->declarations[3]->as.spec_decl.as.callable.param_count == 1U);
     ASSERT(program->declarations[3]->as.spec_decl.as.callable.return_type != NULL);
