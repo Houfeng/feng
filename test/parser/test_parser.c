@@ -660,6 +660,70 @@ static void test_tilde_unary_parsing(void) {
     feng_program_free(program);
 }
 
+static void test_address_of_unary_parsing(void) {
+    const char *source =
+        "mod demo.addr;\n"
+        "@abi\n"
+        "fn cmp(a: i32, b: i32): i32 {\n"
+        "    return a - b;\n"
+        "}\n"
+        "fn run(msg: string, arr: i32[], value: i32) {\n"
+        "    let data_ptr = &value;\n"
+        "    let str_ptr = &msg;\n"
+        "    let arr_ptr = &arr;\n"
+        "    let fn_ptr = &cmp;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+
+    ASSERT(feng_parse_source(source, strlen(source), "address_of_unary.f", &program, &error));
+    ASSERT(program != NULL);
+
+    body = program->declarations[1]->as.function_decl.body;
+    ASSERT(body->statement_count == 4U);
+
+    for (size_t index = 0U; index < body->statement_count; ++index) {
+        const FengStmt *stmt = body->statements[index];
+
+        ASSERT(stmt->kind == FENG_STMT_BINDING);
+        ASSERT(stmt->as.binding.initializer != NULL);
+        ASSERT(stmt->as.binding.initializer->kind == FENG_EXPR_UNARY);
+        ASSERT(stmt->as.binding.initializer->as.unary.op == FENG_TOKEN_AMP);
+        ASSERT(stmt->as.binding.initializer->as.unary.operand != NULL);
+        ASSERT(stmt->as.binding.initializer->as.unary.operand->kind == FENG_EXPR_IDENTIFIER);
+    }
+
+    feng_program_free(program);
+}
+
+static void test_address_of_and_bitwise_and_disambiguation(void) {
+    const char *source =
+        "mod demo.addr;\n"
+        "fn run(a: i32, b: i32) {\n"
+        "    let mixed = &a & b;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengExpr *init;
+
+    ASSERT(feng_parse_source(source, strlen(source), "address_of_disambiguation.f", &program, &error));
+    ASSERT(program != NULL);
+
+    init = program->declarations[0]->as.function_decl.body->statements[0]->as.binding.initializer;
+    ASSERT(init->kind == FENG_EXPR_BINARY);
+    ASSERT(init->as.binary.op == FENG_TOKEN_AMP);
+    ASSERT(init->as.binary.left != NULL);
+    ASSERT(init->as.binary.left->kind == FENG_EXPR_UNARY);
+    ASSERT(init->as.binary.left->as.unary.op == FENG_TOKEN_AMP);
+    ASSERT(init->as.binary.left->as.unary.operand != NULL);
+    ASSERT(init->as.binary.left->as.unary.operand->kind == FENG_EXPR_IDENTIFIER);
+    ASSERT(init->as.binary.right != NULL);
+    ASSERT(init->as.binary.right->kind == FENG_EXPR_IDENTIFIER);
+
+    feng_program_free(program);
+}
+
 static void test_compound_assignment_parsing(void) {
     const char *source =
         "mod demo.ops;\n"
@@ -1293,6 +1357,8 @@ int main(void) {
     test_parse_error_direct_finalizer_call();
     test_bitwise_expr_parsing();
     test_tilde_unary_parsing();
+    test_address_of_unary_parsing();
+    test_address_of_and_bitwise_and_disambiguation();
     test_compound_assignment_parsing();
     test_lambda_block_body_parses();
     test_lambda_block_body_with_arrow_is_rejected();

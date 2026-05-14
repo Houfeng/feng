@@ -2712,6 +2712,7 @@ static FengExpr *parse_postfix(Parser *parser) {
 
 static FengExpr *parse_unary(Parser *parser) {
     if (parser_match(parser, FENG_TOKEN_NOT) ||
+        parser_match(parser, FENG_TOKEN_AMP) ||
         parser_match(parser, FENG_TOKEN_MINUS) ||
         parser_match(parser, FENG_TOKEN_TILDE)) {
         FengExpr *expr = new_expr(parser, FENG_EXPR_UNARY, parser_previous_token(parser));

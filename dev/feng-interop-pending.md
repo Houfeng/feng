@@ -429,9 +429,9 @@ let q: CmpFunc* = c_load_cmp();
 
 ### 10.3 Phase 2：一元 `&` 语法与 AST
 
-- [ ] T2.1 扩展 parser 与 AST，新增一元 `&` 表达式节点和前缀解析路径。
-- [ ] T2.2 保持二元 `&` 继续作为按位与，不引入语法歧义回退。
-- [ ] T2.3 补 parser 测试：`&abi_value`、`&string`、`&array`、`&abi_fn`、一元/二元 `&` 消歧。
+- [x] T2.1 扩展 parser 与 AST 表达式表示，复用通用一元表达式节点承载一元 `&` 并补前缀解析路径。
+- [x] T2.2 保持二元 `&` 继续作为按位与，不引入语法歧义回退。
+- [x] T2.3 补 parser 测试：`&abi_value`、`&string`、`&array`、`&abi_fn`、一元/二元 `&` 消歧。
 
 ### 10.4 Phase 3：ABI 资格与类型检查
 

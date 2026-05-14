@@ -3336,6 +3336,14 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
     char *operand_type_name;
     char *message;
 
+    if (expr->as.unary.op == FENG_TOKEN_AMP) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message(
+                "unary operator '&' is reserved for ABI interop but is not implemented semantically yet"));
+    }
+
     operand_type = infer_expr_type(context, expr->as.unary.operand);
     if (unary_expr_type_is_valid(expr->as.unary.op, operand_type)) {
         return true;
