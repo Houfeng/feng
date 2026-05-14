@@ -1231,6 +1231,53 @@ static void test_explicit_generic_type_constructor_call(void) {
     feng_program_free(program);
 }
 
+static void test_postfix_pointer_type_refs(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(a: Point*[], b: int[]*, c: byte*) {}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengCallableSignature *callable;
+    const FengTypeRef *type_a;
+    const FengTypeRef *type_b;
+    const FengTypeRef *type_c;
+
+    ASSERT(feng_parse_source(source, strlen(source), "postfix_ptr_ref.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    ASSERT(fn_decl->kind == FENG_DECL_FUNCTION);
+    callable = &fn_decl->as.function_decl;
+    ASSERT(callable->param_count == 3U);
+
+    type_a = callable->params[0].type;
+    ASSERT(type_a != NULL);
+    ASSERT(type_a->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(type_a->as.inner != NULL);
+    ASSERT(type_a->as.inner->kind == FENG_TYPE_REF_POINTER);
+    ASSERT(type_a->as.inner->as.inner != NULL);
+    ASSERT(type_a->as.inner->as.inner->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(type_a->as.inner->as.inner->as.named.segments[0], "Point");
+
+    type_b = callable->params[1].type;
+    ASSERT(type_b != NULL);
+    ASSERT(type_b->kind == FENG_TYPE_REF_POINTER);
+    ASSERT(type_b->as.inner != NULL);
+    ASSERT(type_b->as.inner->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(type_b->as.inner->as.inner != NULL);
+    ASSERT(type_b->as.inner->as.inner->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(type_b->as.inner->as.inner->as.named.segments[0], "int");
+
+    type_c = callable->params[2].type;
+    ASSERT(type_c != NULL);
+    ASSERT(type_c->kind == FENG_TYPE_REF_POINTER);
+    ASSERT(type_c->as.inner != NULL);
+    ASSERT(type_c->as.inner->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(type_c->as.inner->as.named.segments[0], "byte");
+
+    feng_program_free(program);
+}
+
 static void test_generic_method_uses_both_outer_and_method_type_params(void) {
     /* 正确语法二: method in generic type uses outer type param T and own param U. */
     const char *source =
@@ -1369,6 +1416,7 @@ int main(void) {
     test_generic_function_multi_type_params();
     test_generic_type_ref_with_args();
     test_generic_type_ref_nested();
+    test_postfix_pointer_type_refs();
     test_explicit_generic_call();
     test_explicit_generic_call_multi_type_args();
     test_explicit_generic_type_constructor_call();

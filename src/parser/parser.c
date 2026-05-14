@@ -532,11 +532,6 @@ static bool parse_type_params(Parser *parser,
 static FengTypeRef *parse_type_ref(Parser *parser) {
     FengTypeRef *type_ref;
     FengToken start_token = parser_current_token(parser);
-    size_t pointer_count = 0U;
-
-    while (parser_match(parser, FENG_TOKEN_STAR)) {
-        ++pointer_count;
-    }
 
     type_ref = new_type_ref(parser, FENG_TYPE_REF_NAMED, start_token);
     if (type_ref == NULL) {
@@ -562,19 +557,23 @@ static FengTypeRef *parse_type_ref(Parser *parser) {
         }
     }
 
-    while (pointer_count > 0U) {
-        FengTypeRef *wrapper = new_type_ref(parser, FENG_TYPE_REF_POINTER, start_token);
+    for (;;) {
+        if (parser_match(parser, FENG_TOKEN_STAR)) {
+            FengTypeRef *wrapper = new_type_ref(parser, FENG_TYPE_REF_POINTER, start_token);
 
-        if (wrapper == NULL) {
-            free_type_ref(type_ref);
-            return NULL;
+            if (wrapper == NULL) {
+                free_type_ref(type_ref);
+                return NULL;
+            }
+            wrapper->as.inner = type_ref;
+            type_ref = wrapper;
+            continue;
         }
-        wrapper->as.inner = type_ref;
-        type_ref = wrapper;
-        --pointer_count;
-    }
 
-    while (parser_match(parser, FENG_TOKEN_LBRACKET)) {
+        if (!parser_match(parser, FENG_TOKEN_LBRACKET)) {
+            break;
+        }
+
         FengTypeRef *wrapper;
         bool layer_writable = false;
 
@@ -1758,10 +1757,6 @@ static bool looks_like_lambda(const Parser *parser) {
 static bool looks_like_type_ref_at(const Parser *parser, size_t *index) {
     size_t cursor = *index;
 
-    while (parser->tokens[cursor].kind == FENG_TOKEN_STAR) {
-        ++cursor;
-    }
-
     if (!token_is_identifier_like(&parser->tokens[cursor], true)) {
         return false;
     }
@@ -1775,7 +1770,15 @@ static bool looks_like_type_ref_at(const Parser *parser, size_t *index) {
         ++cursor;
     }
 
-    while (parser->tokens[cursor].kind == FENG_TOKEN_LBRACKET) {
+    for (;;) {
+        if (parser->tokens[cursor].kind == FENG_TOKEN_STAR) {
+            ++cursor;
+            continue;
+        }
+        if (parser->tokens[cursor].kind != FENG_TOKEN_LBRACKET) {
+            break;
+        }
+
         ++cursor;
         if (parser->tokens[cursor].kind == FENG_TOKEN_NOT) {
             ++cursor;

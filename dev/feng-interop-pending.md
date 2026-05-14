@@ -435,13 +435,13 @@ let q: CmpFunc* = c_load_cmp();
 
 ### 10.4 Phase 3：ABI 资格与类型检查
 
-- [ ] T3.1 扩展 `@abi type` 字段白名单检查：只允许基本标量、`T*`、`Foo*`。
-- [ ] T3.2 拒绝 `@abi type` 直接内联 `string`、数组、`@abi` 对象值和 callable-form `spec` 本体。
-- [ ] T3.3 实现 callable-form `@abi spec` 的参数/返回值 ABI 校验。
-- [ ] T3.4 实现顶层 `@abi fn` 的 ABI 校验与异常边界检查。
-- [ ] T3.5 实现 `Foo*` 目标类型匹配校验：`&@abi fn` 只有在显式目标 `Foo*` 下才成立。
-- [ ] T3.6 拒绝成员函数、lambda、闭包、绑定方法值取址为 `Foo*`。
-- [ ] T3.7 实现一维 ABI 兼容数组资格判定：元素类型仅允许基本标量、`U*`、已通过 ABI 校验的 `@abi` 类型。
+- [x] T3.1 扩展 `@abi type` 字段白名单检查：只允许基本标量、`T*`、`Foo*`。
+- [x] T3.2 拒绝 `@abi type` 直接内联 `string`、数组、`@abi` 对象值和 callable-form `spec` 本体。
+- [x] T3.3 实现 callable-form `@abi spec` 的参数/返回值 ABI 校验。
+- [x] T3.4 实现顶层 `@abi fn` 的 ABI 校验与异常边界检查。
+- [x] T3.5 实现 `Foo*` 目标类型匹配校验：`&@abi fn` 只有在显式目标 `Foo*` 下才成立。
+- [x] T3.6 拒绝成员函数、lambda、闭包、绑定方法值取址为 `Foo*`。
+- [x] T3.7 实现一维 ABI 兼容数组资格判定：元素类型仅允许基本标量、`U*`、已通过 ABI 校验的 `@abi` 类型。
 
 ### 10.5 Phase 4：借用规则与诊断
 

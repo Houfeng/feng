@@ -318,6 +318,16 @@ static bool path_equals(const FengSlice *left,
 
 static char *format_module_name(const FengSlice *segments, size_t segment_count);
 static bool type_ref_is_void(const FengTypeRef *type_ref);
+static bool type_decl_is_abi_stable(const ResolveContext *context,
+                                    const FengDecl *decl,
+                                    const AbiTrace *trace);
+static bool type_ref_is_abi_stable(const ResolveContext *context,
+                                   const FengTypeRef *type_ref,
+                                   bool allow_void,
+                                   const AbiTrace *trace);
+static bool type_ref_is_abi_compatible_array(const ResolveContext *context,
+                                             const FengTypeRef *type_ref,
+                                             const AbiTrace *trace);
 static bool append_raw(void **items,
                        size_t *count,
                        size_t *capacity,
@@ -2232,6 +2242,69 @@ static const FengTypeRef *synthesize_array_type_ref(ResolveContext *context,
     return array_type_ref;
 }
 
+static const FengTypeRef *synthesize_pointer_type_ref_with_inner(ResolveContext *context,
+                                                                 FengTypeRef *inner_type_ref,
+                                                                 FengToken token) {
+    FengTypeRef *pointer_type_ref;
+
+    if (context == NULL || inner_type_ref == NULL) {
+        free_synthetic_type_ref(inner_type_ref);
+        return NULL;
+    }
+
+    pointer_type_ref = (FengTypeRef *)calloc(1U, sizeof(*pointer_type_ref));
+    if (pointer_type_ref == NULL) {
+        free_synthetic_type_ref(inner_type_ref);
+        return NULL;
+    }
+
+    pointer_type_ref->token = token;
+    pointer_type_ref->kind = FENG_TYPE_REF_POINTER;
+    pointer_type_ref->as.inner = inner_type_ref;
+    if (!resolver_track_synthetic_type_ref(context, pointer_type_ref)) {
+        free_synthetic_type_ref(pointer_type_ref);
+        return NULL;
+    }
+
+    return pointer_type_ref;
+}
+
+static const FengTypeRef *synthesize_pointer_type_ref_from_inferred_type(
+    ResolveContext *context,
+    const InferredExprType *inner_type,
+    FengToken token) {
+    FengTypeRef *inner_type_ref;
+
+    if (context == NULL || inner_type == NULL) {
+        return NULL;
+    }
+
+    inner_type_ref = create_type_ref_from_inferred_type(inner_type, token);
+    if (inner_type_ref == NULL) {
+        return NULL;
+    }
+
+    return synthesize_pointer_type_ref_with_inner(context, inner_type_ref, token);
+}
+
+static const FengTypeRef *synthesize_pointer_type_ref_from_inner_type_ref(
+    ResolveContext *context,
+    const FengTypeRef *inner_type_ref,
+    FengToken token) {
+    FengTypeRef *cloned_inner;
+
+    if (context == NULL || inner_type_ref == NULL) {
+        return NULL;
+    }
+
+    cloned_inner = clone_type_ref_for_inference(inner_type_ref);
+    if (cloned_inner == NULL) {
+        return NULL;
+    }
+
+    return synthesize_pointer_type_ref_with_inner(context, cloned_inner, token);
+}
+
 static void resolver_free_scopes(ResolveContext *context) {
     size_t type_ref_index;
 
@@ -2264,6 +2337,9 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
+static FengSpecCoercionCallableSource classify_callable_source(
+    const ResolveContext *context,
+    const FengExpr *expr);
 static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
                                          const FengTypeRef *type_ref);
 static bool validate_type_param_constraints(ResolveContext *context,
@@ -2292,6 +2368,13 @@ static char *format_inferred_expr_type_name(InferredExprType type);
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref);
+static bool expr_matches_expected_abi_function_pointer_type(ResolveContext *context,
+                                                            const FengExpr *expr,
+                                                            const FengTypeRef *expected_type_ref);
+static bool expr_matches_expected_address_of_data_pointer_type(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref);
 static CallableValueResolution resolve_expr_callable_value(ResolveContext *context,
                                                            const FengExpr *expr,
                                                            const FengTypeRef *expected_type_ref);
@@ -2922,6 +3005,25 @@ static const FengDecl *resolve_function_type_decl(const ResolveContext *context,
     return type_decl;
 }
 
+static const FengDecl *resolve_abi_function_pointer_type_decl(const ResolveContext *context,
+                                                              const FengTypeRef *type_ref) {
+    const FengDecl *type_decl;
+
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_POINTER) {
+        return NULL;
+    }
+
+    type_decl = resolve_function_type_decl(context, type_ref->as.inner);
+    if (type_decl == NULL ||
+        !annotations_contain_kind(type_decl->annotations,
+                                  type_decl->annotation_count,
+                                  FENG_ANNOTATION_ABI)) {
+        return NULL;
+    }
+
+    return type_decl;
+}
+
 static const FengDecl *resolve_callable_constraint_type_decl(const ResolveContext *context,
                                                             InferredExprType expr_type) {
     const TypeParamEntry *type_param_entry;
@@ -3148,6 +3250,51 @@ static bool inferred_expr_type_is_string(InferredExprType expr_type) {
     return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
 }
 
+static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContext *context,
+                                                             InferredExprType expr_type) {
+    const char *builtin_name;
+    const FengDecl *type_decl;
+
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+            builtin_name = canonical_builtin_type_name(expr_type.builtin_name);
+            return builtin_name != NULL && strcmp(builtin_name, "string") != 0 &&
+                   strcmp(builtin_name, "void") != 0;
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            if (expr_type.type_ref == NULL) {
+                return false;
+            }
+            builtin_name = type_ref_builtin_canonical_name(expr_type.type_ref);
+            if (builtin_name != NULL) {
+                return strcmp(builtin_name, "string") != 0 && strcmp(builtin_name, "void") != 0;
+            }
+            if (expr_type.type_ref->kind != FENG_TYPE_REF_NAMED) {
+                return false;
+            }
+            type_decl = resolve_type_ref_decl(context, expr_type.type_ref);
+            return type_decl != NULL && type_decl->kind == FENG_DECL_TYPE &&
+                   type_decl_is_abi_stable(context, type_decl, NULL);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            return expr_type.type_decl != NULL && expr_type.type_decl->kind == FENG_DECL_TYPE &&
+                   type_decl_is_abi_stable(context, expr_type.type_decl, NULL);
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return false;
+    }
+
+    return false;
+}
+
+static bool inferred_expr_type_is_abi_array_value(const ResolveContext *context,
+                                                  InferredExprType expr_type) {
+    return expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+           expr_type.type_ref != NULL &&
+           type_ref_is_abi_compatible_array(context, expr_type.type_ref, NULL);
+}
+
 static const char *format_operator_name(FengTokenKind kind) {
     switch (kind) {
         case FENG_TOKEN_PLUS:
@@ -3330,6 +3477,53 @@ static bool binary_expr_types_are_valid(ResolveContext *context,
     }
 }
 
+static bool expr_is_top_level_function_reference(ResolveContext *context, const FengExpr *expr) {
+    if (context == NULL || expr == NULL) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return resolver_find_local_name_entry(context, expr->as.identifier) == NULL &&
+                   find_function_overload_set(context->function_sets,
+                                              context->function_set_count,
+                                              expr->as.identifier) != NULL;
+
+        case FENG_EXPR_MEMBER:
+            if (expr->as.member.object != NULL &&
+                expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+                const AliasEntry *alias =
+                    find_unshadowed_alias(context, expr->as.member.object->as.identifier);
+
+                return alias != NULL &&
+                       find_module_public_function_decl(alias->target_module,
+                                                        expr->as.member.member) != NULL;
+            }
+            return false;
+
+        default:
+            return false;
+    }
+}
+
+static bool expr_is_callable_like_address_of_operand(ResolveContext *context,
+                                                     const FengExpr *expr,
+                                                     InferredExprType operand_type) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    if (expr_is_top_level_function_reference(context, expr) || expr->kind == FENG_EXPR_LAMBDA ||
+        classify_callable_source(context, expr) ==
+            FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE) {
+        return true;
+    }
+
+    return operand_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA ||
+           (operand_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+            resolve_function_type_decl(context, operand_type.type_ref) != NULL);
+}
+
 static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType operand_type;
     const char *operator_name;
@@ -3337,11 +3531,22 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
     char *message;
 
     if (expr->as.unary.op == FENG_TOKEN_AMP) {
-        return resolver_append_error(
-            context,
-            expr->token,
-            format_message(
-                "unary operator '&' is reserved for ABI interop but is not implemented semantically yet"));
+        operand_type = infer_expr_type(context, expr->as.unary.operand);
+        if (inferred_expr_type_is_data_addressable_abi_value(context, operand_type) ||
+            inferred_expr_type_is_string(operand_type) ||
+            inferred_expr_type_is_abi_array_value(context, operand_type) ||
+            expr_is_callable_like_address_of_operand(context,
+                                                    expr->as.unary.operand,
+                                                    operand_type)) {
+            return true;
+        }
+
+        operand_type_name = format_inferred_expr_type_name(operand_type);
+        message = format_message(
+            "unary operator '&' requires an ABI-compatible scalar or @abi value, a string, an ABI-compatible array, or a top-level @abi function, got '%s'",
+            operand_type_name != NULL ? operand_type_name : "<unknown>");
+        free(operand_type_name);
+        return resolver_append_error(context, expr->token, message);
     }
 
     operand_type = infer_expr_type(context, expr->as.unary.operand);
@@ -7499,6 +7704,30 @@ static char *format_expr_target_name(const FengExpr *expr) {
             return buffer;
         }
 
+        case FENG_EXPR_UNARY:
+            if (expr->as.unary.op == FENG_TOKEN_AMP) {
+                char *operand_name = format_expr_target_name(expr->as.unary.operand);
+                size_t operand_length = operand_name != NULL ? strlen(operand_name) : 12U;
+                const char *fallback = "<expression>";
+                char *buffer = (char *)malloc(operand_length + 2U);
+
+                if (buffer == NULL) {
+                    free(operand_name);
+                    return NULL;
+                }
+
+                buffer[0] = '&';
+                if (operand_name != NULL) {
+                    memcpy(buffer + 1U, operand_name, operand_length);
+                } else {
+                    memcpy(buffer + 1U, fallback, operand_length);
+                }
+                buffer[operand_length + 1U] = '\0';
+                free(operand_name);
+                return buffer;
+            }
+            return duplicate_cstr("<expression>");
+
         case FENG_EXPR_CALL:
             return format_expr_target_name(expr->as.call.callee);
 
@@ -7704,6 +7933,47 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
         case FENG_EXPR_UNARY: {
             InferredExprType operand_type = infer_expr_type(context, expr->as.unary.operand);
+
+            if (expr->as.unary.op == FENG_TOKEN_AMP) {
+                if (inferred_expr_type_is_string(operand_type)) {
+                    InferredExprType byte_type = inferred_expr_type_builtin("byte");
+                    const FengTypeRef *pointer_type_ref =
+                        synthesize_pointer_type_ref_from_inferred_type(
+                            context,
+                            &byte_type,
+                            expr->token);
+
+                    return pointer_type_ref != NULL
+                               ? inferred_expr_type_from_type_ref(pointer_type_ref)
+                               : inferred_expr_type_unknown();
+                }
+
+                if (inferred_expr_type_is_abi_array_value(context, operand_type)) {
+                    const FengTypeRef *pointer_type_ref =
+                        synthesize_pointer_type_ref_from_inner_type_ref(
+                            context,
+                            operand_type.type_ref->as.inner,
+                            expr->token);
+
+                    return pointer_type_ref != NULL
+                               ? inferred_expr_type_from_type_ref(pointer_type_ref)
+                               : inferred_expr_type_unknown();
+                }
+
+                if (inferred_expr_type_is_data_addressable_abi_value(context, operand_type)) {
+                    const FengTypeRef *pointer_type_ref =
+                        synthesize_pointer_type_ref_from_inferred_type(
+                            context,
+                            &operand_type,
+                            expr->token);
+
+                    return pointer_type_ref != NULL
+                               ? inferred_expr_type_from_type_ref(pointer_type_ref)
+                               : inferred_expr_type_unknown();
+                }
+
+                return inferred_expr_type_unknown();
+            }
 
             if (expr->as.unary.op == FENG_TOKEN_MINUS &&
                 inferred_expr_type_is_numeric(operand_type)) {
@@ -8648,6 +8918,18 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
     const FengDecl *function_type_decl = resolve_function_type_decl(context, expected_type_ref);
     InferredExprType expr_type;
 
+    if (expr != NULL && expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_AMP &&
+        expected_type_ref != NULL && expected_type_ref->kind == FENG_TYPE_REF_POINTER) {
+        if (resolve_abi_function_pointer_type_decl(context, expected_type_ref) != NULL) {
+            return expr_matches_expected_abi_function_pointer_type(context,
+                                                                  expr,
+                                                                  expected_type_ref);
+        }
+        return expr_matches_expected_address_of_data_pointer_type(context,
+                                                                  expr,
+                                                                  expected_type_ref);
+    }
+
     if (function_type_decl != NULL) {
         return resolve_expr_callable_value(context, expr, expected_type_ref).kind ==
                FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
@@ -9295,6 +9577,236 @@ static void record_spec_equality_if_applicable(ResolveContext *context,
                                              spec_decl, op);
 }
 
+typedef enum AbiFunctionPointerAddressResolutionKind {
+    ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_INVALID_SOURCE,
+    ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH,
+    ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE,
+    ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_AMBIGUOUS,
+} AbiFunctionPointerAddressResolutionKind;
+
+typedef struct AbiFunctionPointerAddressResolution {
+    AbiFunctionPointerAddressResolutionKind kind;
+    const FengDecl *function_decl;
+} AbiFunctionPointerAddressResolution;
+
+static AbiFunctionPointerAddressResolution resolve_abi_function_pointer_address(
+    ResolveContext *context,
+    const FengExpr *operand,
+    const FengTypeRef *expected_function_type_ref,
+    const FengDecl *expected_function_type_decl) {
+    AbiFunctionPointerAddressResolution result;
+
+    memset(&result, 0, sizeof(result));
+    result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_INVALID_SOURCE;
+    if (context == NULL || operand == NULL || expected_function_type_ref == NULL ||
+        expected_function_type_decl == NULL) {
+        return result;
+    }
+
+    if (operand->kind == FENG_EXPR_IDENTIFIER) {
+        const FunctionOverloadSetEntry *overload_set;
+
+        if (resolver_find_local_name_entry(context, operand->as.identifier) != NULL) {
+            return result;
+        }
+
+        overload_set = find_function_overload_set(context->function_sets,
+                                                  context->function_set_count,
+                                                  operand->as.identifier);
+        if (overload_set == NULL) {
+            return result;
+        }
+
+        result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH;
+        for (size_t decl_index = 0U; decl_index < overload_set->decl_count; ++decl_index) {
+            const FengDecl *decl = overload_set->decls[decl_index];
+
+            if (decl == NULL || decl->kind != FENG_DECL_FUNCTION || decl->is_extern ||
+                !annotations_contain_kind(decl->annotations,
+                                          decl->annotation_count,
+                                          FENG_ANNOTATION_ABI) ||
+                !function_type_decl_matches_callable_signature_or_is_pending(
+                    context,
+                    expected_function_type_ref,
+                    expected_function_type_decl,
+                    &decl->as.function_decl)) {
+                continue;
+            }
+
+            if (result.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH) {
+                result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE;
+                result.function_decl = decl;
+                continue;
+            }
+
+            result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_AMBIGUOUS;
+            result.function_decl = NULL;
+            return result;
+        }
+
+        return result;
+    }
+
+    if (operand->kind == FENG_EXPR_MEMBER && operand->as.member.object != NULL &&
+        operand->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+        const AliasEntry *alias =
+            find_unshadowed_alias(context, operand->as.member.object->as.identifier);
+
+        if (alias == NULL) {
+            return result;
+        }
+
+        result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH;
+        for (size_t program_index = 0U; program_index < alias->target_module->program_count;
+             ++program_index) {
+            const FengProgram *program = alias->target_module->programs[program_index];
+
+            for (size_t decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_FUNCTION || !decl_is_public(decl) || decl->is_extern ||
+                    !slice_equals(decl->as.function_decl.name, operand->as.member.member) ||
+                    !annotations_contain_kind(decl->annotations,
+                                              decl->annotation_count,
+                                              FENG_ANNOTATION_ABI) ||
+                    !function_type_decl_matches_callable_signature_or_is_pending(
+                        context,
+                        expected_function_type_ref,
+                        expected_function_type_decl,
+                        &decl->as.function_decl)) {
+                    continue;
+                }
+
+                if (result.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH) {
+                    result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE;
+                    result.function_decl = decl;
+                    continue;
+                }
+
+                result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_AMBIGUOUS;
+                result.function_decl = NULL;
+                return result;
+            }
+        }
+
+        return result;
+    }
+
+    return result;
+}
+
+static bool expr_matches_expected_abi_function_pointer_type(ResolveContext *context,
+                                                            const FengExpr *expr,
+                                                            const FengTypeRef *expected_type_ref) {
+    const FengDecl *expected_function_type_decl;
+    AbiFunctionPointerAddressResolution resolution;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_UNARY || expr->as.unary.op != FENG_TOKEN_AMP) {
+        return false;
+    }
+
+    expected_function_type_decl =
+        resolve_abi_function_pointer_type_decl(context, expected_type_ref);
+    if (expected_function_type_decl == NULL) {
+        return false;
+    }
+
+    resolution = resolve_abi_function_pointer_address(context,
+                                                      expr->as.unary.operand,
+                                                      expected_type_ref->as.inner,
+                                                      expected_function_type_decl);
+    return resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE;
+}
+
+static bool expr_matches_expected_address_of_data_pointer_type(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref) {
+    InferredExprType operand_type;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_UNARY || expr->as.unary.op != FENG_TOKEN_AMP ||
+        expected_type_ref == NULL || expected_type_ref->kind != FENG_TYPE_REF_POINTER ||
+        resolve_abi_function_pointer_type_decl(context, expected_type_ref) != NULL) {
+        return false;
+    }
+
+    operand_type = infer_expr_type(context, expr->as.unary.operand);
+    if (inferred_expr_type_is_string(operand_type)) {
+        const char *builtin_name = type_ref_builtin_canonical_name(expected_type_ref->as.inner);
+
+        return builtin_name != NULL && strcmp(builtin_name, "u8") == 0;
+    }
+
+    if (inferred_expr_type_is_abi_array_value(context, operand_type)) {
+        return type_refs_semantically_equal(context,
+                                            operand_type.type_ref->as.inner,
+                                            expected_type_ref->as.inner);
+    }
+
+    return inferred_expr_type_is_data_addressable_abi_value(context, operand_type) &&
+           inferred_expr_type_matches_type_ref(context,
+                                              operand_type,
+                                              expected_type_ref->as.inner);
+}
+
+static bool validate_expr_against_expected_abi_function_pointer_type(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref) {
+    const FengDecl *expected_function_type_decl;
+    AbiFunctionPointerAddressResolution resolution;
+    char *expr_name;
+    char *type_name;
+
+    expected_function_type_decl =
+        resolve_abi_function_pointer_type_decl(context, expected_type_ref);
+    if (expected_function_type_decl == NULL || expr == NULL || expr->kind != FENG_EXPR_UNARY ||
+        expr->as.unary.op != FENG_TOKEN_AMP) {
+        return false;
+    }
+
+    resolution = resolve_abi_function_pointer_address(context,
+                                                      expr->as.unary.operand,
+                                                      expected_type_ref->as.inner,
+                                                      expected_function_type_decl);
+    if (resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(expr);
+    type_name = format_type_ref_name(expected_type_ref);
+
+    if (resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_AMBIGUOUS) {
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message(
+                "expression '%s' has multiple overloads matching expected ABI function pointer type '%s'",
+                expr_name != NULL ? expr_name : "<expression>",
+                type_name != NULL ? type_name : "<type>"));
+
+        free(expr_name);
+        free(type_name);
+        return ok;
+    }
+
+    {
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message(
+                resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH
+                    ? "expression '%s' does not match expected ABI function pointer type '%s'; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type"
+                    : "expression '%s' cannot form expected ABI function pointer type '%s'; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type",
+                expr_name != NULL ? expr_name : "<expression>",
+                type_name != NULL ? type_name : "<type>"));
+
+        free(expr_name);
+        free(type_name);
+        return ok;
+    }
+}
+
 static bool validate_function_typed_expr(ResolveContext *context,
                                          const FengExpr *expr,
                                          const FengTypeRef *expected_type_ref) {
@@ -9351,6 +9863,12 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
 
     if (expr == NULL || expected_type_ref == NULL) {
         return true;
+    }
+    if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_AMP &&
+        resolve_abi_function_pointer_type_decl(context, expected_type_ref) != NULL) {
+        return validate_expr_against_expected_abi_function_pointer_type(context,
+                                                                        expr,
+                                                                        expected_type_ref);
     }
     if (resolve_function_type_decl(context, expected_type_ref) != NULL) {
         return validate_function_typed_expr(context, expr, expected_type_ref);
@@ -9445,6 +9963,88 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
                                           const FengDecl *decl,
                                           const AbiTrace *trace);
 
+static bool type_ref_is_abi_field_pointer_target(const ResolveContext *context,
+                                                 const FengTypeRef *type_ref,
+                                                 const AbiTrace *trace) {
+    const char *builtin_name;
+    const FengDecl *type_decl;
+
+    if (type_ref == NULL) {
+        return false;
+    }
+
+    if (type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return type_ref_is_abi_compatible_array(context, type_ref, trace);
+    }
+    if (type_ref->kind == FENG_TYPE_REF_POINTER) {
+        return false;
+    }
+
+    builtin_name = type_ref_builtin_canonical_name(type_ref);
+    if (builtin_name != NULL) {
+        return true;
+    }
+
+    type_decl = resolve_type_ref_decl(context, type_ref);
+    if (type_decl == NULL) {
+        return false;
+    }
+
+    if (type_decl->kind == FENG_DECL_TYPE) {
+        return annotations_contain_kind(type_decl->annotations,
+                                        type_decl->annotation_count,
+                                        FENG_ANNOTATION_ABI);
+    }
+
+    return decl_is_function_type(type_decl) &&
+           annotations_contain_kind(type_decl->annotations,
+                                    type_decl->annotation_count,
+                                    FENG_ANNOTATION_ABI);
+}
+
+static bool type_ref_is_abi_field_type(const ResolveContext *context,
+                                       const FengTypeRef *type_ref,
+                                       const AbiTrace *trace) {
+    const char *builtin_name;
+
+    if (type_ref == NULL) {
+        return false;
+    }
+
+    builtin_name = type_ref_builtin_canonical_name(type_ref);
+    if (builtin_name != NULL) {
+        return strcmp(builtin_name, "void") != 0 && strcmp(builtin_name, "string") != 0;
+    }
+
+    return type_ref->kind == FENG_TYPE_REF_POINTER &&
+           type_ref_is_abi_field_pointer_target(context, type_ref->as.inner, trace);
+}
+
+static bool type_ref_is_abi_compatible_array(const ResolveContext *context,
+                                             const FengTypeRef *type_ref,
+                                             const AbiTrace *trace) {
+    const char *builtin_name;
+    const FengDecl *element_decl;
+
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_ARRAY || type_ref->as.inner == NULL ||
+        type_ref->as.inner->kind == FENG_TYPE_REF_ARRAY) {
+        return false;
+    }
+
+    builtin_name = type_ref_builtin_canonical_name(type_ref->as.inner);
+    if (builtin_name != NULL) {
+        return strcmp(builtin_name, "void") != 0 && strcmp(builtin_name, "string") != 0;
+    }
+
+    if (type_ref->as.inner->kind == FENG_TYPE_REF_POINTER) {
+        return true;
+    }
+
+    element_decl = resolve_type_ref_decl(context, type_ref->as.inner);
+    return element_decl != NULL && element_decl->kind == FENG_DECL_TYPE &&
+           type_decl_is_abi_stable(context, element_decl, trace);
+}
+
 static bool type_ref_is_abi_stable(const ResolveContext *context,
                                          const FengTypeRef *type_ref,
                                          bool allow_void,
@@ -9475,7 +10075,7 @@ static bool type_ref_is_abi_stable(const ResolveContext *context,
             return true;
 
         case FENG_TYPE_REF_ARRAY:
-            return false;
+            return type_ref_is_abi_compatible_array(context, type_ref, trace);
     }
 
     return false;
@@ -9565,7 +10165,7 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
         if (member->kind != FENG_TYPE_MEMBER_FIELD) {
             continue;
         }
-        if (!type_ref_is_abi_stable(context, member->as.field.type, false, &next_trace)) {
+        if (!type_ref_is_abi_field_type(context, member->as.field.type, &next_trace)) {
             return false;
         }
     }
@@ -9786,7 +10386,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
         bool ok;
 
         if (member->kind != FENG_TYPE_MEMBER_FIELD ||
-            type_ref_is_abi_stable(context, member->as.field.type, false, &trace)) {
+            type_ref_is_abi_field_type(context, member->as.field.type, &trace)) {
             continue;
         }
 
@@ -10166,6 +10766,50 @@ static bool validate_untyped_callable_value_expr(ResolveContext *context, const 
                                expr != NULL ? expr->token : context->program->module_token,
                                format_message("expression '%s' requires an explicit target function type to resolve overloads",
                                               expr_name != NULL ? expr_name : "<expression>"))) {
+        free(expr_name);
+        return false;
+    }
+
+    free(expr_name);
+    return true;
+}
+
+static bool validate_untyped_address_of_expr(ResolveContext *context, const FengExpr *expr) {
+    char *expr_name;
+    InferredExprType operand_type;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_UNARY || expr->as.unary.op != FENG_TOKEN_AMP) {
+        return true;
+    }
+
+    if (expr_is_top_level_function_reference(context, expr->as.unary.operand)) {
+        expr_name = format_expr_target_name(expr);
+        if (!resolver_append_error(
+                context,
+                expr->token,
+                format_message(
+                    "expression '%s' requires an explicit target Foo* type to form an ABI function pointer",
+                    expr_name != NULL ? expr_name : "<expression>"))) {
+            free(expr_name);
+            return false;
+        }
+
+        free(expr_name);
+        return true;
+    }
+
+    operand_type = infer_expr_type(context, expr->as.unary.operand);
+    if (!expr_is_callable_like_address_of_operand(context, expr->as.unary.operand, operand_type)) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(expr);
+    if (!resolver_append_error(
+            context,
+            expr->token,
+            format_message(
+                "expression '%s' cannot form an ABI function pointer; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type",
+                expr_name != NULL ? expr_name : "<expression>"))) {
         free(expr_name);
         return false;
     }
@@ -11781,6 +12425,9 @@ static bool resolve_binding(ResolveContext *context,
         if (!validate_untyped_callable_value_expr(context, binding->initializer)) {
             return false;
         }
+        if (!validate_untyped_address_of_expr(context, binding->initializer)) {
+            return false;
+        }
         if (!validate_untyped_array_literal_expr(context, binding->initializer)) {
             return false;
         }
@@ -11911,7 +12558,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 infer_expr_type(context, stmt->as.assign.target));
 
         case FENG_STMT_EXPR:
-            return resolve_expr(context, stmt->as.expr, allow_self);
+            return resolve_expr(context, stmt->as.expr, allow_self) &&
+                   validate_untyped_address_of_expr(context, stmt->as.expr);
 
         case FENG_STMT_IF:
             for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
