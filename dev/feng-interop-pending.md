@@ -38,7 +38,7 @@
 | 基本标量类型 | 是 | 直接按 ABI 标量规则传递 |
 | 指针类型 `U*` | 是 | 仅用于 C ABI 边界传递；在 Feng 表达式中不透明、不可直接操作 |
 | 函数指针类型 `Foo*`（`Foo` 为 `@fixed spec`） | 是 | 派生自标注了 `@fixed` 的 callable-form `spec`；不透明，仅在 ABI 边界传递 |
-| `@fixed` 类型 | 是 | 类型本身通过 ABI 稳定校验 |
+| `@fixed` 类型 | 是 | 类型本身通过 ABI 稳定校验，且直接字段类型仅允许基本标量或符合白名单的 `T*` |
 | ABI 兼容数组 `T[]` | 有条件 | `T` 为基本标量 / 指针 / 已通过 ABI 校验的 `@fixed`，且元素按值连续存储 |
 | `string` | 有条件 | 以字节指针和显式长度传递，默认借用语义 |
 
@@ -63,9 +63,27 @@
 3. `@fixed` 相关限制继续严格执行：
     - 不允许 `@fixed` 与泛型交叉：带泛型形参的 `type` 不得标注 `@fixed`，任何泛型实例（闭合或未闭合）当前阶段均不参与 ABI 稳定校验。
     - 不允许直接依赖非 ABI 稳定类型。
-    - 不允许直接把 `string`、普通数组当作 `@fixed` 成员。
+    - `@fixed type` 的直接字段类型只允许以下两类：
+        - 基本标量类型。
+        - 指针类型 `T*`，其中 `T` 只能是 `string`、ABI 兼容数组、已通过 ABI 稳定校验的 `@fixed` 类型，或 ABI 兼容函数签名（标注 `@fixed` 的 callable-form `spec`）。
+    - 因此不允许直接把 `string`、数组、`@fixed` 对象或 callable-form `spec` 本体作为 `@fixed` 成员；需要出现时必须通过对应的 `T*`。
     - 方法与成员字段是不同概念：方法定义不参与 `@fixed type` 的字段 ABI 校验，不影响字段结果。
     - 允许 `Foo*` 函数指针成员，其类型必须派生自标注 `@fixed` 的 callable-form `spec`。
+
+示例：
+
+```feng
+@fixed
+type UserType1 {
+    var id: i32;
+}
+
+@fixed
+type UserType2 {
+    var u1: UserType1;   // 编译期报错：`@fixed type` 字段不能直接内联 `@fixed` 对象
+    var u2: UserType1*;  // 合法
+}
+```
 
 说明：
 
