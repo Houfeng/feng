@@ -1,21 +1,21 @@
-# Feng 语言 C 互操作规范
+# Feng 语言 ABI 互操作规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的 C 互操作概要说明,聚焦 Feng 语言与 C 库来源声明、C 兼容类型、外部函数声明、导出函数和回调函数定义规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的 ABI 互操作概要说明,聚焦 Feng 语言与 C 库来源声明、ABI 兼容资格、`@abi` 声明、`Foo*` 函数指针、`extern fn` 导入声明、导出函数与回调规则。
 
 > **设计原则基础**: 本文档建立在 [Feng 语言设计原则](./feng-principles.md) 之上。
-> 尤其是: 注解只影响语义分析与代码生成,不改变语法; 只有关键字能够影响语法类别,语法问题应能在 parse 阶段检查出来。
+> 尤其是: 注解只影响语义分析与代码生成,不改变语法; ABI 规则必须可在编译期判定; 互操作层不预设任何特定 C API 行为。
 
-## 1 C互操作概览
+## 1 ABI互操作概览
 
 - `extern fn` 仅用于声明 C 语言实现的外部函数,必须无函数体。
 - 本文档是 C ABI 兼容资格的唯一权威来源; 其他规范文档只引用本文档,不重复枚举具体兼容集合。
-- `@fixed` 用于标记 `type`、`spec`、`fn` 或方法希望进入 ABI 固定边界; 它表达的是语义资格,不是新的语法类别。
-- 对象形式的 `@fixed type` 用于定义 C 兼容结构体; `@fixed @union type` 用于定义 C 兼容联合体。
-- 可调用形状的 `@fixed spec` 用于定义 C 兼容函数指针类型; 对象形状的 `spec` 不得标记 `@fixed`。
-- 带函数体的 `@fixed fn` 可用于定义 Feng 实现的 ABI 兼容回调函数; 顶层 `pu @fixed fn` 可用于定义公开导出的 C ABI 函数。
-- 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 只用于无函数体的 `extern fn` 导入声明; 无参数形式只用于 `@fixed fn` 或 `@fixed` 方法的 ABI 调用方式。
-- `string` 与数组可在可调用 C ABI 边界上作为桥接类型使用; 其中数组要求元素类型 ABI 兼容。数组自身的长度、可写性与类型规则统一见 [Feng 内建类型规范](./feng-builtin-type.md)。
-- `@fixed` 的合法性由语义分析检查。诊断应表述为“某声明不能标记为 `@fixed`”,而不是“`@fixed` 改写了语法”。
+- `@abi` 仅用于编译器做 ABI 兼容性检查,不引入新的运行时信息,不改变类型或函数值在 Feng 中的运行时表示。
+- `@abi` 可写为无参形式或带一个目标参数; 当前无参等价于 `@abi("c")`,本文仅定义 `c` 目标语义; 未来可扩展为 `@abi("wasi")` 等其他目标。
+- 当前版本中,`@abi` 仅适用于对象形式的 `type`、callable-form 的 `spec` 和顶层 `fn`; 对象形式的 `spec`、方法、lambda 与闭包都不是当前 `@abi` 目标。
+- `@union` 仅适用于对象形式的 `@abi type`; 未标注 `@union` 时按 ABI 结构体 payload 处理,标注 `@union` 时按 ABI 联合体 payload 处理。
+- 指针类型 `T*` 与函数指针类型 `Foo*` 在 Feng 中都是不透明句柄: 不可直接解引用、不可运算、不可比较、不可显式转换; `Foo*` 也不可直接调用。
+- `string` 与 ABI 兼容数组在 ABI 边界上采用默认借用、优先 0 拷贝的规则; 长度不跟随指针隐式传递,必须按签名显式表达。
+- 顶层 `@abi fn` 可作为 ABI 回调来源,`pu @abi fn` 可作为公开导出函数; Feng 异常不得穿越 ABI 边界传播。
 
 ## 2 C库来源与调用方式注解
 
@@ -24,7 +24,7 @@
 1. 直接书写字符串字面量
 2. 引用在当前可见作用域中、以字符串字面量直接初始化的 `let` 绑定; 来源文件或模块不限
 
-无论采用哪种写法,编译器最终都会在编译期把第一个参数解析为以下三种库来源之一:
+无论采用哪种写法,编译器最终都会在编译期把参数解析为以下三种库来源之一:
 
 1. 系统库名: 无特殊路径前缀,编译器自动补全系统库前缀和后缀
 2. 相对路径: 以 `./` 或 `../` 开头,相对于当前 `.ff` 文件路径
@@ -37,6 +37,8 @@
 - 若该参数使用 `let` 绑定引用,则该绑定必须以字符串字面量直接初始化,不可使用计算表达式或 `var` 绑定; 来源文件或模块不限,只要在使用点可见即可。
 - 不同 `extern fn` 声明在同一文件或同一 `mod` 中可以指向不同原生库,不再要求“一个文件只归属于一个 C ABI 库”。
 - 无函数体的 `extern fn` 声明必须且只能使用一个带参数的调用方式注解; 调用方式由注解名本身唯一确定。
+- 无参数形式的 `@cdecl`、`@stdcall` 和 `@fastcall` 仅适用于顶层 `@abi fn`; 当前未显式标注时,顶层 `@abi fn` 默认按 `cdecl` 处理。
+- 调用方式注解当前只对 `@abi("c")` 目标有定义。
 
 ```feng
 let math_lib = "m";
@@ -50,42 +52,79 @@ extern fn create_point(x: int, y: int): Point;
 
 @cdecl("/usr/local/lib/libcurl.so")
 extern fn curl_global_init(flags: u64): int;
+
+@abi
+@stdcall
+pu fn create_point_export(x: int, y: int): Point {
+    return Point { x: x, y: y };
+}
 ```
 
-## 3 C兼容结构体与联合体定义(@fixed type)
+## 3 ABI兼容资格
 
-对象形式的 `type` 在标注 `@fixed` 后,可定义可与 C 直接映射的结构体或联合体,无需 C 侧额外声明。未显式标注 `@union` 时,对象形式的 `@fixed type Name { ... }` 默认按 C 结构体处理; 若需声明为 C 联合体,可在 `@fixed type` 上再添加 `@union` 注解。
+不在以下清单中的类型或函数,均视为 ABI 不兼容,编译期报错。
+
+### 3.1 类型清单
+
+| 类别 | 是否 ABI 兼容 | 条件 |
+| --- | --- | --- |
+| 基本标量类型 | 是 | 直接按 ABI 标量规则传递 |
+| 指针类型 `U*` | 是 | 仅用于 ABI 边界传递; 在 Feng 表达式中不透明、不可直接操作 |
+| 函数指针类型 `Foo*` | 是 | `Foo` 必须是 callable-form `@abi spec`; `Foo*` 仅作为不透明函数指针传递 |
+| `@abi` 类型 | 是 | 类型本身通过 ABI 校验,且直接字段只允许当前白名单 |
+| ABI 兼容数组 `T[]` | 有条件 | `T` 为基本标量、指针或已通过 ABI 校验的 `@abi` 类型,且元素按值连续存储 |
+| `string` | 有条件 | 在可调用 ABI 边界按“数据指针 + 显式长度”借用传递 |
+
+### 3.2 函数清单
+
+| 类别 | 是否 ABI 兼容 | 条件 |
+| --- | --- | --- |
+| 顶层 `fn` | 有条件 | 必须标注 `@abi`,且全部参数与返回值 ABI 兼容 |
+
+补充规则:
+
+- ABI 兼容资格必须由声明规则静态判定,不得依赖运行时猜测或按具体 C 库名称做特判。
+- `extern fn` 参数位或返回位写成 `Foo*` 时,表示开发者声明该 ABI 位承载与 `Foo` 签名兼容的原生函数指针; 编译器只检查静态类型一致。
+- `string` 与 ABI 兼容数组只在可调用 ABI 边界上定义; 它们不属于 `@abi type` 可直接内联的字段类型。
+
+## 4 `@abi type` 与 `@union`
+
+对象形式的 `type` 在标注 `@abi` 后,声明一个可供 ABI 校验与发码的 payload 视图; `@abi` 本身不改变该类型在 Feng 中的命名、对象语义、构造流程、默认零值、`==` / `!=` 语义、终结器规则或自动内存管理规则。
 
 规则说明:
 
-- `@fixed` 不改变 `type` 的语法形式。某个 `type` 能否标记为 `@fixed`,由语义分析按 ABI 稳定类型集合检查。
-- 对象形式的 `@fixed type` 的直接字段类型必须属于 ABI 稳定类型集合。
-- 在当前语言版本中,ABI 稳定类型集合至少包含: 基础类型、其他合法的 `@fixed type`、合法的可调用形状 `@fixed spec` 和固定长度数组。
-- `@union` 仅适用于对象形式的 `@fixed type`,不适用于可调用形状的 `@fixed spec`。
-- 联合体的所有成员共享同一块内存,其有效成员语义与 C 联合体保持一致。
-- `@fixed type` 和 `@fixed @union type` 的实例布局仅由字段决定; 方法、构造函数、访问控制和注解本身都不参与实例内存布局计算。
-- 编译器不得为 `@fixed type` 或 `@fixed @union type` 注入对象头、虚表指针、判别标签或其他隐藏实例字段。
-- `@fixed` 只额外约束进入 C ABI 边界时的布局与类型资格,不单独改变 Feng 侧的默认零值、创建流程、绑定规则或 `==` / `!=` 语义。
-- 是否需要显式释放,由存储位置和外部资源拥有关系决定; 不能仅因标注了 `@fixed` 就推定为“必须手动释放”。
-- 对象形式的 `@fixed type` 可以声明普通方法或构造函数,但它们不自动进入 ABI 边界; 方法只有在其自身也标记为 `@fixed` 时,才按 ABI 兼容函数检查。
-- `@fixed type` 对象不受自动内存管理,生命周期由程序员通过显式方式管理; 详见 [Feng 语言对象生命周期规范](./feng-lifetime.md)。
-- 向 C ABI 边界传递 `@fixed type` 时,传递方式完全由 `extern fn` 或 `@fixed fn` 的参数类型声明决定: 参数类型为 `T` 则按 C 值语义传递（C 函数收到字段副本）,参数类型为 `*T` 则传递指向 Feng 侧对象的指针（C 函数直接操作该指针）；编译器不做任何隐式转换,C 函数需要指针就声明为指针,需要值就声明为值。
+- `@abi` 不改变 `type` 的语法形式。某个 `type` 能否标记为 `@abi`,由语义分析按 ABI 规则检查。
+- 带泛型形参的 `type` 不得标记 `@abi`; 任何泛型实例当前阶段也不参与 ABI 稳定校验。
+- 对象形式的 `@abi type` 的直接字段类型只允许以下三类:
+  1. 基本标量类型。
+  2. 数据指针类型 `T*`,其中 `T` 只能是 `string`、ABI 兼容数组或已通过 ABI 校验的 `@abi` 类型。
+  3. 函数指针类型 `Foo*`,其中 `Foo` 必须是 callable-form 的 `@abi spec`。
+- 因此,`@abi type` 不允许直接把 `string`、数组、`@abi` 对象值或 callable-form `spec` 值本体内联为字段; 需要出现这些能力时必须通过对应的 `T*` 或 `Foo*` 字段表达。
+- `@union` 仅适用于对象形式的 `@abi type`,不适用于 callable-form 的 `@abi spec`。
+- 方法、构造函数、访问控制和注解本身都不参与 `@abi type` 的字段 ABI 校验; 方法定义不改变 payload 结果。
+- `@abi type` 进入 ABI 边界时,传值或传指针完全由签名决定: 参数类型为 `T` 则按 ABI payload 值语义传递,参数类型为 `T*` 则传递该 payload 的地址; 编译器不做隐式兜底转换。
+- `@abi type` 的字段 payload 是否需要显式释放,取决于外部资源拥有关系与外部协议,不能仅由 `@abi` 注解推导。
 
 ```feng
-@fixed
+@abi
 type Point {
     var x: int;
     var y: int;
 }
 
-@fixed
-type Rect {
-    var p1: Point;
-    var p2: Point;
-    var area: float;
+@abi
+type Slice {
+    var data: byte*;
+    var len: int;
 }
 
-@fixed
+@abi
+type UserType2 {
+    var p: Point;    // 编译期报错: `@abi type` 字段不能直接内联 `@abi` 对象
+    var q: Point*;   // 合法
+}
+
+@abi
 @union
 type IntOrFloat {
     var i: int;
@@ -93,103 +132,32 @@ type IntOrFloat {
 }
 ```
 
-## 4 C函数指针类型定义(@fixed spec)
+## 5 `@abi spec`、`Foo*` 与 `@abi fn`
 
-可调用形状的 `spec` 在标注 `@fixed` 后,用于定义与 C 函数指针兼容的函数契约,以支持回调函数传递。函数指针类型本身不使用 `@union` 或调用方式注解; 调用方式由与之匹配的 `extern fn` 导入声明,或 `@fixed fn` / `@fixed` 方法定义负责标注。
+callable-form 的 `spec` 在标注 `@abi` 后,用于定义 ABI 函数签名类型。`@abi spec Foo(参数): 返回值;` 定义签名 `Foo`; `Foo*` 是对应的原生函数指针类型。
 
 规则说明:
 
-- `@fixed spec Name(参数): 返回值;` 定义 C 兼容函数指针类型。
-- `@fixed spec` 的直接参数类型与返回类型可以使用 ABI 稳定类型,也可以使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
-- 对象形状的 `spec` 不得标记 `@fixed`。对象形状的 `spec` 在语言语义上只约束可见形状、不约束物理布局,不能作为 C ABI 边界上的数据类型。
-- `@union` 不适用于可调用形状的 `@fixed spec`。
-- 带参数的 `@cdecl` / `@stdcall` / `@fastcall` 不得出现在 `@fixed spec` 定义上; 调用方式仅由实际传入该契约位置的 `extern fn` 或 `@fixed fn` / `@fixed` 方法决定。
+- `@abi spec` 仅适用于 callable-form `spec`; 对象形式的 `spec` 不得标记 `@abi`、`@union` 或调用方式注解。
+- 编译器必须检查 `@abi spec` 的全部参数与返回值是否 ABI 兼容。
+- `Foo` 本身仍是普通 callable-form `spec`,不引入新的运行时差异; `Foo*` 属于指针类型体系,与 `T*` 同级并遵循相同的不透明规则。
+- `Foo*` 可直接用作 `extern fn` 的参数类型、返回类型以及 `@abi type` 的成员字段类型。
+- 当前版本中,`@abi fn` 仅适用于顶层 `fn`; 方法、lambda、闭包、绑定方法值都不是合法的 `@abi fn`。
+- 顶层 `@abi fn` 若要进入 ABI 边界,其全部参数与返回值必须 ABI 兼容。
+- 顶层非公开 `@abi fn` 可作为 ABI 回调函数来源; 顶层 `pu @abi fn` 会生成公开的 C ABI 导出符号。
+- `.fb` 包中的头文件与导出清单由公开 `@abi` 接口自动生成。
+- `@abi fn` 内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回约定; 未捕获异常不得穿越 ABI 边界传播。
 
 ```feng
-@fixed
+@abi
 spec CmpFunc(a: int, b: int): int;
 
-@fixed
-spec PointCallback(p: Point): void;
-```
-
-## 5 Feng实现的 `@fixed fn` 调用方式注解
-
-Feng 提供 `@cdecl`、`@stdcall` 和 `@fastcall` 三个内建注解,用于显式声明带函数体的 `@fixed fn` 或 `@fixed` 方法的 C ABI 调用方式。在这类场景中,调用方式注解不得带参数。
-
-规则说明:
-
-- `@cdecl`: 无参数时声明使用 C 默认调用方式。
-- `@stdcall`: 无参数时声明使用 `stdcall` 调用方式。
-- `@fastcall`: 无参数时声明使用 `fastcall` 调用方式。
-- 每个 `@fixed fn` 或 `@fixed` 方法最多只能使用一个调用方式注解。
-- 未显式标注时,`@fixed fn` 与 `@fixed` 方法默认按 `cdecl` 处理。
-- 调用方式注解通常单独写在 `@fixed fn` 或方法定义的上一行,以保持书写清晰。
-
-```feng
-@fixed
-fn my_int_cmp(a: int, b: int): int {
+@abi
+fn int_cmp(a: int, b: int): int {
     return a - b;
 }
 
-@fixed
-@stdcall
-pu fn create_point_export(x: int, y: int): Point {
-    return Point { x: x, y: y };
-}
-```
-
-## 6 C外部函数声明(extern fn)
-
-使用无函数体的 `extern fn` 声明 C 语言实现的外部函数,用于调用 C 库函数。`extern fn` 属于语法类别,因此“是否带函数体”必须在 parse 阶段直接检查出来。
-
-规则说明:
-
-- `extern fn` 声明必须无函数体。
-- `extern fn` 声明必须使用且只能使用一个带参数的 `@cdecl`、`@stdcall` 或 `@fastcall`。
-- 带参数注解的参数可以是字符串字面量,也可以是当前可见作用域中以字符串字面量初始化的 `let` 绑定（来源文件或模块不限）。
-- 带参数注解的注解名本身决定调用方式,不再额外传入字符串形式的调用约定。
-- `extern fn` 的参数和返回值应使用语言已定义的 C 兼容表示,也可使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
-- `extern fn` 支持 `pu`/`pr` 可见性修饰符,默认等价于 `pr extern fn`,仅当前模块内可调用; `pu extern fn` 将该外部函数名公开,允许其他模块通过导入当前模块后调用。
-
-```feng
-let math_lib = "m";
-
-@cdecl(math_lib)
-extern fn sin(x: float): float;
-
-@cdecl(math_lib)
-extern fn sqrt(x: float): float;
-
-@stdcall("./libpoint.so")
-extern fn create_point(x: int, y: int): Point;
-
-@cdecl("./libpoint.so")
-extern fn set_point_callback(cb: PointCallback);
-```
-
-## 7 Feng 回调函数与 C ABI导出函数(@fixed fn)
-
-使用带函数体的 `@fixed fn` 可定义 Feng 实现的 ABI 兼容函数。此类函数既是合法的 Feng 函数,又接受 ABI 边界规则约束。
-
-规则说明:
-
-- 顶层非公开 `@fixed fn` 可作为回调函数传给 C。
-- 顶层 `pu @fixed fn` 会生成公开的 C ABI 导出符号。
-- 方法只有在其自身标记为 `@fixed` 时,才会进入 ABI 兼容检查; 普通方法即使定义在 `@fixed type` 上,也不自动成为 C ABI 接口。
-- `@fixed fn`、`@fixed` 方法和 `pu @fixed fn` 的直接参数类型与返回类型可以使用 ABI 稳定类型,也可以使用 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的 `string` 与数组桥接类型。
-- `@fixed fn` 和 `@fixed` 方法不得捕获外部变量,也不得使用闭包作为 ABI 可调用值。
-- 在需要 `@fixed spec` 契约的位置上,只能传入顶层 `@fixed fn` 或 `@fixed` 方法,不能直接传入 lambda 或闭包。
-- 未捕获异常不得穿越 `@fixed` ABI 边界传播。
-- `.fb` 包中的头文件与导出清单由公开 `@fixed` 接口自动生成。
-
-```feng
-@fixed
-fn my_point_handle(p: Point) {
-    print(p.x, p.y);
-}
-
-@fixed
+@abi
 pu fn point_sum(p1: Point, p2: Point): Point {
     return Point {
         x: p1.x + p2.x,
@@ -198,37 +166,133 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 }
 ```
 
-## 8 ABI兼容资格与生命周期
+## 6 一元 `&` 与指针来源
 
-`@fixed` 的合法性属于语义资格检查,而不是语法检查。
+### 6.1 允许取址的对象
+
+仅允许对以下四类值取 C 指针:
+
+1. `@abi` 对象
+2. `string`
+3. ABI 兼容数组
+4. 标注 `@abi` 且通过 ABI 检查的顶层 `fn`（目标类型必须显式给出为 `Foo*`）
+
+其它类型一律报错,不做隐式兜底。
+
+### 6.2 返回指针含义
+
+1. `&abi_value`: 返回该 `@abi` 值对应 ABI payload 的首地址指针,类型 `T*`。
+2. `&str`: 返回字符串 UTF-8 数据区首地址指针,类型 `byte*`。
+3. `&arr`: 返回 ABI 兼容数组第 `0` 个元素地址; 空数组返回 `0` 指针,类型 `T*`。
+4. `&abi_fn`: 在目标类型显式给出为 `Foo*` 时,返回该顶层 `@abi fn` 的函数指针。
+
+### 6.3 可写性与生命周期
+
+1. `&string` 结果不在语言层强制只读; 是否允许写入由调用方声明的 C 契约决定。若写入破坏 Feng `string` 约束,行为未定义。
+2. `&array` 是否可写由数组可写层语义决定。
+3. `&abi_value` 是否可写由绑定可变性与成员可写规则共同决定。
+4. 数据指针默认借用,仅保证调用期间有效; C 侧若可能缓存、异步使用或以其他方式逃逸使用,开发者必须显式保活 owner。
+5. 函数指针 `Foo*` 本身无生命周期问题,但与之配套传递的 `user_data` 等附带对象仍由调用方负责保活。
+6. 当前版本不支持对临时值取地址; 任何对临时值的 `&` 都必须在编译期报错。
+
+### 6.4 函数指针来源与禁止项
+
+`Foo*` 可来自以下位置:
+
+1. 对满足条件的顶层 `@abi fn` 执行 `&` 取址。
+2. `extern fn` 返回值。
+3. 已有 `Foo*` 绑定、参数、字段或返回值的继续传递。
+
+补充规则:
+
+- 对顶层 `@abi fn` 执行 `&` 时,目标类型必须显式给出为 `Foo*`; 编译器据此检查该 `fn` 与 `Foo` 的参数和返回值完全一致。
+- 缺少目标类型、存在重载歧义或 `fn` 与 `Foo` 签名不一致时,编译器必须报错。
+- 以下所有情况都禁止作为 `Foo*` 的来源: 未标注 `@abi` 的顶层函数、成员函数、lambda、闭包、绑定方法值以及任何带环境捕获的 callable 值。
+- 除 `&abi_fn` 场景外,编译器通常无法追溯 `Foo*` 的真实来源是否匹配 `Foo` 签名; 这类 ABI 正确性由开发者通过 `extern fn` 声明或外部 API 契约保证。
+
+### 6.5 指针类型安全
+
+- 一元 `&` 的结果类型为 `T*` 或 `Foo*`,与取址目标相匹配。
+- 指针在 Feng 中只可用于 ABI 边界的存储、传递和返回,不作为通用编程能力开放。
+- 凡超出上述边界的解引用、调用、运算、比较或显式转换,编译期都必须报错。
+- 二元 `&` 继续保留为按位与,一元 `&` 仅表示取地址,两者按语法位置区分。
+
+```feng
+@cdecl("c_use_i32_ptr")
+extern fn c_use_i32_ptr(p: int*): void;
+
+let x: int = 42;
+let p: int* = &x;
+c_use_i32_ptr(p);
+
+@abi
+spec PointOperate(p: Point): void;
+
+@abi
+fn handle_point(p: Point) {
+    print(p.x, p.y);
+}
+
+let cb: PointOperate* = &handle_point;
+
+@cdecl("./libpoint.so")
+extern fn run_point_operate(p: Point, cb: PointOperate*): void;
+```
+
+## 7 `string` 的 ABI 0拷贝规则
+
+`string` 在 ABI 边界可按“数据指针 + 显式长度”的方式 0 拷贝传递。这是借用使用,不是所有权转移,也不是普通隐式类型转换。
 
 规则说明:
 
-- `@fixed type` 的直接字段类型与固定数组元素类型必须属于 ABI 稳定类型集合。
-- 某个具名类型只有在其自身也通过 `@fixed` 合法性校验后,才属于 ABI 稳定类型集合。
-- `string` 与数组不属于直接布局意义上的 ABI 稳定类型,但可按 [Feng 内建类型规范](./feng-builtin-type.md) 中定义的桥接规则用于 `extern fn`、`@fixed fn`、`@fixed` 方法与 `@fixed spec` 的参数/返回值位置。
-- 普通 `type` 可以包含 `@fixed` 值字段; 但 `@fixed type` 的直接字段布局不能直接依赖普通 `type`、对象形状 `spec`、`string`、数组、闭包或其他托管对象类型。
-- 生命周期不由 `@fixed` 自动变成“总是手动释放”; 更准确的规则是: `@fixed` ABI 值不受运行时托管,其生命周期由存储位置和资源拥有关系决定。
-- 若 `@fixed` 值通过外部分配获得或内部持有外部资源,则应通过显式的 `free`、`close` 或同类协议释放。
+- 默认只保证调用期间有效。
+- 若调用方声明 C 侧会在调用返回后继续使用该指针,开发者必须显式持有原始 `string` owner。
+- `string` 不属于 `@abi type` 可直接内联的字段类型; 若需要在 `@abi type` 中表达相关数据,必须改用显式指针与长度字段。
+- 互操作规则不预设目标 C API 的只读或可写行为; 是否允许写入由开发者按外部契约声明并承担后果。
+
+## 8 ABI兼容数组
+
+数组 `T[]` 可作为 ABI 兼容数组的前提是: 元素类型 `T` 满足以下之一:
+
+1. 基本标量类型
+2. 指针类型 `U*`
+3. 已通过 ABI 校验的 `@abi` 类型
+
+额外硬约束:
+
+- 元素在数组中必须按值连续存储,不能是引用槽位语义。
+- ABI 兼容数组的长度不跟随 `&` 一起隐式传递,长度必须作为显式字段或显式参数表达。
+- 数组自身不属于 `@abi type` 可直接内联的字段类型; 需要在 `@abi type` 中表达数组数据时,必须改用显式数据指针与长度字段。
+- ABI 数组使用点无需再次递归遍历成员,只查询元素类型 `T` 是否已通过当前 ABI 资格检查。
+
+## 9 开发者责任与诊断
+
+开发者必须根据调用方声明的 C 契约判断是否需要延长引用寿命:
+
+1. 同步只读调用: 可用默认借用与 0 拷贝。
+2. 可能逃逸: 必须显式保活 owner（例如 wrapper 成员持有原始 `string`、数组或 `@abi` 对象）。
+3. 不允许把“缓存裸指针”误当作“已保活对象”。
+4. `extern fn` 的参数位或返回位若写成 `Foo*`,其 ABI 真实性由开发者保证,编译器不证明外部实现与声明完全一致。
 
 推荐诊断风格示例:
 
-- `type BufferList` 含有非 `@fixed` 的成员 `items`,因此不能标记为 `@fixed`。
-- `fn point_sum` 的参数 `user` 类型不是 ABI 稳定类型,因此该函数不能标记为 `@fixed`。
-- `spec PointHandler` 是对象形状 spec,不能标记为 `@fixed`; `@fixed` 仅适用于可调用形状的 `spec`。
+- `type BufferList` 含有不能直接内联到 `@abi type` 的字段 `items`,因此不能标记为 `@abi`。
+- `fn point_sum` 的参数 `user` 类型不是 ABI 兼容类型,因此该函数不能标记为 `@abi`。
+- `spec PointHandler` 是对象形式的 `spec`,不能标记为 `@abi`; `@abi` 的 `spec` 仅适用于 callable-form。
+- `let cb = &int_cmp` 缺少显式目标 `Foo*` 类型,因此不能确定函数指针类型。
 
-## 9 C互操作完整示例
+## 10 C互操作完整示例
 
 ```feng
 pu mod libc.math;
 
-@fixed
+@abi
 type Point {
     var x: int;
     var y: int;
 }
 
-@fixed
+@abi
 spec PointOperate(p: Point): void;
 
 let point_lib = "./libpoint.so";
@@ -237,14 +301,14 @@ let point_lib = "./libpoint.so";
 extern fn point_distance(p1: Point, p2: Point): float;
 
 @cdecl(point_lib)
-extern fn run_point_operate(p: Point, cb: PointOperate);
+extern fn run_point_operate(p: Point, cb: PointOperate*): void;
 
-@fixed
+@abi
 fn handle_point(p: Point) {
     print("Point:x=", p.x, " y=", p.y);
 }
 
-@fixed
+@abi
 pu fn point_sum(p1: Point, p2: Point): Point {
     return Point {
         x: p1.x + p2.x,
@@ -253,19 +317,22 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 }
 
 fn main(args: string[]) {
-    let p1 = Point {x: 10, y: 20};
-    let p2 = Point {x: 30, y: 40};
+    let p1 = Point { x: 10, y: 20 };
+    let p2 = Point { x: 30, y: 40 };
 
     let dis = point_distance(p1, p2);
     print(dis);
 
-    run_point_operate(p1, handle_point);
+    let cb: PointOperate* = &handle_point;
+    run_point_operate(p1, cb);
 }
 ```
 
-## 10 与主规范的关系
+## 11 与主规范的关系
 
 - [feng-principles.md](./feng-principles.md): 语言设计原则、分层原则与诊断原则。
-- [feng-language.md](./feng-language.md): 语言总体规范、C 互操作概要、模块、类型、函数、流程控制、异常、自动内存管理、包分发与完整示例。
+- [feng-language.md](./feng-language.md): 语言总体规范、ABI 互操作概要、模块、类型、函数、流程控制、异常、自动内存管理、包分发与完整示例。
+- [feng-type.md](./feng-type.md): `@abi type` 仍是 Feng `type`,对象模型与构造/终结器规则不因 `@abi` 改变。
+- [feng-lifetime.md](./feng-lifetime.md): 托管对象、原始指针与 ABI 借用边界的生命周期规则。
 - [feng-exception.md](./feng-exception.md): ABI 边界上的异常传播限制。
-- 本文档: C 库来源与调用方式、`@fixed` ABI 类型、`extern fn` 导入声明、导出函数和回调规则的独立补充文档。
+- 本文档: C 库来源与调用方式、ABI 兼容资格、`@abi`、`Foo*`、`extern fn` 导入声明、导出函数和回调规则的独立补充文档。

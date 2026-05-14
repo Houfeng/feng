@@ -74,10 +74,10 @@ extern fn ssl_connect(fd: int): int;
 
 **来源②: `--pkg` 指定的 `.fb` 包内正式库文件**
 
-编译器根据公开 `.ft` 中的声明事实与 `@fixed` / `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定当前平台可用的链接目标:
+编译器根据公开 `.ft` 中的声明事实与 `@abi` / `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定当前平台可用的链接目标:
 
 - 普通 `pu type` / `pu fn` / `pu let` / `pu var` 声明 → 链接 `lib/` 下对应平台静态库
-- 带 `@fixed` 的公开 ABI 声明 → 链接 `clib/` 下对应平台库文件
+- 带 `@abi` 的公开 ABI 声明 → 链接 `clib/` 下对应平台库文件
 - 公开 `extern fn` 导入声明 → 追加所需原生库链接信息
 
 两类来源的链接参数最终汇总后统一传递给底层 C 链接器。
@@ -140,7 +140,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 
 1. 在语义分析成功后导出 `build/mod/**/*.ft` 公开符号表
 2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
-3. 调用编译器将公开 `@fixed` 接口编译为 C ABI 库和头文件，放入 `clib/` 与 `include/`（若 `abi` 含 `c`）; 公开 `extern fn` 导入声明则保留其原生库来源与调用方式元信息
+3. 调用编译器将公开 `@abi` 接口编译为 C ABI 库和头文件，放入 `clib/` 与 `include/`（若 `abi` 含 `c`）; 公开 `extern fn` 导入声明则保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
 5. 直接复用 `build/mod/**/*.ft` 与正式库文件打包为 `.fb` ZIP 归档
 

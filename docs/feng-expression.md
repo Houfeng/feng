@@ -42,7 +42,7 @@ let name = item.name;
 - 逻辑运算仅适用于 `bool`。
 - 位运算（`&`、`|`、`^`、`<<`、`>>`）及按位非（`~`）仅适用于整数类型，两侧操作数类型必须相同，不支持隐式提升。
 - 字符串可使用 `+` 进行拼接。
-- `type` 对象、对象形式的 `@fixed type` 和数组上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
+- `type` 对象、对象形式的 `@abi type` 和数组上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
 - 基础数值、`bool` 与 `string` 的 `==` / `!=` 按值比较; `string` 的值语义指内容相等,不依赖底层引用身份。
 
 ### 3.1 数值运算规则
@@ -154,7 +154,7 @@ Feng 采用与 C 相同风格的显式转换语法:
 - `bool` 不参与数值显式转换,不能将数值直接转换为 `bool`,也不能将 `bool` 转换为数值类型。
 - 数组的显式转换资格与限制统一见 [Feng 内建类型规范](./feng-builtin-type.md) 中的数组规则; 本章不重复展开数组转换细则。
 - 对象形状 `spec` 的显式转换资格与限制统一见 [Feng 语言 `spec` 规范](./feng-spec.md); 本章不重复展开 `type -> spec` 与 `spec -> 父 spec` 的细则。
-- `string`、数组、`type`、`@fixed type` 与数值类型之间不支持数值转换。
+- `string`、数组、`type`、`@abi type` 与数值类型之间不支持数值转换。
 
 ```feng
 let total: i64 = 100;
@@ -291,7 +291,7 @@ let buf: u8[!] = u8[:capacity];
 
 ### 6.4 对象字面量
 
-对象字面量支持 `Type { field: value }`、`Type {}`、`Type() { field: value }`、`Type(args) { field: value }` 与 `Type:<Args>() { field: value }` 等形式,适用于 `type` 与对象形式的 `@fixed type`。字段按名称书写,顺序不限,同名字段不得重复出现,当前作用域不可访问的 `pr` 字段不可在字面量中出现。对象字面量的创建语义与构造阶段规则见 [Feng 语言类型规范](./feng-type.md)。
+对象字面量支持 `Type { field: value }`、`Type {}`、`Type() { field: value }`、`Type(args) { field: value }` 与 `Type:<Args>() { field: value }` 等形式,适用于 `type` 与对象形式的 `@abi type`。字段按名称书写,顺序不限,同名字段不得重复出现,当前作用域不可访问的 `pr` 字段不可在字面量中出现。对象字面量的创建语义与构造阶段规则见 [Feng 语言类型规范](./feng-type.md)。
 
 ```feng
 let user = User { name: "guest", age: 18 };

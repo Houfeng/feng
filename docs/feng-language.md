@@ -6,14 +6,14 @@
 
 ## 1 设计哲学
 
-Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式适配**的编程语言，秉持极简主义设计理念，语法紧凑、关键字稀少，兼顾脚本语言的简洁性与 C 语言的高效性；支持闭包、函数式编程与结构化异常处理，全程保障内存安全；以 `type` 统一定义具名类型，并通过 `extern fn`、`@fixed` 和调用方式注解实现与 C 语言的安全互操作，底层可无缝映射为 C 语言代码；普通 Feng 对象由运行时自动内存管理，`@fixed` 边界上的 ABI 值不受该机制接管；同时支持统一的 `.fb` 二进制包格式分发，可携带自有 ABI 静态库层与 C ABI 兼容层，兼顾源码保护、编译加速与跨语言复用。
+Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式适配**的编程语言，秉持极简主义设计理念，语法紧凑、关键字稀少，兼顾脚本语言的简洁性与 C 语言的高效性；支持闭包、函数式编程与结构化异常处理，全程保障内存安全；以 `type` 统一定义具名类型，并通过 `extern fn`、`@abi` 和调用方式注解实现与 C 语言的 ABI 互操作，底层可无缝映射为 C 语言代码；普通 Feng 对象由运行时自动内存管理，`@abi` 仅做 ABI 兼容检查而不改变对象的运行时表示；同时支持统一的 `.fb` 二进制包格式分发，可携带自有 ABI 静态库层与 C ABI 兼容层，兼顾源码保护、编译加速与跨语言复用。
 
 ## 2 语言特性一览
 
 | 特性 | 简述 |
 | --- | --- |
 | 强类型 / 静态类型 | 所有类型在编译期确定，所有类型转换都必须显式写出，无 `any` 类型 |
-| `type` 统一类型系统 | 普通类型采用托管引用语义；`@fixed type` 映射 C 兼容固定布局 |
+| `type` 统一类型系统 | 普通类型采用托管引用语义；`@abi type` 为可参与 ABI 校验的对象类型 |
 | `spec` / `fit` 显式契约 | `spec` 声明契约形状，`fit` 显式建立"类型满足契约"关系，不做结构隐式匹配 |
 | `let` / `var` 绑定 | 不可变 / 可变绑定，支持类型推导与默认零值初始化 |
 | 函数与重载 | `fn` 定义函数与方法，支持按参数类型重载，返回值不参与重载 |
@@ -21,8 +21,8 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | 模块系统 | `mod` / `use` 实现多级命名空间与可见性控制 |
 | 流程控制 | 条件分支、`if` 表达式、条件匹配、`while` / `for`、`break` / `continue` |
 | 结构化异常 | `throw` / `try` / `catch` / `finally`，异常不得穿越 C ABI 边界 |
-| 自动内存管理 | 普通对象由运行时自动管理，`@fixed` 值不受接管，详见 [feng-lifetime.md](./feng-lifetime.md) |
-| C 互操作 | `extern fn` 声明 C 函数，`@fixed` 标记 ABI 兼容类型与函数 |
+| 自动内存管理 | 普通对象由运行时自动管理；`@abi` 不改变对象是否托管，原始指针 `T*` / `Foo*` 不受接管，详见 [feng-lifetime.md](./feng-lifetime.md) |
+| C 互操作 | `extern fn` 声明 C 函数，`@abi` 标记 ABI 兼容类型、函数签名与顶层函数 |
 | 包分发 | `.fb` 统一包格式，支持闭源复用与跨语言分发 |
 
 文件扩展名:
@@ -139,11 +139,11 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 
 | 内建注解 | 适用位置 | 用途简述 |
 | --- | --- | --- |
-| `@fixed` | `type`、`fn`、方法声明前 | 标注该声明进入 ABI 固定边界；不改变 Feng 侧语法形式，合法性由语义分析检查 |
-| `@union` | 对象形式的 `@fixed type` 声明前 | 将 `@fixed type` 声明为 C 联合体；未标注时默认按 C 结构体处理 |
-| `@cdecl` | `extern fn` 声明前，或 `@fixed fn`/`@fixed` 方法定义前 | 指定 `cdecl` 调用方式；带参数时用于 `extern fn` 导入并指定库来源，无参数时用于 `@fixed fn` |
-| `@stdcall` | `extern fn` 声明前，或 `@fixed fn`/`@fixed` 方法定义前 | 同上，`stdcall` 版本 |
-| `@fastcall` | `extern fn` 声明前，或 `@fixed fn`/`@fixed` 方法定义前 | 同上，`fastcall` 版本 |
+| `@abi` | 对象形式的 `type`、callable-form 的 `spec`、顶层 `fn` 声明前 | 标注该声明接受 ABI 兼容性检查；不改变 Feng 侧语法形式与运行时表示 |
+| `@union` | 对象形式的 `@abi type` 声明前 | 将 `@abi type` 声明为 ABI 联合体 payload；未标注时默认按 ABI 结构体 payload 处理 |
+| `@cdecl` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 指定 `cdecl` 调用方式；带参数时用于 `extern fn` 导入并指定库来源，无参数时用于顶层 `@abi fn` |
+| `@stdcall` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 同上，`stdcall` 版本 |
+| `@fastcall` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 同上，`fastcall` 版本 |
 | `@bounded` | 仅作为编译器导出的符号表语义元信息存在（公开 `.ft` / 本地缓存 `.ft`） | 标注公开 `let` 绑定的显式绑定事实，不属于可手写语法 |
 
 ## 4 模块系统
@@ -152,7 +152,7 @@ Feng 用 `mod` 声明文件所属模块，用 `use` 导入外部模块或二进�
 
 ## 5 C 互操作
 
-Feng 通过 `extern fn` 声明 C 外部函数，通过 `@fixed` 标记 ABI 兼容类型与函数，通过调用方式注解指定库来源与调用约定。详细规则见 [Feng 语言 C 互操作规范](./feng-interop.md)。
+Feng 通过 `extern fn` 声明 C 外部函数，通过 `@abi` 标记 ABI 兼容类型、函数签名与顶层函数，通过调用方式注解指定库来源与调用约定。详细规则见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 
 ## 6 类型系统与对象模型
 
@@ -176,7 +176,7 @@ Feng 用 `throw` 显式抛出异常，用 `try`/`catch`/`finally` 捕获与收�
 
 ## 11 自动内存管理
 
-Feng 对托管对象提供自动内存管理，与 `@fixed` ABI 边界上的非托管内存严格分离。终结器的声明规则见 [Feng 语言类型规范](./feng-type.md)，生命周期与执行流程见 [Feng 语言对象生命周期规范](./feng-lifetime.md)。
+Feng 对托管对象提供自动内存管理；标注 `@abi` 不改变对象是否托管，ABI 边界上的借用规则与原始指针生命周期见 [Feng 语言对象生命周期规范](./feng-lifetime.md)。终结器的声明规则见 [Feng 语言类型规范](./feng-type.md)。
 
 ## 12 包分发
 
@@ -189,15 +189,15 @@ Feng 采用统一的 `.fb` 包格式，支持二进制分发、闭源复用与�
 ```feng
 pu mod libc.interop;
 
-// C 兼容结构体
-@fixed
+// ABI 兼容对象类型
+@abi
 type Point {
   var x: int;
   var y: int;
 }
 
-// C 兼容函数指针类型
-@fixed
+// ABI 函数签名
+@abi
 spec PointCB(p: Point): void;
 
 let point_lib = "./libpoint.so";
@@ -207,10 +207,10 @@ let point_lib = "./libpoint.so";
 extern fn point_add(p1: Point, p2: Point): Point;
 
 @cdecl(point_lib)
-extern fn exec_point_cb(p: Point, cb: PointCB);
+extern fn exec_point_cb(p: Point, cb: PointCB*);
 
 // 定义 feng 回调函数
-@fixed
+@abi
 fn on_point(p: Point) {
   print("Point:x=", p.x, " y=", p.y);
 }
@@ -239,7 +239,8 @@ fn main(args: string[]) {
   print(res_p.x, res_p.y);
 
   // 传递 feng 回调给 C
-  exec_point_cb(res_p, on_point);
+  let on_point_cb: PointCB* = &on_point;
+  exec_point_cb(res_p, on_point_cb);
 
   // 调用 feng 自有包成员
   let user = User {name: "test", age: 20};
