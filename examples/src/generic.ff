@@ -1,7 +1,7 @@
 mod feng.probe;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Sequence<T> {
   fn size(): int;
@@ -20,6 +20,6 @@ type Counter: IntSequence {
 fn main(args: string[]) {
   let counter: IntSequence = Counter();
   if counter.size() == 1 {
-    puts("generic spec parent ok");
+    puts(&"generic spec parent ok");
   }
 }

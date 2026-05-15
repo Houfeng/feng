@@ -3,12 +3,12 @@ mod test.cli.localdepapp;
 use test.cli.localdep;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 fn main(args: string[]) {
   if dep_value() == 7 {
-    puts("local dep ok");
+    puts(&"local dep ok");
   } else {
-    puts("local dep bad");
+    puts(&"local dep bad");
   }
 }

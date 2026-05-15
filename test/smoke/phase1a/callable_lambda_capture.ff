@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Mapper(x: int): int;
 spec Reader(): int;
@@ -19,17 +19,17 @@ fn main(args: string[]) {
     let mapper: Mapper = (x: int) -> x + base;
     base = 2;
     if mapper(40) == 42 {
-        puts("local-ok");
+        puts(&"local-ok");
     } else {
-        puts("local-fail");
+        puts(&"local-fail");
     }
 
     let box = Box{n: 7};
     let reader: Reader = box.makeReader();
     box.n = 8;
     if reader() == 8 {
-        puts("self-ok");
+        puts(&"self-ok");
     } else {
-        puts("self-fail");
+        puts(&"self-fail");
     }
 }

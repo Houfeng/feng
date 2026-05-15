@@ -1,6 +1,6 @@
 mod feng.smoke;
 
-@cdecl("libc") extern fn puts(msg: string): int;
+@cdecl("libc") extern fn puts(msg: string*): int;
 
 spec Named {
     var name: string;
@@ -17,9 +17,9 @@ type User: Named {
 fn main(args: string[]) {
     let u = User { name: "feng" };
     let n: Named = u;
-    puts(n.name);
+    puts(&n.name);
     n.name = "tom";
-    puts(n.name);
-    puts(n.greet());
-    puts(u.name);
+    puts(&n.name);
+    puts(&n.greet());
+    puts(&u.name);
 }

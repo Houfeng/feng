@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 // A function that allocates a managed local (writable array) and then throws.
 // The cleanup chain must release `tmp` before the longjmp transfers control.
@@ -13,7 +13,7 @@ fn build_and_throw() {
 // A function that allocates a managed local and returns normally.
 fn build_and_return() {
     let tmp: i32[!] = [9, 8, 7];
-    puts("normal-return");
+    puts(&"normal-return");
 }
 
 fn main(args: string[]) {
@@ -26,11 +26,11 @@ fn main(args: string[]) {
         // released by the runtime cleanup walk on the longjmp path.
         let in_try: i32[!] = [100, 200, 300];
         build_and_throw();
-        puts("unreachable");
+        puts(&"unreachable");
     } catch {
-        puts("caught");
+        puts(&"caught");
     }
 
     build_and_return();
-    puts("after");
+    puts(&"after");
 }

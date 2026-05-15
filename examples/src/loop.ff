@@ -1,17 +1,17 @@
 pu mod feng.examples.loop;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 /**
  * Loops through numbers and calculates their sum.
  * @param args The command-line arguments.
  */
 pu fn loop_example(args: string[]) {
-  puts("start..");
+  puts(&"start..");
   var sum = 0;
   for var i = 0; i < 10000; i += 1 {
     sum = sum + i;
   }
-  puts("end..");
+  puts(&"end..");
 }

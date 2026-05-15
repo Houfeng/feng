@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Eq<T> {
     fn same(other: T): bool;
@@ -23,6 +23,6 @@ fn main(args: string[]) {
     let a: Key = Key{id: 7};
     let b: Key = Key{id: 7};
     if sameAs(a, b) {
-        puts("function self constraint ok");
+        puts(&"function self constraint ok");
     }
 }

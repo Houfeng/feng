@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 // Nested for: inner break must only exit the inner loop. Outer iteration
 // continues past the inner break. Also verifies the init binding's scope
@@ -12,9 +12,9 @@ fn main(args: string[]) {
             if j == 1 {
                 break;
             }
-            puts("inner");
+            puts(&"inner");
         }
-        puts("outer");
+        puts(&"outer");
     }
-    puts("done");
+    puts(&"done");
 }

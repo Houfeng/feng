@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type User {
     let name: string;
@@ -21,7 +21,7 @@ type User {
 
 fn main(args: string[]) {
     let u = User { name: "feng" };
-    puts(u.label(7));
-    puts(u.label("hello"));
-    puts(u.label());
+    puts(&u.label(7));
+    puts(&u.label("hello"));
+    puts(&u.label());
 }

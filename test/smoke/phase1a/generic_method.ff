@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
@@ -19,10 +19,10 @@ fn main(args: string[]) {
     let numberBox: Box<i32> = Box:<i32>();
     numberBox.setValue(7);
     if numberBox.readValue() == 7 {
-        puts("generic method int ok");
+        puts(&"generic method int ok");
     }
 
     let textBox: Box<string> = Box:<string>();
     textBox.setValue("generic method string ok");
-    puts(textBox.readValue());
+    puts(&textBox.readValue());
 }

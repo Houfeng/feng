@@ -8,10 +8,10 @@ use std.collections;
  * Prints a message to the console.
  */
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 fn test<T>(x: T): T {
-  puts("test");
+  puts(&"test");
   return x;
 }
 
@@ -19,7 +19,7 @@ fn test<T>(x: T): T {
  * The main function.
  */
 fn main(args: string[]) {
-  puts("hello, examples");
+  puts(&"hello, examples");
   // lp.loop_example([""]);
   test(1);
   let map = Map:<string, int>();

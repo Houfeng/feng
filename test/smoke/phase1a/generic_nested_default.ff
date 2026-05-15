@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
@@ -15,6 +15,6 @@ fn main(args: string[]) {
     let holder: Holder<i32> = Holder:<i32>();
     holder.inner.value = 11;
     if holder.inner.value == 11 {
-        puts("generic nested default ok");
+        puts(&"generic nested default ok");
     }
 }

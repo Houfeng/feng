@@ -962,9 +962,9 @@ static void test_direct_build_links_library_from_package_bundle(void) {
                     "mod test.cli.pkgmain;\n"
                     "use test.cli.pkgdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string): int;\n"
+                    "extern fn puts(msg: string*): int;\n"
                     "fn main(args: string[]) {\n"
-                    "  if dep_value() == 7 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "  if dep_value() == 7 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
     {
@@ -1081,9 +1081,9 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
                     "mod test.cli.pkgconsumer;\n"
                     "use test.cli.pkga as a;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string): int;\n"
+                    "extern fn puts(msg: string*): int;\n"
                     "fn main(args: string[]) {\n"
-                    "  if a.a_value() == 11 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "  if a.a_value() == 11 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
     {
@@ -1214,9 +1214,9 @@ static void test_project_pack_bundle_can_be_consumed(void) {
                     "mod test.cli.packconsumer;\n"
                     "use test.cli.packdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string): int;\n"
+                    "extern fn puts(msg: string*): int;\n"
                     "fn main(args: string[]) {\n"
-                    "  if dep_value() == 9 { puts(\"ok\"); } else { puts(\"bad\"); }\n"
+                    "  if dep_value() == 9 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
     {
@@ -1282,9 +1282,9 @@ static void test_direct_build_consumes_package_generic_function(void) {
         "mod test.cli.pkggenericfnmain;\n"
         "use test.cli.pkggenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "fn main(args: string[]) {\n"
-        "  if identity(7) == 7 { puts(\"generic fn ok\"); }\n"
+        "  if identity(7) == 7 { puts(&\"generic fn ok\"); }\n"
         "}\n",
         "generic_fn_main",
         "generic fn ok\n");
@@ -1323,11 +1323,11 @@ static void test_direct_build_consumes_package_generic_type(void) {
         "mod test.cli.pkggenerictypemain;\n"
         "use test.cli.pkggenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "fn main(args: string[]) {\n"
         "  let box: Box<int> = Box:<int>();\n"
         "  box.setValue(11);\n"
-        "  if box.readValue() == 11 { puts(\"generic type ok\"); }\n"
+        "  if box.readValue() == 11 { puts(&\"generic type ok\"); }\n"
         "}\n",
         "generic_type_main",
         "generic type ok\n");
@@ -1360,7 +1360,7 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
         "mod test.cli.pkggenericspecmain;\n"
         "use test.cli.pkggenericspec;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
         "  fn same(other: Key): bool {\n"
@@ -1373,7 +1373,7 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
         "fn main(args: string[]) {\n"
         "  let a = Key{id: 3};\n"
         "  let b = Key{id: 3};\n"
-        "  if sameLocal(a, b) { puts(\"generic spec ok\"); }\n"
+        "  if sameLocal(a, b) { puts(&\"generic spec ok\"); }\n"
         "}\n",
         "generic_spec_main",
         "generic spec ok\n");
@@ -1409,7 +1409,7 @@ static void test_direct_build_consumes_package_constrained_generic_function(void
         "mod test.cli.pkgconstrainedgenericfnmain;\n"
         "use test.cli.pkgconstrainedgenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
         "  fn same(other: Key): bool {\n"
@@ -1419,7 +1419,7 @@ static void test_direct_build_consumes_package_constrained_generic_function(void
         "fn main(args: string[]) {\n"
         "  let a = Key{id: 5};\n"
         "  let b = Key{id: 5};\n"
-        "  if sameAs(a, b) { puts(\"constrained generic fn ok\"); }\n"
+        "  if sameAs(a, b) { puts(&\"constrained generic fn ok\"); }\n"
         "}\n",
         "constrained_generic_fn_main",
         "constrained generic fn ok\n");
@@ -1463,7 +1463,7 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
         "mod test.cli.pkgconstrainedgenerictypemain;\n"
         "use test.cli.pkgconstrainedgenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
         "  fn same(other: Key): bool {\n"
@@ -1475,7 +1475,7 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
         "  let b = Key{id: 8};\n"
         "  let map: MiniMap<Key, string> = MiniMap:<Key, string>();\n"
         "  map.put(a, \"value\");\n"
-        "  if map.hasKey(b) { puts(\"constrained generic type ok\"); }\n"
+        "  if map.hasKey(b) { puts(&\"constrained generic type ok\"); }\n"
         "}\n",
         "constrained_generic_type_main",
         "constrained generic type ok\n");
@@ -2683,14 +2683,14 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kMemberBeforeNextStmt =
         "mod test.lsp.completioneditmember;\n"
         "\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "    let age: i32;\n"
         "\n"
         "    fn say(msg: string): void {\n"
-        "        puts(msg);\n"
+        "        puts(&msg);\n"
         "    }\n"
         "}\n"
         "\n"
@@ -2705,14 +2705,14 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kScopeBeforeClose =
         "mod test.lsp.completioneditscope;\n"
         "\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "    let age: i32;\n"
         "\n"
         "    fn say(msg: string): void {\n"
-        "        puts(msg);\n"
+        "        puts(&msg);\n"
         "    }\n"
         "}\n"
         "\n"
@@ -2727,7 +2727,7 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kScopePrefixBeforeNextStmt =
         "mod test.lsp.completioneditprefix;\n"
         "\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
@@ -2742,10 +2742,10 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
         "mod test.lsp.completionmainprefix;\n"
         "\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string): int;\n"
+        "extern fn puts(msg: string*): int;\n"
         "\n"
         "fn main(args: string[]) {\n"
-        "    puts(\"hello, examples\");\n"
+        "    puts(&\"hello, examples\");\n"
         "    p\n"
         "}\n";
     const char *member_labels[] = {"name", "age", "say"};

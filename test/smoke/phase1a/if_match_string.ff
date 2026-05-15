@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 fn translate(word: string): string {
     let r = if word {
@@ -13,9 +13,9 @@ fn translate(word: string): string {
 }
 
 fn main(args: string[]) {
-    puts(translate("hi"));
-    puts(translate("hello"));
-    puts(translate("bye"));
-    puts(translate("goodbye"));
-    puts(translate("foo"));
+    puts(&translate("hi"));
+    puts(&translate("hello"));
+    puts(&translate("bye"));
+    puts(&translate("goodbye"));
+    puts(&translate("foo"));
 }

@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -23,9 +23,9 @@ fn main(args: string[]) {
     let arr: Named[!] = [a, b];
 
     let n0: Named = arr[0];
-    puts(n0.greet());
-    puts(arr[1].greet());
+    puts(&n0.greet());
+    puts(&arr[1].greet());
 
     arr[0] = c;
-    puts(arr[0].greet());
+    puts(&arr[0].greet());
 }

@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -29,6 +29,6 @@ fn pick(tag: i32, left: Named, right: Named): Named {
 fn main(args: string[]) {
     let left: Named = User{name: "match-left"};
     let right: Named = User{name: "match-right"};
-    puts(pick(0, left, right).greet());
-    puts(pick(1, left, right).greet());
+    puts(&pick(0, left, right).greet());
+    puts(&pick(1, left, right).greet());
 }

@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Cloneable<T> {
     fn cloneValue(): T;
@@ -26,6 +26,6 @@ fn main(args: string[]) {
     let copier: Copier<Key> = Copier:<Key>();
     let copied: Key = copier.copy(key);
     if copied.id == 7 {
-        puts("self constraint return ok");
+        puts(&"self constraint return ok");
     }
 }

@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
@@ -10,6 +10,6 @@ type Box<T> {
 fn main(args: string[]) {
     let box: Box<i32> = Box:<i32>() { value: 7 };
     if box.value == 7 {
-        puts("generic object literal ok");
+        puts(&"generic object literal ok");
     }
 }

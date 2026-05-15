@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 /* Simple non-generic aggregate type. */
 type Counter {
@@ -16,15 +16,15 @@ fn main(args: string[]) {
     counters[1].value = 20;
 
     if counters[0].value == 10 {
-        puts("counter-0-ok");
+        puts(&"counter-0-ok");
     } else {
-        puts("counter-0-bad");
+        puts(&"counter-0-bad");
     }
     if counters[1].value == 20 {
-        puts("counter-1-ok");
+        puts(&"counter-1-ok");
     } else {
-        puts("counter-1-bad");
+        puts(&"counter-1-bad");
     }
 
-    puts("array-new-ok");
+    puts(&"array-new-ok");
 }

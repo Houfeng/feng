@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -44,6 +44,6 @@ fn main(args: string[]) {
     holder.set(fromFn);
 
     let fromMethod: string = holder.relay:<Named>(fromFn);
-    puts(fromMethod);
-    puts(holder.read());
+    puts(&fromMethod);
+    puts(&holder.read());
 }

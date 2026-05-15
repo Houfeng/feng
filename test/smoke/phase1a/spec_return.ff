@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -39,21 +39,21 @@ fn forward(label: string): Named {
 
 fn main(args: string[]) {
     let n1: Named = make_named("alpha");
-    puts(n1.greet());
+    puts(&n1.greet());
 
     let n2: Named = echo_named(n1);
-    puts(n2.greet());
+    puts(&n2.greet());
 
     let n3: Named = forward("gamma");
-    puts(n3.greet());
+    puts(&n3.greet());
 
     // Spec call inside an array literal: each element is a +1 aggregate
     // rvalue, materialised then assigned into the slot.
     let arr: Named[!] = [make_named("delta"), make_named("epsilon")];
-    puts(arr[0].greet());
-    puts(arr[1].greet());
+    puts(&arr[0].greet());
+    puts(&arr[1].greet());
 
     // Re-bind via call chain to exercise the take→retain crossover.
     let n4: Named = echo_named(forward("zeta"));
-    puts(n4.greet());
+    puts(&n4.greet());
 }

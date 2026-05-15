@@ -1,7 +1,7 @@
 mod feng.examples.hello_world;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type User {
   let name: string;
@@ -12,7 +12,7 @@ type User {
    * @param msg 消息
    */
   fn say(msg: string): void {
-    puts(msg);
+    puts(&msg);
   }
 }
 

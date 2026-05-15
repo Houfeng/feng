@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -16,7 +16,7 @@ type User: Named {
 }
 
 fn announce(n: Named) {
-    puts(n.greet());
+    puts(&n.greet());
 }
 
 fn main(args: string[]) {

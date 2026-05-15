@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec MapperA(x: int): int;
 spec MapperB(x: int): int;
@@ -25,8 +25,8 @@ fn use_mapper(input: MapperA): int {
 fn main(args: string[]) {
     let mapper: MapperA = add1;
     if use_mapper(mapper) == 42 {
-        puts("other-field-ok");
+        puts(&"other-field-ok");
     } else {
-        puts("other-field-fail");
+        puts(&"other-field-fail");
     }
 }

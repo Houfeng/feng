@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 // Exercises codegen for user-defined finalizers (`fn ~T()`):
 // the runtime invokes the finalizer through descriptor.finalizer when
@@ -10,11 +10,11 @@ type Greeter {
     let label: string;
 
     fn ~Greeter() {
-        puts(self.label);
+        puts(&self.label);
     }
 }
 
 fn main(args: string[]) {
     let g = Greeter { label: "fin" };
-    puts("built");
+    puts(&"built");
 }

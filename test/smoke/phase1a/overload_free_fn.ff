@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 fn label(n: i32): string {
     return "int";
@@ -16,7 +16,7 @@ fn label(): string {
 }
 
 fn main(args: string[]) {
-    puts(label(42));
-    puts(label("hi"));
-    puts(label());
+    puts(&label(42));
+    puts(&label("hi"));
+    puts(&label());
 }

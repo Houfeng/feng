@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 fn classify(age: i32): string {
     let label = if age {
@@ -14,8 +14,8 @@ fn classify(age: i32): string {
 }
 
 fn main(args: string[]) {
-    puts(classify(0));
-    puts(classify(10));
-    puts(classify(30));
-    puts(classify(80));
+    puts(&classify(0));
+    puts(&classify(10));
+    puts(&classify(30));
+    puts(&classify(80));
 }

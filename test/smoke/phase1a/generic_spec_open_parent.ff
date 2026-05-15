@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Sequence<T> {
     fn first(): T;
@@ -23,6 +23,6 @@ fn head(seq: Sequence<int>): int {
 fn main(args: string[]) {
     let bag: IntBag = IntBag{};
     if head(bag) == 7 {
-        puts("generic spec open parent ok");
+        puts(&"generic spec open parent ok");
     }
 }

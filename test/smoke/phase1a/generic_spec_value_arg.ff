@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn greet(): string;
@@ -43,16 +43,16 @@ fn main(args: string[]) {
     let named: Named = User{name: "spec generic value ok"};
 
     let fromFn: Named = identity(named);
-    puts(fromFn.greet());
+    puts(&fromFn.greet());
 
     let holder: Holder<Named> = Holder:<Named>();
     holder.put(named);
     let fromTypeArg: Named = holder.readValue();
-    puts(fromTypeArg.greet());
+    puts(&fromTypeArg.greet());
 
     let fromMethod: Named = holder.echo(named);
-    puts(fromMethod.greet());
+    puts(&fromMethod.greet());
 
     let fromSelfCall: Named = holder.echoThroughMethod(named);
-    puts(fromSelfCall.greet());
+    puts(&fromSelfCall.greet());
 }

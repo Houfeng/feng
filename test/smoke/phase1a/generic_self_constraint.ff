@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Eq<T> {
     fn same(other: T): bool;
@@ -41,6 +41,6 @@ fn main(args: string[]) {
     let map: MiniMap<Key, string> = MiniMap:<Key, string>();
     map.put(key, "self constraint ok");
     if map.hasKey(key) {
-        puts(map.getValue(key));
+        puts(&map.getValue(key));
     }
 }

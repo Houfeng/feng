@@ -1,28 +1,28 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 let greeting: string = "hello";
 
 fn main(args: string[]) {
     let nums: i32[!] = [10, 20, 30];
     if nums[1] == 20 {
-        puts("idx-ok");
+        puts(&"idx-ok");
     } else {
-        puts("idx-bad");
+        puts(&"idx-bad");
     }
     nums[0] = nums[0] + nums[2];
     if nums[0] == 40 {
-        puts("write-ok");
+        puts(&"write-ok");
     } else {
-        puts("write-bad");
+        puts(&"write-bad");
     }
     let readonly: i32[] = [1, 2, 3];
     if readonly[2] == 3 {
-        puts("ro-ok");
+        puts(&"ro-ok");
     } else {
-        puts("ro-bad");
+        puts(&"ro-bad");
     }
-    puts(greeting);
+    puts(&greeting);
 }

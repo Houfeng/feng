@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
@@ -33,8 +33,8 @@ fn main(args: string[]) {
     let first: int = box.echo(20);
     let second: int = box.replace:<int>(22, first);
     if box.currentAgain() + second + box.echoInt(1) == 43 {
-        puts("ok");
+        puts(&"ok");
     } else {
-        puts("fail");
+        puts(&"fail");
     }
 }

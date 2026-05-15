@@ -1,7 +1,7 @@
 mod feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string): int;
+extern fn puts(msg: string*): int;
 
 spec Named {
     fn name(): string;
@@ -26,5 +26,5 @@ fn useLabelled<U: Labelled>(value: U): string {
 
 fn main(args: string[]) {
     let item: Item = Item{};
-    puts(useLabelled:<Item>(item));
+    puts(&useLabelled:<Item>(item));
 }
