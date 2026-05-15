@@ -668,6 +668,52 @@ static void test_extern_function_accepts_abi_array_return_type(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_rejects_bare_string_parameter_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"m\")\n"
+        "extern fn print(msg: string): int;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_string_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_string_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "parameter 'msg' type 'string' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_bare_string_return_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"m\")\n"
+        "extern fn load(): string;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_string_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_string_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "return type 'string' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_non_abi_array_parameter_type(void) {
     const char *source =
         "mod demo.main;\n"
@@ -10976,6 +11022,8 @@ int main(void) {
     test_extern_function_rejects_imported_var_library_binding();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
+    test_extern_function_rejects_bare_string_parameter_type();
+    test_extern_function_rejects_bare_string_return_type();
     test_extern_function_rejects_non_abi_array_parameter_type();
     test_extern_function_rejects_non_fixed_object_parameter();
     test_extern_function_accepts_fixed_object_and_callback_types();

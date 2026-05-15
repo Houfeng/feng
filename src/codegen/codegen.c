@@ -7381,9 +7381,6 @@ static bool cg_emit_registered_call(CG *cg,
         }
         if (expected_abi_user != NULL && expected_abi_user->c_abi_value_name != NULL) {
             buf_append_fmt(&args_buf, "%s(%s)", expected_abi_user->c_abi_value_name, ar.c_expr);
-        } else if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
-            expected_ty && expected_ty->kind == CG_TYPE_STRING) {
-            buf_append_fmt(&args_buf, "feng_string_data(%s)", ar.c_expr);
         } else {
             buf_append_cstr(&args_buf, ar.c_expr);
         }
@@ -12183,26 +12180,16 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
 static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (!cg_register_extern(cg, decl)) return false;
     const ExternFn *ef = &cg->externs[cg->extern_count - 1];
-    /* Emit `extern <ret> name(<params>);`. Legacy `string` externs still map
-     * to `const char *` until the remaining old-ABI fixtures are migrated. */
     Buf *h = &cg->headers;
     buf_append_cstr(h, "extern ");
-    if (ef->return_type->kind == CG_TYPE_STRING) {
-        buf_append_cstr(h, "const char *");
-    } else {
-        cg_emit_c_abi_surface_type(h, ef->return_type);
-    }
+    cg_emit_c_abi_surface_type(h, ef->return_type);
     buf_append_fmt(h, " %s(", ef->name);
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
     } else {
         for (size_t i = 0; i < ef->param_count; i++) {
             if (i) buf_append_cstr(h, ", ");
-            if (ef->param_types[i]->kind == CG_TYPE_STRING) {
-                buf_append_cstr(h, "const char *");
-            } else {
-                cg_emit_c_abi_surface_type(h, ef->param_types[i]);
-            }
+            cg_emit_c_abi_surface_type(h, ef->param_types[i]);
         }
     }
     buf_append_cstr(h, ");\n");

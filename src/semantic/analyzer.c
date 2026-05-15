@@ -10879,15 +10879,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
 static bool type_ref_is_extern_c_abi_compatible(const ResolveContext *context,
                                                 const FengTypeRef *type_ref,
                                                 bool allow_void) {
-    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
-        type_ref->as.named.segment_count == 1U) {
-        const char *builtin_name = canonical_builtin_type_name(type_ref->as.named.segments[0]);
-
-        if (builtin_name != NULL && strcmp(builtin_name, "string") == 0) {
-            return true;
-        }
-    }
-
     return type_ref_is_abi_stable(context, type_ref, allow_void, NULL);
 }
 

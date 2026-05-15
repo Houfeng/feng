@@ -287,7 +287,7 @@ static void test_parse_error_after_annotation_semicolon(void) {
     const char *source =
         "mod demo.main;\n"
         "@cdecl(\"libc\");\n"
-        "extern fn print(msg: string): void;\n";
+        "extern fn print(msg: string*): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -377,7 +377,7 @@ static void test_parse_error_extern_fn_inside_type(void) {
     const char *source =
         "mod demo.user;\n"
         "type User {\n"
-        "    extern fn info(): string;\n"
+        "    extern fn info(): string*;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
