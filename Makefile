@@ -93,7 +93,9 @@ perf-constraints: cli runtime intrinsic
 std-tests: cli runtime intrinsic
 	$(BIN_DIR)/feng build ./std
 	$(BIN_DIR)/feng build ./std_test
-	./std_test/build/bin/std_test
+	printf 'ABCDE' | ./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_OUTPUT__$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
 
 smoke: cli runtime intrinsic
 	./scripts/run_smoke.sh

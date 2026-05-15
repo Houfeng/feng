@@ -1,12 +1,25 @@
 mod std_test;
 
+use std;
+
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern fn write(fd: int, buf: string*, count: long): long;
+
+@cdecl("libc")
+extern fn exit(code: int): void;
+
+fn logLine(text: string) {
+  let newline = "\n";
+
+  write(2, &text, text.length());
+  write(2, &newline, newline.length());
+}
 
 pu fn check(cond: bool, name: string) {
   if cond {
-    puts(&("ok: " + name));
+    logLine("ok: " + name);
   } else {
-    puts(&("FAIL: " + name));
+    logLine("FAIL: " + name);
+    exit(1);
   }
 }

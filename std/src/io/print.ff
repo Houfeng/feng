@@ -1,0 +1,20 @@
+pu mod std;
+
+/**
+ * Writes `text` followed by a newline to standard output.
+ * @param text - UTF-8 text to write before the trailing newline
+ * @return total bytes written, or a negative value on error
+ */
+pu fn print(text: string): long {
+	let textWritten = output(text);
+	if textWritten < (long)0 {
+		return textWritten;
+	}
+
+	let newlineWritten = write(1, &"\n_", (long)1);
+	if newlineWritten < (long)0 {
+		return newlineWritten;
+	}
+
+	return textWritten + newlineWritten;
+}

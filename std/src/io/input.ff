@@ -1,0 +1,13 @@
+pu mod std;
+
+@cdecl("libc")
+extern fn read(fd: int, buf: byte*, count: long): long;
+
+/**
+ * Reads bytes from standard input into `buffer`.
+ * @param buffer - destination writable byte buffer
+ * @return actual bytes read, `0` on EOF, or a negative value on error
+ */
+pu fn input(buffer: byte[!]): long {
+	return read(0, &buffer, buffer.length());
+}
