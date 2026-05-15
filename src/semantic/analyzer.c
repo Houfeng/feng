@@ -336,6 +336,26 @@ static bool append_raw(void **items,
 static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
+static bool expr_is_borrowed_data_pointer_value(ResolveContext *context,
+                                                const FengExpr *expr,
+                                                size_t depth);
+static bool type_ref_is_data_pointer_type(ResolveContext *context,
+                                          const FengTypeRef *type_ref);
+static bool validate_borrowed_data_pointer_call_arguments(
+    ResolveContext *context,
+    const FengExpr *callee,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengParameter *params,
+    size_t param_count,
+    bool allow_borrowed_data_pointer_args);
+static bool validate_borrowed_data_pointer_object_field(ResolveContext *context,
+                                                        const FengObjectFieldInit *field,
+                                                        const FengTypeRef *field_type);
+static bool validate_borrowed_data_pointer_assignment(ResolveContext *context,
+                                                      const FengExpr *target,
+                                                      const FengExpr *value,
+                                                      InferredExprType target_type);
 
 static InferredExprType inferred_expr_type_unknown(void) {
     InferredExprType type;
@@ -1794,6 +1814,33 @@ static const LocalNameEntry *resolver_find_local_name_entry_with_scope(
     if (out_scope_index != NULL) {
         *out_scope_index = 0U;
     }
+    return NULL;
+}
+
+static LocalNameEntry *resolver_find_mutable_local_name_entry(ResolveContext *context,
+                                                              FengSlice name) {
+    size_t scope_index;
+
+    if (context == NULL) {
+        return NULL;
+    }
+
+    scope_index = context->scope_count;
+    while (scope_index > 0U) {
+        ScopeFrame *frame = &context->scopes[scope_index - 1U];
+        size_t local_index = frame->local_count;
+
+        while (local_index > 0U) {
+            LocalNameEntry *entry = &frame->locals[local_index - 1U];
+
+            if (slice_equals(entry->name, name)) {
+                return entry;
+            }
+            --local_index;
+        }
+        --scope_index;
+    }
+
     return NULL;
 }
 
@@ -4470,6 +4517,7 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
     char *existing_type_name;
     char *return_type_name;
     char *message;
+    char *expr_name;
 
     if (context->current_callable_signature == NULL) {
         return true;
@@ -4487,6 +4535,23 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
             context,
             stmt->token,
             format_message("%s body must use 'return;' without a value", member_kind_name));
+    }
+
+    if (stmt->as.return_value != NULL &&
+        expr_is_borrowed_data_pointer_value(context, stmt->as.return_value, 0U)) {
+        expr_name = format_expr_target_name(stmt->as.return_value);
+        if (!resolver_append_error(
+                context,
+                stmt->as.return_value->token,
+                format_message(
+                    "expression '%s' is a borrowed data pointer formed by '&'; borrowed data pointers are only guaranteed valid for the current extern call and cannot be returned; retain the original owner instead of returning the raw pointer",
+                    expr_name != NULL ? expr_name : "<expression>"))) {
+            free(expr_name);
+            return false;
+        }
+
+        free(expr_name);
+        return true;
     }
 
     if (context->current_callable_signature->return_type != NULL) {
@@ -6308,6 +6373,16 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                              callee_type,
                                                              args,
                                                              arg_count)) {
+            if (!validate_borrowed_data_pointer_call_arguments(
+                    context,
+                    callee,
+                    args,
+                    arg_count,
+                    callee_type_decl->as.spec_decl.as.callable.params,
+                    callee_type_decl->as.spec_decl.as.callable.param_count,
+                    false)) {
+                return false;
+            }
             note_callable_value_expr_exception_escape(context, callee);
             record_object_arg_coercion_sites(context, args, arg_count,
                                              callee_type_decl->as.spec_decl.as.callable.params,
@@ -6336,6 +6411,16 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                 callee_constraint_decl,
                                                 args,
                                                 arg_count)) {
+            if (!validate_borrowed_data_pointer_call_arguments(
+                    context,
+                    callee,
+                    args,
+                    arg_count,
+                    callee_constraint_decl->as.spec_decl.as.callable.params,
+                    callee_constraint_decl->as.spec_decl.as.callable.param_count,
+                    false)) {
+                return false;
+            }
             note_callable_value_expr_exception_escape(context, callee);
             record_object_arg_coercion_sites(
                 context,
@@ -6364,6 +6449,15 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
 
     if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
         if (lambda_expr_parameters_match_args(context, callee_type.lambda_expr, args, arg_count)) {
+            if (!validate_borrowed_data_pointer_call_arguments(context,
+                                                               callee,
+                                                               args,
+                                                               arg_count,
+                                                               callee_type.lambda_expr->as.lambda.params,
+                                                               callee_type.lambda_expr->as.lambda.param_count,
+                                                               false)) {
+                return false;
+            }
             note_callable_value_expr_exception_escape(context, callee);
             return true;
         }
@@ -9749,6 +9843,178 @@ static bool expr_matches_expected_address_of_data_pointer_type(
                                               expected_type_ref->as.inner);
 }
 
+static bool expr_is_borrowed_data_pointer_value(ResolveContext *context,
+                                                const FengExpr *expr,
+                                                size_t depth) {
+    InferredExprType operand_type;
+
+    if (context == NULL || expr == NULL || depth > 32U) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_UNARY:
+            if (expr->as.unary.op != FENG_TOKEN_AMP) {
+                return false;
+            }
+
+            operand_type = infer_expr_type(context, expr->as.unary.operand);
+            if (expr_is_callable_like_address_of_operand(context,
+                                                        expr->as.unary.operand,
+                                                        operand_type)) {
+                return false;
+            }
+
+            return inferred_expr_type_is_data_addressable_abi_value(context, operand_type) ||
+                   inferred_expr_type_is_string(operand_type) ||
+                   inferred_expr_type_is_abi_array_value(context, operand_type);
+
+        case FENG_EXPR_IDENTIFIER: {
+            const LocalNameEntry *local_entry =
+                resolver_find_local_name_entry(context, expr->as.identifier);
+
+            if (local_entry != NULL && local_entry->source_expr != NULL) {
+                return expr_is_borrowed_data_pointer_value(context,
+                                                           local_entry->source_expr,
+                                                           depth + 1U);
+            }
+
+            {
+                const VisibleValueEntry *visible_value =
+                    find_visible_value(context->visible_values,
+                                       context->visible_value_count,
+                                       expr->as.identifier);
+
+                if (visible_value != NULL && !visible_value->is_function &&
+                    visible_value->decl != NULL &&
+                    visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                    visible_value->decl->as.binding.initializer != NULL) {
+                    return expr_is_borrowed_data_pointer_value(
+                        context,
+                        visible_value->decl->as.binding.initializer,
+                        depth + 1U);
+                }
+            }
+
+            return false;
+        }
+
+        default:
+            return false;
+    }
+}
+
+static bool type_ref_is_data_pointer_type(ResolveContext *context,
+                                          const FengTypeRef *type_ref) {
+    return type_ref != NULL && type_ref->kind == FENG_TYPE_REF_POINTER &&
+           resolve_abi_function_pointer_type_decl(context, type_ref) == NULL;
+}
+
+static bool validate_borrowed_data_pointer_call_arguments(
+    ResolveContext *context,
+    const FengExpr *callee,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengParameter *params,
+    size_t param_count,
+    bool allow_borrowed_data_pointer_args) {
+    size_t index;
+
+    if (allow_borrowed_data_pointer_args || params == NULL) {
+        return true;
+    }
+
+    for (index = 0U; index < arg_count && index < param_count; ++index) {
+        char *callee_name;
+        char *expr_name;
+
+        if (!type_ref_is_data_pointer_type(context, params[index].type) ||
+            !expr_is_borrowed_data_pointer_value(context, args[index], 0U)) {
+            continue;
+        }
+
+        callee_name = format_expr_target_name(callee);
+        expr_name = format_expr_target_name(args[index]);
+        if (!resolver_append_error(
+                context,
+                args[index]->token,
+                format_message(
+                    "argument %zu expression '%s' is a borrowed data pointer formed by '&'; borrowed data pointers are only guaranteed valid for the current extern call and cannot be passed to non-extern callable '%s'; retain the original owner and form the pointer at the extern boundary",
+                    index + 1U,
+                    expr_name != NULL ? expr_name : "<expression>",
+                    callee_name != NULL ? callee_name : "<callable>"))) {
+            free(callee_name);
+            free(expr_name);
+            return false;
+        }
+
+        free(callee_name);
+        free(expr_name);
+        return true;
+    }
+
+    return true;
+}
+
+static bool validate_borrowed_data_pointer_object_field(ResolveContext *context,
+                                                        const FengObjectFieldInit *field,
+                                                        const FengTypeRef *field_type) {
+    char *expr_name;
+
+    if (field == NULL || !type_ref_is_data_pointer_type(context, field_type) ||
+        !expr_is_borrowed_data_pointer_value(context, field->value, 0U)) {
+        return true;
+    }
+
+    expr_name = format_expr_target_name(field->value);
+    if (!resolver_append_error(
+            context,
+            field->token,
+            format_message(
+                "object literal field '%.*s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer",
+                (int)field->name.length,
+                field->name.data,
+                expr_name != NULL ? expr_name : "<expression>"))) {
+        free(expr_name);
+        return false;
+    }
+
+    free(expr_name);
+    return true;
+}
+
+static bool validate_borrowed_data_pointer_assignment(ResolveContext *context,
+                                                      const FengExpr *target,
+                                                      const FengExpr *value,
+                                                      InferredExprType target_type) {
+    char *target_name;
+    char *expr_name;
+
+    if (target == NULL || value == NULL || target_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        !type_ref_is_data_pointer_type(context, target_type.type_ref) ||
+        !expr_is_borrowed_data_pointer_value(context, value, 0U)) {
+        return true;
+    }
+
+    target_name = format_expr_target_name(target);
+    expr_name = format_expr_target_name(value);
+    if (!resolver_append_error(
+            context,
+            value->token,
+            format_message(
+                "assignment target '%s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer",
+                target_name != NULL ? target_name : "<target>",
+                expr_name != NULL ? expr_name : "<expression>"))) {
+        free(target_name);
+        free(expr_name);
+        return false;
+    }
+
+    free(target_name);
+    free(expr_name);
+    return true;
+}
+
 static bool validate_expr_against_expected_abi_function_pointer_type(
     ResolveContext *context,
     const FengExpr *expr,
@@ -10878,6 +11144,17 @@ static bool validate_constructor_invocation(ResolveContext *context,
     resolution = resolve_accessible_constructor_overload(
         context, type_decl, provider_module, args, arg_count);
     if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_UNIQUE) {
+        if (resolution.constructor != NULL &&
+            !validate_borrowed_data_pointer_call_arguments(
+                context,
+                target_expr,
+                args,
+                arg_count,
+                resolution.constructor->as.callable.params,
+                resolution.constructor->as.callable.param_count,
+                false)) {
+            return false;
+        }
         note_callable_exception_escape(context,
                                        resolution.constructor != NULL
                                            ? &resolution.constructor->as.callable
@@ -11008,6 +11285,16 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     expr->as.call.arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    if (!validate_borrowed_data_pointer_call_arguments(
+                            context,
+                            callee,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            resolution.callable->params,
+                            resolution.callable->param_count,
+                            resolution.decl != NULL && resolution.decl->is_extern)) {
+                        return false;
+                    }
                     note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
@@ -11100,6 +11387,15 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             expr->as.call.arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                if (!validate_borrowed_data_pointer_call_arguments(context,
+                                                                   callee,
+                                                                   expr->as.call.args,
+                                                                   expr->as.call.arg_count,
+                                                                   resolution.callable->params,
+                                                                   resolution.callable->param_count,
+                                                                   false)) {
+                    return false;
+                }
                 note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
@@ -11162,6 +11458,15 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             expr->as.call.arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                if (!validate_borrowed_data_pointer_call_arguments(context,
+                                                                   callee,
+                                                                   expr->as.call.args,
+                                                                   expr->as.call.arg_count,
+                                                                   resolution.callable->params,
+                                                                   resolution.callable->param_count,
+                                                                   false)) {
+                    return false;
+                }
                 note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
@@ -11219,6 +11524,16 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                         expr->as.call.arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    if (!validate_borrowed_data_pointer_call_arguments(
+                            context,
+                            callee,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            resolution.callable->params,
+                            resolution.callable->param_count,
+                            resolution.decl != NULL && resolution.decl->is_extern)) {
+                        return false;
+                    }
                     note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
@@ -12273,6 +12588,11 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                             field_type)) {
                         return false;
                     }
+                    if (!validate_borrowed_data_pointer_object_field(context,
+                                                                     field,
+                                                                     field_type)) {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -12552,10 +12872,34 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (stmt->as.assign.op != FENG_TOKEN_ASSIGN) {
                 return validate_compound_assignment(context, stmt);
             }
-            return validate_expr_against_expected_inferred_type(
-                context,
-                stmt->as.assign.value,
-                infer_expr_type(context, stmt->as.assign.target));
+            {
+                InferredExprType target_type = infer_expr_type(context, stmt->as.assign.target);
+
+                if (!validate_expr_against_expected_inferred_type(context,
+                                                                  stmt->as.assign.value,
+                                                                  target_type)) {
+                    return false;
+                }
+                if (stmt->as.assign.target != NULL &&
+                    stmt->as.assign.target->kind == FENG_EXPR_IDENTIFIER) {
+                    LocalNameEntry *local_entry =
+                        resolver_find_mutable_local_name_entry(context,
+                                                               stmt->as.assign.target->as.identifier);
+
+                    if (local_entry != NULL) {
+                        local_entry->source_expr = stmt->as.assign.value;
+                    }
+                }
+                if (stmt->as.assign.target != NULL &&
+                    stmt->as.assign.target->kind == FENG_EXPR_MEMBER &&
+                    !validate_borrowed_data_pointer_assignment(context,
+                                                               stmt->as.assign.target,
+                                                               stmt->as.assign.value,
+                                                               target_type)) {
+                    return false;
+                }
+                return true;
+            }
 
         case FENG_STMT_EXPR:
             return resolve_expr(context, stmt->as.expr, allow_self) &&

@@ -3946,34 +3946,99 @@ static void test_unary_not_rejects_non_bool_operand(void) {
     feng_program_free(program);
 }
 
-static void test_unary_address_of_accepts_scalar_binding(void) {
+static void test_unary_address_of_rejects_returned_scalar_binding(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run(value: i32): i32* {\n"
         "    return &value;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("unary_address_of_scalar_ok.f", source);
+    FengProgram *program = parse_program_or_die("unary_address_of_scalar_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_scalar_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "borrowed data pointer formed by '&'") != NULL);
+    ASSERT(strstr(errors[0].message,
+                  "cannot be returned") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_unary_address_of_accepts_array_value(void) {
+static void test_unary_address_of_rejects_returned_array_value(void) {
     const char *source =
         "mod demo.main;\n"
         "fn run(values: int[]): int* {\n"
         "    return &values;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("unary_address_of_array_ok.f", source);
+    FengProgram *program = parse_program_or_die("unary_address_of_array_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_array_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "borrowed data pointer formed by '&'") != NULL);
+    ASSERT(strstr(errors[0].message,
+                  "cannot be returned") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_rejects_returned_string_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(text: string): byte* {\n"
+        "    return &text;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_string_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_string_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "borrowed data pointer formed by '&'") != NULL);
+    ASSERT(strstr(errors[0].message,
+                  "cannot be returned") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_allows_extern_call_borrowed_data_pointer(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@cdecl(\"c_use_i32_ptr\")\n"
+        "extern fn c_use_i32_ptr(p: i32*): void;\n"
+        "@cdecl(\"c_use_array_ptr\")\n"
+        "extern fn c_use_array_ptr(p: int*): void;\n"
+        "@cdecl(\"c_use_bytes\")\n"
+        "extern fn c_use_bytes(p: byte*): void;\n"
+        "fn run(value: i32, values: int[], text: string) {\n"
+        "    let p1: i32* = &value;\n"
+        "    let p2: int* = &values;\n"
+        "    let p3: byte* = &text;\n"
+        "    c_use_i32_ptr(p1);\n"
+        "    c_use_array_ptr(p2);\n"
+        "    c_use_bytes(p3);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_extern_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -3988,24 +4053,88 @@ static void test_unary_address_of_accepts_array_value(void) {
     feng_program_free(program);
 }
 
-static void test_unary_address_of_accepts_string_value(void) {
+static void test_unary_address_of_rejects_non_extern_forwarding_via_assignment_alias(void) {
     const char *source =
         "mod demo.main;\n"
-        "fn run(text: string): byte* {\n"
-        "    return &text;\n"
+        "@cdecl(\"c_get_i32_ptr\")\n"
+        "extern fn c_get_i32_ptr(): i32*;\n"
+        "fn forward(p: i32*) {\n"
+        "}\n"
+        "fn run(value: i32) {\n"
+        "    var p: i32* = c_get_i32_ptr();\n"
+        "    p = &value;\n"
+        "    forward(p);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("unary_address_of_string_ok.f", source);
+    FengProgram *program = parse_program_or_die("unary_address_of_non_extern_forward_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_non_extern_forward_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message,
+                  "cannot be passed to non-extern callable 'forward'") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_rejects_object_field_storage(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Holder {\n"
+        "    var ptr: i32*;\n"
+        "}\n"
+        "fn run(value: i32) {\n"
+        "    let p: i32* = &value;\n"
+        "    let holder = Holder { ptr: p };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_object_field_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_object_field_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message,
+                  "object literal field 'ptr' cannot store borrowed data pointer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_rejects_member_assignment_storage(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Holder {\n"
+        "    var ptr: i32*;\n"
+        "}\n"
+        "@cdecl(\"c_get_i32_ptr\")\n"
+        "extern fn c_get_i32_ptr(): i32*;\n"
+        "fn run(value: i32) {\n"
+        "    let holder = Holder { ptr: c_get_i32_ptr() };\n"
+        "    holder.ptr = &value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_member_assignment_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_member_assignment_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message,
+                  "assignment target 'holder.ptr' cannot store borrowed data pointer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -10742,9 +10871,13 @@ int main(void) {
     test_index_assignment_rejects_non_array_target();
     test_unary_minus_rejects_non_numeric_operand();
     test_unary_not_rejects_non_bool_operand();
-    test_unary_address_of_accepts_scalar_binding();
-    test_unary_address_of_accepts_array_value();
-    test_unary_address_of_accepts_string_value();
+    test_unary_address_of_rejects_returned_scalar_binding();
+    test_unary_address_of_rejects_returned_array_value();
+    test_unary_address_of_rejects_returned_string_value();
+    test_unary_address_of_allows_extern_call_borrowed_data_pointer();
+    test_unary_address_of_rejects_non_extern_forwarding_via_assignment_alias();
+    test_unary_address_of_rejects_object_field_storage();
+    test_unary_address_of_rejects_member_assignment_storage();
     test_unary_address_of_accepts_top_level_abi_function_pointer_target();
     test_unary_address_of_requires_explicit_function_pointer_target();
     test_unary_address_of_rejects_plain_function_pointer_target();
