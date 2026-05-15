@@ -387,9 +387,11 @@ static void test_abi_function_pointer_codegen(void) {
         "fn run() {\n"
         "    let cb: Cmp* = &cmp;\n"
         "    let holder: Holder = Holder{cb: cb};\n"
+        "    let same: bool = cb == holder.cb;\n"
         "    c_register_cmp(cb);\n"
         "    c_register_cmp(&cmp);\n"
         "    holder.cb = c_load_cmp();\n"
+        "    let different: bool = cb != holder.cb;\n"
         "    c_register_cmp(holder.cb);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "abifn.ff");
@@ -450,6 +452,7 @@ static void test_abi_value_pointer_codegen(void) {
         "    c_use_point_ptr(&point);\n"
         "    c_use_point_ptr(handle);\n"
         "    let other: Point* = c_roundtrip_point_ptr(handle);\n"
+        "    let same: bool = handle == other;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "abivalue.ff");
     const FengProgram *programs[1] = {program};

@@ -6136,6 +6136,17 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
 
+    if (is_cmp && e->as.binary.op != FENG_TOKEN_LT && e->as.binary.op != FENG_TOKEN_LE &&
+        e->as.binary.op != FENG_TOKEN_GT && e->as.binary.op != FENG_TOKEN_GE &&
+        lr.type->kind == CG_TYPE_POINTER && rr.type->kind == CG_TYPE_POINTER) {
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(bool)(%s %s %s)", lr.c_expr, cop, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
     /* Numeric arithmetic / bitwise / comparison. */
     CGType *common = NULL;
     if (!cg_unify_numeric(cg, e->token, &lr, &rr, &common)) {

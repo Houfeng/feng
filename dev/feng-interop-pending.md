@@ -139,9 +139,9 @@ type UserType2 {
 ### 3.6 指针类型安全与语法示例
 
 1. 一元 `&` 的结果类型为 `T*` 或 `Foo*`，与取址目标类型一致。
-2. 指针在 Feng 中是不透明句柄：不可直接解引用、不可调用（`Foo*` 也不可直接调用）、不可指针运算、不可比较、不可进行类型转换。
+2. 指针在 Feng 中是不透明句柄：不可直接解引用、不可调用（`Foo*` 也不可直接调用）、不可指针运算、不可进行类型转换；仅允许同类型指针参与 `==` / `!=`，并按原生指针地址身份比较。
 3. 指针仅可用于 C ABI 互操作边界（如 `extern` 实参/返回值/`@abi type` 成员存储），不作为通用编程能力开放。
-4. 凡超出上述边界的指针操作，编译期报错。
+4. 指针不支持 `<` / `<=` / `>` / `>=` 之类的顺序比较；凡超出上述边界的其他指针操作，编译期报错。
 
 语法示例（普通类型取址并用于 ABI 传参）：
 
@@ -480,7 +480,7 @@ let q: CmpFunc* = c_load_cmp();
 - [x] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern fn` 返回 `Foo*`。
 - [x] T6.4 执行全量回归，并在本文更新每项完成状态与验收结果。
 
-当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern fn` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
+当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern fn` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。当前进一步收敛不透明指针规则：`T*` / `Foo*` 允许在同类型前提下参与 `==` / `!=`，并按原生指针地址身份比较；其余解引用、调用、运算、跨类型转换与顺序比较继续在编译期拒绝。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
 
 ---
 

@@ -4401,6 +4401,89 @@ static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
     feng_program_free(program);
 }
 
+static void test_binary_equality_accepts_data_pointer_operands(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: int = 1;\n"
+        "    let p: int* = &x;\n"
+        "    let q: int* = p;\n"
+        "    let same: bool = p == q;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("pointer_equality_data_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_binary_equality_accepts_function_pointer_operands(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "spec Cmp(a: int, b: int): int;\n"
+        "@abi\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let fp: Cmp* = &cmp;\n"
+        "    let fq: Cmp* = fp;\n"
+        "    let same: bool = fp != fq;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("pointer_equality_function_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_binary_equality_rejects_mismatched_pointer_operands(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: int = 1;\n"
+        "    let p: int* = &x;\n"
+        "    let bytes: byte[] = [1];\n"
+        "    let q: byte* = &bytes;\n"
+        "    let same: bool = p == q;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("pointer_equality_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "pointer_equality_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '==' requires operands of the same type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_binary_plus_rejects_non_matching_operands(void) {
     const char *source =
         "mod demo.main;\n"
@@ -11010,6 +11093,9 @@ int main(void) {
     test_function_pointer_binding_is_not_directly_callable();
     test_function_pointer_semantic_allows_field_param_and_return_flow();
     test_unary_address_of_rejects_bound_method_pointer_target();
+    test_binary_equality_accepts_data_pointer_operands();
+    test_binary_equality_accepts_function_pointer_operands();
+    test_binary_equality_rejects_mismatched_pointer_operands();
     test_binary_plus_rejects_non_matching_operands();
     test_binary_and_rejects_non_bool_operands();
     test_bitwise_ops_accept_same_integer_type();
