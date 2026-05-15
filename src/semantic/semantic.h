@@ -149,7 +149,12 @@ typedef enum FengSpecCoercionForm {
     /* Callable value → callable-form spec / function type. Carries the
      * value-source classification per §6.2; signature is read from the
      * target callable decl. */
-    FENG_SPEC_COERCION_FORM_CALLABLE
+    FENG_SPEC_COERCION_FORM_CALLABLE,
+    /* `&top_level_abi_fn` → `Foo*` where `Foo` is a callable-form `@abi`
+     * spec. Semantic resolves the exact target spec and source function so
+     * codegen does not have to guess which ABI function-pointer surface the
+     * site chose. */
+    FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER
 } FengSpecCoercionForm;
 
 /* Origin of the callable value being coerced to a callable-form spec. The
@@ -381,6 +386,20 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengDecl *callable_owner_type_decl,
     const FengDecl *callable_fit_decl,
     const FengExpr *callable_lambda_expr);
+
+/* Record an ABI function-pointer address site. This is the `&top_level_fn`
+ * counterpart to callable-form coercion sites: semantic resolves the exact
+ * callable-form `@abi spec` target and the referenced top-level function,
+ * and codegen later lowers the site as a plain C function pointer rather
+ * than as a closure value.
+ *
+ * Implemented in spec_coercion_sites.c. */
+bool feng_semantic_record_abi_function_pointer_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
+    const FengDecl *callable_decl);
 
 /* Look up the recorded coercion site for `expr`. Returns NULL when no site
  * was recorded (either the expression is not a coercion site, or the

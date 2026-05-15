@@ -323,6 +323,109 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
+static void test_address_of_scalar_and_array_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.addr;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_use_i32_ptr(p: i32*): void;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_use_array_ptr(p: int*): void;\n"
+        "fn run() {\n"
+        "    let value: i32 = 7;\n"
+        "    let values: int[] = [1, 2, 3];\n"
+        "    c_use_i32_ptr(&value);\n"
+        "    c_use_array_ptr(&values);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "addr.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (address-of scalar/array): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_data(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_abi_function_pointer_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.abifn;\n"
+        "@abi\n"
+        "spec Cmp(a: int, b: int): int;\n"
+        "@abi\n"
+        "type Holder {\n"
+        "    var cb: Cmp*;\n"
+        "}\n"
+        "@abi\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_register_cmp(cb: Cmp*): void;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_load_cmp(): Cmp*;\n"
+        "fn run() {\n"
+        "    let cb: Cmp* = &cmp;\n"
+        "    let holder: Holder = Holder{cb: cb};\n"
+        "    c_register_cmp(cb);\n"
+        "    c_register_cmp(&cmp);\n"
+        "    holder.cb = c_load_cmp();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "abifn.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (ABI function pointer): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "typedef ") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengAbiFnPtr__feng__codegen__abifn__Cmp") != NULL);
+    ASSERT(strstr(out.c_source, "&feng__feng__codegen__abifn__cmp") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_lib_public_functions_are_exported(void) {
     static const char *kSource =
         "mod feng.codegen.exposed;\n"
@@ -2105,6 +2208,8 @@ static void test_phase_e_aggregate_generic_arg_three_entrances_codegen(void) {
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
+    test_address_of_scalar_and_array_codegen();
+    test_abi_function_pointer_codegen();
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
     test_imported_feng_function_prototypes_compile();

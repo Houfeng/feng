@@ -9573,6 +9573,34 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
         resolution.lambda_expr);
 }
 
+static void record_abi_function_pointer_site(ResolveContext *context,
+                                             const FengExpr *expr,
+                                             const FengTypeRef *expected_type_ref,
+                                             const FengDecl *function_decl) {
+    const FengDecl *target_decl;
+    const FengTypeRef *target_spec_type_ref;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL ||
+        expected_type_ref == NULL || function_decl == NULL) {
+        return;
+    }
+
+    target_decl = resolve_abi_function_pointer_type_decl(context, expected_type_ref);
+    if (target_decl == NULL) {
+        return;
+    }
+    if (expected_type_ref->kind != FENG_TYPE_REF_POINTER || expected_type_ref->as.inner == NULL) {
+        return;
+    }
+    target_spec_type_ref = expected_type_ref->as.inner;
+
+    (void)feng_semantic_record_abi_function_pointer_site(context->analysis,
+                                                         expr,
+                                                         target_decl,
+                                                         target_spec_type_ref,
+                                                         function_decl);
+}
+
 /* Phase S2-a — SpecDefaultBinding recording helper (§6.3). Records a
  * default-witness site when `binding_type` resolves to a spec decl (object
  * or callable form). Caller is responsible for ensuring this is invoked
@@ -9809,7 +9837,15 @@ static bool expr_matches_expected_abi_function_pointer_type(ResolveContext *cont
                                                       expr->as.unary.operand,
                                                       expected_type_ref->as.inner,
                                                       expected_function_type_decl);
-    return resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE;
+    if (resolution.kind != ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE) {
+        return false;
+    }
+
+    record_abi_function_pointer_site(context,
+                                     expr,
+                                     expected_type_ref,
+                                     resolution.function_decl);
+    return true;
 }
 
 static bool expr_matches_expected_address_of_data_pointer_type(
@@ -10036,6 +10072,10 @@ static bool validate_expr_against_expected_abi_function_pointer_type(
                                                       expected_type_ref->as.inner,
                                                       expected_function_type_decl);
     if (resolution.kind == ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_UNIQUE) {
+        record_abi_function_pointer_site(context,
+                                         expr,
+                                         expected_type_ref,
+                                         resolution.function_decl);
         return true;
     }
 

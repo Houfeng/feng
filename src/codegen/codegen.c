@@ -302,6 +302,7 @@ static bool cg_pointer_inner_is_lowerable(const CGType *t) {
         case CG_TYPE_F64:
         case CG_TYPE_STRING:
         case CG_TYPE_POINTER:
+        case CG_TYPE_CALLABLE:
             return true;
         default:
             return false;
@@ -415,6 +416,7 @@ typedef struct UserSpec {
     char   *c_default_witness_name;        /* e.g., FengSpecDefaultWitness__M__S */
     char   *c_closure_struct_name;         /* callable-form only */
     char   *c_closure_desc_name;           /* callable-form only */
+    char   *c_abi_fn_ptr_typedef_name;     /* callable-form @abi function-pointer surface */
     UserSpecMember *members;
     size_t          member_count;
     bool            members_registered;
@@ -497,6 +499,11 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         }
         if (t->element->kind == CG_TYPE_STRING) {
             buf_append_cstr(b, "char *");
+            return;
+        }
+        if (t->element->kind == CG_TYPE_CALLABLE && t->element->user_spec != NULL &&
+            t->element->user_spec->c_abi_fn_ptr_typedef_name != NULL) {
+            buf_append_cstr(b, t->element->user_spec->c_abi_fn_ptr_typedef_name);
             return;
         }
         buf_append_cstr(b, cgtype_to_c(t->element->kind));
@@ -3365,6 +3372,10 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         Buf db; buf_init(&db);
         buf_append_fmt(&db, "FengClosureDesc__%s__%s", owner_mangle, symbol.data);
         s->c_closure_desc_name = db.data;
+
+        Buf pb; buf_init(&pb);
+        buf_append_fmt(&pb, "FengAbiFnPtr__%s__%s", owner_mangle, symbol.data);
+        s->c_abi_fn_ptr_typedef_name = pb.data;
     }
 
     free(owner_mangle);
@@ -3379,7 +3390,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
             return false;
         }
     } else if (!(s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
-                 s->c_closure_desc_name)) {
+                 s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name)) {
         return false;
     }
 
@@ -4459,6 +4470,10 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
         Buf db; buf_init(&db);
         buf_append_fmt(&db, "FengClosureDesc__%s__%s", cg->module_mangle, san);
         s->c_closure_desc_name = db.data;
+
+        Buf pb; buf_init(&pb);
+        buf_append_fmt(&pb, "FengAbiFnPtr__%s__%s", cg->module_mangle, san);
+        s->c_abi_fn_ptr_typedef_name = pb.data;
     }
 
     free(san);
@@ -4469,7 +4484,8 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
             && s->c_default_subject_struct_name && s->c_default_subject_desc_name
             && s->c_default_subject_new_name && s->c_default_witness_name;
     }
-    return s->c_witness_struct_name && s->c_closure_struct_name && s->c_closure_desc_name;
+    return s->c_witness_struct_name && s->c_closure_struct_name &&
+           s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name;
 }
 
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
@@ -5134,11 +5150,29 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
     return true;
 }
 
+static void cg_emit_callable_abi_function_pointer_typedef(Buf *b, const UserSpec *s) {
+    buf_append_cstr(b, "typedef ");
+    cg_emit_c_type(b, s->callable_return_type);
+    buf_append_fmt(b, " (*%s)(", s->c_abi_fn_ptr_typedef_name);
+    if (s->callable_param_count == 0U) {
+        buf_append_cstr(b, "void");
+    } else {
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            if (i != 0U) {
+                buf_append_cstr(b, ", ");
+            }
+            cg_emit_c_type(b, s->callable_param_types[i]);
+        }
+    }
+    buf_append_cstr(b, ");\n");
+}
+
 /* Forward declarations for spec value-struct + witness-struct, plus the
  * value-struct definition. The witness-struct definition is emitted later in
  * cg_emit_user_spec_definition (which needs every method's CType resolved). */
 static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
+        cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
         buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
         return;
     }
@@ -6059,44 +6093,170 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr && out->type;
 }
 
+static bool cg_expr_is_direct_lvalue(const FengExpr *expr) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_MEMBER:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_type) {
+    if (element_type == NULL) {
+        return false;
+    }
+    if (cg_type_kind_is_scalar_builtin(element_type->kind) ||
+        element_type->kind == CG_TYPE_POINTER ||
+        element_type->kind == CG_TYPE_CALLABLE) {
+        return true;
+    }
+    return false;
+}
+
 static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     ExprResult inner;
     if (!cg_emit_expr(cg, e->as.unary.operand, &inner)) return false;
     if (e->as.unary.op == FENG_TOKEN_AMP) {
-        if (inner.type == NULL || inner.type->kind != CG_TYPE_STRING) {
+        if (inner.type == NULL) {
             er_free(&inner);
             return cg_fail(cg, e->token,
-                "codegen: unary '&' currently supports string operands only");
+                "codegen: unary '&' is missing an operand type");
         }
-        if (inner.owns_ref) {
-            if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+
+        if (inner.type->kind == CG_TYPE_STRING) {
+            if (inner.owns_ref) {
+                if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+                    er_free(&inner);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+            }
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b, "((char *)feng_string_data(%s))", inner.c_expr);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_POINTER);
+            if (out->type == NULL) {
+                er_free(&inner);
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            out->type->element = cgtype_new(CG_TYPE_STRING);
+            if (out->type->element == NULL) {
+                er_free(&inner);
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            er_free(&inner);
+            out->owns_ref = false;
+            return out->c_expr != NULL;
+        }
+
+        if (inner.type->kind == CG_TYPE_ARRAY) {
+            char *elem_ptr_cty;
+            CGType *elem_ptr_type;
+            Buf b;
+
+            if (inner.type->element == NULL ||
+                !cg_array_data_pointer_element_is_lowerable(inner.type->element)) {
+                er_free(&inner);
+                return cg_fail(cg, e->token,
+                    "codegen: unary '&' does not yet support this ABI array element type");
+            }
+            if (inner.owns_ref && cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                 er_free(&inner);
                 return cg_fail(cg, e->token, "codegen: out of memory");
             }
-        }
-        Buf b; buf_init(&b);
-        buf_append_fmt(&b, "((char *)feng_string_data(%s))", inner.c_expr);
-        out->c_expr = b.data;
-        out->type = cgtype_new(CG_TYPE_POINTER);
-        if (out->type == NULL) {
+
+            elem_ptr_type = cgtype_new(CG_TYPE_POINTER);
+            if (elem_ptr_type == NULL) {
+                er_free(&inner);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            elem_ptr_type->element = cgtype_clone(inner.type->element);
+            if (elem_ptr_type->element == NULL) {
+                cgtype_free(elem_ptr_type);
+                er_free(&inner);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            elem_ptr_cty = cg_ctype_dup(elem_ptr_type);
+            cgtype_free(elem_ptr_type);
+            if (elem_ptr_cty == NULL) {
+                er_free(&inner);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+
+            buf_init(&b);
+            buf_append_fmt(&b, "((%s)feng_array_data(%s))", elem_ptr_cty, inner.c_expr);
+            free(elem_ptr_cty);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_POINTER);
+            if (out->type == NULL) {
+                er_free(&inner);
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            out->type->element = cgtype_clone(inner.type->element);
+            if (out->type->element == NULL) {
+                er_free(&inner);
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
             er_free(&inner);
-            free(out->c_expr);
-            out->c_expr = NULL;
-            return false;
+            out->owns_ref = false;
+            return out->c_expr != NULL;
         }
-        out->type->element = cgtype_new(CG_TYPE_STRING);
-        if (out->type->element == NULL) {
+
+        if (cg_type_kind_is_scalar_builtin(inner.type->kind)) {
+            Buf b;
+
+            if (!cg_expr_is_direct_lvalue(e->as.unary.operand)) {
+                if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+                    er_free(&inner);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+            }
+
+            buf_init(&b);
+            buf_append_fmt(&b, "(&(%s))", inner.c_expr);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_POINTER);
+            if (out->type == NULL) {
+                er_free(&inner);
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            out->type->element = cgtype_clone(inner.type);
+            if (out->type->element == NULL) {
+                er_free(&inner);
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
             er_free(&inner);
-            cgtype_free(out->type);
-            out->type = NULL;
-            free(out->c_expr);
-            out->c_expr = NULL;
-            return false;
+            out->owns_ref = false;
+            return out->c_expr != NULL;
         }
+
         er_free(&inner);
-        out->owns_ref = false;
-        return out->c_expr != NULL;
+        return cg_fail(cg, e->token,
+            "codegen: unary '&' currently supports string, ABI scalar, and ABI array operands only");
     }
     const char *op = NULL;
     bool require_bool = false;
@@ -6663,6 +6823,53 @@ static bool cg_emit_callable_function_coercion(CG *cg,
         return false;
     }
     out->type->user_spec = target_spec;
+    out->owns_ref = false;
+    return true;
+}
+
+static bool cg_emit_abi_function_pointer_site(CG *cg,
+                                              const FengExpr *e,
+                                              const FengSpecCoercionSite *cs,
+                                              ExprResult *out) {
+    const UserSpec *target_spec = NULL;
+    const FreeFn *fn = NULL;
+
+    er_init(out);
+    if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
+        return false;
+    }
+    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
+        return cg_fail(cg, e->token,
+            "codegen: ABI function pointer target was not registered as a callable-form spec");
+    }
+    if (cs->callable_source != FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN ||
+        cs->callable_decl == NULL || cs->callable_decl->kind != FENG_DECL_FUNCTION) {
+        return cg_fail(cg, e->token,
+            "codegen: ABI function pointers currently support only top-level @abi functions");
+    }
+    fn = cg_find_free_fn_by_decl(cg, cs->callable_decl);
+    if (fn == NULL || fn->c_name == NULL) {
+        return cg_fail(cg, e->token,
+            "codegen: ABI function pointer source function was not registered");
+    }
+
+    {
+        Buf b;
+        buf_init(&b);
+        buf_append_fmt(&b, "&%s", fn->c_name);
+        out->c_expr = b.data;
+    }
+    out->type = cgtype_new(CG_TYPE_POINTER);
+    if (out->c_expr == NULL || out->type == NULL) {
+        er_free(out);
+        return false;
+    }
+    out->type->element = cgtype_new(CG_TYPE_CALLABLE);
+    if (out->type->element == NULL) {
+        er_free(out);
+        return false;
+    }
+    out->type->element->user_spec = target_spec;
     out->owns_ref = false;
     return true;
 }
@@ -9464,6 +9671,9 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     const FengSpecCoercionSite *cs =
         feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
 
+    if (cs && cs->form == FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER) {
+        return cg_emit_abi_function_pointer_site(cg, e, cs, out);
+    }
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_CALLABLE) {
         return cg_emit_callable_spec_coercion(cg, e, cs, out);
     }
@@ -16616,6 +16826,7 @@ static void cg_dispose(CG *cg) {
         free(us->c_default_witness_name);
         free(us->c_closure_struct_name);
         free(us->c_closure_desc_name);
+        free(us->c_abi_fn_ptr_typedef_name);
         for (size_t j = 0; j < us->generic_type_arg_count; ++j) {
             cg_type_ref_free(us->generic_type_args[j]);
         }
