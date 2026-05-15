@@ -60,6 +60,11 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 编译器从两类来源自动收集链接参数,无需用户额外指定:
 
+另外,编译器会自动补入自身随附的两类基础静态库:
+
+- runtime 库: `build/lib/libfeng_runtime.a`,承载托管对象、数组、异常等运行时机制。
+- intrinsic 库: `build/lib/libfeng_intrinsic.a`,承载以普通 `extern fn` 形式暴露给标准库/编译器的内建原生 API; 该层必须遵循显式 ABI 签名,不复用 runtime 对象签名充当桥接。
+
 **来源①: `.ff` 源文件中的 `@cdecl` / `@stdcall` / `@fastcall` 导入注解**
 
 ```feng
@@ -71,6 +76,8 @@ extern fn ssl_connect(fd: int): int;
 ```
 
 编译器读取注解参数，解析为系统库名、相对路径或绝对路径，生成对应链接参数。
+
+其中 `@cdecl("feng_intrinsic")` 不是系统库搜索名,而是编译器保留的内建库标识; 编译器必须把它解析到自身随附的 `libfeng_intrinsic.a`,而不是依赖宿主环境的 `-lfeng_intrinsic` 搜索结果。
 
 **来源②: `--pkg` 指定的 `.fb` 包内正式库文件**
 

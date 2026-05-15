@@ -91,6 +91,7 @@ typedef enum CGTypeKind {
     CG_TYPE_I8, CG_TYPE_I16, CG_TYPE_I32, CG_TYPE_I64,
     CG_TYPE_U8, CG_TYPE_U16, CG_TYPE_U32, CG_TYPE_U64,
     CG_TYPE_F32, CG_TYPE_F64,
+    CG_TYPE_POINTER,
     CG_TYPE_STRING,
     CG_TYPE_ARRAY,        /* element kind held separately when needed */
     CG_TYPE_OBJECT,       /* user-defined type — Phase 1A iter 2 */
@@ -104,7 +105,7 @@ struct UserSpec;     /* forward (Step 4b) */
 
 typedef struct CGType {
     CGTypeKind kind;
-    /* For arrays: element CGType (heap-owned). NULL otherwise. */
+    /* For arrays/pointers: nested CGType (heap-owned). NULL otherwise. */
     struct CGType *element;
     /* For OBJECT: borrowed pointer to the registered UserType. NULL otherwise.
      * The UserType is owned by the CG context and outlives every CGType. */
@@ -275,12 +276,34 @@ static const char *cgtype_to_c(CGTypeKind k) {
         case CG_TYPE_U64: return "uint64_t";
         case CG_TYPE_F32: return "float";
         case CG_TYPE_F64: return "double";
+        case CG_TYPE_POINTER: return "void *";
         case CG_TYPE_STRING: return "FengString *";
         case CG_TYPE_ARRAY: return "FengArray *";
         case CG_TYPE_OBJECT: return "void *";
         case CG_TYPE_CALLABLE: return "void *";
         case CG_TYPE_GENERIC_PARAM: return "void *"; /* erased; actual dispatch via descriptor */
         default: return "void";
+    }
+}
+
+static bool cg_pointer_inner_is_lowerable(const CGType *t) {
+    if (t == NULL) return false;
+    switch (t->kind) {
+        case CG_TYPE_BOOL:
+        case CG_TYPE_I8:
+        case CG_TYPE_I16:
+        case CG_TYPE_I32:
+        case CG_TYPE_I64:
+        case CG_TYPE_U8:
+        case CG_TYPE_U16:
+        case CG_TYPE_U32:
+        case CG_TYPE_U64:
+        case CG_TYPE_F32:
+        case CG_TYPE_F64:
+        case CG_TYPE_POINTER:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -461,6 +484,20 @@ static char *cg_user_type_c_name(const CGType *t) {
  * pointer star) — fat-spec values live on the stack / in argument slots and
  * are passed by value. */
 static void cg_emit_c_type(Buf *b, const CGType *t) {
+    if (t && t->kind == CG_TYPE_POINTER) {
+        if (t->element == NULL) {
+            buf_append_cstr(b, "void *");
+            return;
+        }
+        if (t->element->kind == CG_TYPE_POINTER) {
+            cg_emit_c_type(b, t->element);
+            buf_append_cstr(b, " *");
+            return;
+        }
+        buf_append_cstr(b, cgtype_to_c(t->element->kind));
+        buf_append_cstr(b, " *");
+        return;
+    }
     if (t && t->kind == CG_TYPE_OBJECT && t->user) {
         buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
         return;
@@ -1150,6 +1187,9 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
         case CG_TYPE_U64:    buf_append_cstr(out, "u64");    return true;
         case CG_TYPE_F32:    buf_append_cstr(out, "f32");    return true;
         case CG_TYPE_F64:    buf_append_cstr(out, "f64");    return true;
+        case CG_TYPE_POINTER:
+            buf_append_cstr(out, "P_");
+            return cg_encode_type_short(t->element, out);
         case CG_TYPE_STRING: buf_append_cstr(out, "s");      return true;
         case CG_TYPE_OBJECT:
             if (!t->user) { buf_append_cstr(out, "O_unknown"); return true; }
@@ -3459,8 +3499,25 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         *out_type = t;
         return true;
     }
+    if (ref->kind == FENG_TYPE_REF_POINTER) {
+        CGType *inner = NULL;
+        if (!cg_resolve_type(cg, ref->as.inner, fallback, &inner)) return false;
+        if (!cg_pointer_inner_is_lowerable(inner)) {
+            cgtype_free(inner);
+            return cg_fail(cg, ref->token,
+                "codegen: pointer pointee type is not supported in this step");
+        }
+        CGType *t = cgtype_new(CG_TYPE_POINTER);
+        if (!t) {
+            cgtype_free(inner);
+            return false;
+        }
+        t->element = inner;
+        *out_type = t;
+        return true;
+    }
     return cg_fail(cg, ref->token,
-        "codegen: pointer types not supported in Phase 1A");
+        "codegen: unknown type reference kind");
 }
 
 static bool cg_register_open_generic_type_instances_in_ref(CG *cg,
@@ -6001,6 +6058,41 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     ExprResult inner;
     if (!cg_emit_expr(cg, e->as.unary.operand, &inner)) return false;
+    if (e->as.unary.op == FENG_TOKEN_AMP) {
+        if (inner.type == NULL || inner.type->kind != CG_TYPE_STRING) {
+            er_free(&inner);
+            return cg_fail(cg, e->token,
+                "codegen: unary '&' currently supports string operands only");
+        }
+        if (inner.owns_ref) {
+            if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+                er_free(&inner);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "((uint8_t *)feng_string_data(%s))", inner.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_POINTER);
+        if (out->type == NULL) {
+            er_free(&inner);
+            free(out->c_expr);
+            out->c_expr = NULL;
+            return false;
+        }
+        out->type->element = cgtype_new(CG_TYPE_U8);
+        if (out->type->element == NULL) {
+            er_free(&inner);
+            cgtype_free(out->type);
+            out->type = NULL;
+            free(out->c_expr);
+            out->c_expr = NULL;
+            return false;
+        }
+        er_free(&inner);
+        out->owns_ref = false;
+        return out->c_expr != NULL;
+    }
     const char *op = NULL;
     bool require_bool = false;
     bool require_int = false;
@@ -8588,6 +8680,7 @@ static bool cg_types_equal(const CGType *a, const CGType *b) {
     if (a->kind != b->kind) return false;
     if (a->kind == CG_TYPE_OBJECT) return a->user == b->user;
     if (a->kind == CG_TYPE_CALLABLE) return a->user_spec == b->user_spec;
+    if (a->kind == CG_TYPE_POINTER) return cg_types_equal(a->element, b->element);
     if (a->kind == CG_TYPE_ARRAY) return cg_types_equal(a->element, b->element);
     return true;
 }
@@ -9620,6 +9713,8 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "0"); break;
         case CG_TYPE_F32: case CG_TYPE_F64:
             buf_append_cstr(&b, "0.0"); break;
+        case CG_TYPE_POINTER:
+            buf_append_cstr(&b, "NULL"); break;
         case CG_TYPE_STRING:
             buf_append_cstr(&b, "feng_string_default()"); break;
         case CG_TYPE_ARRAY: {
@@ -11513,21 +11608,26 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
 static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (!cg_register_extern(cg, decl)) return false;
     const ExternFn *ef = &cg->externs[cg->extern_count - 1];
-    /* Emit `extern <ret> name(<params>);` Strings map to `const char *`. */
+    /* Emit `extern <ret> name(<params>);`. Legacy `string` externs still map
+     * to `const char *` until the remaining old-ABI fixtures are migrated. */
     Buf *h = &cg->headers;
-    const char *ret_c = (ef->return_type->kind == CG_TYPE_STRING)
-                          ? "const char *"
-                          : cgtype_to_c(ef->return_type->kind);
-    buf_append_fmt(h, "extern %s %s(", ret_c, ef->name);
+    buf_append_cstr(h, "extern ");
+    if (ef->return_type->kind == CG_TYPE_STRING) {
+        buf_append_cstr(h, "const char *");
+    } else {
+        cg_emit_c_type(h, ef->return_type);
+    }
+    buf_append_fmt(h, " %s(", ef->name);
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
     } else {
         for (size_t i = 0; i < ef->param_count; i++) {
             if (i) buf_append_cstr(h, ", ");
-            const char *pty = (ef->param_types[i]->kind == CG_TYPE_STRING)
-                                ? "const char *"
-                                : cgtype_to_c(ef->param_types[i]->kind);
-            buf_append_cstr(h, pty);
+            if (ef->param_types[i]->kind == CG_TYPE_STRING) {
+                buf_append_cstr(h, "const char *");
+            } else {
+                cg_emit_c_type(h, ef->param_types[i]);
+            }
         }
     }
     buf_append_cstr(h, ");\n");

@@ -15,6 +15,7 @@
 - `@union` 仅适用于对象形式的 `@abi type`; 未标注 `@union` 时按 ABI 结构体 payload 处理,标注 `@union` 时按 ABI 联合体 payload 处理。
 - 指针类型 `T*` 与函数指针类型 `Foo*` 在 Feng 中都是不透明句柄: 不可直接解引用、不可运算、不可比较、不可显式转换; `Foo*` 也不可直接调用。
 - `string` 与 ABI 兼容数组在 ABI 边界上采用默认借用、优先 0 拷贝的规则; 长度不跟随指针隐式传递,必须按签名显式表达。
+- 编译器或标准库需要暴露内建原生能力时,也必须通过普通 `extern fn` + 显式 ABI 签名表达; 这类符号归属 intrinsic 层,不归属 runtime 层。
 - 顶层 `@abi fn` 可作为 ABI 回调来源,`pu @abi fn` 可作为公开导出函数; Feng 异常不得穿越 ABI 边界传播。
 
 ## 2 C库来源与调用方式注解
@@ -39,6 +40,7 @@
 - 无函数体的 `extern fn` 声明必须且只能使用一个带参数的调用方式注解; 调用方式由注解名本身唯一确定。
 - 无参数形式的 `@cdecl`、`@stdcall` 和 `@fastcall` 仅适用于顶层 `@abi fn`; 当前未显式标注时,顶层 `@abi fn` 默认按 `cdecl` 处理。
 - 调用方式注解当前只对 `@abi("c")` 目标有定义。
+- `@cdecl("feng_intrinsic")` 保留给编译器随附的 intrinsic 原生库; 标准库中的内建原生 API 必须放在该层并使用普通 ABI 签名,不得混入 runtime 公共 ABI。
 
 ```feng
 let math_lib = "m";

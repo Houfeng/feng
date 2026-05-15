@@ -346,7 +346,6 @@ FengString *feng_string_default(void);
 FengString *feng_string_concat(const FengString *left, const FengString *right);
 
 size_t      feng_string_length(const FengString *s);
-int64_t     feng_string_utf8_length(const char *s);
 const char *feng_string_data(const FengString *s);
 
 /* --- Array ------------------------------------------------------------- */

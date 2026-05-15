@@ -17,6 +17,7 @@ SEMANTIC_SRCS := $(wildcard src/semantic/*.c)
 CODEGEN_SRCS := $(wildcard src/codegen/*.c)
 SYMBOL_SRCS := $(wildcard src/symbol/*.c)
 RUNTIME_SRCS := $(wildcard src/runtime/*.c)
+INTRINSIC_SRCS := $(wildcard src/intrinsic/*.c)
 ARCHIVE_SRCS := $(wildcard src/archive/*.c)
 THIRD_PARTY_SRCS := third_party/miniz/miniz.c
 CLI_SRCS := $(shell find src/cli -name '*.c')
@@ -25,6 +26,7 @@ TEST_LEXER_SRCS := $(wildcard test/lexer/*.c)
 TEST_PARSER_SRCS := $(wildcard test/parser/*.c)
 TEST_SEMANTIC_SRCS := $(wildcard test/semantic/*.c)
 TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
+TEST_INTRINSIC_SRCS := $(wildcard test/intrinsic/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
@@ -42,17 +44,19 @@ TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 
 CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))
 RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS))
+INTRINSIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(INTRINSIC_SRCS))
 TEST_ARCHIVE_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_ARCHIVE_SRCS))
 TEST_LEXER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(TEST_LEXER_SRCS))
 TEST_PARSER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(TEST_PARSER_SRCS))
 TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SEMANTIC_SRCS))
 TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIME_SRCS))
+TEST_INTRINSIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(INTRINSIC_SRCS) $(TEST_INTRINSIC_SRCS))
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
 TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
 TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
-DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
+DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(INTRINSIC_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
-	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
+	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) $(TEST_INTRINSIC_OBJS:.o=.d) \
 	$(TEST_CODEGEN_OBJS:.o=.d) $(TEST_CLI_OBJS:.o=.d) \
 	$(TEST_SYMBOL_OBJS:.o=.d)
 
@@ -60,40 +64,44 @@ THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-func
 
 LIB_DIR := $(BUILD_DIR)/lib
 RUNTIME_LIB := $(LIB_DIR)/libfeng_runtime.a
+INTRINSIC_LIB := $(LIB_DIR)/libfeng_intrinsic.a
 
-.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
+.PHONY: all cli runtime intrinsic test smoke cli-tests cli-project-tests std-tests perf-constraints clean
 
-all: cli runtime
+all: cli runtime intrinsic
 
 cli: $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB)
 
-test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests perf-constraints
+intrinsic: $(INTRINSIC_LIB)
+
+test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_intrinsic $(BIN_DIR)/test_codegen $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests perf-constraints
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
 	$(BIN_DIR)/test_semantic
 	$(BIN_DIR)/test_runtime
+	$(BIN_DIR)/test_intrinsic
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_symbol
 
-perf-constraints: cli runtime
+perf-constraints: cli runtime intrinsic
 	./scripts/run_perf_constraints.sh
 
-std-tests: cli
+std-tests: cli runtime intrinsic
 	$(BIN_DIR)/feng build ./std
 	$(BIN_DIR)/feng build ./std_test
 	./std_test/build/bin/std_test
 
-smoke: cli runtime
+smoke: cli runtime intrinsic
 	./scripts/run_smoke.sh
 
-cli-tests: cli runtime
+cli-tests: cli runtime intrinsic
 	./scripts/run_cli_direct.sh
 
-cli-project-tests: cli runtime
+cli-project-tests: cli runtime intrinsic
 	./scripts/run_cli_project.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
@@ -120,6 +128,10 @@ $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) $(RUNTIME_LDLIBS) -o $@
 
+$(BIN_DIR)/test_intrinsic: $(TEST_INTRINSIC_OBJS)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_INTRINSIC_OBJS) $(LDFLAGS) -o $@
+
 $(BIN_DIR)/test_codegen: $(TEST_CODEGEN_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CODEGEN_OBJS) $(LDFLAGS) -o $@
@@ -135,6 +147,10 @@ $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 $(RUNTIME_LIB): $(RUNTIME_OBJS)
 	@mkdir -p $(LIB_DIR)
 	$(AR) rcs $@ $(RUNTIME_OBJS)
+
+$(INTRINSIC_LIB): $(INTRINSIC_OBJS)
+	@mkdir -p $(LIB_DIR)
+	$(AR) rcs $@ $(INTRINSIC_OBJS)
 
 $(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c
 	@mkdir -p $(dir $@)

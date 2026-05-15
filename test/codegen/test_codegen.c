@@ -30,7 +30,7 @@ static const char *kSourceA =
     "mod feng.codegen.mfa;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern fn puts(msg: string): int;\n"
+    "extern fn puts(msg: byte*): int;\n"
     "\n"
     "fn helper(): int {\n"
     "    return 42;\n"
@@ -40,10 +40,10 @@ static const char *kSourceB =
     "mod feng.codegen.mfb;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern fn puts(msg: string): int;\n"
+    "extern fn puts(msg: byte*): int;\n"
     "\n"
     "fn main(args: string[]) {\n"
-    "    puts(\"multi-file ok\");\n"
+    "    puts(&\"multi-file ok\");\n"
     "}\n";
 
 static FengProgram *parse_or_die(const char *source, const char *path) {
