@@ -357,6 +357,8 @@ typedef struct UserType {
     char   *c_abi_layout_name;
     char   *c_abi_ptr_name;
     char   *c_abi_base_offset_name;
+    char   *c_abi_value_name;
+    char   *c_abi_box_name;
     UserField  *fields;
     size_t      field_count;
     UserMethod *methods;
@@ -544,6 +546,22 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
     buf_append_cstr(b, cgtype_to_c(t ? t->kind : CG_TYPE_VOID));
 }
 
+static const UserType *cg_abi_value_user_type(const CGType *t) {
+    return t != NULL && t->kind == CG_TYPE_OBJECT &&
+           t->user != NULL && t->user->is_abi_type ? t->user : NULL;
+}
+
+static void cg_emit_c_abi_surface_type(Buf *b, const CGType *t) {
+    const UserType *abi_user = cg_abi_value_user_type(t);
+
+    if (abi_user != NULL && abi_user->c_abi_layout_name != NULL) {
+        buf_append_fmt(b, "struct %s", abi_user->c_abi_layout_name);
+        return;
+    }
+
+    cg_emit_c_type(b, t);
+}
+
 /* Heap-allocated form. Caller frees. */
 static char *cg_ctype_dup(const CGType *t) {
     Buf b; buf_init(&b);
@@ -650,13 +668,19 @@ typedef struct ExternFn {
 typedef struct FreeFn {
     char     *feng_name;
     char     *c_name;
+    char     *c_abi_name;
     CGType  **param_types;
     char    **param_names;
     size_t    param_count;
     CGType   *return_type;
+    bool      is_abi;
     const FengDecl *decl;
     const FengProgram *owner_program;
 } FreeFn;
+
+static bool cg_free_fn_has_abi_wrapper(const FreeFn *fn) {
+    return fn != NULL && fn->is_abi && fn->c_abi_name != NULL;
+}
 
 typedef struct ModuleBinding {
     char    *feng_name;
@@ -3095,9 +3119,19 @@ static bool cg_init_user_type_abi_symbols(UserType *t) {
     buf_append_fmt(&offset, "%s__abi_base_offset", t->c_struct_name);
     t->c_abi_base_offset_name = offset.data;
 
+        Buf value; buf_init(&value);
+        buf_append_fmt(&value, "%s__abi_value", t->c_struct_name);
+        t->c_abi_value_name = value.data;
+
+        Buf box; buf_init(&box);
+        buf_append_fmt(&box, "%s__abi_box", t->c_struct_name);
+        t->c_abi_box_name = box.data;
+
     return t->c_abi_layout_name != NULL &&
            t->c_abi_ptr_name != NULL &&
-           t->c_abi_base_offset_name != NULL;
+            t->c_abi_base_offset_name != NULL &&
+            t->c_abi_value_name != NULL &&
+            t->c_abi_box_name != NULL;
 }
 static bool cg_collect_generic_instances_from_type_params(CG *cg,
                                                           const FengTypeParam *type_params,
@@ -4208,7 +4242,10 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     const FengCallableSignature *sig = &decl->as.function_decl;
     FreeFn *f = &cg->free_fns[cg->free_fn_count++];
     f->feng_name = strndup(sig->name.data, sig->name.length);
-    f->c_name = cg_fn_mangle(cg->module_mangle, &sig->name);
+    f->is_abi = cg_annotations_contain_kind(decl->annotations,
+                                            decl->annotation_count,
+                                            FENG_ANNOTATION_ABI);
+    char *surface_name = cg_fn_mangle(cg->module_mangle, &sig->name);
     f->param_count = sig->param_count;
     f->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
     f->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
@@ -4225,8 +4262,19 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     /* Append param-type suffix for overload-aware mangling. Applied
      * unconditionally so the symbol shape is the same regardless of whether
      * the function is part of an overload set today. */
-    f->c_name = cg_append_param_suffix(f->c_name, f->param_types, f->param_count);
-    if (!f->c_name) return false;
+    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count);
+    if (!surface_name) return false;
+    if (f->is_abi) {
+        Buf impl; buf_init(&impl);
+        buf_append_cstr(&impl, surface_name);
+        buf_append_cstr(&impl, "__impl");
+        f->c_name = impl.data;
+        f->c_abi_name = surface_name;
+        if (!f->c_name) return false;
+    } else {
+        f->c_name = surface_name;
+        f->c_abi_name = NULL;
+    }
     f->decl = decl;
     f->owner_program = cg->cur_program;
     return true;
@@ -5223,7 +5271,7 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
 
 static void cg_emit_callable_abi_function_pointer_typedef(Buf *b, const UserSpec *s) {
     buf_append_cstr(b, "typedef ");
-    cg_emit_c_type(b, s->callable_return_type);
+    cg_emit_c_abi_surface_type(b, s->callable_return_type);
     buf_append_fmt(b, " (*%s)(", s->c_abi_fn_ptr_typedef_name);
     if (s->callable_param_count == 0U) {
         buf_append_cstr(b, "void");
@@ -5232,7 +5280,7 @@ static void cg_emit_callable_abi_function_pointer_typedef(Buf *b, const UserSpec
             if (i != 0U) {
                 buf_append_cstr(b, ", ");
             }
-            cg_emit_c_type(b, s->callable_param_types[i]);
+            cg_emit_c_abi_surface_type(b, s->callable_param_types[i]);
         }
     }
     buf_append_cstr(b, ");\n");
@@ -6968,7 +7016,7 @@ static bool cg_emit_abi_function_pointer_site(CG *cg,
             "codegen: ABI function pointers currently support only top-level @abi functions");
     }
     fn = cg_find_free_fn_by_decl(cg, cs->callable_decl);
-    if (fn == NULL || fn->c_name == NULL) {
+    if (fn == NULL || (fn->c_name == NULL && fn->c_abi_name == NULL)) {
         return cg_fail(cg, e->token,
             "codegen: ABI function pointer source function was not registered");
     }
@@ -6976,7 +7024,7 @@ static bool cg_emit_abi_function_pointer_site(CG *cg,
     {
         Buf b;
         buf_init(&b);
-        buf_append_fmt(&b, "&%s", fn->c_name);
+        buf_append_fmt(&b, "&%s", cg_free_fn_has_abi_wrapper(fn) ? fn->c_abi_name : fn->c_name);
         out->c_expr = b.data;
     }
     out->type = cgtype_new(CG_TYPE_POINTER);
@@ -7324,13 +7372,16 @@ static bool cg_emit_registered_call(CG *cg,
             break;
         }
         CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
+        const UserType *expected_abi_user = ext ? cg_abi_value_user_type(expected_ty) : NULL;
         if (i) buf_append_cstr(&args_buf, ", ");
         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
             cg_materialize_to_local(cg, &ar, "_t");
         } else if (cgtype_is_aggregate(ar.type)) {
             cg_materialize_to_local(cg, &ar, "_t");
         }
-        if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
+        if (expected_abi_user != NULL && expected_abi_user->c_abi_value_name != NULL) {
+            buf_append_fmt(&args_buf, "%s(%s)", expected_abi_user->c_abi_value_name, ar.c_expr);
+        } else if (ext && ar.type && ar.type->kind == CG_TYPE_STRING &&
             expected_ty && expected_ty->kind == CG_TYPE_STRING) {
             buf_append_fmt(&args_buf, "feng_string_data(%s)", ar.c_expr);
         } else {
@@ -7346,6 +7397,38 @@ static bool cg_emit_registered_call(CG *cg,
     Buf b;
     buf_init(&b);
     if (ext) {
+        const UserType *return_abi_user = cg_abi_value_user_type(ext->return_type);
+
+        if (return_abi_user != NULL && return_abi_user->c_abi_box_name != NULL) {
+            char *abi_tmp = cg_fresh_temp(cg, "_abi_ret");
+            char *ret_tmp = cg_fresh_temp(cg, "_ret");
+
+            if (abi_tmp == NULL || ret_tmp == NULL) {
+                free(abi_tmp);
+                free(ret_tmp);
+                buf_free(&args_buf);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+
+            buf_append_fmt(cg->cur_body,
+                "    struct %s %s = %s(%s);\n"
+                "    struct %s *%s = %s(%s);\n",
+                return_abi_user->c_abi_layout_name,
+                abi_tmp,
+                ext->name,
+                args_buf.data ? args_buf.data : "",
+                return_abi_user->c_struct_name,
+                ret_tmp,
+                return_abi_user->c_abi_box_name,
+                abi_tmp);
+            out->c_expr = ret_tmp;
+            out->type = cgtype_clone(ext->return_type);
+            out->owns_ref = true;
+            free(abi_tmp);
+            buf_free(&args_buf);
+            return out->c_expr && out->type;
+        }
+
         buf_append_fmt(&b, "%s(%s)", ext->name, args_buf.data ? args_buf.data : "");
         out->type = cgtype_clone(ext->return_type);
     } else {
@@ -7356,6 +7439,163 @@ static bool cg_emit_registered_call(CG *cg,
     out->c_expr = b.data;
     out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
     return out->c_expr && out->type;
+}
+
+static bool cg_emit_free_fn_abi_wrapper(CG *cg,
+                                        const FreeFn *fn,
+                                        bool needs_static) {
+    char **call_args = NULL;
+    char **boxed_params = NULL;
+    bool ok = true;
+
+    if (!cg_free_fn_has_abi_wrapper(fn)) {
+        return true;
+    }
+
+    call_args = fn->param_count ? calloc(fn->param_count, sizeof *call_args) : NULL;
+    boxed_params = fn->param_count ? calloc(fn->param_count, sizeof *boxed_params) : NULL;
+    if (fn->param_count > 0U && (call_args == NULL || boxed_params == NULL)) {
+        free(call_args);
+        free(boxed_params);
+        return cg_fail(cg, fn->decl->token, "codegen: out of memory");
+    }
+
+    Buf *body = &cg->fn_defs;
+    if (needs_static) {
+        buf_append_cstr(body, "static ");
+    }
+    cg_emit_c_abi_surface_type(body, fn->return_type);
+    buf_append_fmt(body, " %s(", fn->c_abi_name);
+    if (fn->param_count == 0U) {
+        buf_append_cstr(body, "void");
+    }
+    for (size_t i = 0; i < fn->param_count; ++i) {
+        const char *param_name = fn->param_names[i] ? fn->param_names[i] : "_p";
+        if (i != 0U) {
+            buf_append_cstr(body, ", ");
+        }
+        cg_emit_c_abi_surface_type(body, fn->param_types[i]);
+        buf_append_fmt(body, " %s", param_name);
+    }
+    buf_append_cstr(body, ") {\n");
+
+    for (size_t i = 0; i < fn->param_count; ++i) {
+        const UserType *abi_user = cg_abi_value_user_type(fn->param_types[i]);
+        const char *param_name = fn->param_names[i] ? fn->param_names[i] : "_p";
+
+        if (abi_user != NULL && abi_user->c_abi_box_name != NULL) {
+            boxed_params[i] = cg_fresh_temp(cg, "_abi_arg");
+            if (boxed_params[i] == NULL) {
+                ok = false;
+                break;
+            }
+            buf_append_fmt(body,
+                "    struct %s *%s = %s(%s);\n",
+                abi_user->c_struct_name,
+                boxed_params[i],
+                abi_user->c_abi_box_name,
+                param_name);
+            call_args[i] = strdup(boxed_params[i]);
+        } else {
+            call_args[i] = strdup(param_name);
+        }
+
+        if (call_args[i] == NULL) {
+            ok = false;
+            break;
+        }
+    }
+
+    if (!ok) {
+        for (size_t i = 0; i < fn->param_count; ++i) {
+            free(call_args[i]);
+            free(boxed_params[i]);
+        }
+        free(call_args);
+        free(boxed_params);
+        return cg_fail(cg, fn->decl->token, "codegen: out of memory");
+    }
+
+    const UserType *return_abi_user = cg_abi_value_user_type(fn->return_type);
+    if (return_abi_user != NULL && return_abi_user->c_abi_value_name != NULL) {
+        char *ret_obj = cg_fresh_temp(cg, "_abi_ret_obj");
+        char *ret_value = cg_fresh_temp(cg, "_abi_ret");
+        if (ret_obj == NULL || ret_value == NULL) {
+            free(ret_obj);
+            free(ret_value);
+            ok = false;
+        } else {
+            buf_append_fmt(body,
+                "    struct %s *%s = %s(",
+                return_abi_user->c_struct_name,
+                ret_obj,
+                fn->c_name);
+            for (size_t i = 0; i < fn->param_count; ++i) {
+                if (i != 0U) {
+                    buf_append_cstr(body, ", ");
+                }
+                buf_append_cstr(body, call_args[i]);
+            }
+            buf_append_cstr(body, ");\n");
+            buf_append_fmt(body,
+                "    struct %s %s = %s(%s);\n"
+                "    feng_release(%s);\n",
+                return_abi_user->c_abi_layout_name,
+                ret_value,
+                return_abi_user->c_abi_value_name,
+                ret_obj,
+                ret_obj);
+            for (size_t i = 0; i < fn->param_count; ++i) {
+                if (boxed_params[i] != NULL) {
+                    buf_append_fmt(body, "    feng_release(%s);\n", boxed_params[i]);
+                }
+            }
+            buf_append_fmt(body, "    return %s;\n", ret_value);
+            free(ret_obj);
+            free(ret_value);
+        }
+    } else if (fn->return_type != NULL && fn->return_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(body, "    ");
+        cg_emit_c_abi_surface_type(body, fn->return_type);
+        buf_append_fmt(body, " _ret = %s(", fn->c_name);
+        for (size_t i = 0; i < fn->param_count; ++i) {
+            if (i != 0U) {
+                buf_append_cstr(body, ", ");
+            }
+            buf_append_cstr(body, call_args[i]);
+        }
+        buf_append_cstr(body, ");\n");
+        for (size_t i = 0; i < fn->param_count; ++i) {
+            if (boxed_params[i] != NULL) {
+                buf_append_fmt(body, "    feng_release(%s);\n", boxed_params[i]);
+            }
+        }
+        buf_append_cstr(body, "    return _ret;\n");
+    } else {
+        buf_append_fmt(body, "    %s(", fn->c_name);
+        for (size_t i = 0; i < fn->param_count; ++i) {
+            if (i != 0U) {
+                buf_append_cstr(body, ", ");
+            }
+            buf_append_cstr(body, call_args[i]);
+        }
+        buf_append_cstr(body, ");\n");
+        for (size_t i = 0; i < fn->param_count; ++i) {
+            if (boxed_params[i] != NULL) {
+                buf_append_fmt(body, "    feng_release(%s);\n", boxed_params[i]);
+            }
+        }
+        buf_append_cstr(body, "    return;\n");
+    }
+    buf_append_cstr(body, "}\n\n");
+
+    for (size_t i = 0; i < fn->param_count; ++i) {
+        free(call_args[i]);
+        free(boxed_params[i]);
+    }
+    free(call_args);
+    free(boxed_params);
+    return ok;
 }
 
 static bool cg_emit_callable_value_call(CG *cg,
@@ -11950,7 +12190,7 @@ static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (ef->return_type->kind == CG_TYPE_STRING) {
         buf_append_cstr(h, "const char *");
     } else {
-        cg_emit_c_type(h, ef->return_type);
+        cg_emit_c_abi_surface_type(h, ef->return_type);
     }
     buf_append_fmt(h, " %s(", ef->name);
     if (ef->param_count == 0) {
@@ -11961,7 +12201,7 @@ static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
             if (ef->param_types[i]->kind == CG_TYPE_STRING) {
                 buf_append_cstr(h, "const char *");
             } else {
-                cg_emit_c_type(h, ef->param_types[i]);
+                cg_emit_c_abi_surface_type(h, ef->param_types[i]);
             }
         }
     }
@@ -11981,6 +12221,27 @@ static void cg_emit_free_fn_proto(Buf *out, const FreeFn *fn, bool needs_static)
     for (size_t i = 0; i < fn->param_count; i++) {
         if (i) buf_append_cstr(out, ", ");
         cg_emit_c_type(out, fn->param_types[i]);
+        buf_append_fmt(out, " %s",
+            fn->param_names[i] ? fn->param_names[i] : "_p");
+    }
+    buf_append_cstr(out, ");\n");
+}
+
+static void cg_emit_free_fn_abi_proto(Buf *out, const FreeFn *fn, bool needs_static) {
+    if (!cg_free_fn_has_abi_wrapper(fn)) {
+        return;
+    }
+    if (needs_static) {
+        buf_append_cstr(out, "static ");
+    }
+    cg_emit_c_abi_surface_type(out, fn->return_type);
+    buf_append_fmt(out, " %s(", fn->c_abi_name);
+    if (fn->param_count == 0) {
+        buf_append_cstr(out, "void");
+    }
+    for (size_t i = 0; i < fn->param_count; i++) {
+        if (i) buf_append_cstr(out, ", ");
+        cg_emit_c_abi_surface_type(out, fn->param_types[i]);
         buf_append_fmt(out, " %s",
             fn->param_names[i] ? fn->param_names[i] : "_p");
     }
@@ -13000,14 +13261,17 @@ static bool cg_emit_function(CG *cg,
 
     if (!cg_register_free_fn(cg, decl)) return false;
     FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
-    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
-                          decl->visibility == FENG_VISIBILITY_PUBLIC);
+    bool exports_public_symbol = target == FENG_COMPILE_TARGET_LIB &&
+                                 decl->visibility == FENG_VISIBILITY_PUBLIC;
+    bool needs_static = cg_free_fn_has_abi_wrapper(fn) ? true : !exports_public_symbol;
+    bool abi_wrapper_needs_static = !exports_public_symbol;
     cg->cur_fn_is_main = is_main;
     cg->cur_return_type = fn->return_type;
 
     if (is_main && !cg_check_main_signature(cg, fn)) return false;
 
     cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
+    cg_emit_free_fn_abi_proto(&cg->fn_protos, fn, abi_wrapper_needs_static);
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
@@ -13085,6 +13349,9 @@ static bool cg_emit_function(CG *cg,
     }
     buf_append_cstr(body, "}\n\n");
     ok = true;
+    if (ok && !cg_emit_free_fn_abi_wrapper(cg, fn, abi_wrapper_needs_static)) {
+        ok = false;
+    }
 
 cleanup:
     cg->captured_binding_names = saved_captured_names;
@@ -15696,6 +15963,38 @@ static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
         t->c_struct_name,
         t->c_abi_layout_name,
         t->c_abi_base_offset_name);
+
+    buf_append_fmt(td,
+        "static inline struct %s %s(const struct %s *self) {\n"
+        "    struct %s _abi;\n",
+        t->c_abi_layout_name,
+        t->c_abi_value_name,
+        t->c_struct_name,
+        t->c_abi_layout_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_fmt(td,
+            "    _abi.%s = self->%s;\n",
+            t->fields[i].c_name,
+            t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "    return _abi;\n}\n\n");
+
+    buf_append_fmt(td,
+        "static inline struct %s *%s(struct %s value) {\n"
+        "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n",
+        t->c_struct_name,
+        t->c_abi_box_name,
+        t->c_abi_layout_name,
+        t->c_struct_name,
+        t->c_struct_name,
+        t->c_desc_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_fmt(td,
+            "    _o->%s = value.%s;\n",
+            t->fields[i].c_name,
+            t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "    return _o;\n}\n\n");
     return true;
 }
 
@@ -16945,6 +17244,7 @@ static void cg_dispose(CG *cg) {
     for (size_t i = 0; i < cg->free_fn_count; i++) {
         free(cg->free_fns[i].feng_name);
         free(cg->free_fns[i].c_name);
+        free(cg->free_fns[i].c_abi_name);
         for (size_t j = 0; j < cg->free_fns[i].param_count; j++) {
             cgtype_free(cg->free_fns[i].param_types[j]);
             free(cg->free_fns[i].param_names[j]);
@@ -16965,6 +17265,8 @@ static void cg_dispose(CG *cg) {
         free(ut->c_abi_layout_name);
         free(ut->c_abi_ptr_name);
         free(ut->c_abi_base_offset_name);
+        free(ut->c_abi_value_name);
+        free(ut->c_abi_box_name);
         for (size_t j = 0; j < ut->generic_type_arg_count; ++j) {
             cg_type_ref_free(ut->generic_type_args[j]);
         }

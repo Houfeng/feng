@@ -496,6 +496,114 @@ static void test_abi_value_pointer_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_abi_value_extern_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.abivalueextern;\n"
+        "@abi\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn create_point(x: int, y: int): Point;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn point_sum(p: Point): int;\n"
+        "fn run() {\n"
+        "    let point: Point = create_point(1, 2);\n"
+        "    let total: int = point_sum(point);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "abivalueextern.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (ABI value extern): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern struct Feng__feng__codegen__abivalueextern__Point__AbiLayout create_point(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern int32_t point_sum(struct Feng__feng__codegen__abivalueextern__Point__AbiLayout") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__abivalueextern__Point__abi_box(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__abivalueextern__Point__abi_value(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_abi_value_function_pointer_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.abivaluefn;\n"
+        "@abi\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@abi\n"
+        "spec PointMapper(p: Point): Point;\n"
+        "@abi\n"
+        "pu fn echo(p: Point): Point {\n"
+        "    return p;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let cb: PointMapper* = &echo;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "abivaluefn.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (ABI value function pointer): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengAbiFnPtr__feng__codegen__abivaluefn__PointMapper") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__abivaluefn__Point__abi_box(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__abivaluefn__Point__abi_value(") != NULL);
+    ASSERT(strstr(out.c_source, "__impl(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_lib_public_functions_are_exported(void) {
     static const char *kSource =
         "mod feng.codegen.exposed;\n"
@@ -2281,6 +2389,8 @@ int main(void) {
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();
+    test_abi_value_extern_codegen();
+    test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
     test_imported_feng_function_prototypes_compile();

@@ -941,6 +941,38 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_accepts_abi_value_param_and_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn create_point(x: int, y: int): Point;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn point_sum(p: Point): int;\n"
+        "fn run() {\n"
+        "    let point: Point = create_point(1, 2);\n"
+        "    let total: int = point_sum(point);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("extern_abi_value_signature_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fixed_function_accepts_abi_array_parameter(void) {
     const char *source =
         "mod demo.main;\n"
@@ -10955,6 +10987,7 @@ int main(void) {
     test_fixed_type_rejects_direct_callable_field_type();
     test_fixed_function_type_rejects_union_annotation();
     test_fixed_function_accepts_abi_stable_signature();
+    test_extern_function_accepts_abi_value_param_and_return();
     test_fixed_function_accepts_abi_array_parameter();
     test_fixed_function_rejects_parameterized_calling_convention();
     test_fixed_method_rejects_managed_signature_type();

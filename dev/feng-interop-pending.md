@@ -482,6 +482,8 @@ let q: CmpFunc* = c_load_cmp();
 
 当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern fn` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。当前进一步收敛不透明指针规则：`T*` / `Foo*` 允许在同类型前提下参与 `==` / `!=`，并按原生指针地址身份比较；其余解引用、调用、运算、跨类型转换与顺序比较继续在编译期拒绝。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
 
+补充：此前 hidden `T__AbiLayout` 仅真正支撑了 `T*` / `&abi_value` 的边界 lowering；本轮继续把 by-value ABI surface 补齐到 `extern fn` 与顶层 `@abi fn`。当签名位写成 `T` 时，C surface 统一使用隐藏 `T__AbiLayout` 按值传递；进入 Feng 体内时把 payload 装箱成新的托管 `T` 实例，离开 Feng ABI 边界时再从对象抽取 payload 返回，确保“ABI 传值”与“Feng 托管对象语义”两层职责分离。
+
 ---
 
 ## 11. 本稿定位

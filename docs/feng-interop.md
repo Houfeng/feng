@@ -105,6 +105,8 @@ pu fn create_point_export(x: int, y: int): Point {
 - `@union` 仅适用于对象形式的 `@abi type`,不适用于 callable-form 的 `@abi spec`。
 - 方法、构造函数、访问控制和注解本身都不参与 `@abi type` 的字段 ABI 校验; 方法定义不改变 payload 结果。
 - `@abi type` 进入 ABI 边界时,传值或传指针完全由签名决定: 参数类型为 `T` 则按 ABI payload 值语义传递,参数类型为 `T*` 则传递该 payload 的地址; 编译器不做隐式兜底转换。
+- 当 `extern fn` 或顶层 `@abi fn` 的参数位写成 `T`（其中 `T` 是对象形式的 `@abi type`）时,该 ABI 位在 C surface 上使用隐藏的 `T__AbiLayout` 结构按值传递; 进入 Feng 函数体时,编译器会把该 payload 装箱为新的托管 `T` 实例供后续语义继续使用。
+- 当 `extern fn` 或顶层 `@abi fn` 的返回位写成 `T` 时,该 ABI 位同样按隐藏的 `T__AbiLayout` 值语义返回; 从 C 进入 Feng 时,编译器必须把返回的 payload 重建为新的托管 `T` 实例,而从 Feng 导出到 ABI surface 时,编译器必须从 `T` 对象中抽取出对应 payload 返回。
 - `@abi type` 的字段 payload 是否需要显式释放,取决于外部资源拥有关系与外部协议,不能仅由 `@abi` 注解推导。
 
 ```feng
