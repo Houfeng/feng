@@ -30,7 +30,7 @@ static const char *kSourceA =
     "mod feng.codegen.mfa;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern fn puts(msg: byte*): int;\n"
+    "extern fn c_puts(msg: string*): int;\n"
     "\n"
     "fn helper(): int {\n"
     "    return 42;\n"
@@ -40,10 +40,10 @@ static const char *kSourceB =
     "mod feng.codegen.mfb;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern fn puts(msg: byte*): int;\n"
+    "extern fn c_puts(msg: string*): int;\n"
     "\n"
     "fn main(args: string[]) {\n"
-    "    puts(&\"multi-file ok\");\n"
+    "    c_puts(&\"multi-file ok\");\n"
     "}\n";
 
 static FengProgram *parse_or_die(const char *source, const char *path) {
@@ -257,8 +257,11 @@ static void test_multi_file_bin(void) {
      * visible in the source). */
     ASSERT(strstr(out.c_source, "feng__feng__codegen__mfa__helper") != NULL);
     ASSERT(strstr(out.c_source, "feng__feng__codegen__mfb__main") != NULL);
+    ASSERT(strstr(out.c_source, "c_puts(char *)") != NULL);
+    ASSERT(strstr(out.c_source, "c_puts(((char *)feng_string_data(") != NULL);
     /* Exactly one C `main` entry wrapper for the binary. */
     ASSERT(count_substr(out.c_source, "int main(int argc, char **argv)") == 1U);
+    compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
     feng_codegen_error_free(&cgerr);

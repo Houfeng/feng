@@ -300,6 +300,7 @@ static bool cg_pointer_inner_is_lowerable(const CGType *t) {
         case CG_TYPE_U64:
         case CG_TYPE_F32:
         case CG_TYPE_F64:
+        case CG_TYPE_STRING:
         case CG_TYPE_POINTER:
             return true;
         default:
@@ -492,6 +493,10 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         if (t->element->kind == CG_TYPE_POINTER) {
             cg_emit_c_type(b, t->element);
             buf_append_cstr(b, " *");
+            return;
+        }
+        if (t->element->kind == CG_TYPE_STRING) {
+            buf_append_cstr(b, "char *");
             return;
         }
         buf_append_cstr(b, cgtype_to_c(t->element->kind));
@@ -6071,7 +6076,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
             }
         }
         Buf b; buf_init(&b);
-        buf_append_fmt(&b, "((uint8_t *)feng_string_data(%s))", inner.c_expr);
+        buf_append_fmt(&b, "((char *)feng_string_data(%s))", inner.c_expr);
         out->c_expr = b.data;
         out->type = cgtype_new(CG_TYPE_POINTER);
         if (out->type == NULL) {
@@ -6080,7 +6085,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = NULL;
             return false;
         }
-        out->type->element = cgtype_new(CG_TYPE_U8);
+        out->type->element = cgtype_new(CG_TYPE_STRING);
         if (out->type->element == NULL) {
             er_free(&inner);
             cgtype_free(out->type);

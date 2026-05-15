@@ -1,7 +1,7 @@
 pu mod std;
 
 @cdecl("feng_intrinsic")
-extern fn feng_string_utf8_length(value: byte*): long;
+extern fn feng_string_utf8_length(value: string*): long;
 
 /**
  * Extends `string` with standard length-related operations.

@@ -13,13 +13,13 @@
     } while (0)
 
 static void test_ascii_length(void) {
-    uint8_t value[] = "hello";
+    char value[] = "hello";
 
     ASSERT(feng_string_utf8_length(value) == 5);
 }
 
 static void test_utf8_length(void) {
-    uint8_t value[] = "你好";
+    char value[] = "你好";
 
     ASSERT(feng_string_utf8_length(value) == 6);
 }

@@ -9828,7 +9828,7 @@ static bool expr_matches_expected_address_of_data_pointer_type(
     if (inferred_expr_type_is_string(operand_type)) {
         const char *builtin_name = type_ref_builtin_canonical_name(expected_type_ref->as.inner);
 
-        return builtin_name != NULL && strcmp(builtin_name, "u8") == 0;
+        return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
     }
 
     if (inferred_expr_type_is_abi_array_value(context, operand_type)) {

@@ -11,7 +11,7 @@ static void feng_intrinsic_abort(const char *message) {
     abort();
 }
 
-int64_t feng_string_utf8_length(uint8_t *value) {
+int64_t feng_string_utf8_length(char *value) {
     size_t length = value != NULL ? strlen((const char *)value) : 0U;
 
     if (length > (size_t)INT64_MAX) {

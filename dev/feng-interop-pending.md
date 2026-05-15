@@ -468,7 +468,7 @@ let q: CmpFunc* = c_load_cmp();
 - [ ] T5.5 实现 `Foo*` 在 `extern fn` 参数/返回位与 `@abi type` 字段中的传递和存储。
 - [ ] T5.6 确认禁止路径不发码：成员函数、闭包、绑定方法、直接调用 `Foo*`、解引用/运算指针等。
 
-当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: byte*): long;`，并通过 `&self` 显式传入 `byte*`。这条链路已验证 intrinsic 层装配与 `&string` 的最小发码路径，但不代表 Phase 5 其余项已完成。
+当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入；当前实现仍使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: byte*): long;`，并通过 `&self` 显式传入 `byte*`。这条链路已验证 intrinsic 层装配与 `&string` 的最小发码路径，但与本稿以 `string*` 表达 `string` ABI 兼容数据地址的裁决尚未完全对齐，后续仍需按本稿口径统一实现，不代表 Phase 5 其余项已完成。
 
 ### 10.7 Phase 6：测试与回归
 
