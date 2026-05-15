@@ -103,6 +103,8 @@ typedef enum CGTypeKind {
 struct UserType;     /* forward */
 struct UserSpec;     /* forward (Step 4b) */
 
+static bool cg_user_type_is_abi(const struct UserType *t);
+
 typedef struct CGType {
     CGTypeKind kind;
     /* For arrays/pointers: nested CGType (heap-owned). NULL otherwise. */
@@ -304,6 +306,8 @@ static bool cg_pointer_inner_is_lowerable(const CGType *t) {
         case CG_TYPE_POINTER:
         case CG_TYPE_CALLABLE:
             return true;
+        case CG_TYPE_OBJECT:
+            return cg_user_type_is_abi(t->user);
         default:
             return false;
     }
@@ -349,6 +353,10 @@ typedef struct UserType {
      * cyclic types the slot stays NULL and any binding/field that would need
      * a default zero of this type is rejected at semantic time. */
     char   *c_default_zero_name;
+    bool    is_abi_type;
+    char   *c_abi_layout_name;
+    char   *c_abi_ptr_name;
+    char   *c_abi_base_offset_name;
     UserField  *fields;
     size_t      field_count;
     UserMethod *methods;
@@ -367,6 +375,10 @@ typedef struct UserType {
      * a simple name in different modules cannot be conflated. */
     const FengProgram *owner_program;
 } UserType;
+
+static bool cg_user_type_is_abi(const struct UserType *t) {
+    return t != NULL && t->is_abi_type;
+}
 
 /* Spec registry. Object-form specs lower to by-value fat structs; callable-
  * form specs lower to managed closure pointers plus a constraint-surface
@@ -499,6 +511,13 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         }
         if (t->element->kind == CG_TYPE_STRING) {
             buf_append_cstr(b, "char *");
+            return;
+        }
+        if (t->element->kind == CG_TYPE_OBJECT &&
+            t->element->user != NULL &&
+            t->element->user->is_abi_type &&
+            t->element->user->c_abi_layout_name != NULL) {
+            buf_append_fmt(b, "struct %s *", t->element->user->c_abi_layout_name);
             return;
         }
         if (t->element->kind == CG_TYPE_CALLABLE && t->element->user_spec != NULL &&
@@ -3044,6 +3063,42 @@ static UserType *cg_find_generic_instance_user_type_for_ref(CG *cg,
 static bool cg_collect_generic_instances_from_type_ref(CG *cg,
                                                        const FengTypeRef *ref,
                                                        CGTypeParamScope scope);
+
+static bool cg_annotations_contain_kind(const FengAnnotation *annotations,
+                                        size_t annotation_count,
+                                        FengAnnotationKind kind) {
+    if (annotations == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < annotation_count; ++i) {
+        if (annotations[i].builtin_kind == kind) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool cg_init_user_type_abi_symbols(UserType *t) {
+    if (t == NULL || !t->is_abi_type) {
+        return true;
+    }
+
+    Buf layout; buf_init(&layout);
+    buf_append_fmt(&layout, "%s__AbiLayout", t->c_struct_name);
+    t->c_abi_layout_name = layout.data;
+
+    Buf ptr; buf_init(&ptr);
+    buf_append_fmt(&ptr, "%s__abi_ptr", t->c_struct_name);
+    t->c_abi_ptr_name = ptr.data;
+
+    Buf offset; buf_init(&offset);
+    buf_append_fmt(&offset, "%s__abi_base_offset", t->c_struct_name);
+    t->c_abi_base_offset_name = offset.data;
+
+    return t->c_abi_layout_name != NULL &&
+           t->c_abi_ptr_name != NULL &&
+           t->c_abi_base_offset_name != NULL;
+}
 static bool cg_collect_generic_instances_from_type_params(CG *cg,
                                                           const FengTypeParam *type_params,
                                                           size_t type_param_count,
@@ -3161,6 +3216,15 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     Buf zero_name; buf_init(&zero_name);
     buf_append_fmt(&zero_name, "%s__default_zero", t->c_struct_name);
     t->c_default_zero_name = zero_name.data;
+    t->is_abi_type = cg_annotations_contain_kind(decl->annotations,
+                                                 decl->annotation_count,
+                                                 FENG_ANNOTATION_ABI);
+    if (!cg_init_user_type_abi_symbols(t)) {
+        free(owner_mangle);
+        free(base_san);
+        buf_free(&symbol);
+        return false;
+    }
 
     free(owner_mangle);
     free(base_san);
@@ -4232,6 +4296,13 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
         buf_append_fmt(&z, "%s__default_zero", t->c_struct_name);
         t->c_default_zero_name = z.data;
         if (!t->c_default_zero_name) { free(san); return false; }
+    }
+    t->is_abi_type = cg_annotations_contain_kind(decl->annotations,
+                                                 decl->annotation_count,
+                                                 FENG_ANNOTATION_ABI);
+    if (!cg_init_user_type_abi_symbols(t)) {
+        free(san);
+        return false;
     }
     free(san);
     return t->feng_name && t->c_struct_name && t->c_desc_name;
@@ -6128,6 +6199,44 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&inner);
             return cg_fail(cg, e->token,
                 "codegen: unary '&' is missing an operand type");
+        }
+
+        if (inner.type->kind == CG_TYPE_OBJECT &&
+            inner.type->user != NULL &&
+            inner.type->user->is_abi_type) {
+            Buf b;
+
+            if (inner.owns_ref) {
+                if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+                    er_free(&inner);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+            }
+
+            buf_init(&b);
+            buf_append_fmt(&b, "%s(%s)",
+                           inner.type->user->c_abi_ptr_name,
+                           inner.c_expr);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_POINTER);
+            if (out->type == NULL) {
+                er_free(&inner);
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            out->type->element = cgtype_clone(inner.type);
+            if (out->type->element == NULL) {
+                er_free(&inner);
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            er_free(&inner);
+            out->owns_ref = false;
+            return out->c_expr != NULL;
         }
 
         if (inner.type->kind == CG_TYPE_STRING) {
@@ -15529,8 +15638,61 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
 
 /* Emit `struct Feng__mod__T;` and the descriptor extern into `headers` so
  * cross references compile in any order. */
+static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
+    Buf *td = &cg->type_defs;
+
+    if (!t->is_abi_type) {
+        return true;
+    }
+    if (t->field_count == 0U) {
+        return cg_fail(cg, t->decl->token,
+            "codegen: @abi type '%s' must declare at least one field for pointer lowering",
+            t->feng_name);
+    }
+
+    buf_append_fmt(td, "struct %s {\n", t->c_abi_layout_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_cstr(td, "    ");
+        cg_emit_c_type(td, t->fields[i].type);
+        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    buf_append_fmt(td,
+        "enum { %s = offsetof(struct %s, %s) };\n",
+        t->c_abi_base_offset_name,
+        t->c_struct_name,
+        t->fields[0].c_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_fmt(td,
+            "_Static_assert(offsetof(struct %s, %s) - %s == "
+            "offsetof(struct %s, %s), "
+            "\"abi offset mismatch: %s.%s\");\n",
+            t->c_struct_name,
+            t->fields[i].c_name,
+            t->c_abi_base_offset_name,
+            t->c_abi_layout_name,
+            t->fields[i].c_name,
+            t->feng_name,
+            t->fields[i].feng_name);
+    }
+    buf_append_fmt(td,
+        "static inline struct %s *%s(struct %s *self) {\n"
+        "    return (struct %s *)((char *)self + %s);\n"
+        "}\n\n",
+        t->c_abi_layout_name,
+        t->c_abi_ptr_name,
+        t->c_struct_name,
+        t->c_abi_layout_name,
+        t->c_abi_base_offset_name);
+    return true;
+}
+
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
     buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
+    if (t->is_abi_type && t->c_abi_layout_name != NULL) {
+        buf_append_fmt(&cg->headers, "struct %s;\n", t->c_abi_layout_name);
+    }
     buf_append_fmt(&cg->headers, "extern const FengTypeDescriptor %s;\n",
                    t->c_desc_name);
 }
@@ -15546,6 +15708,9 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
     }
     buf_append_cstr(td, "};\n\n");
+    if (!cg_emit_user_type_abi_surface(cg, t)) {
+        return;
+    }
 
     /* release_children: codegen-emitted callback that drops every managed
      * field of an instance. Only emitted when the type actually holds at
@@ -16786,6 +16951,9 @@ static void cg_dispose(CG *cg) {
         free(ut->c_release_children_name);
         free(ut->c_finalizer_name);
         free(ut->c_default_zero_name);
+        free(ut->c_abi_layout_name);
+        free(ut->c_abi_ptr_name);
+        free(ut->c_abi_base_offset_name);
         for (size_t j = 0; j < ut->generic_type_arg_count; ++j) {
             cg_type_ref_free(ut->generic_type_args[j]);
         }

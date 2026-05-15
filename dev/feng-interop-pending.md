@@ -383,6 +383,7 @@ let q: CmpFunc* = c_load_cmp();
 1. 一元 `&` 对临时值：允许取址；编译器不做自动延寿。若调用返回后仍需继续使用，由开发者自行保活 owner（例如挂到 wrapper 成员）。
 2. `string` ABI 传递：语言只定义借用与 0 拷贝能力；具体 ABI 形状由 `extern fn` 签名显式表达，Feng 不预设未知 C API 是 `char*`、`(ptr, len)` 还是其他布局。
 3. ABI 兼容数组首版仅覆盖一维数组。
+4. `@abi type` 在 Phase 5 不引入对象内联 payload 成员；`T*` 与 `&abi_value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案：为每个 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 视图和 `T__abi_ptr(...)` helper，helper 的 ABI 数据起点必须锚定为真实对象首 ABI 字段的 `offsetof(struct T, field0)`，并以静态断言锁定后续字段相对偏移；禁止使用 `sizeof(FengManagedHeader)` 之类的裸偏移推断。
 
 ### 8.1 留待后续版本再拍板的扩展项
 
@@ -407,9 +408,11 @@ let q: CmpFunc* = c_load_cmp();
 
 1. `&string` 生成数据指针取址路径。
 2. `&abi_array` 生成元素区首地址取址路径。
-3. 不实现 `extern` 调用位自动延寿；若调用返回后仍需继续使用，由开发者自行保活 owner。
-4. 首版仅生成 `&@abi` 顶层函数对应的原生函数指针结果，并允许 `extern fn` 参数/返回位直接按 `Foo*` 传递。
-5. 对成员函数、闭包、绑定方法等禁止路径不生成相关代码，编译期直接拒绝。
+3. `&abi_value` 首版采用隐藏 ABI layout + 首 ABI 字段稳定偏移 helper 方案：为每个 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 与 `T__abi_ptr(...)` helper；`extern fn` 中的 `T*` 统一降成 `T__AbiLayout *`；helper 必须以真实对象首 ABI 字段的 `offsetof(struct T, field0)` 为 ABI 起点，并以 `offsetof(struct T, fieldN) - offsetof(struct T, field0) == offsetof(struct T__AbiLayout, fieldN)` 形式锁定布局，禁止使用 `sizeof(FengManagedHeader)` 做裸偏移。
+4. 当前不在对象结构中引入内联 payload 成员，不改变 Feng 内部 `obj.field` / `self.field` 的普通字段寻址模型。
+5. 不实现 `extern` 调用位自动延寿；若调用返回后仍需继续使用，由开发者自行保活 owner。
+6. 首版仅生成 `&@abi` 顶层函数对应的原生函数指针结果，并允许 `extern fn` 参数/返回位直接按 `Foo*` 传递。
+7. 对成员函数、闭包、绑定方法等禁止路径不生成相关代码，编译期直接拒绝。
 
 ### 9.3 文档与测试
 
@@ -461,14 +464,15 @@ let q: CmpFunc* = c_load_cmp();
 
 ### 10.6 Phase 5：发码
 
-- [ ] T5.1 实现 `&abi_value` 发码，生成 ABI payload 首地址指针。
+- [x] T5.1 实现 `&abi_value` 发码，基于隐藏 ABI layout + 首 ABI 字段稳定 helper/offset 生成 ABI payload 首地址指针。
 - [x] T5.2 实现 `&string` 发码，只提供借用能力，不默认推断固定 ABI 形状。
 - [x] T5.3 实现 `&abi_array` 发码，生成一维元素区首地址指针。
 - [x] T5.4 实现 `&top_level_abi_fn` 发码，生成 `Foo*` 原生函数指针。
 - [ ] T5.5 实现 `Foo*` 在 `extern fn` 参数/返回位与 `@abi type` 字段中的传递和存储。
 - [ ] T5.6 确认禁止路径不发码：成员函数、闭包、绑定方法、直接调用 `Foo*`、解引用/运算指针等。
 
-当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮继续补齐了 `&abi_array` 与 `&top_level_abi_fn` 的发码，并为 callable-form `@abi spec` 生成稳定的 C function-pointer typedef，使 `Foo*` 能在 `extern fn` 参数/返回位与 `@abi type` 字段中传递和存储；同时仍保留 legacy。尚未完成的是 `&abi_value` 对命名 `@abi type` payload 首地址的发码，因此 Phase 5 仍未全部完成。
+当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮继续补齐了 `&abi_array` 与 `&top_level_abi_fn` 的发码，并为 callable-form `@abi spec` 生成稳定的 C function-pointer typedef，使 `Foo*` 能在 `extern fn` 参数/返回位与 `@abi type` 字段中传递和存储；同时仍保留 legacy。`@abi type` 的后续 `&abi_value` 实现已拍板采用“隐藏 ABI layout + 稳定 helper/offset”方案，不在对象结构中引入内联 payload。尚未完成的是按该方案落地命名 `@abi type` ABI 数据首地址的发码，因此 Phase 5 仍未全部完成。
+当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮继续补齐了 `&abi_array`、`&top_level_abi_fn` 与 `&abi_value` 的发码，并为 callable-form `@abi spec` 生成稳定的 C function-pointer typedef，使 `Foo*` 能在 `extern fn` 参数/返回位与 `@abi type` 字段中传递和存储；其中命名 `@abi type` 的 `T*` / `&value` 现采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案，不在对象结构中引入内联 payload，不生成额外 bridge 结构，helper 统一锚定真实对象首字段 `offsetof(struct T, field0)` 并以静态断言锁定后续字段偏移。Phase 5 其余未完成项保持不变。
 
 ### 10.7 Phase 6：测试与回归
 
