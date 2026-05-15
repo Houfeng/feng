@@ -4300,6 +4300,35 @@ static void test_unary_address_of_rejects_local_lambda_pointer_target(void) {
     feng_program_free(program);
 }
 
+static void test_function_pointer_binding_is_not_directly_callable(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "spec Cmp(a: int, b: int): int;\n"
+        "@cdecl(\"c_load_cmp\")\n"
+        "extern fn c_load_cmp(): Cmp*;\n"
+        "fn run() {\n"
+        "    let cb: Cmp* = c_load_cmp();\n"
+        "    cb(1, 2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_pointer_direct_call_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "function_pointer_direct_call_error.f") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message,
+                  "expression 'cb' is not callable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_binary_plus_rejects_non_matching_operands(void) {
     const char *source =
         "mod demo.main;\n"
@@ -10906,6 +10935,7 @@ int main(void) {
     test_unary_address_of_rejects_plain_function_pointer_target();
     test_unary_address_of_rejects_method_pointer_target();
     test_unary_address_of_rejects_local_lambda_pointer_target();
+    test_function_pointer_binding_is_not_directly_callable();
     test_binary_plus_rejects_non_matching_operands();
     test_binary_and_rejects_non_bool_operands();
     test_bitwise_ops_accept_same_integer_type();

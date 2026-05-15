@@ -468,18 +468,17 @@ let q: CmpFunc* = c_load_cmp();
 - [x] T5.2 实现 `&string` 发码，只提供借用能力，不默认推断固定 ABI 形状。
 - [x] T5.3 实现 `&abi_array` 发码，生成一维元素区首地址指针。
 - [x] T5.4 实现 `&top_level_abi_fn` 发码，生成 `Foo*` 原生函数指针。
-- [ ] T5.5 实现 `Foo*` 在 `extern fn` 参数/返回位与 `@abi type` 字段中的传递和存储。
-- [ ] T5.6 确认禁止路径不发码：成员函数、闭包、绑定方法、直接调用 `Foo*`、解引用/运算指针等。
+- [x] T5.5 实现 `Foo*` 在 `extern fn` 参数/返回位与 `@abi type` 字段中的传递和存储。
+- [x] T5.6 确认禁止路径不发码：成员函数、闭包、绑定方法、直接调用 `Foo*`、解引用/运算指针等。
 
-当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮继续补齐了 `&abi_array` 与 `&top_level_abi_fn` 的发码，并为 callable-form `@abi spec` 生成稳定的 C function-pointer typedef，使 `Foo*` 能在 `extern fn` 参数/返回位与 `@abi type` 字段中传递和存储；同时仍保留 legacy。`@abi type` 的后续 `&abi_value` 实现已拍板采用“隐藏 ABI layout + 稳定 helper/offset”方案，不在对象结构中引入内联 payload。尚未完成的是按该方案落地命名 `@abi type` ABI 数据首地址的发码，因此 Phase 5 仍未全部完成。
-当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮继续补齐了 `&abi_array`、`&top_level_abi_fn` 与 `&abi_value` 的发码，并为 callable-form `@abi spec` 生成稳定的 C function-pointer typedef，使 `Foo*` 能在 `extern fn` 参数/返回位与 `@abi type` 字段中传递和存储；其中命名 `@abi type` 的 `T*` / `&value` 现采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案，不在对象结构中引入内联 payload，不生成额外 bridge 结构，helper 统一锚定真实对象首字段 `offsetof(struct T, field0)` 并以静态断言锁定后续字段偏移。Phase 5 其余未完成项保持不变。
+当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮补齐了 `&abi_array`、`&top_level_abi_fn`、`&abi_value` 与 `Foo*` ABI 传递链路的发码：callable-form `@abi spec` 现在生成稳定的 C function-pointer typedef，`Foo*` 可在 `extern fn` 参数/返回位与 `@abi type` 字段中传递、存储并从字段再次传出；命名 `@abi type` 的 `T*` / `&value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案，不在对象结构中引入内联 payload，不生成额外 bridge 结构，helper 统一锚定真实对象首字段 `offsetof(struct T, field0)` 并以静态断言锁定后续字段偏移；同时通过 semantic 反例确认 `Foo*` 不能被直接调用，成员函数 / lambda 等禁止来源继续在编译期拒绝。至此 Phase 5 已完成；本轮 focused `test_semantic`、`test_codegen` 与全量 `make test` 均已通过。
 
 ### 10.7 Phase 6：测试与回归
 
 - [ ] T6.1 补 semantic 正例测试：`@abi type`、`@abi spec`、顶层 `@abi fn`、`Foo*` 成员/参数/返回、一维 ABI 数组。
 - [ ] T6.2 补 semantic 反例测试：缺少目标 `Foo*` 类型、签名不匹配、未标注 `@abi` 顶层函数、成员函数/闭包/lambda 取址、字段白名单违规。
 - [ ] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern fn` 返回 `Foo*`。
-- [ ] T6.4 执行全量回归，并在本文更新每项完成状态与验收结果。
+- [x] T6.4 执行全量回归，并在本文更新每项完成状态与验收结果。
 
 ---
 

@@ -390,6 +390,7 @@ static void test_abi_function_pointer_codegen(void) {
         "    c_register_cmp(cb);\n"
         "    c_register_cmp(&cmp);\n"
         "    holder.cb = c_load_cmp();\n"
+        "    c_register_cmp(holder.cb);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "abifn.ff");
     const FengProgram *programs[1] = {program};
@@ -416,7 +417,12 @@ static void test_abi_function_pointer_codegen(void) {
                   "typedef ") != NULL);
     ASSERT(strstr(out.c_source,
                   "FengAbiFnPtr__feng__codegen__abifn__Cmp") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern FengAbiFnPtr__feng__codegen__abifn__Cmp c_load_cmp(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengAbiFnPtr__feng__codegen__abifn__Cmp cb;") != NULL);
     ASSERT(strstr(out.c_source, "&feng__feng__codegen__abifn__cmp") != NULL);
+    ASSERT(strstr(out.c_source, "c_load_cmp()") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
