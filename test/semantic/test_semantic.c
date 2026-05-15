@@ -4329,6 +4329,78 @@ static void test_function_pointer_binding_is_not_directly_callable(void) {
     feng_program_free(program);
 }
 
+static void test_function_pointer_semantic_allows_field_param_and_return_flow(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "spec Cmp(a: int, b: int): int;\n"
+        "@abi\n"
+        "type Holder {\n"
+        "    var cb: Cmp*;\n"
+        "}\n"
+        "@abi\n"
+        "fn cmp(a: int, b: int): int {\n"
+        "    return a - b;\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_register_cmp(cb: Cmp*): void;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_load_cmp(): Cmp*;\n"
+        "fn run() {\n"
+        "    let cb: Cmp* = &cmp;\n"
+        "    let holder: Holder = Holder{cb: cb};\n"
+        "    c_register_cmp(holder.cb);\n"
+        "    let other: Cmp* = c_load_cmp();\n"
+        "    let copy: Holder = Holder{cb: other};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("function_pointer_flow_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "spec Cmp(a: int, b: int): int;\n"
+        "type Box {\n"
+        "    fn cmp(a: int, b: int): int {\n"
+        "        return a - b;\n"
+        "    }\n"
+        "}\n"
+        "fn run(box: Box) {\n"
+        "    let method = box.cmp;\n"
+        "    let cb: Cmp* = &method;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_bound_method_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 2U);
+    ASSERT(strcmp(errors[1].path, "unary_address_of_bound_method_error.f") == 0);
+    ASSERT(errors[1].token.line == 11U);
+    ASSERT(strstr(errors[1].message,
+                  "cannot form expected ABI function pointer type 'Cmp*'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_binary_plus_rejects_non_matching_operands(void) {
     const char *source =
         "mod demo.main;\n"
@@ -10936,6 +11008,8 @@ int main(void) {
     test_unary_address_of_rejects_method_pointer_target();
     test_unary_address_of_rejects_local_lambda_pointer_target();
     test_function_pointer_binding_is_not_directly_callable();
+    test_function_pointer_semantic_allows_field_param_and_return_flow();
+    test_unary_address_of_rejects_bound_method_pointer_target();
     test_binary_plus_rejects_non_matching_operands();
     test_binary_and_rejects_non_bool_operands();
     test_bitwise_ops_accept_same_integer_type();

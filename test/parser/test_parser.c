@@ -664,11 +664,16 @@ static void test_address_of_unary_parsing(void) {
     const char *source =
         "mod demo.addr;\n"
         "@abi\n"
+        "type Point {\n"
+        "    var x: i32;\n"
+        "}\n"
+        "@abi\n"
         "fn cmp(a: i32, b: i32): i32 {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run(msg: string, arr: i32[], value: i32) {\n"
+        "fn run(point: Point, msg: string, arr: i32[], value: i32) {\n"
         "    let data_ptr = &value;\n"
+        "    let point_ptr = &point;\n"
         "    let str_ptr = &msg;\n"
         "    let arr_ptr = &arr;\n"
         "    let fn_ptr = &cmp;\n"
@@ -680,8 +685,8 @@ static void test_address_of_unary_parsing(void) {
     ASSERT(feng_parse_source(source, strlen(source), "address_of_unary.f", &program, &error));
     ASSERT(program != NULL);
 
-    body = program->declarations[1]->as.function_decl.body;
-    ASSERT(body->statement_count == 4U);
+    body = program->declarations[2]->as.function_decl.body;
+    ASSERT(body->statement_count == 5U);
 
     for (size_t index = 0U; index < body->statement_count; ++index) {
         const FengStmt *stmt = body->statements[index];

@@ -475,10 +475,12 @@ let q: CmpFunc* = c_load_cmp();
 
 ### 10.7 Phase 6：测试与回归
 
-- [ ] T6.1 补 semantic 正例测试：`@abi type`、`@abi spec`、顶层 `@abi fn`、`Foo*` 成员/参数/返回、一维 ABI 数组。
-- [ ] T6.2 补 semantic 反例测试：缺少目标 `Foo*` 类型、签名不匹配、未标注 `@abi` 顶层函数、成员函数/闭包/lambda 取址、字段白名单违规。
-- [ ] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern fn` 返回 `Foo*`。
+- [x] T6.1 补 semantic 正例测试：`@abi type`、`@abi spec`、顶层 `@abi fn`、`Foo*` 成员/参数/返回、一维 ABI 数组。
+- [x] T6.2 补 semantic 反例测试：缺少目标 `Foo*` 类型、签名不匹配、未标注 `@abi` 顶层函数、成员函数/闭包/lambda 取址、字段白名单违规。
+- [x] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern fn` 返回 `Foo*`。
 - [x] T6.4 执行全量回归，并在本文更新每项完成状态与验收结果。
+
+当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern fn` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
 
 ---
 

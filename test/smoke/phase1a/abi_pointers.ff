@@ -1,0 +1,35 @@
+mod feng.smoke.abi_pointers;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+@cdecl("libc")
+extern fn write(fd: int, buf: byte*, count: long): long;
+
+@abi
+spec Cmp(a: int, b: int): int;
+
+@abi
+type Holder {
+    var cb: Cmp*;
+    var tag: int;
+}
+
+@abi
+fn cmp(a: int, b: int): int {
+    return a - b;
+}
+
+fn main(args: string[]) {
+    let text: string = "phase6 abi ok";
+    let values: byte[] = [111, 107, 10];
+    let holder: Holder = Holder{cb: &cmp, tag: 7};
+    let expected: long = 3;
+    let written: long = write(1, &values, expected);
+
+    if holder.tag == 7 && written == expected {
+        puts(&text);
+    } else {
+        puts(&"phase6 abi bad");
+    }
+}
