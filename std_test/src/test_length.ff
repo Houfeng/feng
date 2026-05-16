@@ -29,6 +29,12 @@ fn array_length_empty() {
   check(values.length() == (long)0, "length/array-empty");
 }
 
+fn array_length_nested() {
+  let matrix: int[][!] = [[1, 2, 3], [4]];
+  check(matrix.length() == (long)2, "length/array-nested-outer");
+  check(matrix[0].length() == (long)3, "length/array-nested-inner");
+}
+
 pu fn run_length_tests() {
   string_length_ascii();
   string_length_utf8_bytes();
@@ -36,4 +42,5 @@ pu fn run_length_tests() {
   array_length_readonly();
   array_length_writable();
   array_length_empty();
+  array_length_nested();
 }

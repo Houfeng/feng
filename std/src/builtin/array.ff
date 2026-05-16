@@ -1,5 +1,8 @@
 pu mod std;
 
+@runtime
+extern fn feng_array_length_i64<T>(value: T[]): long;
+
 /**
  * Extends immutable arrays with standard length-related operations.
  * @param <T> - the element type
@@ -10,11 +13,7 @@ pu fit T[] {
    * @return element count of this array
    */
   pu fn length(): long {
-    var total: long = 0;
-    for let item in self {
-      total = total + (long)1;
-    }
-    return total;
+    return feng_array_length_i64(self);
   }
 }
 
@@ -28,10 +27,6 @@ pu fit T[!] {
    * @return element count of this array
    */
   pu fn length(): long {
-    var total: long = 0;
-    for let item in self {
-      total = total + (long)1;
-    }
-    return total;
+    return feng_array_length_i64((T[])self);
   }
 }

@@ -7,3 +7,4 @@
 #endif
 
 FENG_RUNTIME_CONTRACT(int64_t, feng_string_utf8_length, (FengString *value))
+FENG_RUNTIME_CONTRACT(int64_t, feng_array_length_i64, (const FengArray *value))
