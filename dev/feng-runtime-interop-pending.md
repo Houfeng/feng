@@ -170,7 +170,7 @@ extern fn feng_string_length(value: string): long;
 
 补充说明：
 
-- `T*`、`Foo*` 若本来就是普通 Feng 函数签名中的合法类型，则 `@runtime` 中也应直接允许，不应再为它们单独增加一条 `@runtime` 禁令。
+- `T*`、`Foo*` 在 Feng 中就是合法的不透明指针类型；`@runtime extern fn` 与普通 Feng 函数一样可直接使用它们，不需要额外说明或专属检查。
 - `@runtime` 允许指针类型，不等于应该把原本可自然写成 `string`、数组或对象值的 contract 一律改写成指针版本；是否使用指针，应由 contract 的真实语义决定。
 - 这一路径的目标是减少规则分叉：`@runtime` 主要新增的是目标注解分流与 lowering 分支，而不是第二套类型系统门槛。
 
@@ -211,11 +211,11 @@ extern fn feng_string_length(value: string): long;
 
 当前建议：
 
-1. `@runtime` 最终应依赖单独的 runtime contract 头，而不是把整个 runtime public header 视为可随意调用的总入口；该头对应的实现建议收敛在 `src/runtime/contract/` 子层。
-2. 若过渡阶段复用现有 `runtime/feng_runtime.h`，也只应把其中被 `@runtime` 明确纳入 contract 的子集视为稳定 surface。
-3. `runtime_internal.h` 一类内部头永远不进入 `@runtime` 可达范围。
+1. 收敛 runtime contract 头的唯一目的，是为 `@runtime` 提供一份可声明目标白名单；它不是整个 runtime public header 的别名。
+2. 若过渡阶段复用现有 `runtime/feng_runtime.h`，也只应把其中被 `@runtime` 明确纳入白名单的声明视为可达；这不等于把整份 header 都开放给 `@runtime`。
+3. `runtime_internal.h` 一类内部头永远不进入该白名单；`src/runtime/contract/` 的作用也是收敛这份受控入口集合，而不是重新定义 runtime 的其他层次。
 
-目标是把“可手写调用的 runtime contract”与“runtime 自身 TU 间共享的内部实现头”继续明确分层；目录上体现为 `src/runtime/contract/` 与 `src/runtime/` 其余实现文件的区别，而不是继续保留顶层 `src/intrinsic/`。
+目标是把 `@runtime` 可声明的受控入口集合明确下来；目录上体现为 `src/runtime/contract/` 与 `src/runtime/` 其余实现文件的区别，而不是继续保留顶层 `src/intrinsic/`。
 
 ### 6.4 符号命名
 
@@ -362,6 +362,7 @@ extern fn feng_user_debug(value: User): void;
 ### 11.1 Phase 0：规范与术语收敛
 
 - [ ] 在开发文档中确认 `extern fn` 的总定义不再限定为 C-only。
+- [ ] 同步公共权威文档：把 `extern fn` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern fn` 语义。
 - [ ] 为 `@runtime` 明确首版适用位置、互斥规则、非公开定位，以及“签名语义与普通 Feng 函数一致”的原则。
 - [ ] 明确顶层 intrinsic 迁入 `src/runtime/contract/` 子层；runtime 语义继续停留在 `src/runtime/` contract surface。
 
@@ -387,7 +388,7 @@ extern fn feng_user_debug(value: User): void;
 ### 11.5 Phase 3：发码与链接
 
 - [ ] 为 `@runtime extern fn` 新增独立 lowering 分支；首版直接 emit 对应 C 原型与普通 C 调用，不引入额外 bridge / trampoline。
-- [ ] 收敛 runtime contract 头文件边界；必要时从现有 runtime 头中拆出更窄的 contract 头。
+- [ ] 收敛 runtime contract 头文件白名单边界；必要时从现有 runtime 头中拆出更窄的 contract 头，仅用于枚举 `@runtime` 可声明入口。
 - [ ] 明确 runtime contract 符号的链接来源与 build 集成方式。
 
 ### 11.6 Phase 4：intrinsic 并入 runtime 子层
