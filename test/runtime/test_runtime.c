@@ -255,6 +255,22 @@ static void test_array_zero_length(void) {
     feng_release(array);
 }
 
+static void test_array_payload_alignment(void) {
+    FengArray *trivial = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 3U);
+    FengArray *managed = feng_array_new(&test_object_descriptor, sizeof(void *), true, 2U);
+    void *trivial_data = feng_array_data(trivial);
+    void *managed_data = feng_array_data(managed);
+    uintptr_t align_mask = (uintptr_t)_Alignof(max_align_t) - (uintptr_t)1U;
+
+    ASSERT(trivial_data != NULL);
+    ASSERT(managed_data != NULL);
+    ASSERT((((uintptr_t)trivial_data) & align_mask) == 0U);
+    ASSERT((((uintptr_t)managed_data) & align_mask) == 0U);
+
+    feng_release(managed);
+    feng_release(trivial);
+}
+
 static void test_exception_caught(void) {
     FengExceptionFrame frame;
     int caught = 0;
@@ -1390,6 +1406,7 @@ int main(void) {
     test_array_primitive();
     test_array_managed_releases_elements();
     test_array_zero_length();
+    test_array_payload_alignment();
     test_exception_caught();
     test_exception_managed_value_caught();
     test_exception_nested_propagation();

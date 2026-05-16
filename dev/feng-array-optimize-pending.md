@@ -1,6 +1,6 @@
 # Feng 数组运行时优化（待评审草案）
 
-> 状态：讨论整理稿（供 review）
+> 状态：第一步已完成（待 review）
 > 目标：先收敛数组 runtime 的“真正尾部内联”方案与第一步实施范围，再进入实现与测试拆解。
 > 说明：本文只覆盖第一步：把固定长度数组的数据区改为内联；不包含 list 迁移 API、批量迁移实现，也不包含后续容器优化。
 
@@ -13,6 +13,15 @@
 3. 数组语义不变：仍然是受管引用对象、创建后长度固定、赋值/传参/返回默认复制引用，不复制元素内容。
 4. codegen 侧数组访问形状不变：继续通过 `feng_array_data()` / `feng_array_length()` / `feng_array_check_index()` 访问，不因为本次布局变化而重写调用点。
 5. list 的内部迁移 API 不是本阶段内容；后续若继续做容器优化，基于新数组布局单独设计。
+
+### 1.3 本阶段结构决策（最终口径）
+
+为避免歧义，本阶段对数组数据区的结构决策固定为：
+
+1. 采用“完全不占位”方案：`struct FengArray` 不引入 `items` 字段，也不引入 `item[]` / `data[]` 之类占位成员。
+2. 不采用 `alignas(max_align_t)` 占位成员方案；对齐统一由内部 helper 通过 offset 计算保证。
+3. 所有 payload 地址计算必须收敛到单一 helper，禁止在不同路径重复手写偏移计算。
+4. 关键注释必须与实现保持一致：结构体注释、创建路径注释、`feng_array_data()` 注释、finalize 注释、collector 数组路径注释，都要明确“同一块 allocation 尾部内联”的语义与边界。
 
 ### 1.1 为什么本阶段不保留 `items` 指针
 
@@ -121,6 +130,7 @@
 - header + metadata 固定头部
 - 头部之后是对齐后的尾部数据区
 - 不再保存 `void *items` 字段
+- 不新增占位成员（包括 `alignas(max_align_t)` 的占位写法）
 
 逻辑布局可表示为：
 
@@ -155,6 +165,12 @@ static const void *feng_array_const_data_inline(const struct FengArray *a);
 2. 将 `sizeof(struct FengArray)` 向上对齐到该边界
 3. `length == 0` 时继续返回 `NULL`
 4. `length > 0` 时返回 `((unsigned char *)a) + offset`
+
+建议对齐公式（示意）：
+
+1. `align = alignof(max_align_t)`
+2. `offset = (sizeof(struct FengArray) + align - 1) & ~(align - 1)`
+3. `data = (length == 0) ? NULL : ((unsigned char *)a + offset)`
 
 说明：当前 Feng 运行时元素类型应不超过 `malloc` / `max_align_t` 能保证的对齐范围；若未来引入 over-aligned 类型，再单独扩展该设计。
 
@@ -225,6 +241,7 @@ collector 中数组遍历与释放都要同步改成基于：
 1. 删除 `void *items`
 2. 更新布局注释
 3. 明确当前数据区来自同一 allocation 的尾部内联区域
+4. 明确“不使用任何占位成员，数据区地址仅由 helper 计算”
 
 ### Step 3：改 `feng_array_new_kinded()` 和 accessor
 
@@ -260,6 +277,55 @@ collector 中数组遍历与释放都要同步改成基于：
 3. `make test`
 
 必要时再补一个 runtime 对齐测试，验证 `feng_array_data()` 返回地址满足本阶段承诺的对齐边界。
+
+## 5A. 分步 Todo（执行清单）
+
+以下 Todo 按“可独立提交、可独立验收”拆分。每个任务完成后都应先通过对应最小验证，再进入下一个任务。
+
+- [x] Todo-01：冻结方案文档与边界
+	目标：文档明确“第一步只做尾部内联，不做 list 迁移 API”。
+	交付：更新本文件；同步确认 `docs/feng-builtin-type.md` 与 `docs/feng-lifetime.md` 的职责边界描述正确。
+	验收：文档评审通过（不改代码）。
+
+- [x] Todo-02：更新 runtime 注释与布局说明
+	目标：实现前先让注释表达和目标方案一致。
+	交付：更新 `src/runtime/feng_runtime_internal.h`、`src/runtime/feng_array.c` 文件头和数组布局注释。
+	验收：注释中必须明确“完全不占位（无 `items` 字段、无占位成员）+ helper 统一对齐与偏移计算”；仅注释改动，构建无回归。
+
+- [x] Todo-03：改 `FengArray` 内部布局（移除 `items` 字段）
+	目标：结构体层完成“尾部内联”前置改造。
+	交付：`src/runtime/feng_runtime_internal.h` 中 `struct FengArray` 去掉 `void *items` 字段，并补充新的 allocation layout 注释。
+	验收：`make runtime` 可编译通过（允许功能未完整，禁止编译错误扩散到无关模块）。
+
+- [x] Todo-04：实现 payload 地址计算 helper
+	目标：统一 offset 计算，避免散落重复逻辑。
+	交付：在 `src/runtime/feng_array.c` 增加 `data_offset` / `data_inline` helper（命名可微调），覆盖对齐与 `length == 0` 返回 `NULL` 逻辑。
+	验收：helper 被 `feng_array_data()` 和数组内部遍历路径复用；无重复手写偏移计算。
+
+- [x] Todo-05：重写数组创建路径为单次分配
+	目标：`feng_array_new_kinded()` 从“两次分配”变为“一次分配”。
+	交付：改 `src/runtime/feng_array.c` 创建逻辑，保留现有 precondition/overflow/aggregate-init 语义。
+	验收：`./build/bin/test_runtime` 中数组创建相关测试通过。
+
+- [x] Todo-06：重写 finalize 路径（去掉 `free(items)`）
+	目标：内联布局下不再独立释放 payload。
+	交付：改 `src/runtime/feng_array.c` 的 `feng_array_finalize_internal()`，保留逐元素 release，删除 `free(a->items)`。
+	验收：managed pointer 与 aggregate 释放测试通过，无 double-free。
+
+- [x] Todo-07：同步改 cycle collector 数组路径
+	目标：collector 不再依赖旧 split-layout 假设。
+	交付：改 `src/runtime/feng_cycle.c` 数组扫描与 white set free 路径，删除 `free(arr->items)`，空数组判断改为 `length == 0` 或统一 helper。
+	验收：`make test_runtime` + `make test` 通过；无 collector 崩溃/误回收。
+
+- [x] Todo-08：补对齐与零长度行为回归
+	目标：锁定本阶段最关键行为边界。
+	交付：完善 `test/runtime/test_runtime.c`，确保零长度数组仍断言 `feng_array_data(array) == NULL`；必要时新增对齐断言测试。
+	验收：`./build/bin/test_runtime` 全绿。
+
+- [x] Todo-09：全量回归与文档收口
+	目标：完成第一步交付闭环。
+	交付：更新 `docs/feng-lifetime.md` 运行时表示文字；执行全量回归。
+	验收：`make test` 通过；本文件状态更新为“第一步已完成”。
 
 ## 6. 需要改动的文件与大体行数
 

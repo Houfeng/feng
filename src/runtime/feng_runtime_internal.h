@@ -15,27 +15,39 @@ struct FengString {
 
 struct FengArray {
     FengManagedHeader header;
+    /* Number of elements, not bytes. */
     size_t length;
+    /* Per-element storage size in bytes (fixed per array instance). */
     size_t element_size;
     const FengTypeDescriptor *element_desc;
     /* Three-way classification per dev/feng-value-model-delivered.md §7.3.
-     * TRIVIAL    — bytes only; finalize merely frees `items`.
-     * MANAGED_POINTER — `items` is an array of `void *` slots; each non-NULL
-     *                   slot is feng_release'd on finalize.
-     * AGGREGATE  — `items` is an array of by-value aggregates of size
-     *              `element_aggregate->size`; each element is released via
-     *              feng_aggregate_release on finalize. `element_aggregate`
-     *              MUST be non-NULL when element_kind == AGGREGATE. */
+     * TRIVIAL    — bytes only.
+     * MANAGED_POINTER — payload is interpreted as `void *` slots.
+     * AGGREGATE  — payload is interpreted as by-value aggregates of size
+     *              `element_aggregate->size`; `element_aggregate` MUST be
+     *              non-NULL when element_kind == AGGREGATE. */
     FengValueKind element_kind;
     const FengAggregateValueDescriptor *element_aggregate;
-    /* Heap-allocated storage of length * element_size bytes. */
-    void *items;
+    /* No payload pointer/placeholder member exists in this struct.
+     * Element bytes live in the same allocation, tail-inline after an
+     * alignment-adjusted offset computed by feng_array_payload_inline(). */
 };
 
 /* Tag-specific child cleanup invoked by feng_release after refcount drops to 0,
  * before the user-defined finalizer (when present) and the final free. */
 void feng_string_finalize_internal(struct FengString *s);
 void feng_array_finalize_internal(struct FengArray *a);
+
+/* Internal array payload accessors.
+ *
+ * Both helpers return NULL when `a == NULL` or `a->length == 0`.
+ * For non-empty arrays they return the aligned tail-inline payload address
+ * inside the same allocation as `struct FengArray`.
+ *
+ * All runtime paths (array accessors/finalize/collector) must reuse these
+ * helpers instead of open-coding offset math. */
+void *feng_array_payload_inline(struct FengArray *a);
+const void *feng_array_payload_inline_const(const struct FengArray *a);
 
 /* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
  * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let

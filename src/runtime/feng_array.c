@@ -1,11 +1,45 @@
-/* Fixed-length array runtime. Element storage is heap-allocated separately
- * from the header so that arbitrary alignment (up to malloc's guarantee) is
- * trivially satisfied for any 1A element type. */
+/* Fixed-length array runtime.
+ *
+ * Current implementation uses split layout: array header and element payload
+ * are allocated separately (`items`).
+ *
+ * Phase-1 optimization target is true tail-inline payload with no placeholder
+ * member in FengArray. After that migration, payload address must be computed
+ * by one shared helper using aligned offset (max_align_t baseline), and all
+ * array access/finalize/collector paths must reuse that helper. */
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+static size_t feng_array_align_up(size_t value, size_t align) {
+    return (value + (align - 1U)) & ~(align - 1U);
+}
+
+static size_t feng_array_data_offset(void) {
+    return feng_array_align_up(sizeof(struct FengArray), _Alignof(max_align_t));
+}
+
+void *feng_array_payload_inline(struct FengArray *a) {
+    unsigned char *base;
+
+    if (a == NULL || a->length == 0U) {
+        return NULL;
+    }
+    base = (unsigned char *)a;
+    return (void *)(base + feng_array_data_offset());
+}
+
+const void *feng_array_payload_inline_const(const struct FengArray *a) {
+    const unsigned char *base;
+
+    if (a == NULL || a->length == 0U) {
+        return NULL;
+    }
+    base = (const unsigned char *)a;
+    return (const void *)(base + feng_array_data_offset());
+}
 
 const FengTypeDescriptor feng_array_descriptor = {
     .name = "feng.builtin.array",
@@ -14,11 +48,15 @@ const FengTypeDescriptor feng_array_descriptor = {
 };
 
 void feng_array_finalize_internal(struct FengArray *a) {
+    void *payload;
+
     if (a == NULL) {
         return;
     }
 
-    if (a->items != NULL) {
+    payload = feng_array_payload_inline(a);
+
+    if (payload != NULL) {
         size_t i;
 
         switch (a->element_kind) {
@@ -26,14 +64,14 @@ void feng_array_finalize_internal(struct FengArray *a) {
                 /* No per-element work; raw bytes only. */
                 break;
             case FENG_VALUE_MANAGED_POINTER: {
-                void **slots = (void **)a->items;
+                void **slots = (void **)payload;
                 for (i = 0U; i < a->length; ++i) {
                     feng_release(slots[i]);
                 }
                 break;
             }
             case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
-                unsigned char *base = (unsigned char *)a->items;
+                unsigned char *base = (unsigned char *)payload;
                 for (i = 0U; i < a->length; ++i) {
                     feng_aggregate_release(base + i * a->element_size,
                                            a->element_aggregate);
@@ -45,9 +83,6 @@ void feng_array_finalize_internal(struct FengArray *a) {
                            (int)a->element_kind);
         }
     }
-
-    free(a->items);
-    a->items = NULL;
 }
 
 FengArray *feng_array_new_kinded(FengValueKind element_kind,
@@ -56,6 +91,9 @@ FengArray *feng_array_new_kinded(FengValueKind element_kind,
                                  size_t element_size,
                                  size_t length) {
     struct FengArray *a;
+    size_t payload_size;
+    size_t data_offset;
+    size_t total_size;
 
     /* Per-kind precondition checks: surface descriptor / codegen mistakes
      * eagerly rather than miscount or corrupt during finalize. */
@@ -101,10 +139,18 @@ FengArray *feng_array_new_kinded(FengValueKind element_kind,
                    length,
                    element_size);
     }
+    payload_size = length * element_size;
+    data_offset = feng_array_data_offset();
+    if (payload_size > SIZE_MAX - data_offset) {
+        feng_panic("feng_array_new_kinded: data_offset %zu + payload_size %zu overflows",
+                   data_offset,
+                   payload_size);
+    }
+    total_size = data_offset + payload_size;
 
-    a = (struct FengArray *)calloc(1, sizeof(*a));
+    a = (struct FengArray *)calloc(1, total_size);
     if (a == NULL) {
-        feng_panic("feng_array_new_kinded: out of memory for header");
+        feng_panic("feng_array_new_kinded: out of memory for %zu bytes", total_size);
     }
 
     a->header.desc = &feng_array_descriptor;
@@ -117,26 +163,19 @@ FengArray *feng_array_new_kinded(FengValueKind element_kind,
     a->element_aggregate = element_aggregate;
 
     if (length > 0U) {
-        a->items = calloc(length, element_size);
-        if (a->items == NULL) {
-            free(a);
-            feng_panic("feng_array_new_kinded: out of memory for %zu elements",
-                       length);
-        }
+        unsigned char *base = (unsigned char *)feng_array_payload_inline(a);
+
         /* For AGGREGATE elements, the descriptor decides whether all-zero
          * bytes are a legal default. ZERO_BYTES is already satisfied by
          * calloc; INIT_FN aggregates require a per-element initialiser
          * call so the managed slots reach a properly-retained state. */
         if (element_kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS &&
             element_aggregate->default_init->kind == FENG_DEFAULT_INIT_FN) {
-            unsigned char *base = (unsigned char *)a->items;
             size_t i;
             for (i = 0U; i < length; ++i) {
                 element_aggregate->default_init->init_fn(base + i * element_size);
             }
         }
-    } else {
-        a->items = NULL;
     }
 
     return (FengArray *)a;
@@ -159,7 +198,7 @@ size_t feng_array_length(const FengArray *array) {
 }
 
 void *feng_array_data(FengArray *array) {
-    return array != NULL ? ((struct FengArray *)array)->items : NULL;
+    return feng_array_payload_inline((struct FengArray *)array);
 }
 
 void feng_array_check_index(const FengArray *array, size_t index) {

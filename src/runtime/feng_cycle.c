@@ -287,14 +287,15 @@ static void cyc_for_each_child(FengManagedHeader *header,
         }
         case FENG_TYPE_TAG_ARRAY: {
             struct FengArray *arr = (struct FengArray *)header;
-            if (arr->items == NULL) {
+            void *payload = feng_array_payload_inline(arr);
+            if (payload == NULL) {
                 break;
             }
             switch (arr->element_kind) {
                 case FENG_VALUE_TRIVIAL:
                     break;
                 case FENG_VALUE_MANAGED_POINTER: {
-                    FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                    FengManagedHeader **slots = (FengManagedHeader **)payload;
                     for (size_t i = 0U; i < arr->length; ++i) {
                         FengManagedHeader *child = slots[i];
                         if (child != NULL) {
@@ -308,7 +309,7 @@ static void cyc_for_each_child(FengManagedHeader *header,
                         void (*visit)(FengManagedHeader *child, void *ctx);
                         void *ctx;
                     } bridge = { visit, ctx };
-                    unsigned char *base = (unsigned char *)arr->items;
+                    unsigned char *base = (unsigned char *)payload;
                     for (size_t i = 0U; i < arr->length; ++i) {
                         cyc_aggregate_for_each_pointer_slot(
                             base + i * arr->element_size,
@@ -482,21 +483,22 @@ static void cyc_for_each_child_slot(FengManagedHeader *header,
         }
         case FENG_TYPE_TAG_ARRAY: {
             struct FengArray *arr = (struct FengArray *)header;
-            if (arr->items == NULL) {
+            void *payload = feng_array_payload_inline(arr);
+            if (payload == NULL) {
                 break;
             }
             switch (arr->element_kind) {
                 case FENG_VALUE_TRIVIAL:
                     break;
                 case FENG_VALUE_MANAGED_POINTER: {
-                    FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                    FengManagedHeader **slots = (FengManagedHeader **)payload;
                     for (size_t i = 0U; i < arr->length; ++i) {
                         visit(&slots[i], slots[i], ctx);
                     }
                     break;
                 }
                 case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
-                    unsigned char *base = (unsigned char *)arr->items;
+                    unsigned char *base = (unsigned char *)payload;
                     for (size_t i = 0U; i < arr->length; ++i) {
                         cyc_aggregate_for_each_pointer_slot(
                             base + i * arr->element_size,
@@ -662,12 +664,13 @@ static void phase15_mark_survivors_bfs(WhiteList *wl, WhiteAux *aux,
             }
         } else if (s->tag == FENG_TYPE_TAG_ARRAY) {
             struct FengArray *arr = (struct FengArray *)s;
-            if (arr->items != NULL) {
+            void *payload = feng_array_payload_inline(arr);
+            if (payload != NULL) {
                 switch (arr->element_kind) {
                     case FENG_VALUE_TRIVIAL:
                         break;
                     case FENG_VALUE_MANAGED_POINTER: {
-                        FengManagedHeader **slots = (FengManagedHeader **)arr->items;
+                        FengManagedHeader **slots = (FengManagedHeader **)payload;
                         for (size_t k = 0U; k < arr->length; ++k) {
                             FengManagedHeader *c = slots[k];
                             if (is_white(c) && !(c->cycle_state & CYC_FLAG_VISITED)) {
@@ -685,7 +688,7 @@ static void phase15_mark_survivors_bfs(WhiteList *wl, WhiteAux *aux,
                             FengManagedHeader **q;
                             size_t *tail_p;
                         } bctx = { queue, &qtail };
-                        unsigned char *base = (unsigned char *)arr->items;
+                        unsigned char *base = (unsigned char *)payload;
                         for (size_t k = 0U; k < arr->length; ++k) {
                             cyc_aggregate_for_each_pointer_slot(
                                 base + k * arr->element_size,
@@ -784,9 +787,6 @@ static void phase2_free_unsurvived(WhiteList *wl) {
         }
         switch (h->tag) {
             case FENG_TYPE_TAG_ARRAY: {
-                struct FengArray *arr = (struct FengArray *)h;
-                free(arr->items);
-                arr->items = NULL;
                 free(h);
                 break;
             }
@@ -810,9 +810,6 @@ static void free_whole_white_set(WhiteList *wl) {
         FengManagedHeader *h = wl->buf[i];
         switch (h->tag) {
             case FENG_TYPE_TAG_ARRAY: {
-                struct FengArray *arr = (struct FengArray *)h;
-                free(arr->items);
-                arr->items = NULL;
                 free(h);
                 break;
             }
