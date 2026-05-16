@@ -2,7 +2,7 @@
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的异常处理概要说明,聚焦 Feng 语言中的 `throw`、异常传播、`try/catch/finally` 与 C ABI 边界规则。
 
-> **设计原则基础**: `extern fn` 的限制属于语法层; `@abi` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
+> **设计原则基础**: `extern fn` 自身的无函数体约束属于语法层; `@abi` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
 
 ## 1 异常模型概览
 
@@ -91,11 +91,11 @@ fn with_cleanup() {
 - 用于 ABI 边界的顶层 `@abi fn`（含公开导出函数与回调函数来源）内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回值或错误码。
 - 编译器在语义阶段对 `@abi` ABI 边界做静态异常传播分析：若用于 ABI 边界的顶层 `@abi fn` 内存在可能未被捕获而到达函数出口的异常路径，编译期报错，而非依赖运行时检测。
 - 若未捕获异常到达 `@abi` 的 ABI 边界,运行时直接终止当前进程,不得向 C 侧继续返回未定义状态。
-- `extern fn` 导入声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
+- C ABI 路径下的 `extern fn` 导入声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
 
 ## 6 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch/finally` 的控制流关系。
-- [feng-interop.md](./feng-interop.md): `extern fn` 导入规则、`@abi` 的 ABI 规则与异常边界。
+- [feng-interop.md](./feng-interop.md): C ABI 路径下的 `extern fn` 导入规则、`@abi` 的 ABI 规则与异常边界。
 - 本文档: `throw`、传播模型、`finally` 执行语义与 C ABI 边界限制。

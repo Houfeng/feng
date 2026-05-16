@@ -509,11 +509,91 @@ static void test_extern_function_accepts_module_string_library_binding(void) {
     feng_program_free(program);
 }
 
-static void test_extern_function_requires_calling_convention_annotation(void) {
+static void test_extern_function_without_calling_convention_annotation_is_accepted(void) {
     const char *source =
         "mod demo.main;\n"
         "extern fn sin(x: float): float;\n";
-    FengProgram *program = parse_program_or_die("extern_fn_missing_callconv_error.f", source);
+    FengProgram *program = parse_program_or_die("extern_fn_missing_callconv_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_extern_function_accepts_string_parameter_without_c_abi_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "extern fn print(msg: string): int;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_string_param_without_c_abi_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_extern_function_accepts_string_return_without_c_abi_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "extern fn load(): string;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_string_return_without_c_abi_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_accepts_top_level_extern_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "extern fn feng_string_length(value: string): long;\n";
+    FengProgram *program = parse_program_or_die("runtime_extern_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_rejects_non_extern_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "fn feng_string_length(value: string): long {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("runtime_non_extern_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -521,10 +601,101 @@ static void test_extern_function_requires_calling_convention_annotation(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "extern_fn_missing_callconv_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "runtime_non_extern_error.f") == 0);
     ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message,
-                  "must use exactly one of '@cdecl', '@stdcall', or '@fastcall'") != NULL);
+    ASSERT(strstr(errors[0].message, "cannot use @runtime unless it is declared extern") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_rejects_c_abi_target_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "@cdecl(\"m\")\n"
+        "extern fn feng_string_length(value: string): long;\n";
+    FengProgram *program = parse_program_or_die("runtime_callconv_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "runtime_callconv_conflict_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "cannot combine @runtime with C ABI target annotations") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_rejects_abi_annotation(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "@abi\n"
+        "extern fn feng_string_length(value: string): long;\n";
+    FengProgram *program = parse_program_or_die("runtime_abi_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "runtime_abi_conflict_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "cannot combine @runtime with @abi") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_rejects_type_declaration(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "type User {\n"
+        "    var name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("runtime_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "runtime_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern fn declarations") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_runtime_annotation_rejects_member_method(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type User {\n"
+        "    @runtime\n"
+        "    fn name(): string {\n"
+        "        return \"guest\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("runtime_member_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "runtime_member_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern fn declarations") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -11015,11 +11186,19 @@ int main(void) {
     test_top_level_overload_two_specs_no_common_type_accepted();
     test_member_method_overload_overlap_via_fit_rejected();
     test_extern_function_accepts_module_string_library_binding();
-    test_extern_function_requires_calling_convention_annotation();
+    test_extern_function_without_calling_convention_annotation_is_accepted();
     test_extern_function_rejects_multiple_calling_convention_annotations();
     test_extern_function_rejects_non_string_library_binding();
     test_extern_function_accepts_imported_string_library_binding();
     test_extern_function_rejects_imported_var_library_binding();
+    test_extern_function_accepts_string_parameter_without_c_abi_annotation();
+    test_extern_function_accepts_string_return_without_c_abi_annotation();
+    test_runtime_annotation_accepts_top_level_extern_function();
+    test_runtime_annotation_rejects_non_extern_function();
+    test_runtime_annotation_rejects_c_abi_target_annotation();
+    test_runtime_annotation_rejects_abi_annotation();
+    test_runtime_annotation_rejects_type_declaration();
+    test_runtime_annotation_rejects_member_method();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();

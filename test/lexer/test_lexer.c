@@ -45,7 +45,7 @@ static void test_keyword_and_annotation_counts(void) {
 
     ASSERT(feng_keyword_count() == 26U);
     ASSERT(feng_reserved_word_count() == 12U);
-    ASSERT(feng_builtin_annotation_count() == 7U);
+    ASSERT(feng_builtin_annotation_count() == 8U);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_SPEC);
     ASSERT(feng_lookup_keyword("fit", 3U, &keyword_kind));
@@ -71,6 +71,8 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(annotation_kind == FENG_ANNOTATION_ABI);
     ASSERT(feng_lookup_builtin_annotation("fixed", 5U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
+    ASSERT(feng_lookup_builtin_annotation("runtime", 7U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_RUNTIME);
     ASSERT(feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_BOUNDED);
 }
@@ -193,6 +195,37 @@ static void test_basic_module_tokens(void) {
     token = next_token(&lexer, FENG_TOKEN_SEMICOLON);
     token = next_token(&lexer, FENG_TOKEN_EOF);
     ASSERT(token.length == 0U);
+}
+
+static void test_runtime_annotation_token(void) {
+    const char *source =
+        "@runtime\n"
+        "extern fn feng_string_length(value: string): long;\n";
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "runtime_annotation.f");
+
+    token = next_token(&lexer, FENG_TOKEN_ANNOTATION);
+    ASSERT(token.annotation_kind == FENG_ANNOTATION_RUNTIME);
+    assert_lexeme(&token, "@runtime");
+
+    token = next_token(&lexer, FENG_TOKEN_KW_EXTERN);
+    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "feng_string_length");
+    token = next_token(&lexer, FENG_TOKEN_LPAREN);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "value");
+    token = next_token(&lexer, FENG_TOKEN_COLON);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "string");
+    token = next_token(&lexer, FENG_TOKEN_RPAREN);
+    token = next_token(&lexer, FENG_TOKEN_COLON);
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "long");
+    token = next_token(&lexer, FENG_TOKEN_SEMICOLON);
+    token = next_token(&lexer, FENG_TOKEN_EOF);
 }
 
 static void test_literals_and_arrow(void) {
@@ -575,6 +608,7 @@ int main(void) {
     test_reserved_words_rejected();
     test_new_keywords_and_builtin_type_names();
     test_basic_module_tokens();
+    test_runtime_annotation_token();
     test_literals_and_arrow();
     test_comments_crlf_and_custom_annotations();
     test_doc_comment_attaches_to_next_token();

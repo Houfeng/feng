@@ -130,6 +130,27 @@ static void test_statements_and_expressions(void) {
     feng_program_free(program);
 }
 
+static void test_runtime_annotation_on_extern_function(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "extern fn feng_string_length(value: string): long;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "runtime_extern.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_FUNCTION);
+    ASSERT(program->declarations[0]->is_extern);
+    ASSERT(program->declarations[0]->annotation_count == 1U);
+    ASSERT(program->declarations[0]->annotations[0].builtin_kind == FENG_ANNOTATION_RUNTIME);
+    ASSERT(program->declarations[0]->as.function_decl.param_count == 1U);
+    ASSERT(program->declarations[0]->as.function_decl.return_type != NULL);
+
+    feng_program_free(program);
+}
+
 static void test_member_annotations_and_constructors(void) {
     const char *source =
         "mod demo.user;\n"
@@ -1374,6 +1395,7 @@ static void test_generic_parse_error_missing_type_param_name(void) {
 int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
+    test_runtime_annotation_on_extern_function();
     test_match_with_range_and_list_labels();
     test_match_statement_form();
     test_for_in_loop();

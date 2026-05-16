@@ -196,6 +196,15 @@ static void test_string_concat(void) {
     feng_release(combined);
 }
 
+static void test_string_utf8_length_contract(void) {
+    FengString *ascii = feng_string_literal("hello", 5U);
+    FengString *utf8 = feng_string_literal("你好", 6U);
+
+    ASSERT(feng_string_utf8_length(ascii) == 5);
+    ASSERT(feng_string_utf8_length(utf8) == 6);
+    ASSERT(feng_string_utf8_length(NULL) == 0);
+}
+
 static const FengTypeDescriptor i32_element_descriptor = {
     .name = "i32",
     .size = sizeof(int32_t),
@@ -1403,6 +1412,7 @@ int main(void) {
     test_scalar_box_runtime_contract();
     test_string_literal_immortal();
     test_string_concat();
+    test_string_utf8_length_contract();
     test_array_primitive();
     test_array_managed_releases_elements();
     test_array_zero_length();

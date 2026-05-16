@@ -856,30 +856,6 @@ static char *locate_runtime_lib(const char *program_path) {
     return path;
 }
 
-static char *locate_intrinsic_lib(const char *program_path) {
-    const char *env = getenv("FENG_INTRINSIC_LIB");
-    if (env != NULL && env[0] != '\0') {
-        if (!path_exists(env)) {
-            fprintf(stderr,
-                    "FENG_INTRINSIC_LIB points to %s which does not exist\n",
-                    env);
-            return NULL;
-        }
-        return str_dup_cstr(env);
-    }
-    char *exe = resolve_executable_path(program_path);
-    if (exe == NULL) return NULL;
-    char *exe_dir = path_dirname_dup(exe);
-    free(exe);
-    if (exe_dir == NULL) return NULL;
-    char *root = find_ancestor_with(exe_dir, "build/lib/libfeng_intrinsic.a");
-    free(exe_dir);
-    if (root == NULL) return NULL;
-    char *path = path_join2(root, "build/lib/libfeng_intrinsic.a");
-    free(root);
-    return path;
-}
-
 static char *locate_runtime_include(const char *program_path) {
     const char *env = getenv("FENG_RUNTIME_INCLUDE");
     if (env != NULL && env[0] != '\0') {
@@ -948,7 +924,7 @@ static char *map_library_name(const char *raw) {
     const char *name = raw;
     if (strncmp(name, "lib", 3) == 0) name += 3;
     if (strcmp(name, "c") == 0) return NULL; /* libc is implicit */
-    if (strcmp(name, "feng_runtime") == 0 || strcmp(name, "feng_intrinsic") == 0) {
+    if (strcmp(name, "feng_runtime") == 0) {
         return NULL;
     }
     if (name[0] == '\0') return NULL;
@@ -1100,29 +1076,18 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     }
 
     char *runtime_lib = NULL;
-    char *intrinsic_lib = NULL;
     char *host_target = NULL;
     char *bundle_error = NULL;
     char *bundle_temp_dir = NULL;
     char **bundle_libs = NULL;
     size_t bundle_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
-        intrinsic_lib = locate_intrinsic_lib(opts->program_path);
-        if (intrinsic_lib == NULL) {
-            fprintf(stderr,
-                    "error: cannot locate libfeng_intrinsic.a.\n"
-                    "  set FENG_INTRINSIC_LIB=<path-to-libfeng_intrinsic.a> or run from a\n"
-                    "  build tree where build/lib/libfeng_intrinsic.a exists.\n");
-            free(include_dir);
-            return 1;
-        }
         runtime_lib = locate_runtime_lib(opts->program_path);
         if (runtime_lib == NULL) {
             fprintf(stderr,
                     "error: cannot locate libfeng_runtime.a.\n"
                     "  set FENG_RUNTIME_LIB=<path-to-libfeng_runtime.a> or run from a\n"
                     "  build tree where build/lib/libfeng_runtime.a exists.\n");
-            free(intrinsic_lib);
             free(include_dir);
             return 1;
         }
@@ -1132,7 +1097,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                         "error: cannot determine host target for package bundles: %s\n",
                         bundle_error != NULL ? bundle_error : "unknown error");
                 free(bundle_error);
-                free(intrinsic_lib);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -1151,7 +1115,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                         bundle_error != NULL ? bundle_error : "unknown error");
                 free(bundle_error);
                 free(host_target);
-                free(intrinsic_lib);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -1168,7 +1131,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
         free(host_target);
-        free(intrinsic_lib);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -1224,7 +1186,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         for (size_t i = 0; ok && i < bundle_lib_count; ++i) {
             if (!argv_push(&av, bundle_libs[i])) { ok = false; }
         }
-        if (ok && !argv_push(&av, intrinsic_lib)) { ok = false; }
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
         if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
         for (size_t i = 0; ok && i < lib_count; ++i) {
@@ -1337,7 +1298,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     free(bundle_temp_dir);
     free(host_target);
     free(bundle_error);
-    free(intrinsic_lib);
     free(runtime_lib);
     free(include_dir);
     free(include_flag);

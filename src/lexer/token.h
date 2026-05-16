@@ -58,6 +58,7 @@ extern "C" {
     X(CDECL, "cdecl") \
     X(STDCALL, "stdcall") \
     X(FASTCALL, "fastcall") \
+    X(RUNTIME, "runtime") \
     X(BOUNDED, "bounded")
 
 typedef enum FengTokenKind {

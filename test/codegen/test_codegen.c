@@ -550,6 +550,47 @@ static void test_abi_value_extern_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_runtime_extern_codegen_uses_feng_surface_types(void) {
+    static const char *kSource =
+        "mod feng.codegen.runtimeextern;\n"
+        "@runtime\n"
+        "extern fn feng_string_length(value: string): u64;\n"
+        "fn run(value: string): u64 {\n"
+        "    return feng_string_length(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "runtimeextern.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (runtime extern): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_string_length(value)") != NULL);
+    ASSERT(strstr(out.c_source, "extern uint64_t feng_string_length(") == NULL);
+    ASSERT(strstr(out.c_source, "feng_string_length(((char *)feng_string_data(") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_abi_value_function_pointer_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.abivaluefn;\n"
@@ -2390,6 +2431,7 @@ int main(void) {
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();
     test_abi_value_extern_codegen();
+    test_runtime_extern_codegen_uses_feng_surface_types();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();

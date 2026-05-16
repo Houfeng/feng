@@ -663,6 +663,7 @@ typedef struct ExternFn {
     CGType **param_types;
     size_t   param_count;
     CGType  *return_type;
+    bool     uses_runtime_contract;
 } ExternFn;
 
 typedef struct FreeFn {
@@ -3102,6 +3103,12 @@ static bool cg_annotations_contain_kind(const FengAnnotation *annotations,
     return false;
 }
 
+static bool cg_decl_uses_runtime_contract(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_FUNCTION && decl->is_extern &&
+           cg_annotations_contain_kind(
+               decl->annotations, decl->annotation_count, FENG_ANNOTATION_RUNTIME);
+}
+
 static bool cg_init_user_type_abi_symbols(UserType *t) {
     if (t == NULL || !t->is_abi_type) {
         return true;
@@ -4209,6 +4216,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     ef->name = strndup(sig->name.data, sig->name.length);
     ef->param_count = sig->param_count;
     ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+    ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
     for (size_t i = 0; i < sig->param_count; i++) {
         if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
                              &ef->param_types[i])) {
@@ -7372,7 +7380,9 @@ static bool cg_emit_registered_call(CG *cg,
             break;
         }
         CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
-        const UserType *expected_abi_user = ext ? cg_abi_value_user_type(expected_ty) : NULL;
+        const UserType *expected_abi_user =
+            (ext != NULL && !ext->uses_runtime_contract) ? cg_abi_value_user_type(expected_ty)
+                                                         : NULL;
         if (i) buf_append_cstr(&args_buf, ", ");
         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
             cg_materialize_to_local(cg, &ar, "_t");
@@ -7394,7 +7404,8 @@ static bool cg_emit_registered_call(CG *cg,
     Buf b;
     buf_init(&b);
     if (ext) {
-        const UserType *return_abi_user = cg_abi_value_user_type(ext->return_type);
+        const UserType *return_abi_user =
+            ext->uses_runtime_contract ? NULL : cg_abi_value_user_type(ext->return_type);
 
         if (return_abi_user != NULL && return_abi_user->c_abi_box_name != NULL) {
             char *abi_tmp = cg_fresh_temp(cg, "_abi_ret");
@@ -12181,6 +12192,14 @@ static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (!cg_register_extern(cg, decl)) return false;
     const ExternFn *ef = &cg->externs[cg->extern_count - 1];
     Buf *h = &cg->headers;
+
+    /* Runtime-contract externs rely on the runtime header as the single
+     * declaration authority. Emitting a second prototype here would drift on
+     * qualifiers such as `const` and create C conflicts for the same symbol. */
+    if (ef->uses_runtime_contract) {
+        return true;
+    }
+
     buf_append_cstr(h, "extern ");
     cg_emit_c_abi_surface_type(h, ef->return_type);
     buf_append_fmt(h, " %s(", ef->name);

@@ -4,7 +4,10 @@
  * Scope (Phase 1A complete):
  *   - module declaration
  *   - extern fn with @cdecl(<lib>) — emits a plain `extern` declaration whose
- *     C symbol is the Feng function name verbatim
+ *     surface types follow the C ABI path and whose C symbol is the Feng
+ *     function name verbatim
+ *   - extern fn with @runtime — reuses the runtime contract header's
+ *     declaration and emits ordinary C calls (no ABI bridge / trampoline)
  *   - top-level free fn (including `main(args: string[])` entry)
  *   - top-level let/var (module-level bindings, initialised on startup,
  *     released on shutdown)

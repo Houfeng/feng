@@ -1417,6 +1417,20 @@ static size_t count_calling_convention_annotations(const FengAnnotation *annotat
     return count;
 }
 
+static const FengAnnotation *find_annotation_of_kind(const FengAnnotation *annotations,
+                                                     size_t annotation_count,
+                                                     FengAnnotationKind kind) {
+    size_t annotation_index;
+
+    for (annotation_index = 0U; annotation_index < annotation_count; ++annotation_index) {
+        if (annotations[annotation_index].builtin_kind == kind) {
+            return &annotations[annotation_index];
+        }
+    }
+
+    return NULL;
+}
+
 static const FengAnnotation *find_calling_convention_annotation(const FengAnnotation *annotations,
                                                                 size_t annotation_count) {
     size_t annotation_index;
@@ -1428,6 +1442,89 @@ static const FengAnnotation *find_calling_convention_annotation(const FengAnnota
     }
 
     return NULL;
+}
+
+static bool extern_function_uses_c_abi_path(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_FUNCTION && decl->is_extern &&
+           count_calling_convention_annotations(decl->annotations, decl->annotation_count) != 0U;
+}
+
+static bool validate_runtime_annotation_on_decl(ResolveContext *context, const FengDecl *decl) {
+    const FengAnnotation *runtime_annotation;
+
+    if (context == NULL || decl == NULL) {
+        return true;
+    }
+
+    runtime_annotation = find_annotation_of_kind(
+        decl->annotations, decl->annotation_count, FENG_ANNOTATION_RUNTIME);
+    if (runtime_annotation == NULL) {
+        return true;
+    }
+
+    if (decl->kind != FENG_DECL_FUNCTION) {
+        return resolver_append_error(
+            context,
+            runtime_annotation->token,
+            format_message("@runtime only applies to top-level extern fn declarations")) &&
+               false;
+    }
+
+    if (!decl->is_extern) {
+        return resolver_append_error(
+            context,
+            runtime_annotation->token,
+            format_message(
+                "function '%.*s' cannot use @runtime unless it is declared extern",
+                (int)decl->as.function_decl.name.length,
+                decl->as.function_decl.name.data));
+               false;
+    }
+
+    if (annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI)) {
+        return resolver_append_error(
+            context,
+            runtime_annotation->token,
+            format_message(
+                "function '%.*s' cannot combine @runtime with @abi",
+                (int)decl->as.function_decl.name.length,
+                decl->as.function_decl.name.data)) &&
+               false;
+    }
+
+    if (count_calling_convention_annotations(decl->annotations, decl->annotation_count) != 0U) {
+        return resolver_append_error(
+            context,
+            runtime_annotation->token,
+            format_message(
+                "function '%.*s' cannot combine @runtime with C ABI target annotations",
+                (int)decl->as.function_decl.name.length,
+                decl->as.function_decl.name.data)) &&
+               false;
+    }
+
+    return true;
+}
+
+static bool validate_runtime_annotation_on_member(ResolveContext *context,
+                                                  const FengTypeMember *member) {
+    const FengAnnotation *runtime_annotation;
+
+    if (context == NULL || member == NULL) {
+        return true;
+    }
+
+    runtime_annotation = find_annotation_of_kind(
+        member->annotations, member->annotation_count, FENG_ANNOTATION_RUNTIME);
+    if (runtime_annotation == NULL) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        runtime_annotation->token,
+        format_message("@runtime only applies to top-level extern fn declarations")) &&
+           false;
 }
 
 static bool extern_library_annotation_arg_is_valid(ResolveContext *context, const FengExpr *expr) {
@@ -1470,7 +1567,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
             context,
             decl->as.function_decl.token,
             format_message(
-                "function '%.*s' cannot be marked as @abi because extern functions declare imported C symbols",
+                "function '%.*s' cannot be marked as @abi because extern functions use target annotations to define external ABI semantics",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
     }
@@ -1488,6 +1585,10 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
     calling_convention = find_calling_convention_annotation(decl->annotations, decl->annotation_count);
     calling_convention_count =
         count_calling_convention_annotations(decl->annotations, decl->annotation_count);
+
+    if (calling_convention_count == 0U) {
+        return true;
+    }
 
     if (decl->annotation_count != 1U || calling_convention_count != 1U ||
         calling_convention == NULL || calling_convention->arg_count != 1U) {
@@ -10886,7 +10987,7 @@ static bool validate_extern_function_signature(ResolveContext *context, const Fe
     const FengCallableSignature *callable;
     size_t param_index;
 
-    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_FUNCTION || !decl->is_extern) {
+    if (context == NULL || !extern_function_uses_c_abi_path(decl)) {
         return true;
     }
 
@@ -15144,6 +15245,10 @@ static bool validate_type_param_constraints(ResolveContext *context,
 static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     size_t index;
 
+    if (!validate_runtime_annotation_on_decl(context, decl)) {
+        return false;
+    }
+
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
             return resolve_binding(context, &decl->as.binding, false, false);
@@ -15183,6 +15288,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
+
+                if (!validate_runtime_annotation_on_member(context, member)) {
+                    ok = false;
+                    break;
+                }
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     bool field_is_callable_spec = false;
@@ -15333,6 +15443,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             }
             for (index = 0U; ok && index < decl->as.spec_decl.as.object.member_count; ++index) {
                 const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
+
+                if (!validate_runtime_annotation_on_member(context, member)) {
+                    ok = false;
+                    break;
+                }
 
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!resolve_type_ref(context, member->as.field.type, false)) {
