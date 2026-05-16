@@ -346,7 +346,12 @@ FengString *feng_string_default(void);
 FengString *feng_string_concat(const FengString *left, const FengString *right);
 
 size_t      feng_string_length(const FengString *s);
-int64_t     feng_string_utf8_length(FengString *value);
+/* Runtime-contract declarations shared by generated `@runtime` calls and the
+ * runtime implementation. Keep this fragment as the single source of truth
+ * for which runtime symbols codegen may accept on the `@runtime` path. */
+#define FENG_RUNTIME_CONTRACT(ret_type, name, args) ret_type name args;
+#include "runtime/feng_runtime_contract.h"
+#undef FENG_RUNTIME_CONTRACT
 const char *feng_string_data(const FengString *s);
 
 /* --- Array ------------------------------------------------------------- */

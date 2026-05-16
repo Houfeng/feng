@@ -3103,10 +3103,27 @@ static bool cg_annotations_contain_kind(const FengAnnotation *annotations,
     return false;
 }
 
+static bool cg_slice_equals_cstr(FengSlice slice, const char *text) {
+    size_t text_length = strlen(text);
+
+    return slice.length == text_length && memcmp(slice.data, text, text_length) == 0;
+}
+
 static bool cg_decl_uses_runtime_contract(const FengDecl *decl) {
     return decl != NULL && decl->kind == FENG_DECL_FUNCTION && decl->is_extern &&
            cg_annotations_contain_kind(
                decl->annotations, decl->annotation_count, FENG_ANNOTATION_RUNTIME);
+}
+
+static bool cg_runtime_contract_contains_name(FengSlice name) {
+#define FENG_RUNTIME_CONTRACT(ret_type, symbol, args) \
+    if (cg_slice_equals_cstr(name, #symbol)) {           \
+        return true;                                     \
+    }
+#include "runtime/feng_runtime_contract.h"
+#undef FENG_RUNTIME_CONTRACT
+
+    return false;
 }
 
 static bool cg_init_user_type_abi_symbols(UserType *t) {
@@ -4212,11 +4229,22 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         cg->extern_capacity = cap;
     }
     const FengCallableSignature *sig = &decl->as.function_decl;
-    ExternFn *ef = &cg->externs[cg->extern_count++];
+    ExternFn *ef = &cg->externs[cg->extern_count];
+
+    memset(ef, 0, sizeof(*ef));
+    ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
+
+    if (ef->uses_runtime_contract && !cg_runtime_contract_contains_name(sig->name)) {
+        return cg_fail(cg,
+                       sig->token,
+                       "codegen: @runtime extern fn '%.*s' is not declared by runtime contract",
+                       (int)sig->name.length,
+                       sig->name.data);
+    }
+
     ef->name = strndup(sig->name.data, sig->name.length);
     ef->param_count = sig->param_count;
     ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
-    ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
     for (size_t i = 0; i < sig->param_count; i++) {
         if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
                              &ef->param_types[i])) {
@@ -4226,6 +4254,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     if (!cg_resolve_type(cg, sig->return_type, &sig->token, &ef->return_type)) {
         return false;
     }
+    cg->extern_count++;
     return true;
 }
 

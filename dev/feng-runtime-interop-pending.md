@@ -215,6 +215,12 @@ extern fn feng_string_length(value: string): long;
 2. 若过渡阶段复用现有 `runtime/feng_runtime.h`，也只应把其中被 `@runtime` 明确纳入白名单的声明视为可达；这不等于把整份 header 都开放给 `@runtime`。
 3. `runtime_internal.h` 一类内部头永远不进入该白名单；`src/runtime/contract/` 的作用也是收敛这份受控入口集合，而不是重新定义 runtime 的其他层次。
 
+当前最小落地方式：
+
+1. 保持 `runtime/feng_runtime.h` 作为 codegen 继续复用的唯一入口头。
+2. 新增 `src/runtime/feng_runtime_contract.h` 作为 contract 条目清单；该片段既用于在 `feng_runtime.h` 中展开声明，也用于 codegen 侧做 `@runtime` 名字检查。
+3. 新增 `src/runtime/feng_runtime_contract.c` 承载 contract helper 实现；helper 仍编入同一个 `libfeng_runtime.a`，不新增独立库。
+
 目标是把 `@runtime` 可声明的受控入口集合明确下来；目录上体现为 `src/runtime/contract/` 与 `src/runtime/` 其余实现文件的区别，而不是继续保留顶层 `src/intrinsic/`。
 
 ### 6.4 符号命名
