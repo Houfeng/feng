@@ -53,9 +53,9 @@
 
 因此，本阶段优先把语言层固定数组收敛到“真正内联的定长数组”模型；list 的增长与迁移优化留到下一阶段，通过私有迁移 API 单独解决，而不是继续让固定数组 runtime 同时承担两种目标。
 
-## 2. 现状锚点
+## 2. 改造前锚点
 
-### 2.1 当前 split layout
+### 2.1 改造前 split layout
 
 当前 runtime 的数组布局在 `src/runtime/feng_runtime_internal.h` 约 14-31 行：
 
@@ -69,7 +69,7 @@
 
 也就是说，当前数组对象本体和元素区是两块内存。
 
-### 2.2 当前创建路径
+### 2.2 改造前创建路径
 
 `src/runtime/feng_array.c` 约 53-151 行的 `feng_array_new_kinded()` 当前执行两次分配：
 
@@ -78,7 +78,7 @@
 
 `length == 0` 时，`items = NULL`。
 
-### 2.3 当前释放路径
+### 2.3 改造前释放路径
 
 `src/runtime/feng_array.c` 约 16-49 行的 `feng_array_finalize_internal()` 当前逻辑为：
 
@@ -86,7 +86,7 @@
 2. `free(a->items)`
 3. header 再由 object core 最终 `free(header)`
 
-### 2.4 当前 cycle collector 相关路径
+### 2.4 改造前 cycle collector 相关路径
 
 `src/runtime/feng_cycle.c` 中当前仍直接依赖 `arr->items`：
 
@@ -229,7 +229,7 @@ collector 中数组遍历与释放都要同步改成基于：
 
 优先文件：
 
-- `dev/feng-array-optimize-pending.md`（本文）
+- `dev/feng-array-optimize-delivered.md`（本文）
 - `docs/feng-lifetime.md` 约 135-150 行
 - `src/runtime/feng_array.c` 约 1-3 行文件头注释
 - `src/runtime/feng_runtime_internal.h` 约 14-31 行数组布局注释
@@ -333,7 +333,7 @@ collector 中数组遍历与释放都要同步改成基于：
 
 | 文件 | 大体行数 | 主要改动 |
 | --- | --- | --- |
-| `dev/feng-array-optimize-pending.md` | 全文 | 记录本方案、边界、步骤与风险 |
+| `dev/feng-array-optimize-delivered.md` | 全文 | 记录本方案、边界、步骤与风险 |
 | `docs/feng-lifetime.md` | 约 135-150 行 | 将数组运行时布局说明收紧为真实实现 |
 | `src/runtime/feng_runtime_internal.h` | 约 14-31 行 | 删除 `items` 字段，更新数组内部布局注释 |
 | `src/runtime/feng_array.c` | 约 1-3 行、16-49 行、53-163 行 | 更新注释、重写创建/访问器/释放路径 |
