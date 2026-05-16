@@ -3120,7 +3120,7 @@ static bool cg_runtime_contract_contains_name(FengSlice name) {
     if (cg_slice_equals_cstr(name, #symbol)) {           \
         return true;                                     \
     }
-#include "runtime/feng_runtime_contract.h"
+#include "runtime/feng_runtime_contract.inc"
 #undef FENG_RUNTIME_CONTRACT
 
     return false;

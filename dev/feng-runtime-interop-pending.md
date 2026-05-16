@@ -218,7 +218,7 @@ extern fn feng_string_length(value: string): long;
 当前最小落地方式：
 
 1. 保持 `runtime/feng_runtime.h` 作为 codegen 继续复用的唯一入口头。
-2. 新增 `src/runtime/feng_runtime_contract.h` 作为 contract 条目清单；该片段既用于在 `feng_runtime.h` 中展开声明，也用于 codegen 侧做 `@runtime` 名字检查。
+2. 新增 `src/runtime/feng_runtime_contract.inc` 作为 contract 条目清单；该片段既用于在 `feng_runtime.h` 中展开声明，也用于 codegen 侧做 `@runtime` 名字检查。
 3. 新增 `src/runtime/feng_runtime_contract.c` 承载 contract helper 实现；helper 仍编入同一个 `libfeng_runtime.a`，不新增独立库。
 
 目标是把 `@runtime` 可声明的受控入口集合明确下来；目录上体现为 `src/runtime/contract/` 与 `src/runtime/` 其余实现文件的区别，而不是继续保留顶层 `src/intrinsic/`。
