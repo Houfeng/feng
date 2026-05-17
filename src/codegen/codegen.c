@@ -16221,6 +16221,8 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                     return false;
                 }
                 break;
+            case FENG_DECL_ENUM:
+                break;
             case FENG_DECL_TYPE:
                 scope.first = decl->as.type_decl.type_params;
                 scope.first_count = decl->as.type_decl.type_param_count;
@@ -16428,6 +16430,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
             case FENG_DECL_GLOBAL_BINDING:
                 /* Already registered + storage emitted in Pass 2b; the
                  * initializer runs from the main wrapper. */
+                continue;
+            case FENG_DECL_ENUM:
                 continue;
             case FENG_DECL_TYPE: {
                 if (d->as.type_decl.type_param_count > 0) {

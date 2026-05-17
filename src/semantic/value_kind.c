@@ -53,6 +53,11 @@ FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl) {
         return FENG_SEMANTIC_VALUE_TRIVIAL;
     }
     switch (decl->kind) {
+        case FENG_DECL_ENUM:
+            /* Enums are nominal in the front-end but lower as plain integer
+             * scalars with no managed lifetime. */
+            return FENG_SEMANTIC_VALUE_TRIVIAL;
+
         case FENG_DECL_TYPE:
             /* Concrete user types live on the heap as
              * `FengManagedHeader` + body; values of these types are

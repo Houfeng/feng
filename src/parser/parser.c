@@ -41,6 +41,7 @@ static void free_decl(FengDecl *decl);
 static void free_annotations(FengAnnotation *annotations, size_t count);
 static void free_parameters(FengParameter *params, size_t count);
 static void free_type_member(FengTypeMember *member);
+static void free_enum_items(FengEnumItem *items, size_t count);
 
 static void free_annotation_fields(FengAnnotation *annotation) {
     size_t arg_index;
@@ -830,6 +831,164 @@ static bool type_ref_is_void_named(const FengTypeRef *type_ref) {
     }
 }
 
+static bool parse_enum_integer_literal(Parser *parser, int64_t *out_value) {
+    bool negative = false;
+    const FengToken *token;
+    int64_t value;
+
+    if (out_value == NULL) {
+        return false;
+    }
+
+    if (parser_match(parser, FENG_TOKEN_MINUS)) {
+        negative = true;
+    }
+
+    token = parser_current(parser);
+    if (token->kind != FENG_TOKEN_INTEGER) {
+        (void)parser_error_current(parser, "enum item initializer must be an integer literal");
+        return false;
+    }
+
+    value = token->value.integer;
+    if (negative) {
+        value = -value;
+    }
+    (void)parser_advance(parser);
+    *out_value = value;
+    return true;
+}
+
+static FengDecl *parse_enum_declaration(Parser *parser,
+                                        FengSlice doc_comment,
+                                        FengVisibility visibility,
+                                        bool is_extern,
+                                        FengAnnotation *annotations,
+                                        size_t annotation_count) {
+    FengToken name_token = parser_current_token(parser);
+    FengDecl *decl;
+    FengSlice enum_name;
+    size_t item_capacity = 0U;
+
+    if (is_extern) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser, "enum declarations cannot be marked 'extern'");
+        return NULL;
+    }
+
+    if (annotation_count > 0U) {
+        free_annotations(annotations, annotation_count);
+        (void)parser_error_current(parser,
+                                   "enum declarations do not support annotations in the current phase");
+        return NULL;
+    }
+
+    decl = new_decl(parser, FENG_DECL_ENUM, name_token, doc_comment);
+    if (decl == NULL) {
+        return NULL;
+    }
+
+    decl->visibility = visibility;
+
+    if (!parser_expect_identifier_like(parser, &enum_name, false, "expected an enum name")) {
+        free_decl(decl);
+        return NULL;
+    }
+    decl->as.enum_decl.name = enum_name;
+
+    if (parser_check(parser, FENG_TOKEN_LT)) {
+        (void)parser_error_current(parser, "enum declarations do not support generic parameters");
+        free_decl(decl);
+        return NULL;
+    }
+    if (parser_check(parser, FENG_TOKEN_COLON)) {
+        (void)parser_error_current(parser, "enum declarations cannot declare parent specs");
+        free_decl(decl);
+        return NULL;
+    }
+    if (parser_check(parser, FENG_TOKEN_LPAREN)) {
+        (void)parser_error_current(parser, "enum declarations cannot declare callable signatures");
+        free_decl(decl);
+        return NULL;
+    }
+    if (!parser_expect(parser, FENG_TOKEN_LBRACE, "enum declarations require '{...}' after the enum name")) {
+        free_decl(decl);
+        return NULL;
+    }
+    if (parser_check(parser, FENG_TOKEN_RBRACE)) {
+        (void)parser_error_current(parser, "enum declarations must declare at least one item");
+        free_decl(decl);
+        return NULL;
+    }
+
+    while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+        FengToken item_token = parser_current_token(parser);
+        FengEnumItem item;
+
+        memset(&item, 0, sizeof(item));
+
+        if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR) ||
+            parser_check(parser, FENG_TOKEN_KW_FN) || parser_check(parser, FENG_TOKEN_KW_EXTERN) ||
+            parser_check(parser, FENG_TOKEN_KW_PU) || parser_check(parser, FENG_TOKEN_KW_PR)) {
+            (void)parser_error_current(parser,
+                                       "enum declarations only allow item names and optional integer literal initializers");
+            free_decl(decl);
+            return NULL;
+        }
+        if (parser_check(parser, FENG_TOKEN_ANNOTATION)) {
+            (void)parser_error_current(parser, "enum items do not support annotations");
+            free_decl(decl);
+            return NULL;
+        }
+
+        if (!parser_expect_identifier_like(parser, &item.name, false, "expected an enum item name")) {
+            free_decl(decl);
+            return NULL;
+        }
+        item.token = item_token;
+
+        if (parser_match(parser, FENG_TOKEN_ASSIGN)) {
+            item.has_explicit_value = true;
+            if (!parse_enum_integer_literal(parser, &item.explicit_value)) {
+                free_decl(decl);
+                return NULL;
+            }
+            if (!parser_check(parser, FENG_TOKEN_COMMA) && !parser_check(parser, FENG_TOKEN_RBRACE)) {
+                (void)parser_error_current(parser,
+                                           "enum item initializer must be a single integer literal");
+                free_decl(decl);
+                return NULL;
+            }
+        }
+
+        if (!APPEND_VALUE(parser,
+                          decl->as.enum_decl.items,
+                          decl->as.enum_decl.item_count,
+                          item_capacity,
+                          item)) {
+            free_decl(decl);
+            return NULL;
+        }
+
+        if (!parser_match(parser, FENG_TOKEN_COMMA)) {
+            break;
+        }
+        if (parser_check(parser, FENG_TOKEN_RBRACE)) {
+            (void)parser_error_current(parser,
+                                       "enum declarations do not allow a trailing ',' after the last item");
+            free_decl(decl);
+            return NULL;
+        }
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RBRACE, "expected '}' to close enum body")) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    return decl;
+}
+
 static FengDecl *parse_type_declaration(Parser *parser,
                                         FengSlice doc_comment,
                                         FengVisibility visibility,
@@ -1614,6 +1773,14 @@ static FengDecl *parse_declaration(Parser *parser) {
 
     if (parser_match(parser, FENG_TOKEN_KW_TYPE)) {
         return parse_type_declaration(parser,
+                                      doc_comment,
+                                      visibility,
+                                      is_extern,
+                                      annotations,
+                                      annotation_count);
+    }
+    if (parser_match(parser, FENG_TOKEN_KW_ENUM)) {
+        return parse_enum_declaration(parser,
                                       doc_comment,
                                       visibility,
                                       is_extern,
@@ -3671,6 +3838,11 @@ static void free_type_member(FengTypeMember *member) {
     free(member);
 }
 
+static void free_enum_items(FengEnumItem *items, size_t count) {
+    (void)count;
+    free(items);
+}
+
 static void free_decl(FengDecl *decl) {
     size_t index;
 
@@ -3695,6 +3867,9 @@ static void free_decl(FengDecl *decl) {
                 free_type_ref(decl->as.type_decl.declared_specs[index]);
             }
             free(decl->as.type_decl.declared_specs);
+            break;
+        case FENG_DECL_ENUM:
+            free_enum_items(decl->as.enum_decl.items, decl->as.enum_decl.item_count);
             break;
         case FENG_DECL_SPEC:
             free_type_params(decl->as.spec_decl.type_params,

@@ -598,6 +598,21 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     }
                 }
                 break;
+            case FENG_DECL_ENUM:
+                fputs("enum ", stream);
+                dump_slice(stream, decl->as.enum_decl.name);
+                fputc('\n', stream);
+                for (member_index = 0U; member_index < decl->as.enum_decl.item_count; ++member_index) {
+                    const FengEnumItem *item = &decl->as.enum_decl.items[member_index];
+
+                    dump_indent(stream, 2);
+                    dump_slice(stream, item->name);
+                    if (item->has_explicit_value) {
+                        fprintf(stream, " = %lld", (long long)item->explicit_value);
+                    }
+                    fputc('\n', stream);
+                }
+                break;
             case FENG_DECL_SPEC:
                 fprintf(stream,
                         "spec %s ",

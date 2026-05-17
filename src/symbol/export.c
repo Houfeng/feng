@@ -2082,6 +2082,13 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             ctx->type_param_count = 0U;
             return decl;
 
+        case FENG_DECL_ENUM:
+            feng_symbol_internal_set_error(out_error,
+                                           path,
+                                           source_decl->token,
+                                           "enum symbol export requires the enum .ft format to be specified first");
+            return NULL;
+
         case FENG_DECL_SPEC:
             decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_SPEC,
                                        source_decl->visibility,

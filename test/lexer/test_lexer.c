@@ -43,9 +43,11 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 26U);
-    ASSERT(feng_reserved_word_count() == 12U);
+    ASSERT(feng_keyword_count() == 27U);
+    ASSERT(feng_reserved_word_count() == 11U);
     ASSERT(feng_builtin_annotation_count() == 8U);
+    ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_SPEC);
     ASSERT(feng_lookup_keyword("fit", 3U, &keyword_kind));
@@ -57,7 +59,7 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(!feng_lookup_keyword("float", 5U, &keyword_kind));
     ASSERT(feng_is_reserved_word("class", 5U));
     ASSERT(feng_is_reserved_word("static", 6U));
-    ASSERT(feng_is_reserved_word("enum", 4U));
+    ASSERT(!feng_is_reserved_word("enum", 4U));
     ASSERT(feng_is_reserved_word("const", 5U));
     ASSERT(feng_is_reserved_word("export", 6U));
     ASSERT(feng_is_reserved_word("import", 6U));
@@ -82,7 +84,6 @@ static void test_reserved_words_rejected(void) {
         "class",
         "struct",
         "static",
-        "enum",
         "const",
         "export",
         "import",
@@ -110,12 +111,14 @@ static void test_reserved_words_rejected(void) {
 
 static void test_new_keywords_and_builtin_type_names(void) {
     const char *source =
-        "spec fit bool string int long byte float double i32 u8 f64\n";
+        "enum spec fit bool string int long byte float double i32 u8 f64\n";
     FengLexer lexer;
     FengToken token;
 
     feng_lexer_init(&lexer, source, strlen(source), "keywords_and_types.f");
 
+    token = next_token(&lexer, FENG_TOKEN_KW_ENUM);
+    assert_lexeme(&token, "enum");
     token = next_token(&lexer, FENG_TOKEN_KW_SPEC);
     assert_lexeme(&token, "spec");
     token = next_token(&lexer, FENG_TOKEN_KW_FIT);

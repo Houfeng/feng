@@ -347,6 +347,13 @@ typedef struct FengCallableSignature {
     FengBlock *body;
 } FengCallableSignature;
 
+typedef struct FengEnumItem {
+    FengToken token;
+    FengSlice name;
+    bool has_explicit_value;
+    int64_t explicit_value;
+} FengEnumItem;
+
 struct FengTypeMember {
     FengToken token;
     FengTypeMemberKind kind;
@@ -368,6 +375,7 @@ struct FengTypeMember {
 typedef enum FengDeclKind {
     FENG_DECL_GLOBAL_BINDING = 0,
     FENG_DECL_TYPE,
+    FENG_DECL_ENUM,
     FENG_DECL_SPEC,
     FENG_DECL_FIT,
     FENG_DECL_FUNCTION
@@ -405,6 +413,11 @@ struct FengDecl {
             FengTypeRef **declared_specs;
             size_t declared_spec_count;
         } type_decl;
+        struct {
+            FengSlice name;
+            FengEnumItem *items;
+            size_t item_count;
+        } enum_decl;
         struct {
             FengSlice name;
             FengTypeParam *type_params; /* generic type parameters, e.g. spec Reader<T> */

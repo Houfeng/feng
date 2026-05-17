@@ -231,6 +231,9 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
             }
             free(decl->as.type_decl.declared_specs);
             break;
+        case FENG_DECL_ENUM:
+            free(decl->as.enum_decl.items);
+            break;
         case FENG_DECL_SPEC:
             free_synthetic_type_params(decl->as.spec_decl.type_params, decl->as.spec_decl.type_param_count);
             for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {

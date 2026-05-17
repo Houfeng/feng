@@ -187,6 +187,44 @@ static void test_member_annotations_and_constructors(void) {
     feng_program_free(program);
 }
 
+static void test_enum_declarations_parse(void) {
+    const char *source =
+        "mod demo.enums;\n"
+        "pu enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "enum SignedCode {\n"
+        "    Ok = 200,\n"
+        "    Retry = -1\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "enum_parse.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    ASSERT(program->declarations[0]->kind == FENG_DECL_ENUM);
+    ASSERT(program->declarations[0]->visibility == FENG_VISIBILITY_PUBLIC);
+    assert_slice_text(program->declarations[0]->as.enum_decl.name, "Status");
+    ASSERT(program->declarations[0]->as.enum_decl.item_count == 2U);
+    assert_slice_text(program->declarations[0]->as.enum_decl.items[0].name, "Ok");
+    ASSERT(!program->declarations[0]->as.enum_decl.items[0].has_explicit_value);
+    assert_slice_text(program->declarations[0]->as.enum_decl.items[1].name, "NotFound");
+    ASSERT(!program->declarations[0]->as.enum_decl.items[1].has_explicit_value);
+
+    ASSERT(program->declarations[1]->kind == FENG_DECL_ENUM);
+    assert_slice_text(program->declarations[1]->as.enum_decl.name, "SignedCode");
+    ASSERT(program->declarations[1]->as.enum_decl.item_count == 2U);
+    ASSERT(program->declarations[1]->as.enum_decl.items[0].has_explicit_value);
+    ASSERT(program->declarations[1]->as.enum_decl.items[0].explicit_value == 200);
+    ASSERT(program->declarations[1]->as.enum_decl.items[1].has_explicit_value);
+    ASSERT(program->declarations[1]->as.enum_decl.items[1].explicit_value == -1);
+
+    feng_program_free(program);
+}
+
 static void test_ast_source_tokens(void) {
     const char *source =
         "pu mod demo.main;\n"
@@ -408,6 +446,53 @@ static void test_parse_error_extern_fn_inside_type(void) {
     ASSERT(error.message != NULL);
     ASSERT(strstr(error.message, "type members cannot use 'extern fn'") != NULL);
     ASSERT(error.token.kind == FENG_TOKEN_KW_EXTERN);
+}
+
+static void test_parse_error_enum_member_declaration(void) {
+    const char *source =
+        "mod demo.enums;\n"
+        "enum Bad {\n"
+        "    let code: int;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "enum_member_error.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message,
+                  "enum declarations only allow item names and optional integer literal initializers") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_KW_LET);
+}
+
+static void test_parse_error_enum_initializer_expression(void) {
+    const char *source =
+        "mod demo.enums;\n"
+        "enum Bad {\n"
+        "    Value = 1 + 2\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "enum_initializer_error.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "enum item initializer must be a single integer literal") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_PLUS);
+}
+
+static void test_parse_error_empty_enum(void) {
+    const char *source =
+        "mod demo.enums;\n"
+        "enum Empty {}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "enum_empty_error.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "enum declarations must declare at least one item") != NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_RBRACE);
 }
 
 static void test_parse_error_missing_top_level_fn_keyword(void) {
@@ -1454,6 +1539,7 @@ int main(void) {
     test_top_level_declarations();
     test_statements_and_expressions();
     test_runtime_annotation_on_extern_function();
+    test_enum_declarations_parse();
     test_match_with_range_and_list_labels();
     test_match_statement_form();
     test_for_in_loop();
@@ -1473,6 +1559,9 @@ int main(void) {
     test_parse_error_extern_fn_with_body();
     test_parse_error_member_fn_missing_body();
     test_parse_error_extern_fn_inside_type();
+    test_parse_error_enum_member_declaration();
+    test_parse_error_enum_initializer_expression();
+    test_parse_error_empty_enum();
     test_parse_error_missing_top_level_fn_keyword();
     test_parse_error_missing_member_fn_keyword();
     test_parse_error_missing_member_binding_keyword();

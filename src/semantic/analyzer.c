@@ -17,6 +17,10 @@ static inline bool decl_is_function_type(const FengDecl *decl) {
            decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE;
 }
 
+static inline bool decl_is_enum_type(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_ENUM;
+}
+
 /* Forward declaration — defined later in this file alongside the witness
  * materialisation helpers. */
 static bool init_spec_witness_subject_key(const FengDecl *type_decl,
@@ -24,10 +28,19 @@ static bool init_spec_witness_subject_key(const FengDecl *type_decl,
                                           FengSemanticSubjectKey *out_key);
 
 static inline FengSlice decl_typeish_name(const FengDecl *decl) {
+    if (decl == NULL) {
+        return (FengSlice){0};
+    }
     if (decl->kind == FENG_DECL_SPEC) {
         return decl->as.spec_decl.name;
     }
-    return decl->as.type_decl.name;
+    if (decl->kind == FENG_DECL_ENUM) {
+        return decl->as.enum_decl.name;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        return decl->as.type_decl.name;
+    }
+    return (FengSlice){0};
 }
 
 typedef struct SymbolEntry {
@@ -386,6 +399,24 @@ static InferredExprType inferred_expr_type_from_decl(const FengDecl *type_decl) 
     type.kind = type_decl != NULL ? FENG_INFERRED_EXPR_TYPE_DECL : FENG_INFERRED_EXPR_TYPE_UNKNOWN;
     type.type_decl = type_decl;
     return type;
+}
+
+static const FengEnumItem *find_enum_item_decl(const FengDecl *enum_decl, FengSlice name) {
+    size_t item_index;
+
+    if (!decl_is_enum_type(enum_decl)) {
+        return NULL;
+    }
+
+    for (item_index = 0U; item_index < enum_decl->as.enum_decl.item_count; ++item_index) {
+        const FengEnumItem *item = &enum_decl->as.enum_decl.items[item_index];
+
+        if (slice_equals(item->name, name)) {
+            return item;
+        }
+    }
+
+    return NULL;
 }
 
 static InferredExprType inferred_expr_type_from_lambda(const FengExpr *lambda_expr) {
@@ -871,6 +902,7 @@ static const FengToken *decl_token(const FengDecl *decl) {
         case FENG_DECL_GLOBAL_BINDING:
             return &decl->as.binding.token;
         case FENG_DECL_TYPE:
+        case FENG_DECL_ENUM:
             return &decl->token;
         case FENG_DECL_SPEC:
             return &decl->token;
@@ -1344,6 +1376,10 @@ static const FengDecl *find_module_public_type_decl(const FengSemanticModule *mo
 
             if (decl->kind == FENG_DECL_TYPE && decl_is_public(decl) &&
                 slice_equals(decl->as.type_decl.name, name)) {
+                return decl;
+            }
+            if (decl->kind == FENG_DECL_ENUM && decl_is_public(decl) &&
+                slice_equals(decl->as.enum_decl.name, name)) {
                 return decl;
             }
             if (decl->kind == FENG_DECL_SPEC && decl_is_public(decl) &&
@@ -3414,6 +3450,26 @@ static bool inferred_expr_type_is_numeric(InferredExprType expr_type) {
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
 
+static bool inferred_expr_type_is_enum(const ResolveContext *context, InferredExprType expr_type) {
+    const FengDecl *type_decl;
+
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            return decl_is_enum_type(expr_type.type_decl);
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            type_decl = resolve_type_ref_decl(context, expr_type.type_ref);
+            return decl_is_enum_type(type_decl);
+
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return false;
+    }
+
+    return false;
+}
+
 static bool inferred_expr_type_is_integer(InferredExprType expr_type) {
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
 
@@ -3478,11 +3534,17 @@ static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContex
                 return false;
             }
             type_decl = resolve_type_ref_decl(context, expr_type.type_ref);
+            if (decl_is_enum_type(type_decl)) {
+                return true;
+            }
             return type_decl != NULL && type_decl->kind == FENG_DECL_TYPE &&
                    type_decl_has_field_members(type_decl) &&
                    type_decl_is_abi_stable(context, type_decl, NULL);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (decl_is_enum_type(expr_type.type_decl)) {
+                return true;
+            }
             return expr_type.type_decl != NULL && expr_type.type_decl->kind == FENG_DECL_TYPE &&
                    type_decl_has_field_members(expr_type.type_decl) &&
                    type_decl_is_abi_stable(context, expr_type.type_decl, NULL);
@@ -4579,7 +4641,13 @@ static bool array_cast_writability_subset(const FengTypeRef *source,
 static bool cast_expr_types_are_valid(const ResolveContext *context,
                                       InferredExprType value_type,
                                       const FengTypeRef *target_type) {
+    const char *target_builtin = type_ref_builtin_canonical_name(target_type);
+
     if (inferred_expr_type_matches_type_ref(context, value_type, target_type)) {
+        return true;
+    }
+    if (inferred_expr_type_is_enum(context, value_type) && target_builtin != NULL &&
+        strcmp(target_builtin, "i32") == 0) {
         return true;
     }
     if (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type)) {
@@ -4778,6 +4846,91 @@ static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *con
     }
 
     return NULL;
+}
+
+static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_decl) {
+    bool saw_explicit = false;
+    bool saw_implicit = false;
+    int64_t *values = NULL;
+    size_t item_index;
+
+    if (context == NULL || context->analysis == NULL || !decl_is_enum_type(enum_decl)) {
+        return true;
+    }
+    if (feng_semantic_lookup_enum_info(context->analysis, enum_decl) != NULL) {
+        return true;
+    }
+
+    if (enum_decl->as.enum_decl.item_count > 0U) {
+        values = (int64_t *)malloc(enum_decl->as.enum_decl.item_count * sizeof(*values));
+        if (values == NULL) {
+            return false;
+        }
+    }
+
+    for (item_index = 0U; item_index < enum_decl->as.enum_decl.item_count; ++item_index) {
+        const FengEnumItem *item = &enum_decl->as.enum_decl.items[item_index];
+        size_t previous_index;
+
+        if (item->has_explicit_value) {
+            saw_explicit = true;
+        } else {
+            saw_implicit = true;
+        }
+        if (saw_explicit && saw_implicit) {
+            free(values);
+            return resolver_append_error(
+                context,
+                item->token,
+                format_message("enum '%.*s' cannot mix explicit and implicit item values",
+                               (int)enum_decl->as.enum_decl.name.length,
+                               enum_decl->as.enum_decl.name.data));
+        }
+
+        for (previous_index = 0U; previous_index < item_index; ++previous_index) {
+            if (slice_equals(enum_decl->as.enum_decl.items[previous_index].name, item->name)) {
+                free(values);
+                return resolver_append_error(
+                    context,
+                    item->token,
+                    format_message("enum '%.*s' has duplicate item name '%.*s'",
+                                   (int)enum_decl->as.enum_decl.name.length,
+                                   enum_decl->as.enum_decl.name.data,
+                                   (int)item->name.length,
+                                   item->name.data));
+            }
+        }
+
+        values[item_index] = item->has_explicit_value ? item->explicit_value : (int64_t)item_index;
+        for (previous_index = 0U; previous_index < item_index; ++previous_index) {
+            if (values[previous_index] == values[item_index]) {
+                int64_t duplicate_value = values[item_index];
+
+                free(values);
+                return resolver_append_error(
+                    context,
+                    item->token,
+                    format_message("enum '%.*s' has duplicate item value %lld",
+                                   (int)enum_decl->as.enum_decl.name.length,
+                                   enum_decl->as.enum_decl.name.data,
+                                   (long long)duplicate_value));
+            }
+        }
+    }
+
+    for (item_index = 0U; item_index < enum_decl->as.enum_decl.item_count; ++item_index) {
+        if (!feng_semantic_record_enum_item_info(context->analysis,
+                                                 enum_decl,
+                                                 &enum_decl->as.enum_decl.items[item_index],
+                                                 item_index,
+                                                 values[item_index])) {
+            free(values);
+            return false;
+        }
+    }
+
+    free(values);
+    return true;
 }
 
 static bool record_type_fact_for_site(ResolveContext *context,
@@ -7667,6 +7820,29 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     InferredExprType owner_type;
     const char *builtin_name;
 
+    {
+        ResolvedTypeTarget type_target = resolve_type_target_expr(context, expr->as.member.object, false);
+
+        if (decl_is_enum_type(type_target.type_decl)) {
+            if (!ensure_enum_decl_info(context, type_target.type_decl)) {
+                return false;
+            }
+            if (feng_semantic_find_enum_item_info(context->analysis,
+                                                  type_target.type_decl,
+                                                  expr->as.member.member) != NULL) {
+                return true;
+            }
+            return resolver_append_error(
+                context,
+                expr->token,
+                format_message("enum '%.*s' has no item '%.*s'",
+                               (int)type_target.type_decl->as.enum_decl.name.length,
+                               type_target.type_decl->as.enum_decl.name.data,
+                               (int)expr->as.member.member.length,
+                               expr->as.member.member.data));
+        }
+    }
+
     owner_type = resolve_expr_owner_type(context,
                                          expr->as.member.object,
                                          &owner_type_decl,
@@ -8175,6 +8351,10 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         case FENG_EXPR_MEMBER: {
             const FengExpr *object = target->as.member.object;
 
+            if (decl_is_enum_type(resolve_type_target_expr(context, object, false).type_decl)) {
+                return append_assignment_target_not_writable_error(context, target);
+            }
+
             if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
                 const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
 
@@ -8382,6 +8562,13 @@ static InferredExprType infer_identifier_expr_type(ResolveContext *context, Feng
 }
 
 static InferredExprType infer_member_expr_type(ResolveContext *context, const FengExpr *expr) {
+    ResolvedTypeTarget type_target = resolve_type_target_expr(context, expr->as.member.object, false);
+
+    if (decl_is_enum_type(type_target.type_decl) &&
+        find_enum_item_decl(type_target.type_decl, expr->as.member.member) != NULL) {
+        return inferred_expr_type_from_decl(type_target.type_decl);
+    }
+
     if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
         const AliasEntry *alias =
             find_unshadowed_alias(context, expr->as.member.object->as.identifier);
@@ -10729,8 +10916,12 @@ static char *format_inferred_expr_type_name(InferredExprType type) {
             return format_type_ref_name(type.type_ref);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
-            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE) {
-                return format_module_name(&type.type_decl->as.type_decl.name, 1U);
+            if (type.type_decl != NULL) {
+                FengSlice name = decl_typeish_name(type.type_decl);
+
+                if (name.data != NULL) {
+                    return format_module_name(&name, 1U);
+                }
             }
             return duplicate_cstr("<type>");
 
@@ -10786,6 +10977,10 @@ static bool type_ref_is_abi_field_pointer_target(const ResolveContext *context,
         return false;
     }
 
+    if (decl_is_enum_type(type_decl)) {
+        return true;
+    }
+
     if (type_decl->kind == FENG_DECL_TYPE) {
         return annotations_contain_kind(type_decl->annotations,
                                         type_decl->annotation_count,
@@ -10802,6 +10997,7 @@ static bool type_ref_is_abi_field_type(const ResolveContext *context,
                                        const FengTypeRef *type_ref,
                                        const AbiTrace *trace) {
     const char *builtin_name;
+    const FengDecl *type_decl;
 
     if (type_ref == NULL) {
         return false;
@@ -10810,6 +11006,11 @@ static bool type_ref_is_abi_field_type(const ResolveContext *context,
     builtin_name = type_ref_builtin_canonical_name(type_ref);
     if (builtin_name != NULL) {
         return strcmp(builtin_name, "void") != 0 && strcmp(builtin_name, "string") != 0;
+    }
+
+    type_decl = resolve_type_ref_decl(context, type_ref);
+    if (decl_is_enum_type(type_decl)) {
+        return true;
     }
 
     return type_ref->kind == FENG_TYPE_REF_POINTER &&
@@ -10837,6 +11038,9 @@ static bool type_ref_is_abi_compatible_array(const ResolveContext *context,
     }
 
     element_decl = resolve_type_ref_decl(context, type_ref->as.inner);
+    if (decl_is_enum_type(element_decl)) {
+        return true;
+    }
     return element_decl != NULL && element_decl->kind == FENG_DECL_TYPE &&
            type_decl_is_abi_stable(context, element_decl, trace);
 }
@@ -10919,6 +11123,10 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
     AbiTrace next_trace;
     size_t member_index;
     size_t param_index;
+
+    if (decl_is_enum_type(decl)) {
+        return true;
+    }
 
     if (decl == NULL || (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_SPEC) ||
         !annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI) ||
@@ -11415,6 +11623,9 @@ static bool type_ref_uses_c_boundary_compatible_named_types(const ResolveContext
             if (type_decl == NULL) {
                 return false;
             }
+            if (decl_is_enum_type(type_decl)) {
+                return true;
+            }
             if (type_decl->kind == FENG_DECL_TYPE) {
                 return annotations_contain_kind(type_decl->annotations,
                                                 type_decl->annotation_count,
@@ -11473,6 +11684,9 @@ static bool inferred_expr_type_uses_c_boundary_compatible_named_types(
         case FENG_INFERRED_EXPR_TYPE_DECL:
             if (type.type_decl == NULL) {
                 return false;
+            }
+            if (decl_is_enum_type(type.type_decl)) {
+                return true;
             }
             if (type.type_decl->kind == FENG_DECL_TYPE) {
                 return annotations_contain_kind(type.type_decl->annotations,
@@ -12553,6 +12767,48 @@ static bool import_public_names(const FengSemanticModule *target_module,
                             use_decl->token,
                             format_message(
                                 "imported type '%.*s' from module '%s' conflicts with an existing visible type name",
+                                (int)name.length,
+                                name.data,
+                                module_name != NULL ? module_name : "<unknown>"));
+                        break;
+                    }
+
+                    entry.name = name;
+                    entry.provider_module = target_module;
+                    entry.decl = decl;
+                    ok = append_raw((void **)visible_types,
+                                    visible_type_count,
+                                    visible_type_capacity,
+                                    sizeof(entry),
+                                    &entry);
+                    break;
+                }
+
+                case FENG_DECL_ENUM: {
+                    VisibleTypeEntry entry;
+
+                    name = decl->as.enum_decl.name;
+                    if (find_slice_index(seen_type_names, seen_type_count, name) < seen_type_count) {
+                        break;
+                    }
+                    if (!append_slice(&seen_type_names, &seen_type_count, &seen_type_capacity, name)) {
+                        ok = false;
+                        break;
+                    }
+
+                    index = find_visible_type_index(*visible_types, *visible_type_count, name);
+                    if (index < *visible_type_count) {
+                        if ((*visible_types)[index].provider_module == target_module) {
+                            break;
+                        }
+                        ok = append_error(
+                            errors,
+                            error_count,
+                            error_capacity,
+                            program->path,
+                            use_decl->token,
+                            format_message(
+                                "imported enum '%.*s' from module '%s' conflicts with an existing visible type name",
                                 (int)name.length,
                                 name.data,
                                 module_name != NULL ? module_name : "<unknown>"));
@@ -15784,6 +16040,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
         case FENG_DECL_GLOBAL_BINDING:
             return resolve_binding(context, &decl->as.binding, false, false);
 
+        case FENG_DECL_ENUM:
+            return ensure_enum_decl_info(context, decl);
+
         case FENG_DECL_TYPE: {
             /* G4-1: Push the type's own type parameters into scope so that
              * field types, declared spec refs, and member methods can all
@@ -16278,6 +16537,39 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                     }
 
                     entry.name = decl->as.type_decl.name;
+                    entry.provider_module = module;
+                    entry.decl = decl;
+                    ok = append_raw((void **)&visible_types,
+                                    &visible_type_count,
+                                    &visible_type_capacity,
+                                    sizeof(entry),
+                                    &entry);
+                    break;
+                }
+
+                case FENG_DECL_ENUM: {
+                    VisibleTypeEntry entry;
+
+                    index = find_visible_type_index(visible_types, visible_type_count, decl->as.enum_decl.name);
+                    if (index < visible_type_count) {
+                        char *message = format_message(
+                            "enum declaration '%.*s' conflicts with an existing visible type name",
+                            (int)decl->as.enum_decl.name.length,
+                            decl->as.enum_decl.name.data);
+
+                        ok = append_error(errors,
+                                          error_count,
+                                          error_capacity,
+                                          program->path,
+                                          *decl_token(decl),
+                                          message);
+                        break;
+                    }
+                    if (!ok) {
+                        break;
+                    }
+
+                    entry.name = decl->as.enum_decl.name;
                     entry.provider_module = module;
                     entry.decl = decl;
                     ok = append_raw((void **)&visible_types,

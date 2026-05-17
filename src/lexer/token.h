@@ -11,6 +11,7 @@ extern "C" {
 
 #define FENG_KEYWORD_LIST(X) \
     X(TYPE, "type") \
+    X(ENUM, "enum") \
     X(SPEC, "spec") \
     X(FIT, "fit") \
     X(EXTERN, "extern") \
@@ -41,7 +42,6 @@ extern "C" {
     X(CLASS, "class") \
     X(STRUCT, "struct") \
     X(STATIC, "static") \
-    X(ENUM, "enum") \
     X(CONST, "const") \
     X(EXPORT, "export") \
     X(IMPORT, "import") \

@@ -2389,6 +2389,16 @@ static size_t decl_end(const FengDecl *decl) {
                 }
             }
             break;
+        case FENG_DECL_ENUM:
+            if (decl->as.enum_decl.item_count > 0U) {
+                size_t limit = token_end_offset(
+                    decl->as.enum_decl.items[decl->as.enum_decl.item_count - 1U].token);
+
+                if (limit > end) {
+                    end = limit;
+                }
+            }
+            break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 size_t limit = member_end(decl->as.type_decl.members[index]);
@@ -2582,6 +2592,11 @@ static size_t decl_end_for_source(const char *source, const FengDecl *decl) {
     }
     end = decl_end(decl);
     switch (decl->kind) {
+        case FENG_DECL_ENUM:
+            if (matching_brace_end_after_offset(source, token_end_offset(decl->token), &close_end)) {
+                end = max_size(end, close_end);
+            }
+            break;
         case FENG_DECL_TYPE:
             if (matching_brace_end_after_offset(source, token_end_offset(decl->token), &close_end)) {
                 end = max_size(end, close_end);
@@ -3191,6 +3206,8 @@ static FengSlice decl_name(const FengDecl *decl) {
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
             return decl->as.binding.name;
+        case FENG_DECL_ENUM:
+            return decl->as.enum_decl.name;
         case FENG_DECL_TYPE:
             return decl->as.type_decl.name;
         case FENG_DECL_SPEC:
@@ -3220,7 +3237,8 @@ static const FengDecl *find_module_decl_by_name(const FengSemanticModule *module
         for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
             const FengDecl *decl = program->declarations[decl_index];
             bool is_value = decl->kind == FENG_DECL_FUNCTION || decl->kind == FENG_DECL_GLOBAL_BINDING;
-            bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_SPEC;
+            bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+                           decl->kind == FENG_DECL_SPEC;
 
             if (public_only && decl->visibility != FENG_VISIBILITY_PUBLIC) {
                 continue;
@@ -3255,7 +3273,8 @@ static const FengDecl *find_program_decl_by_name(const FengProgram *program,
     for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
         const FengDecl *decl = program->declarations[decl_index];
         bool is_value = decl->kind == FENG_DECL_FUNCTION || decl->kind == FENG_DECL_GLOBAL_BINDING;
-        bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_SPEC;
+        bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+                       decl->kind == FENG_DECL_SPEC;
 
         if (public_only && decl->visibility != FENG_VISIBILITY_PUBLIC) {
             continue;
@@ -3367,6 +3386,8 @@ static bool symbol_decl_matches_ast_decl_kind(const FengSymbolDeclView *decl,
     switch (ast_decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
             return feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_BINDING;
+        case FENG_DECL_ENUM:
+            return false;
         case FENG_DECL_TYPE:
             return feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE;
         case FENG_DECL_SPEC:
@@ -4336,7 +4357,8 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
         if (decl->kind == FENG_DECL_GLOBAL_BINDING) {
             return resolve_named_type_ref(session, program, decl->as.binding.type);
         }
-        if (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_SPEC) {
+        if (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+            decl->kind == FENG_DECL_SPEC) {
             return decl;
         }
     }
@@ -4398,6 +4420,8 @@ static bool find_decl_token_hit(const FengDecl *decl,
                     return true;
                 }
             }
+            break;
+        case FENG_DECL_ENUM:
             break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
@@ -4660,6 +4684,8 @@ static bool find_type_ref_hit(const FengDecl *decl,
                     return true;
                 }
             }
+            break;
+        case FENG_DECL_ENUM:
             break;
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
@@ -4977,6 +5003,8 @@ static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
             return find_expr_hit(decl->as.binding.initializer, offset);
+        case FENG_DECL_ENUM:
+            break;
         case FENG_DECL_FUNCTION:
             return find_expr_hit_in_block(decl->as.function_decl.body, offset);
         case FENG_DECL_TYPE:
@@ -5155,6 +5183,11 @@ static bool decl_signature_to_string(FengLspString *buffer, const FengDecl *decl
                                        decl->as.binding.name.length) &&
                    string_append_cstr(buffer, ": ") &&
                    type_ref_to_string(buffer, decl->as.binding.type);
+        case FENG_DECL_ENUM:
+            return string_append_cstr(buffer, "enum ") &&
+                   string_append_bytes(buffer,
+                                       decl->as.enum_decl.name.data,
+                                       decl->as.enum_decl.name.length);
         case FENG_DECL_TYPE:
             return string_append_cstr(buffer, "type ") &&
                    string_append_bytes(buffer, decl->as.type_decl.name.data, decl->as.type_decl.name.length) &&
@@ -6301,6 +6334,8 @@ static const FengExpr *find_call_hit_in_decl(const FengDecl *decl, size_t offset
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
             return find_call_hit_expr(decl->as.binding.initializer, offset);
+        case FENG_DECL_ENUM:
+            break;
         case FENG_DECL_FUNCTION:
             return find_call_hit_in_block(decl->as.function_decl.body, offset);
         case FENG_DECL_TYPE:
@@ -7210,6 +7245,8 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
                                                     offset,
                                                     locals,
                                                     target);
+        case FENG_DECL_ENUM:
+            return false;
         case FENG_DECL_FUNCTION:
             return resolve_object_field_target_block(session,
                                                      program,
@@ -8081,6 +8118,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                                               decl->as.binding.initializer,
                                               target,
                                               references);
+        case FENG_DECL_ENUM:
+            return true;
         case FENG_DECL_FUNCTION:
             return collect_param_declarations(source,
                                               decl->as.function_decl.params,
@@ -8433,6 +8472,8 @@ static bool find_symbol_decl_token_hit(const FengLspCacheQueryContext *context,
                 }
             }
             break;
+        case FENG_DECL_ENUM:
+            break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 if (find_symbol_decl_token_hit_member(context,
@@ -8686,6 +8727,8 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
                     return true;
                 }
             }
+            break;
+        case FENG_DECL_ENUM:
             break;
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
@@ -10343,7 +10386,8 @@ static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysis
         if (decl->kind == FENG_DECL_GLOBAL_BINDING) {
             return resolve_named_type_ref(session, program, decl->as.binding.type);
         }
-        if (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_SPEC) {
+        if (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+            decl->kind == FENG_DECL_SPEC) {
             return decl;
         }
     }

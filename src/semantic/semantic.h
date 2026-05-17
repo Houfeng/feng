@@ -69,6 +69,21 @@ typedef struct FengSemanticTypeFact {
     const FengDecl *type_decl;
 } FengSemanticTypeFact;
 
+typedef struct FengSemanticEnumItemInfo {
+    const FengEnumItem *item;
+    size_t ordinal;
+    int64_t value;
+} FengSemanticEnumItemInfo;
+
+typedef struct FengSemanticEnumInfo {
+    const FengDecl *enum_decl;
+    const FengEnumItem *first_item;
+    int64_t first_value;
+    FengSemanticEnumItemInfo *items;
+    size_t item_count;
+    size_t item_capacity;
+} FengSemanticEnumInfo;
+
 /* Source classification for a single (type_decl, spec_decl) satisfaction
  * relation. See dev/feng-spec-semantic-draft.md §6 / §9.1. The distinction
  * between HEAD and PARENT preserves the provenance chain needed for
@@ -239,6 +254,9 @@ typedef struct FengSemanticAnalysis {
     FengSemanticTypeFact *type_facts;
     size_t type_fact_count;
     size_t type_fact_capacity;
+    FengSemanticEnumInfo *enum_infos;
+    size_t enum_info_count;
+    size_t enum_info_capacity;
     FengSpecRelation *spec_relations;
     size_t spec_relation_count;
     size_t spec_relation_capacity;
@@ -315,6 +333,20 @@ bool feng_semantic_record_type_fact(const FengSemanticAnalysis *analysis,
 
 const FengSemanticTypeFact *feng_semantic_lookup_type_fact(const FengSemanticAnalysis *analysis,
                                                            const void *site);
+
+bool feng_semantic_record_enum_item_info(const FengSemanticAnalysis *analysis,
+                                         const FengDecl *enum_decl,
+                                         const FengEnumItem *item,
+                                         size_t ordinal,
+                                         int64_t value);
+
+const FengSemanticEnumInfo *feng_semantic_lookup_enum_info(const FengSemanticAnalysis *analysis,
+                                                           const FengDecl *enum_decl);
+
+const FengSemanticEnumItemInfo *feng_semantic_find_enum_item_info(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *enum_decl,
+    FengSlice item_name);
 
 /* Internal post-pass entry — populates analysis->type_markers. Idempotent.
  * Implemented in cyclic.c; declared here so analyzer.c can call it on the

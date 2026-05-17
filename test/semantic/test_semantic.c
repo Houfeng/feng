@@ -10921,9 +10921,321 @@ static void test_spec_equality_int_not_recorded(void) {
 
 /* --- Value-kind classification tests (dev/feng-value-model-delivered.md §6.1) --- */
 
+static const FengDecl *find_enum_decl_by_name(
+        const FengSemanticAnalysis *analysis, const char *name) {
+    size_t name_len = strlen(name);
+    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        for (size_t pi = 0U; pi < mod->program_count; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            for (size_t di = 0U; di < prog->declaration_count; ++di) {
+                const FengDecl *d = prog->declarations[di];
+                if (d->kind != FENG_DECL_ENUM) continue;
+                const FengSlice *n = &d->as.enum_decl.name;
+                if (n->length == name_len &&
+                    memcmp(n->data, name, name_len) == 0) {
+                    return d;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 static FengSlice slice_from_cstr(const char *literal) {
     FengSlice s = { literal, strlen(literal) };
     return s;
+}
+
+static void test_enum_info_tracks_implicit_values(void) {
+    const char *src =
+        "pu mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound,\n"
+        "    InternalError\n"
+        "}\n"
+        "fn pick(): Status {\n"
+        "    return Status.NotFound;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_info_implicit.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *status;
+    const FengSemanticEnumInfo *info;
+    const FengSemanticEnumItemInfo *ok_info;
+    const FengSemanticEnumItemInfo *missing_info;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    status = find_enum_decl_by_name(analysis, "Status");
+    ASSERT(status != NULL);
+    info = feng_semantic_lookup_enum_info(analysis, status);
+    ASSERT(info != NULL);
+    ASSERT(info->first_item == &status->as.enum_decl.items[0]);
+    ASSERT(info->first_value == 0);
+    ASSERT(info->item_count == 3U);
+
+    ok_info = feng_semantic_find_enum_item_info(analysis, status, slice_from_cstr("NotFound"));
+    ASSERT(ok_info != NULL);
+    ASSERT(ok_info->ordinal == 1U);
+    ASSERT(ok_info->value == 1);
+
+    missing_info = feng_semantic_find_enum_item_info(analysis, status, slice_from_cstr("Missing"));
+    ASSERT(missing_info == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_enum_info_tracks_explicit_values_and_cast_to_int(void) {
+    const char *src =
+        "pu mod demo.enums;\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "fn code(): int {\n"
+        "    return (int)HttpStatus.NotFound;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_info_explicit.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *status;
+    const FengSemanticEnumInfo *info;
+    const FengSemanticEnumItemInfo *item_info;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    status = find_enum_decl_by_name(analysis, "HttpStatus");
+    ASSERT(status != NULL);
+    info = feng_semantic_lookup_enum_info(analysis, status);
+    ASSERT(info != NULL);
+    ASSERT(info->first_item == &status->as.enum_decl.items[0]);
+    ASSERT(info->first_value == 200);
+
+    item_info = feng_semantic_find_enum_item_info(analysis, status, slice_from_cstr("NotFound"));
+    ASSERT(item_info != NULL);
+    ASSERT(item_info->ordinal == 1U);
+    ASSERT(item_info->value == 404);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_mixed_explicit_and_implicit_values(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok = 200,\n"
+        "    NotFound\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_mixed_values_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_mixed_values_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "cannot mix explicit and implicit item values") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_duplicate_item_name(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Ok\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_duplicate_name_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_duplicate_name_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "duplicate item name 'Ok'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_duplicate_item_value(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok = 200,\n"
+        "    AlsoOk = 200\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_duplicate_value_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_duplicate_value_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "duplicate item value 200") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_int_to_enum_cast(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "fn bad(): Status {\n"
+        "    return (Status)1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_cast_from_int_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_cast_from_int_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "to 'Status' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_relational_compare_is_rejected(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "fn bad(): bool {\n"
+        "    return Status.Ok < Status.NotFound;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_relational_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_relational_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '<' requires operands of the same numeric type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_accepts_enum_types(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "@cdecl(\"m\")\n"
+        "extern fn fetch(status: Status): Status;\n";
+    FengProgram *program = parse_program_or_die("extern_enum_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_abi_type_accepts_enum_field(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "@abi\n"
+        "type Packet {\n"
+        "    var status: Status;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("abi_enum_field_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_kind_enum_is_trivial(void) {
+    const char *src =
+        "pu mod demo.vk;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("vk_enum.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *status;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    status = find_enum_decl_by_name(analysis, "Status");
+    ASSERT(status != NULL);
+    ASSERT(feng_semantic_value_kind_of_decl(status) == FENG_SEMANTIC_VALUE_TRIVIAL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_value_kind_builtin_classifies_string_as_managed_pointer(void) {
@@ -12007,6 +12319,17 @@ int main(void) {
     test_main_entry_bad_signature_is_rejected_for_bin();
     test_multiple_main_entries_rejected_for_bin();
     test_lib_target_skips_main_check();
+
+    test_enum_info_tracks_implicit_values();
+    test_enum_info_tracks_explicit_values_and_cast_to_int();
+    test_enum_rejects_mixed_explicit_and_implicit_values();
+    test_enum_rejects_duplicate_item_name();
+    test_enum_rejects_duplicate_item_value();
+    test_enum_rejects_int_to_enum_cast();
+    test_enum_relational_compare_is_rejected();
+    test_extern_function_accepts_enum_types();
+    test_abi_type_accepts_enum_field();
+    test_value_kind_enum_is_trivial();
 
     test_value_kind_builtin_classifies_string_as_managed_pointer();
     test_value_kind_builtin_classifies_numerics_and_bool_as_trivial();
