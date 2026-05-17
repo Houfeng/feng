@@ -109,7 +109,7 @@ pu fn create_point_export(x: int, y: int): Point {
 - `@union` 仅适用于对象形式的 `@abi type`,不适用于 callable-form 的 `@abi spec`。
 - 方法、构造函数、访问控制和注解本身都不参与 `@abi type` 的字段 ABI 校验; 方法定义不改变 payload 结果。
 - `@abi type` 进入 ABI 边界时,传值或传指针完全由签名决定: 参数类型为 `T` 则按 ABI payload 值语义传递,参数类型为 `T*` 则传递该 payload 的地址; 编译器不做隐式兜底转换。
-- 在 `extern fn` 导入场景中,无字段对象形式 `@abi type` 只能以 `T*` 形态出现,不能按值写成 `T`。
+- 在 `extern fn`、顶层 `@abi fn` 与 callable-form `@abi spec` 中,无字段对象形式 `@abi type` 只能以 `T*` 形态出现,不能按值写成 `T`。
 - 当 `extern fn` 或顶层 `@abi fn` 的参数位写成 `T`（其中 `T` 是声明了字段的对象形式 `@abi type`）时,该 ABI 位在 C surface 上使用隐藏的 `T__AbiLayout` 结构按值传递; 进入 Feng 函数体时,编译器会把该 payload 装箱为新的托管 `T` 实例供后续语义继续使用。
 - 当 `extern fn` 或顶层 `@abi fn` 的返回位写成 `T`（其中 `T` 是声明了字段的对象形式 `@abi type`）时,该 ABI 位同样按隐藏的 `T__AbiLayout` 值语义返回; 从 C 进入 Feng 时,编译器必须把返回的 payload 重建为新的托管 `T` 实例,而从 Feng 导出到 ABI surface 时,编译器必须从 `T` 对象中抽取出对应 payload 返回。
 - 无字段对象形式 `@abi type` 不生成按值 `T__AbiLayout`; 其 `T*` 在 C surface 上按 opaque pointer 处理。
@@ -149,11 +149,11 @@ callable-form 的 `spec` 在标注 `@abi` 后,用于定义 ABI 函数签名类�
 规则说明:
 
 - `@abi spec` 仅适用于 callable-form `spec`; 对象形式的 `spec` 不得标记 `@abi`、`@union` 或调用方式注解。
-- 编译器必须检查 `@abi spec` 的全部参数与返回值是否 ABI 兼容。
+- 编译器必须检查 `@abi spec` 的全部参数与返回值是否 ABI 兼容; 其中无字段对象形式 `@abi type` 只能以 `T*` 形态出现。
 - `Foo` 本身仍是普通 callable-form `spec`,不引入新的运行时差异; `Foo*` 属于指针类型体系,与 `T*` 同级并遵循相同的不透明规则。
 - `Foo*` 可直接用作 `extern fn` 的参数类型、返回类型以及 `@abi type` 的成员字段类型。
 - 当前版本中,`@abi fn` 仅适用于顶层 `fn`; 方法、lambda、闭包、绑定方法值都不是合法的 `@abi fn`。
-- 顶层 `@abi fn` 若要进入 ABI 边界,其全部参数与返回值必须 ABI 兼容。
+- 顶层 `@abi fn` 若要进入 ABI 边界,其全部参数与返回值必须 ABI 兼容; 其中无字段对象形式 `@abi type` 只能以 `T*` 形态出现。
 - 顶层非公开 `@abi fn` 可作为 ABI 回调函数来源; 顶层 `pu @abi fn` 会生成公开的 C ABI 导出符号。
 - `.fb` 包中的头文件与导出清单由公开 `@abi` 接口自动生成。
 - `@abi fn` 内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回约定; 未捕获异常不得穿越 ABI 边界传播。

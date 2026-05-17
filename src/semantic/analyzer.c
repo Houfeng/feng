@@ -10917,6 +10917,11 @@ static bool inferred_expr_type_is_abi_stable(const ResolveContext *context,
     return false;
 }
 
+static bool type_ref_uses_c_boundary_compatible_named_types(const ResolveContext *context,
+                                                            const FengTypeRef *type_ref,
+                                                            bool allow_void,
+                                                            bool pointer_pointee);
+
 static bool type_decl_is_abi_stable(const ResolveContext *context,
                                           const FengDecl *decl,
                                           const AbiTrace *trace) {
@@ -10955,13 +10960,23 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
             if (!type_ref_is_abi_stable(context,
                                               decl->as.spec_decl.as.callable.params[param_index].type,
                                               false,
-                                              &next_trace)) {
+                                              &next_trace) ||
+                !type_ref_uses_c_boundary_compatible_named_types(
+                    context,
+                    decl->as.spec_decl.as.callable.params[param_index].type,
+                    false,
+                    false)) {
                 return false;
             }
         }
 
         return type_ref_is_abi_stable(
-            context, decl->as.spec_decl.as.callable.return_type, true, &next_trace);
+                   context, decl->as.spec_decl.as.callable.return_type, true, &next_trace) &&
+               type_ref_uses_c_boundary_compatible_named_types(
+                   context,
+                   decl->as.spec_decl.as.callable.return_type,
+                   true,
+                   false);
     }
 
     for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
@@ -11148,7 +11163,8 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             char *type_name;
             bool ok;
 
-            if (type_ref_is_abi_stable(context, param->type, false, &trace)) {
+            if (type_ref_is_abi_stable(context, param->type, false, &trace) &&
+                type_ref_uses_c_boundary_compatible_named_types(context, param->type, false, false)) {
                 continue;
             }
 
@@ -11168,7 +11184,9 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
         }
 
         if (!type_ref_is_abi_stable(
-                context, decl->as.spec_decl.as.callable.return_type, true, &trace)) {
+                context, decl->as.spec_decl.as.callable.return_type, true, &trace) ||
+            !type_ref_uses_c_boundary_compatible_named_types(
+                context, decl->as.spec_decl.as.callable.return_type, true, false)) {
             char *type_name = format_type_ref_name(decl->as.spec_decl.as.callable.return_type);
             bool ok = resolver_append_error(
                 context,
@@ -11212,6 +11230,12 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
 
     return true;
 }
+
+static bool inferred_expr_type_uses_c_boundary_compatible_named_types(
+    const ResolveContext *context,
+    InferredExprType type,
+    bool allow_void,
+    bool pointer_pointee);
 
 static bool validate_abi_callable_signature(ResolveContext *context,
                                              FengToken token,
@@ -11321,7 +11345,8 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         char *type_name;
         bool ok;
 
-        if (type_ref_is_abi_stable(context, param->type, false, NULL)) {
+        if (type_ref_is_abi_stable(context, param->type, false, NULL) &&
+            type_ref_uses_c_boundary_compatible_named_types(context, param->type, false, false)) {
             continue;
         }
 
@@ -11346,7 +11371,9 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     }
 
     if (!inferred_expr_type_is_abi_stable(
-            context, callable_effective_return_type(context, callable), true, NULL)) {
+            context, callable_effective_return_type(context, callable), true, NULL) ||
+        !inferred_expr_type_uses_c_boundary_compatible_named_types(
+            context, callable_effective_return_type(context, callable), true, false)) {
         char *type_name = format_inferred_expr_type_name(callable_effective_return_type(context, callable));
         bool ok = resolver_append_error(
             context,
@@ -11432,6 +11459,45 @@ static bool type_ref_is_extern_c_abi_compatible(const ResolveContext *context,
                                                            type_ref,
                                                            allow_void,
                                                            false);
+}
+
+static bool inferred_expr_type_uses_c_boundary_compatible_named_types(
+    const ResolveContext *context,
+    InferredExprType type,
+    bool allow_void,
+    bool pointer_pointee) {
+    const char *builtin_name;
+
+    switch (type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+            builtin_name = canonical_builtin_type_name(type.builtin_name);
+            return builtin_name != NULL && (strcmp(builtin_name, "void") != 0 || allow_void);
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return type_ref_uses_c_boundary_compatible_named_types(context,
+                                                                   type.type_ref,
+                                                                   allow_void,
+                                                                   pointer_pointee);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (type.type_decl == NULL) {
+                return false;
+            }
+            if (type.type_decl->kind == FENG_DECL_TYPE) {
+                return annotations_contain_kind(type.type_decl->annotations,
+                                                type.type_decl->annotation_count,
+                                                FENG_ANNOTATION_ABI) &&
+                       (pointer_pointee || type_decl_has_field_members(type.type_decl));
+            }
+
+            return type_decl_is_abi_stable(context, type.type_decl, NULL);
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return false;
+    }
+
+    return false;
 }
 
 static bool validate_extern_function_signature(ResolveContext *context, const FengDecl *decl) {

@@ -1158,6 +1158,88 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
     feng_program_free(program);
 }
 
+static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "fn roundtrip(handle: Handle*): Handle* {\n"
+        "    return handle;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_pointer_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "fn close(handle: Handle): int {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_fieldless_value_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "function 'close' cannot be marked as @abi because parameter 'handle' uses non-ABI-stable type 'Handle'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "fn make_handle(): Handle {\n"
+        "    return Handle {};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_fn_fieldless_value_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "function 'make_handle' cannot be marked as @abi because return type 'Handle' is not ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_accepts_abi_value_param_and_return(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1539,6 +1621,29 @@ static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
     feng_program_free(program);
 }
 
+static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "spec HandleCb(handle: Handle*): Handle*;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_pointer_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fixed_callable_spec_accepts_abi_array_parameter(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1601,6 +1706,32 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
     feng_program_free(program);
 }
 
+static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "spec HandleCb(handle: Handle): int;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_value_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_callable_spec_fieldless_value_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'HandleCb' cannot be marked as @abi because parameter 'handle' uses non-ABI-stable type 'Handle'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1642,6 +1773,32 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
                   "type 'Cb' cannot be marked as @abi because return type 'Bag' is not ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@abi\n"
+        "spec HandleCb(): Handle;\n";
+    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_value_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fixed_callable_spec_fieldless_value_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'HandleCb' cannot be marked as @abi because return type 'Handle' is not ABI-stable") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -11478,6 +11635,9 @@ int main(void) {
     test_fixed_type_rejects_direct_callable_field_type();
     test_fixed_function_type_rejects_union_annotation();
     test_fixed_function_accepts_abi_stable_signature();
+    test_fixed_function_accepts_fieldless_abi_type_pointer_signature();
+    test_fixed_function_rejects_fieldless_abi_type_value_parameter();
+    test_fixed_function_rejects_fieldless_abi_type_value_return();
     test_extern_function_accepts_abi_value_param_and_return();
     test_extern_function_accepts_fieldless_abi_type_pointer_param_and_return();
     test_extern_function_rejects_fieldless_abi_type_value_parameter();
@@ -11493,11 +11653,14 @@ int main(void) {
     test_object_form_spec_rejects_fixed_annotation();
     test_object_form_spec_rejects_union_annotation();
     test_fixed_callable_spec_accepts_fixed_type_parameter();
+    test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature();
     test_fixed_callable_spec_accepts_abi_array_parameter();
     test_fixed_callable_spec_rejects_non_abi_array_parameter();
     test_fixed_callable_spec_rejects_non_fixed_type_parameter();
+    test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter();
     test_fixed_callable_spec_rejects_object_spec_parameter();
     test_fixed_callable_spec_rejects_non_fixed_return_type();
+    test_fixed_callable_spec_rejects_fieldless_abi_type_value_return();
     test_fixed_function_rejects_uncaught_throw();
     test_fixed_function_allows_locally_caught_throw();
     test_fixed_function_rejects_call_to_throwing_function();
