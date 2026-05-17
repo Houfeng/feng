@@ -75,7 +75,7 @@ pu fn create_point_export(x: int, y: int): Point {
 | 基本标量类型 | 是 | 直接按 ABI 标量规则传递 |
 | 指针类型 `U*` | 是 | 仅用于 ABI 边界传递; 在 Feng 表达式中不透明、不可直接操作 |
 | 函数指针类型 `Foo*` | 是 | `Foo` 必须是 callable-form `@abi spec`; `Foo*` 仅作为不透明函数指针传递 |
-| `@abi` 类型 | 是 | 类型本身通过 ABI 校验,且直接字段只允许当前白名单 |
+| `@abi` 类型 | 有条件 | 对象形式 `@abi type` 有字段时可按值进入 ABI; 无字段时仅可作为 `T*` 的名义 pointee |
 | ABI 兼容数组 `T[]` | 有条件 | `T` 为基本标量、指针或已通过 ABI 校验的 `@abi` 类型,且元素按值连续存储 |
 | `string` | 有条件 | 默认按借用方式参与 ABI 边界; 具体 ABI 形状由 `extern fn` 签名显式表达,语言不预设未知 C API |
 
@@ -99,6 +99,8 @@ pu fn create_point_export(x: int, y: int): Point {
 
 - `@abi` 不改变 `type` 的语法形式。某个 `type` 能否标记为 `@abi`,由语义分析按 ABI 规则检查。
 - 带泛型形参的 `type` 不得标记 `@abi`; 任何泛型实例当前阶段也不参与 ABI 稳定校验。
+- 对象形式的 `@abi type` 按是否声明字段分成两类: 有字段者可以按值进入 C ABI surface,也可以按取址规则形成 `T*`; 无字段者只作为 `T*` 的名义 pointee。
+- 没有 `@abi` 的 `type` 不能进入 C 边界。
 - 对象形式的 `@abi type` 的直接字段类型只允许以下三类:
   1. 基本标量类型。
   2. 数据指针类型 `T*`,其中 `T` 只能是 `string`、ABI 兼容数组或已通过 ABI 校验的 `@abi` 类型。
@@ -107,8 +109,10 @@ pu fn create_point_export(x: int, y: int): Point {
 - `@union` 仅适用于对象形式的 `@abi type`,不适用于 callable-form 的 `@abi spec`。
 - 方法、构造函数、访问控制和注解本身都不参与 `@abi type` 的字段 ABI 校验; 方法定义不改变 payload 结果。
 - `@abi type` 进入 ABI 边界时,传值或传指针完全由签名决定: 参数类型为 `T` 则按 ABI payload 值语义传递,参数类型为 `T*` 则传递该 payload 的地址; 编译器不做隐式兜底转换。
-- 当 `extern fn` 或顶层 `@abi fn` 的参数位写成 `T`（其中 `T` 是对象形式的 `@abi type`）时,该 ABI 位在 C surface 上使用隐藏的 `T__AbiLayout` 结构按值传递; 进入 Feng 函数体时,编译器会把该 payload 装箱为新的托管 `T` 实例供后续语义继续使用。
-- 当 `extern fn` 或顶层 `@abi fn` 的返回位写成 `T` 时,该 ABI 位同样按隐藏的 `T__AbiLayout` 值语义返回; 从 C 进入 Feng 时,编译器必须把返回的 payload 重建为新的托管 `T` 实例,而从 Feng 导出到 ABI surface 时,编译器必须从 `T` 对象中抽取出对应 payload 返回。
+- 在 `extern fn` 导入场景中,无字段对象形式 `@abi type` 只能以 `T*` 形态出现,不能按值写成 `T`。
+- 当 `extern fn` 或顶层 `@abi fn` 的参数位写成 `T`（其中 `T` 是声明了字段的对象形式 `@abi type`）时,该 ABI 位在 C surface 上使用隐藏的 `T__AbiLayout` 结构按值传递; 进入 Feng 函数体时,编译器会把该 payload 装箱为新的托管 `T` 实例供后续语义继续使用。
+- 当 `extern fn` 或顶层 `@abi fn` 的返回位写成 `T`（其中 `T` 是声明了字段的对象形式 `@abi type`）时,该 ABI 位同样按隐藏的 `T__AbiLayout` 值语义返回; 从 C 进入 Feng 时,编译器必须把返回的 payload 重建为新的托管 `T` 实例,而从 Feng 导出到 ABI surface 时,编译器必须从 `T` 对象中抽取出对应 payload 返回。
+- 无字段对象形式 `@abi type` 不生成按值 `T__AbiLayout`; 其 `T*` 在 C surface 上按 opaque pointer 处理。
 - `@abi type` 的字段 payload 是否需要显式释放,取决于外部资源拥有关系与外部协议,不能仅由 `@abi` 注解推导。
 
 ```feng
@@ -179,7 +183,7 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 仅允许对以下五类值取 C 指针:
 
 1. 基本标量
-2. `@abi` 对象
+2. 声明了字段的 `@abi` 对象
 3. `string`
 4. ABI 兼容数组
 5. 标注 `@abi` 且通过 ABI 检查的顶层 `fn`（目标类型必须显式给出为 `Foo*`）
@@ -189,16 +193,21 @@ pu fn point_sum(p1: Point, p2: Point): Point {
 ### 6.2 返回指针含义
 
 1. `&scalar`: 返回该基本标量存储单元的首地址指针,类型 `T*`。
-2. `&abi_value`: 返回该 `@abi` 值对应 ABI payload 的首地址指针,类型 `T*`。
+2. `&abi_value`: 返回该声明了字段的 `@abi` 值对应 ABI payload 的首地址指针,类型 `T*`。
 3. `&str`: 返回 `string` 的 ABI 兼容数据地址指针,类型 `string*`; 当前 `c` 目标下该地址为 UTF-8 数据区首地址。
 4. `&arr`: 返回 ABI 兼容数组第 `0` 个元素地址; 空数组返回 `0` 指针,类型 `T*`。
 5. `&abi_fn`: 在目标类型显式给出为 `Foo*` 时,返回该顶层 `@abi fn` 的函数指针。
+
+补充规则:
+
+- 无字段对象形式 `@abi type` 不能通过一元 `&` 形成 `T*`。
+- 这类 `T*` 仅可来自 `extern fn` 返回值、外部 ABI 边界传入值以及已有同类型指针的继续传递。
 
 ### 6.3 可写性与生命周期
 
 1. `&string` 结果不在语言层强制只读; 是否允许写入由调用方声明的 C 契约决定。若写入破坏 Feng `string` 约束,行为未定义。
 2. `&array` 是否可写由数组可写层语义决定。
-3. `&abi_value` 是否可写由绑定可变性与成员可写规则共同决定。
+3. `&abi_value` 是否可写由绑定可变性与成员可写规则共同决定; 该规则只适用于声明了字段的 `@abi type`。
 4. `&scalar` 是否可写由标量绑定的可变性决定。
 5. 数据指针默认借用,仅保证调用期间有效; C 侧若可能缓存、异步使用或以其他方式逃逸使用,开发者必须显式保活 owner。
 6. 函数指针 `Foo*` 本身无生命周期问题,但与之配套传递的 `user_data` 等附带对象仍由调用方负责保活。

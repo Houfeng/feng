@@ -149,8 +149,8 @@ fn run() {
 
 ### 9.1 文档同步
 
-- [ ] 将本稿规则同步到 [dev/feng-interop-pending.md](./feng-interop-pending.md)。
-- [ ] 将 ABI 公共规则同步到 [docs/feng-interop.md](../docs/feng-interop.md)。
+- [x] 将本稿规则同步到 [dev/feng-interop-pending.md](./feng-interop-pending.md)。
+- [x] 将 ABI 公共规则同步到 [docs/feng-interop.md](../docs/feng-interop.md)。
 
 ### 9.2 语义实现
 
@@ -158,10 +158,10 @@ fn run() {
 
 - [src/semantic/analyzer.c](../src/semantic/analyzer.c)：调整 `validate_extern_function_signature`、`inferred_expr_type_is_data_addressable_abi_value`、`type_ref_is_abi_stable` / `type_decl_is_abi_stable` 相关判定。
 
-- [ ] 在 `extern fn` 签名校验中区分“有字段 `@abi type`”与“无字段 `@abi type`”。
-- [ ] 拒绝无字段 `@abi type` 以按值 `T` 形态出现在 `extern fn` 的参数位与返回位。
-- [ ] 调整一元 `&` 的判定，使对象形式 `type` 只有在“带 `@abi` 且声明了字段”时才能形成 `T*`。
-- [ ] 保持没有 `@abi` 的 `type` 不能进入 C 边界。
+- [x] 在 `extern fn` 签名校验中区分“有字段 `@abi type`”与“无字段 `@abi type`”。
+- [x] 拒绝无字段 `@abi type` 以按值 `T` 形态出现在 `extern fn` 的参数位与返回位。
+- [x] 调整一元 `&` 的判定，使对象形式 `type` 只有在“带 `@abi` 且声明了字段”时才能形成 `T*`。
+- [x] 保持没有 `@abi` 的 `type` 不能进入 C 边界。
 
 ### 9.3 代码生成
 
@@ -169,21 +169,21 @@ fn run() {
 
 - [src/codegen/codegen.c](../src/codegen/codegen.c)：调整 `cg_pointer_inner_is_lowerable`、`cg_emit_c_type`、`cg_init_user_type_abi_symbols`、`cg_emit_user_type_abi_surface` 等 ABI lowering 路径。
 
-- [ ] 让无字段 `@abi type` 的 `T*` 在 C surface 上走 opaque pointer lowering。
-- [ ] 禁止无字段 `@abi type` 的 `T` 进入按值 ABI lowering。
-- [ ] 跳过无字段 `@abi type` 的 `abi_layout` 生成。
-- [ ] 保持有字段 `@abi type` 的按值 ABI lowering 与取址形成 `T*` 的能力。
+- [x] 让无字段 `@abi type` 的 `T*` 在 C surface 上走 opaque pointer lowering。
+- [x] 禁止无字段 `@abi type` 的 `T` 进入按值 ABI lowering。
+- [x] 跳过无字段 `@abi type` 的 `abi_layout` 生成。
+- [x] 保持有字段 `@abi type` 的按值 ABI lowering 与取址形成 `T*` 的能力。
 
 ### 9.4 测试补齐
 
-- [ ] 为无字段 `@abi type` 增加 `extern fn` 返回 `T*` 的正例。
-- [ ] 为无字段 `@abi type` 增加 `extern fn` 参数 `T*` 的正例。
-- [ ] 为无字段 `@abi type` 增加按值参数 `T` 的反例。
-- [ ] 为无字段 `@abi type` 增加按值返回 `T` 的反例。
-- [ ] 为无字段 `@abi type` 增加通过 `&` 形成 `T*` 的反例。
-- [ ] 回归验证有字段 `@abi type` 仍可按值进入 ABI，且仍可通过 `&` 形成 `T*`。
+- [x] 为无字段 `@abi type` 增加 `extern fn` 返回 `T*` 的正例。
+- [x] 为无字段 `@abi type` 增加 `extern fn` 参数 `T*` 的正例。
+- [x] 为无字段 `@abi type` 增加按值参数 `T` 的反例。
+- [x] 为无字段 `@abi type` 增加按值返回 `T` 的反例。
+- [x] 为无字段 `@abi type` 增加通过 `&` 形成 `T*` 的反例。
+- [x] 回归验证有字段 `@abi type` 仍可按值进入 ABI，且仍可通过 `&` 形成 `T*`。
 
 ### 9.5 回归验证
 
-- [ ] 执行相关语义测试与代码生成测试。
-- [ ] 执行全量回归测试。
+- [x] 执行相关语义测试与代码生成测试。
+- [x] 执行全量回归测试。

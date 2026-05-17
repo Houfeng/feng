@@ -63,7 +63,11 @@
 
 1. `@abi` 目标必须通过当前 ABI 目标的兼容性校验；本文当前仅定义 `c`，因此无参 `@abi` 等价于 `@abi("c")` 并按 C ABI 规则检查。
 2. `@abi` 参与 ABI 边界时，传值/传指针规则由签名决定（`T` 或 `T*`）；对 `extern fn` 来说，参数位与返回位必须显式写出指针形状，不允许隐式转为指针。
-3. `@abi` 相关限制继续严格执行：
+3. 对象形式的 `@abi type` 在 C ABI 路径下按是否声明字段分成两类：
+    - 有字段：可以按值进入 C ABI surface，也可以按取址规则形成 `T*`。
+    - 无字段：只作为 `T*` 的名义 pointee，不按值进入 `extern fn` 的参数位与返回位，也不能通过一元 `&` 形成 `T*`。
+    - 没有 `@abi` 的 `type` 不能进入 C 边界。
+4. `@abi` 相关限制继续严格执行：
     - 不允许 `@abi` 与泛型交叉：带泛型形参的 `type` 不得标注 `@abi`，任何泛型实例（闭合或未闭合）当前阶段均不参与 ABI 稳定校验。
     - 不允许直接依赖非 ABI 稳定类型。
     - `@abi type` 的直接字段类型只允许以下两类：
@@ -103,7 +107,7 @@ type UserType2 {
 | 取址目标 | 示例 | 结果类型 | 地址含义 | 额外约束 |
 | --- | --- | --- | --- | --- |
 | 基本标量 | `&x` | `T*` | 该标量存储单元的首地址 | `T` 必须是基本标量类型 |
-| `@abi` 对象 | `&abi_value` | `T*` | 该值对应 ABI payload 的首地址 | `T` 必须是已通过 ABI 校验的 `@abi` 类型 |
+| `@abi` 对象 | `&abi_value` | `T*` | 该值对应 ABI payload 的首地址 | `T` 必须是声明了字段并已通过 ABI 校验的 `@abi` 类型 |
 | `string` | `&str` | `string*` | `string` 的 ABI 兼容数据地址；当前 `c` 目标下为 UTF-8 数据区首地址 | 不暴露运行时对象本体；仅暴露 ABI 兼容数据地址 |
 | ABI 兼容数组 | `&arr` | `T*` | 第 0 个元素地址；空数组返回 0 指针 | 当前首版仅覆盖一维 ABI 兼容数组 |
 | 顶层 `@abi fn` | `&abi_fn` | `Foo*` | 与目标签名匹配的原生函数指针 | 目标类型必须显式给出 `Foo*` |
@@ -115,6 +119,7 @@ type UserType2 {
 补充约束：
 
 - 当 `extern fn` 参数位声明为 `T*`/`Foo*` 时，调用点必须提供显式指针值（如一元 `&` 结果或同类型指针绑定）；不做入参自动取址或自动借用。
+- 当 `extern fn` 参数位或返回位涉及对象形式 `@abi type T` 时，无字段 `T` 只能显式写成 `T*`，不能按值写成 `T`。
 
 ### 3.3 可写性
 
@@ -383,7 +388,7 @@ let q: CmpFunc* = c_load_cmp();
 1. 一元 `&` 对临时值：允许取址；编译器不做自动延寿。若调用返回后仍需继续使用，由开发者自行保活 owner（例如挂到 wrapper 成员）。
 2. `string` ABI 传递：语言只定义借用与 0 拷贝能力；具体 ABI 形状由 `extern fn` 签名显式表达，Feng 不预设未知 C API 是 `char*`、`(ptr, len)` 还是其他布局。
 3. ABI 兼容数组首版仅覆盖一维数组。
-4. `@abi type` 在 Phase 5 不引入对象内联 payload 成员；`T*` 与 `&abi_value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案：为每个 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 视图和 `T__abi_ptr(...)` helper，helper 的 ABI 数据起点必须锚定为真实对象首 ABI 字段的 `offsetof(struct T, field0)`，并以静态断言锁定后续字段相对偏移；禁止使用 `sizeof(FengManagedHeader)` 之类的裸偏移推断。
+4. 声明了字段的 `@abi type` 在 Phase 5 不引入对象内联 payload 成员；`T*` 与 `&abi_value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案：为这类 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 视图和 `T__abi_ptr(...)` helper，helper 的 ABI 数据起点必须锚定为真实对象首 ABI 字段的 `offsetof(struct T, field0)`，并以静态断言锁定后续字段相对偏移；禁止使用 `sizeof(FengManagedHeader)` 之类的裸偏移推断。无字段 `@abi type` 不生成 `T__AbiLayout`，其 `T*` 直接按 opaque pointer 进入 C surface。
 
 ### 8.1 留待后续版本再拍板的扩展项
 
@@ -408,7 +413,7 @@ let q: CmpFunc* = c_load_cmp();
 
 1. `&string` 生成数据指针取址路径。
 2. `&abi_array` 生成元素区首地址取址路径。
-3. `&abi_value` 首版采用隐藏 ABI layout + 首 ABI 字段稳定偏移 helper 方案：为每个 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 与 `T__abi_ptr(...)` helper；`extern fn` 中的 `T*` 统一降成 `T__AbiLayout *`；helper 必须以真实对象首 ABI 字段的 `offsetof(struct T, field0)` 为 ABI 起点，并以 `offsetof(struct T, fieldN) - offsetof(struct T, field0) == offsetof(struct T__AbiLayout, fieldN)` 形式锁定布局，禁止使用 `sizeof(FengManagedHeader)` 做裸偏移。
+3. `&abi_value` 首版对“声明了字段的 `@abi type`”采用隐藏 ABI layout + 首 ABI 字段稳定偏移 helper 方案：为这类 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 与 `T__abi_ptr(...)` helper；`extern fn` 中对应的 `T*` 统一降成 `T__AbiLayout *`；helper 必须以真实对象首 ABI 字段的 `offsetof(struct T, field0)` 为 ABI 起点，并以 `offsetof(struct T, fieldN) - offsetof(struct T, field0) == offsetof(struct T__AbiLayout, fieldN)` 形式锁定布局，禁止使用 `sizeof(FengManagedHeader)` 做裸偏移。无字段 `@abi type` 不生成 `T__AbiLayout`，其 `T*` 直接按 opaque pointer lowering。
 4. 当前不在对象结构中引入内联 payload 成员，不改变 Feng 内部 `obj.field` / `self.field` 的普通字段寻址模型。
 5. 不实现 `extern` 调用位自动延寿；若调用返回后仍需继续使用，由开发者自行保活 owner。
 6. 首版仅生成 `&@abi` 顶层函数对应的原生函数指针结果，并允许 `extern fn` 参数/返回位直接按 `Foo*` 传递。
