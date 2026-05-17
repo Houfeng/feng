@@ -13,7 +13,7 @@ pu fit T[] {
    * @return element count of this array
    */
   pu fn length(): long {
-    return feng_array_length_i64:<T>(self);
+    return feng_array_length_i64(self);
   }
 }
 
@@ -27,6 +27,6 @@ pu fit T[!] {
    * @return element count of this array
    */
   pu fn length(): long {
-    return feng_array_length_i64:<T>((T[])self);
+    return feng_array_length_i64((T[])self);
   }
 }

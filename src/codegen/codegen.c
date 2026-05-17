@@ -3871,35 +3871,44 @@ static bool cg_type_has_stable_generic_extern_surface(const CGType *type) {
     }
 }
 
-static bool cg_resolve_callable_type_with_explicit_args(
+static bool cg_resolve_callable_type_template(
     CG *cg,
     const FengCallableSignature *sig,
     const FengTypeRef *ref,
-    FengTypeRef *const *type_args,
-    size_t type_arg_count,
     const FengToken *fallback,
     CGType **out_type) {
-    FengTypeRef *substituted = NULL;
-    const FengTypeRef *effective_ref = ref;
+    char **type_param_names = NULL;
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+    bool ok;
 
-    if (sig != NULL && ref != NULL && sig->type_param_count > 0U) {
-        if (type_arg_count != sig->type_param_count) {
-            return cg_fail(cg,
-                           fallback ? *fallback : sig->token,
-                           "codegen: generic extern type argument count mismatch");
-        }
-        substituted = cg_type_ref_substitute(ref,
-                                             sig->type_params,
-                                             sig->type_param_count,
-                                             type_args);
-        if (substituted == NULL) {
-            return false;
-        }
-        effective_ref = substituted;
+    if (sig == NULL || sig->type_param_count == 0U) {
+        return cg_resolve_type(cg, ref, fallback, out_type);
+    }
+    if (!cg_callable_type_param_names(cg,
+                                      sig,
+                                      fallback ? *fallback : sig->token,
+                                      &type_param_names)) {
+        return false;
     }
 
-    bool ok = cg_resolve_type(cg, effective_ref, fallback, out_type);
-    cg_type_ref_free(substituted);
+    cg->in_generic_fn = true;
+    cg->generic_fn_type_param_count = sig->type_param_count;
+    cg->generic_fn_type_param_names = type_param_names;
+    cg->generic_fn_type_param_constraints = NULL;
+    cg->generic_fn_type_param_descs = NULL;
+
+    ok = cg_resolve_type(cg, ref, fallback, out_type);
+
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
+    cg_free_cstr_array(type_param_names, sig->type_param_count);
     return ok;
 }
 
@@ -9038,6 +9047,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     const FreeFn *fn = NULL;
     if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
         if (rc->function_decl->is_extern) {
+            /* Generic extern calls are specialized through the ordinary extern
+             * ABI path after resolving/inferencing concrete type arguments.
+             * Non-generic externs continue through cg_emit_registered_call. */
             if (ext != NULL && rc->function_decl->as.function_decl.type_param_count > 0U) {
                 return cg_emit_generic_extern_call(cg, e, rc->function_decl, ext, out);
             }
@@ -9903,10 +9915,11 @@ static bool cg_emit_branch_into_slot(CG *cg,
     return ok;
 }
 
-/* Probe the type of a branch's yield expression by emitting it into a
- * throwaway buffer and scope. Returns a heap-owned CGType clone on success
- * or NULL on failure. Caller owns the returned CGType. */
-static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
+/* Probe an expression type by emitting it into a throwaway buffer and scope.
+ * This may advance monotonic counters or populate shared caches, but it does
+ * not splice code into the real output stream. Returns a heap-owned CGType
+ * clone on success or NULL on failure. Caller owns the returned CGType. */
+static CGType *cg_probe_expr_type(CG *cg, const FengExpr *expr) {
     Buf throwaway; buf_init(&throwaway);
     Buf *saved_body = cg->cur_body;
     cg->cur_body = &throwaway;
@@ -9918,7 +9931,7 @@ static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
     }
     cg->cur_scope = probe;
     ExprResult r;
-    bool ok = cg_emit_expr(cg, yield, &r);
+    bool ok = cg_emit_expr(cg, expr, &r);
     CGType *result = ok ? cgtype_clone(r.type) : NULL;
     er_free(&r);
     cg->cur_scope = probe->parent;
@@ -9926,6 +9939,10 @@ static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
     cg->cur_body = saved_body;
     buf_free(&throwaway);
     return result;
+}
+
+static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
+    return cg_probe_expr_type(cg, yield);
 }
 
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -13139,12 +13156,111 @@ static CGType *cg_infer_type_arg(const GenericFn *gfn, size_t tp_idx,
     return NULL;
 }
 
+static bool cg_inferred_callable_types_equal(const CGType *a, const CGType *b) {
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+        case CG_TYPE_GENERIC_PARAM:
+            return a->generic_param_index == b->generic_param_index;
+        case CG_TYPE_OBJECT:
+            return a->user == b->user;
+        case CG_TYPE_SPEC:
+        case CG_TYPE_CALLABLE:
+            return a->user_spec == b->user_spec;
+        case CG_TYPE_POINTER:
+        case CG_TYPE_ARRAY:
+            return cg_inferred_callable_types_equal(a->element, b->element);
+        default:
+            return true;
+    }
+}
+
+static bool cg_collect_inferred_callable_type_args(CG *cg,
+                                                   FengToken blame,
+                                                   const CGType *pattern,
+                                                   const CGType *actual,
+                                                   CGType **type_args,
+                                                   size_t type_arg_count) {
+    if (pattern == NULL || actual == NULL) return false;
+
+    switch (pattern->kind) {
+        case CG_TYPE_GENERIC_PARAM: {
+            size_t index = pattern->generic_param_index;
+
+            if (index >= type_arg_count) return false;
+            if (type_args[index] == NULL) {
+                type_args[index] = cgtype_clone(actual);
+                if (type_args[index] == NULL) {
+                    return cg_fail(cg, blame, "codegen: out of memory");
+                }
+                return true;
+            }
+            return cg_inferred_callable_types_equal(type_args[index], actual);
+        }
+
+        case CG_TYPE_POINTER:
+        case CG_TYPE_ARRAY:
+            return actual->kind == pattern->kind &&
+                   cg_collect_inferred_callable_type_args(cg,
+                                                          blame,
+                                                          pattern->element,
+                                                          actual->element,
+                                                          type_args,
+                                                          type_arg_count);
+
+        case CG_TYPE_OBJECT:
+            return actual->kind == CG_TYPE_OBJECT && pattern->user == actual->user;
+
+        case CG_TYPE_SPEC:
+        case CG_TYPE_CALLABLE:
+            return actual->kind == pattern->kind && pattern->user_spec == actual->user_spec;
+
+        default:
+            return actual->kind == pattern->kind;
+    }
+}
+
+static CGType *cg_instantiate_callable_type_from_args(const CGType *pattern,
+                                                      CGType *const *type_args,
+                                                      size_t type_arg_count) {
+    if (pattern == NULL) return NULL;
+    if (pattern->kind == CG_TYPE_GENERIC_PARAM) {
+        if (pattern->generic_param_index >= type_arg_count ||
+            type_args[pattern->generic_param_index] == NULL) {
+            return NULL;
+        }
+        return cgtype_clone(type_args[pattern->generic_param_index]);
+    }
+
+    CGType *result = cgtype_new(pattern->kind);
+    if (result == NULL) return NULL;
+    result->user = pattern->user;
+    result->user_spec = pattern->user_spec;
+    result->generic_param_index = pattern->generic_param_index;
+
+    if (pattern->element != NULL) {
+        result->element = cg_instantiate_callable_type_from_args(pattern->element,
+                                                                 type_args,
+                                                                 type_arg_count);
+        if (result->element == NULL) {
+            cgtype_free(result);
+            return NULL;
+        }
+    }
+
+    return result;
+}
+
 static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                                         const FengDecl *decl,
                                         const ExternFn *ext,
                                         ExprResult *out) {
     const FengCallableSignature *sig = &decl->as.function_decl;
+    /* Generic externs do not use the GenericFn descriptor ABI. We first pick a
+     * concrete erased surface from explicit or inferred type arguments, then
+     * emit a normal extern call against that concrete signature. */
     CGType **param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
+    CGType **type_args = sig->type_param_count ? calloc(sig->type_param_count, sizeof *type_args) : NULL;
     CGType *return_type = NULL;
     ExternFn concrete = {
         .name = ext != NULL ? ext->name : NULL,
@@ -13158,36 +13274,127 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     if (ext == NULL) {
         return cg_fail(cg, e->token, "codegen: generic extern call is missing extern metadata");
     }
-    if (!e->as.call.has_explicit_type_args ||
-        e->as.call.explicit_type_arg_count != sig->type_param_count) {
+    if ((sig->param_count > 0U && param_types == NULL) ||
+        (sig->type_param_count > 0U && type_args == NULL)) {
         free(param_types);
+        free(type_args);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    if (e->as.call.arg_count != sig->param_count) {
+        free(param_types);
+        free(type_args);
         return cg_fail(cg,
                        e->token,
-                       "codegen: generic extern call '%.*s' currently requires explicit type arguments",
+                       "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
                        (int)sig->name.length,
-                       sig->name.data);
+                       sig->name.data,
+                       sig->param_count,
+                       e->as.call.arg_count);
+    }
+
+    if (e->as.call.has_explicit_type_args) {
+        if (e->as.call.explicit_type_arg_count != sig->type_param_count) {
+            free(param_types);
+            free(type_args);
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: generic extern type argument count mismatch");
+        }
+        for (size_t i = 0; i < sig->type_param_count; ++i) {
+            if (!cg_resolve_type(cg,
+                                 e->as.call.explicit_type_args[i],
+                                 &e->token,
+                                 &type_args[i])) {
+                goto cleanup;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < sig->param_count; ++i) {
+            CGType *pattern = NULL;
+            CGType *actual = cg_probe_expr_type(cg, e->as.call.args[i]);
+
+            if (actual == NULL) {
+                goto cleanup;
+            }
+            if (!cg_resolve_callable_type_template(cg,
+                                                   sig,
+                                                   sig->params[i].type,
+                                                   &sig->params[i].token,
+                                                   &pattern)) {
+                cgtype_free(actual);
+                goto cleanup;
+            }
+            if (!cg_collect_inferred_callable_type_args(cg,
+                                                        sig->params[i].token,
+                                                        pattern,
+                                                        actual,
+                                                        type_args,
+                                                        sig->type_param_count)) {
+                cgtype_free(pattern);
+                cgtype_free(actual);
+                if (cg->failed) {
+                    goto cleanup;
+                }
+                cg_fail(cg,
+                        e->token,
+                        "codegen: cannot infer generic extern type arguments for '%.*s' from argument %zu",
+                        (int)sig->name.length,
+                        sig->name.data,
+                        i);
+                goto cleanup;
+            }
+            cgtype_free(pattern);
+            cgtype_free(actual);
+        }
+        for (size_t i = 0; i < sig->type_param_count; ++i) {
+            if (type_args[i] == NULL) {
+                cg_fail(cg,
+                        e->token,
+                        "codegen: cannot infer type argument %zu for generic extern '%.*s'",
+                        i,
+                        (int)sig->name.length,
+                        sig->name.data);
+                goto cleanup;
+            }
+        }
     }
 
     for (size_t i = 0; i < sig->param_count; ++i) {
-        if (!cg_resolve_callable_type_with_explicit_args(cg,
-                                                         sig,
-                                                         sig->params[i].type,
-                                                         e->as.call.explicit_type_args,
-                                                         e->as.call.explicit_type_arg_count,
-                                                         &sig->params[i].token,
-                                                         &param_types[i])) {
+        CGType *pattern = NULL;
+
+        if (!cg_resolve_callable_type_template(cg,
+                                               sig,
+                                               sig->params[i].type,
+                                               &sig->params[i].token,
+                                               &pattern)) {
+            goto cleanup;
+        }
+        param_types[i] = cg_instantiate_callable_type_from_args(pattern,
+                                                                type_args,
+                                                                sig->type_param_count);
+        cgtype_free(pattern);
+        if (param_types[i] == NULL) {
+            cg_fail(cg, sig->params[i].token, "codegen: out of memory");
             goto cleanup;
         }
     }
 
     if (sig->return_type != NULL) {
-        if (!cg_resolve_callable_type_with_explicit_args(cg,
-                                                         sig,
-                                                         sig->return_type,
-                                                         e->as.call.explicit_type_args,
-                                                         e->as.call.explicit_type_arg_count,
-                                                         &sig->token,
-                                                         &return_type)) {
+        CGType *pattern = NULL;
+
+        if (!cg_resolve_callable_type_template(cg,
+                                               sig,
+                                               sig->return_type,
+                                               &sig->token,
+                                               &pattern)) {
+            goto cleanup;
+        }
+        return_type = cg_instantiate_callable_type_from_args(pattern,
+                                                             type_args,
+                                                             sig->type_param_count);
+        cgtype_free(pattern);
+        if (return_type == NULL) {
+            cg_fail(cg, sig->token, "codegen: out of memory");
             goto cleanup;
         }
     } else {
@@ -13206,6 +13413,10 @@ cleanup:
         cgtype_free(param_types[i]);
     }
     free(param_types);
+    for (size_t i = 0; i < sig->type_param_count; ++i) {
+        cgtype_free(type_args[i]);
+    }
+    free(type_args);
     cgtype_free(return_type);
     return ok;
 }

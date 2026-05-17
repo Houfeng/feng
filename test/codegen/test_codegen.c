@@ -591,6 +591,84 @@ static void test_runtime_extern_codegen_uses_feng_surface_types(void) {
     feng_program_free(program);
 }
 
+static void test_generic_runtime_extern_call_infers_type_args(void) {
+    static const char *kSource =
+        "mod feng.codegen.genericruntimeextern;\n"
+        "@runtime\n"
+        "extern fn feng_array_length_i64<T>(value: T[]): long;\n"
+        "fn run(values: int[]): long {\n"
+        "    return feng_array_length_i64(values);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genericruntimeextern.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic runtime extern inference): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_length_i64(values)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
+    static const char *kSource =
+        "mod feng.codegen.genericruntimeexternexplicit;\n"
+        "@runtime\n"
+        "extern fn feng_array_length_i64<T>(value: T[]): long;\n"
+        "fn run(values: int[]): long {\n"
+        "    return feng_array_length_i64:<int>(values);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genericruntimeexternexplicit.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic runtime extern explicit args): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_length_i64(values)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_runtime_extern_codegen_rejects_non_contract_symbol(void) {
     static const char *kSource =
         "mod feng.codegen.runtimeexternreject;\n"
@@ -2466,6 +2544,8 @@ int main(void) {
     test_abi_value_pointer_codegen();
     test_abi_value_extern_codegen();
     test_runtime_extern_codegen_uses_feng_surface_types();
+    test_generic_runtime_extern_call_infers_type_args();
+    test_generic_runtime_extern_call_accepts_explicit_type_args();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();

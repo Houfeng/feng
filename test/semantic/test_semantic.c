@@ -2511,6 +2511,79 @@ static void test_top_level_function_call_reports_type_mismatch(void) {
     feng_program_free(program);
 }
 
+static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "extern fn feng_array_length_i64<T>(value: T[]): long;\n"
+        "fn run(values: int[]): long {\n"
+        "    return feng_array_length_i64(values);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_extern_wrapped_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "extern fn same<T>(left: T[], right: T[]): long;\n"
+        "fn run(left: int[], right: string[]): long {\n"
+        "    return same(left, right);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_extern_wrapped_conflict.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "top-level function 'same' has no overload accepting 2 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_non_extern_call_does_not_expand_wrapped_array_inference(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn same<T>(values: T[]): T[] {\n"
+        "    return values;\n"
+        "}\n"
+        "fn run(values: int[]): int[] {\n"
+        "    return same(values);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_non_extern_wrapped_scope.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "top-level function 'same' has no overload accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_imported_function_call_selects_overload_by_literal_type(void) {
     const char *base_source =
         "pu mod demo.base;\n"
@@ -2534,6 +2607,35 @@ static void test_imported_function_call_selects_overload_by_literal_type(void) {
     size_t error_count = 0U;
 
     ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_imported_generic_extern_call_accepts_wrapped_array_inference(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "@runtime\n"
+        "pu extern fn feng_array_length_i64<T>(value: T[]): long;\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base as base;\n"
+        "fn run(values: int[]): long {\n"
+        "    return base.feng_array_length_i64(values);\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("imported_generic_extern_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("imported_generic_extern_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
     ASSERT(analysis != NULL);
     ASSERT(errors == NULL);
     ASSERT(error_count == 0U);
@@ -11268,7 +11370,11 @@ int main(void) {
     test_top_level_function_call_selects_overload_by_literal_type();
     test_top_level_function_call_selects_overload_by_inferred_local_binding();
     test_top_level_function_call_reports_type_mismatch();
+    test_generic_extern_call_accepts_wrapped_array_inference();
+    test_generic_extern_call_rejects_conflicting_wrapped_array_inference();
+    test_generic_non_extern_call_does_not_expand_wrapped_array_inference();
     test_imported_function_call_selects_overload_by_literal_type();
+    test_imported_generic_extern_call_accepts_wrapped_array_inference();
     test_alias_function_call_selects_overload_by_literal_type();
     test_method_call_selects_overload_by_literal_type();
     test_function_typed_local_binding_is_callable();
