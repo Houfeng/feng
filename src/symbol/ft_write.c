@@ -439,36 +439,46 @@ static uint32_t writer_serialize_callable_type(WriterContext *ctx,
     size_t param_index;
     uint32_t tseq_start;
     uint32_t return_type_id;
-    uint32_t param_name_str;
-    uint32_t param_type_id;
-    uint16_t param_flags;
+    uint32_t *param_name_strs = NULL;
+    uint32_t *param_type_ids = NULL;
+    uint16_t *param_tseq_flags = NULL;
 
-    tseq_start = (uint32_t)ctx->tseq_count; /* 0-based start index */
+    if (decl->param_count > 0U) {
+        param_name_strs = (uint32_t *)calloc(decl->param_count, sizeof(*param_name_strs));
+        param_type_ids = (uint32_t *)calloc(decl->param_count, sizeof(*param_type_ids));
+        param_tseq_flags = (uint16_t *)calloc(decl->param_count, sizeof(*param_tseq_flags));
+        if (param_name_strs == NULL || param_type_ids == NULL || param_tseq_flags == NULL) {
+            free(param_name_strs);
+            free(param_type_ids);
+            free(param_tseq_flags);
+            feng_symbol_internal_set_error(out_error, path, token, "out of memory serializing callable type");
+            return 0U;
+        }
+    }
 
-    /* Emit one TSEQ element per parameter */
+    /*
+     * First serialize parameter/return types so nested generic type-arg TSEQ
+     * records are emitted before we reserve the callable's own contiguous TSEQ range.
+     */
     for (param_index = 0U; param_index < decl->param_count; ++param_index) {
-        param_name_str = writer_intern_string(ctx,
-                                             decl->params[param_index].name,
-                                             path,
-                                             decl->params[param_index].token,
-                                             out_error);
-        param_type_id = writer_serialize_type(ctx,
-                                              decl->params[param_index].type,
-                                              path,
-                                              decl->params[param_index].token,
-                                              out_error);
-        param_flags = decl->params[param_index].mutability == FENG_MUTABILITY_VAR
-                          ? FENG_SYMBOL_FT_TSEQ_FLAG_VAR
-                          : 0U;
-        if ((decl->params[param_index].name != NULL && param_name_str == 0U) ||
-            (decl->params[param_index].type != NULL && param_type_id == 0U) ||
-            !writer_append_tseq(ctx,
-                                param_name_str,
-                                param_type_id,
-                                param_flags,
-                                path,
-                                decl->params[param_index].token,
-                                out_error)) {
+        param_name_strs[param_index] = writer_intern_string(ctx,
+                                                            decl->params[param_index].name,
+                                                            path,
+                                                            decl->params[param_index].token,
+                                                            out_error);
+        param_type_ids[param_index] = writer_serialize_type(ctx,
+                                                            decl->params[param_index].type,
+                                                            path,
+                                                            decl->params[param_index].token,
+                                                            out_error);
+        param_tseq_flags[param_index] = decl->params[param_index].mutability == FENG_MUTABILITY_VAR
+                                            ? FENG_SYMBOL_FT_TSEQ_FLAG_VAR
+                                            : 0U;
+        if ((decl->params[param_index].name != NULL && param_name_strs[param_index] == 0U) ||
+            (decl->params[param_index].type != NULL && param_type_ids[param_index] == 0U)) {
+            free(param_name_strs);
+            free(param_type_ids);
+            free(param_tseq_flags);
             return 0U;
         }
     }
@@ -476,11 +486,39 @@ static uint32_t writer_serialize_callable_type(WriterContext *ctx,
     /* Emit return-type TSEQ element (name_str = 0, flags = 0) */
     return_type_id = writer_serialize_type(ctx, decl->return_type, path, token, out_error);
     if (decl->return_type != NULL && return_type_id == 0U) {
+        free(param_name_strs);
+        free(param_type_ids);
+        free(param_tseq_flags);
         return 0U;
     }
+
+    tseq_start = (uint32_t)ctx->tseq_count; /* 0-based start index */
+
+    for (param_index = 0U; param_index < decl->param_count; ++param_index) {
+        if (!writer_append_tseq(ctx,
+                                param_name_strs[param_index],
+                                param_type_ids[param_index],
+                                param_tseq_flags[param_index],
+                                path,
+                                decl->params[param_index].token,
+                                out_error)) {
+            free(param_name_strs);
+            free(param_type_ids);
+            free(param_tseq_flags);
+            return 0U;
+        }
+    }
+
     if (!writer_append_tseq(ctx, 0U, return_type_id, 0U, path, token, out_error)) {
+        free(param_name_strs);
+        free(param_type_ids);
+        free(param_tseq_flags);
         return 0U;
     }
+
+    free(param_name_strs);
+    free(param_type_ids);
+    free(param_tseq_flags);
 
     /* Build the CALLABLE/SPEC_CALLABLE TYPS record */
     memset(&record, 0, sizeof(record));

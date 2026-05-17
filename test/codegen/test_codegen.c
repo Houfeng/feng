@@ -1229,6 +1229,78 @@ static void test_fit_builtin_direct_call_codegen_shape(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_array_open_generic_return_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.fit_builtin_generic_array;\n"
+        "type Span<T> {\n"
+        "    let origin: T[];\n"
+        "    let start: long;\n"
+        "    let end: long;\n"
+        "    fn Span(origin: T[], start: long, end: long) {\n"
+        "        self.origin = origin;\n"
+        "        self.start = start;\n"
+        "        self.end = end;\n"
+        "    }\n"
+        "    fn length(): long {\n"
+        "        return self.end - self.start;\n"
+        "    }\n"
+        "    fn get(index: long): T {\n"
+        "        return self.origin[self.start + index];\n"
+        "    }\n"
+        "}\n"
+        "fit T[] {\n"
+        "    fn slice(start: long, length: long): Span<T> {\n"
+        "        return Span:<T>(self, start, start + length);\n"
+        "    }\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let values: int[] = [1, 2, 3, 4];\n"
+        "    let middle = values.slice((long)1, (long)2);\n"
+        "    return middle.get((long)0) + (int)middle.length();\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource,
+        "tests/fit_builtin_generic_array_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (fit builtin generic array): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "Span__G__i32") != NULL);
+    ASSERT(strstr(out.c_source, "Span__G__T") != NULL);
+    ASSERT(strstr(out.c_source, "__slice__from__i64__i64") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.fit_builtin_spec;\n"
@@ -2647,7 +2719,7 @@ static void test_phase_e_aggregate_generic_arg_three_entrances_codegen(void) {
 static const char *kUserConstructorFormsSrc =
     "mod feng.codegen.ctor1;\n"
     "type UserType {\n"
-    "    let id: int;\n"
+    "    var id: int;\n"
     "    let name: string;\n"
     "    fn UserType() {\n"
     "        self.id = 1;\n"
@@ -2717,6 +2789,7 @@ int main(void) {
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();
+    test_fit_builtin_array_open_generic_return_codegen();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
     test_generic_fn_codegen();

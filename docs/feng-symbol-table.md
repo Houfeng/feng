@@ -781,6 +781,7 @@ RELS
 - `TSEQ` 记录全局顺序存储；`TYPS` 节点通过 `elem_start` + `elem_count` 引用一段连续范围。
 - writer 必须保证同一 `TYPS` 节点引用的 `TSEQ` 元素是连续的。
 - `CALLABLE` 类型的返回类型元素永远是 TSEQ 范围中的最后一个（`name_str = 0`）；consumer 可直接取最后元素作为返回类型，前面所有元素为参数。
+- `CALLABLE` 的参数/返回 `TSEQ` 区间中不得夹杂其他 `TYPS` 节点（例如 `NAMED_GENERIC` 类型实参）占用的槽位；即使参数或返回类型本身包含泛型使用，也必须保证 callable 区间自身连续且可独立解码。
 - 顶层泛型函数与泛型方法的类型参数列表不平铺进 TSEQ；它们通过 owner 为该 callable 的 `type_param` 子符号表达，callable TSEQ 只引用这些参数参与构成的参数类型与返回类型。
 - 若某方法定义在泛型 `type` 内，其 TSEQ 中的参数类型和返回类型可同时引用外层 `type` 的 `type_param` 与当前方法自己的 `type_param`；consumer 必须保持两层作用域可区分。
 - `flags` 的具体位定义与 SYMS.flags 保持一致的规范子集，第一版只使用 bit 0（`0x0001` = `var`，即可变参数）；未使用位固定写 `0`。

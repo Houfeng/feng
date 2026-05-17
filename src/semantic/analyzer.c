@@ -2555,10 +2555,54 @@ static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *source_type_ref,
                                              const FengTypeRef *spec_type_ref);
+static bool fit_target_collect_array_local_type_param(const ResolveContext *context,
+                                                      const FengTypeRef *target_ref,
+                                                      FengTypeParam *out_type_param);
+
+static const FengTypeRef *substitute_type_ref_for_fit_instance(
+    ResolveContext *context,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type,
+    const FengTypeRef *member_type_ref) {
+    FengTypeParam fit_local_type_param;
+    FengTypeRef *type_args[1];
+    FengTypeRef *substituted;
+
+    if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
+        member_type_ref == NULL || owner_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        owner_type.type_ref == NULL || owner_type.type_ref->kind != FENG_TYPE_REF_ARRAY ||
+        owner_type.type_ref->as.inner == NULL ||
+        !fit_target_collect_array_local_type_param(context,
+                                                   fit_decl->as.fit_decl.target,
+                                                   &fit_local_type_param)) {
+        return member_type_ref;
+    }
+    if (fit_decl->as.fit_decl.target == NULL ||
+        fit_decl->as.fit_decl.target->kind != FENG_TYPE_REF_ARRAY ||
+        fit_decl->as.fit_decl.target->array_element_writable !=
+            owner_type.type_ref->array_element_writable) {
+        return member_type_ref;
+    }
+
+    type_args[0] = (FengTypeRef *)owner_type.type_ref->as.inner;
+    substituted = clone_type_ref_substituting_type_params(member_type_ref,
+                                                          &fit_local_type_param,
+                                                          1U,
+                                                          type_args);
+    if (substituted == NULL) {
+        return member_type_ref;
+    }
+    if (!resolver_track_synthetic_type_ref(context, substituted)) {
+        free_synthetic_type_ref(substituted);
+        return member_type_ref;
+    }
+    return substituted;
+}
 
 static const FengTypeRef *substitute_callable_return_type_for_call(
     ResolveContext *context,
     const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
     InferredExprType owner_type,
     const FengExpr *call_expr,
     const FengCallableSignature *callable,
@@ -2576,6 +2620,10 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
                                                             owner_type_decl,
                                                             owner_type,
                                                             callable->return_type);
+    return_type_ref = substitute_type_ref_for_fit_instance(context,
+                                                          fit_decl,
+                                                          owner_type,
+                                                          return_type_ref);
     if (callable->type_param_count == 0U || call_expr == NULL ||
         call_expr->kind != FENG_EXPR_CALL) {
         return return_type_ref;
@@ -7287,6 +7335,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                     const FengTypeRef *return_type_ref =
                         substitute_callable_return_type_for_call(context,
                                                                  NULL,
+                                                                 NULL,
                                                                  inferred_expr_type_unknown(),
                                                                  expr,
                                                                  resolution.callable,
@@ -7326,6 +7375,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                     if (resolution.callable->return_type != NULL) {
                         const FengTypeRef *return_type_ref =
                             substitute_callable_return_type_for_call(context,
+                                                                     NULL,
                                                                      NULL,
                                                                      inferred_expr_type_unknown(),
                                                                      expr,
@@ -7367,6 +7417,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                     const FengTypeRef *return_type_ref =
                         substitute_callable_return_type_for_call(context,
                                                                  owner_type_decl,
+                                                                 resolution.fit_decl,
                                                                  owner_type,
                                                                  expr,
                                                                  resolution.callable,
@@ -7784,173 +7835,102 @@ static bool resolver_current_constructor_add_bound_name(ResolveContext *context,
                                name);
 }
 
-static bool collect_constructor_bound_lets_from_stmt(const FengDecl *type_decl,
-                                                     const FengStmt *stmt,
-                                                     FengSlice **bound_names,
-                                                     size_t *bound_count,
-                                                     size_t *bound_capacity);
+static bool constructor_block_binds_let_field(const FengDecl *type_decl,
+                                             const FengBlock *block,
+                                             FengSlice field_name);
 
-static bool collect_constructor_bound_lets_from_block(const FengDecl *type_decl,
-                                                      const FengBlock *block,
-                                                      FengSlice **bound_names,
-                                                      size_t *bound_count,
-                                                      size_t *bound_capacity) {
-    size_t stmt_index;
-
-    if (block == NULL) {
-        return true;
-    }
-
-    for (stmt_index = 0U; stmt_index < block->statement_count; ++stmt_index) {
-        if (!collect_constructor_bound_lets_from_stmt(type_decl,
-                                                      block->statements[stmt_index],
-                                                      bound_names,
-                                                      bound_count,
-                                                      bound_capacity)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool collect_constructor_bound_lets_from_stmt(const FengDecl *type_decl,
-                                                     const FengStmt *stmt,
-                                                     FengSlice **bound_names,
-                                                     size_t *bound_count,
-                                                     size_t *bound_capacity) {
-    size_t clause_index;
-    const FengTypeMember *member;
-
-    if (stmt == NULL) {
-        return true;
-    }
+static bool constructor_stmt_binds_let_field(const FengDecl *type_decl,
+                                            const FengStmt *stmt,
+                                            FengSlice field_name) {
+    if (stmt == NULL) return false;
 
     switch (stmt->kind) {
         case FENG_STMT_BLOCK:
-            return collect_constructor_bound_lets_from_block(
-                type_decl, stmt->as.block, bound_names, bound_count, bound_capacity);
-
-        case FENG_STMT_ASSIGN:
-            member = find_direct_self_let_target_member(type_decl, stmt->as.assign.target);
-            if (member != NULL &&
-                !append_unique_slice(bound_names, bound_count, bound_capacity, member->as.field.name)) {
-                return false;
-            }
-            return true;
-
-        case FENG_STMT_IF:
-            for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
-                if (!collect_constructor_bound_lets_from_block(type_decl,
-                                                               stmt->as.if_stmt.clauses[clause_index].block,
-                                                               bound_names,
-                                                               bound_count,
-                                                               bound_capacity)) {
-                    return false;
-                }
-            }
-            return collect_constructor_bound_lets_from_block(
-                type_decl, stmt->as.if_stmt.else_block, bound_names, bound_count, bound_capacity);
-
-        case FENG_STMT_MATCH: {
-            size_t branch_index;
-
-            for (branch_index = 0U; branch_index < stmt->as.match_stmt.branch_count; ++branch_index) {
-                if (!collect_constructor_bound_lets_from_block(
-                        type_decl,
-                        stmt->as.match_stmt.branches[branch_index].body,
-                        bound_names,
-                        bound_count,
-                        bound_capacity)) {
-                    return false;
-                }
-            }
-            return collect_constructor_bound_lets_from_block(
-                type_decl, stmt->as.match_stmt.else_block, bound_names, bound_count, bound_capacity);
+            return constructor_block_binds_let_field(type_decl, stmt->as.block, field_name);
+        case FENG_STMT_ASSIGN: {
+            const FengTypeMember *member = find_direct_self_let_target_member(type_decl,
+                                                                              stmt->as.assign.target);
+            return member != NULL &&
+                   member->as.field.name.length == field_name.length &&
+                   memcmp(member->as.field.name.data, field_name.data, field_name.length) == 0;
         }
-
-        case FENG_STMT_WHILE:
-            return collect_constructor_bound_lets_from_block(
-                type_decl, stmt->as.while_stmt.body, bound_names, bound_count, bound_capacity);
-
-        case FENG_STMT_FOR:
-            if (stmt->as.for_stmt.is_for_in) {
-                return collect_constructor_bound_lets_from_block(type_decl,
-                                                                 stmt->as.for_stmt.body,
-                                                                 bound_names,
-                                                                 bound_count,
-                                                                 bound_capacity);
+        case FENG_STMT_IF:
+            for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
+                if (constructor_block_binds_let_field(type_decl,
+                                                      stmt->as.if_stmt.clauses[i].block,
+                                                      field_name)) {
+                    return true;
+                }
             }
-            return collect_constructor_bound_lets_from_stmt(type_decl,
-                                                            stmt->as.for_stmt.init,
-                                                            bound_names,
-                                                            bound_count,
-                                                            bound_capacity) &&
-                   collect_constructor_bound_lets_from_stmt(type_decl,
-                                                            stmt->as.for_stmt.update,
-                                                            bound_names,
-                                                            bound_count,
-                                                            bound_capacity) &&
-                   collect_constructor_bound_lets_from_block(type_decl,
-                                                             stmt->as.for_stmt.body,
-                                                             bound_names,
-                                                             bound_count,
-                                                             bound_capacity);
-
+            return constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.if_stmt.else_block,
+                                                     field_name);
+        case FENG_STMT_MATCH:
+            for (size_t i = 0U; i < stmt->as.match_stmt.branch_count; ++i) {
+                if (constructor_block_binds_let_field(type_decl,
+                                                      stmt->as.match_stmt.branches[i].body,
+                                                      field_name)) {
+                    return true;
+                }
+            }
+            return constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.match_stmt.else_block,
+                                                     field_name);
+        case FENG_STMT_WHILE:
+            return constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.while_stmt.body,
+                                                     field_name);
+        case FENG_STMT_FOR:
+            return constructor_stmt_binds_let_field(type_decl,
+                                                    stmt->as.for_stmt.init,
+                                                    field_name) ||
+                   constructor_stmt_binds_let_field(type_decl,
+                                                    stmt->as.for_stmt.update,
+                                                    field_name) ||
+                   constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.for_stmt.body,
+                                                     field_name);
         case FENG_STMT_TRY:
-            return collect_constructor_bound_lets_from_block(
-                       type_decl,
-                       stmt->as.try_stmt.try_block,
-                       bound_names,
-                       bound_count,
-                       bound_capacity) &&
-                   collect_constructor_bound_lets_from_block(type_decl,
-                                                             stmt->as.try_stmt.catch_block,
-                                                             bound_names,
-                                                             bound_count,
-                                                             bound_capacity) &&
-                   collect_constructor_bound_lets_from_block(type_decl,
-                                                             stmt->as.try_stmt.finally_block,
-                                                             bound_names,
-                                                             bound_count,
-                                                             bound_capacity);
-
+            return constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.try_stmt.try_block,
+                                                     field_name) ||
+                   constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.try_stmt.catch_block,
+                                                     field_name) ||
+                   constructor_block_binds_let_field(type_decl,
+                                                     stmt->as.try_stmt.finally_block,
+                                                     field_name);
         case FENG_STMT_BINDING:
         case FENG_STMT_EXPR:
         case FENG_STMT_RETURN:
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
-            return true;
+            return false;
     }
+    return false;
+}
 
-    return true;
+static bool constructor_block_binds_let_field(const FengDecl *type_decl,
+                                             const FengBlock *block,
+                                             FengSlice field_name) {
+    if (block == NULL) return false;
+    for (size_t i = 0U; i < block->statement_count; ++i) {
+        if (constructor_stmt_binds_let_field(type_decl, block->statements[i], field_name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool constructor_binds_let_field(const FengDecl *type_decl,
                                         const FengTypeMember *constructor,
                                         FengSlice field_name) {
-    FengSlice *bound_names = NULL;
-    size_t bound_count = 0U;
-    size_t bound_capacity = 0U;
-    bool found;
-
-    if (constructor == NULL || constructor->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
-        return false;
-    }
-
-    if (!collect_constructor_bound_lets_from_block(type_decl,
-                                                   constructor->as.callable.body,
-                                                   &bound_names,
-                                                   &bound_count,
-                                                   &bound_capacity)) {
-        free(bound_names);
-        return false;
-    }
-
-    found = find_slice_index(bound_names, bound_count, field_name) < bound_count;
-    free(bound_names);
-    return found;
+    return constructor != NULL &&
+           constructor->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
+           constructor_block_binds_let_field(type_decl,
+                                             constructor->as.callable.body,
+                                             field_name);
 }
 
 static bool validate_let_field_object_literal_binding(ResolveContext *context,
@@ -7985,16 +7965,18 @@ static bool validate_let_field_object_literal_binding(ResolveContext *context,
                                                                  target_expr->as.call.args,
                                                                  target_expr->as.call.arg_count);
         } else {
-            resolution = resolve_accessible_constructor_overload(
-                context, type_decl, provider_module, NULL, 0U);
+            resolution = resolve_accessible_constructor_overload(context,
+                                                                 type_decl,
+                                                                 provider_module,
+                                                                 NULL,
+                                                                 0U);
         }
-
         if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_UNIQUE) {
             selected_constructor = resolution.constructor;
         }
     }
 
-    if (selected_constructor != NULL && constructor_binds_let_field(type_decl, selected_constructor, field->name)) {
+    if (constructor_binds_let_field(type_decl, selected_constructor, field->name)) {
         return resolver_append_error(
             context,
             field->token,

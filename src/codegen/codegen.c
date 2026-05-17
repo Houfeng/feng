@@ -11,7 +11,6 @@
  *     (incl. returns and break/continue paths via cleanup-frame walking).
  */
 #include "codegen/codegen.h"
-
 #include <ctype.h>
 #include <inttypes.h>
 #include <math.h>
@@ -753,6 +752,7 @@ typedef struct CG {
     Buf      *cur_body; /* current function body buffer */
     Scope    *cur_scope;
     int       tmp_counter;
+    int       local_counter;
     int       label_counter;
     size_t    lambda_counter;
     size_t    capture_cell_counter;
@@ -879,6 +879,7 @@ typedef struct CG {
      * `in_generic_fn` is the gate; the parallel arrays are borrowed from the
      * GenericFn being emitted and must not be freed by this block. */
     bool         in_generic_fn;
+    bool         generic_return_uses_out;
     size_t       generic_fn_type_param_count;
     char       **generic_fn_type_param_names;   /* borrowed — do NOT free */
     size_t       ambient_type_param_count;
@@ -1030,6 +1031,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                FengCompileTarget target);
 static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
                                                 const UserMethod *m);
+static bool cg_register_user_type_members(CG *cg, UserType *t);
 static const UserMethod *cg_user_type_constructor_by_member(const UserType *t,
                                                             const FengTypeMember *m);
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
@@ -1045,6 +1047,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix);
 static bool cg_emit_constructor_invoke(CG *cg,
                                        FengExpr *const *args,
                                        size_t arg_count,
+                                       const UserType *owner_type,
                                        const UserMethod *ctor,
                                        const char *self_expr,
                                        FengToken blame);
@@ -1217,6 +1220,44 @@ static const char *cg_generic_param_desc_name(const CG *cg, size_t index) {
     return cg->generic_fn_type_param_descs[index];
 }
 
+static const char *cg_generic_param_desc_name_for_name(const CG *cg,
+                                                       const char *type_param_name) {
+    if (type_param_name == NULL ||
+        cg->generic_fn_type_param_names == NULL ||
+        cg->generic_fn_type_param_descs == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0U; i < cg->generic_fn_type_param_count; ++i) {
+        const char *name = cg->generic_fn_type_param_names[i];
+        const char *desc = cg->generic_fn_type_param_descs[i];
+
+        if (name != NULL && desc != NULL && strcmp(name, type_param_name) == 0) {
+            return desc;
+        }
+    }
+    return NULL;
+}
+
+static bool cg_append_user_type_context_descriptor_args(CG *cg,
+                                                        Buf *out,
+                                                        const UserType *owner_type,
+                                                        FengToken blame) {
+    if (owner_type == NULL || owner_type->generic_context_type_param_count == 0U) {
+        return true;
+    }
+    for (size_t i = 0U; i < owner_type->generic_context_type_param_count; ++i) {
+        const char *name = owner_type->generic_context_type_param_names[i];
+        const char *desc = cg_generic_param_desc_name_for_name(cg, name);
+
+        if (desc == NULL) {
+            return cg_fail(cg, blame,
+                           "codegen: generic type argument forwarding requires an active generic descriptor context");
+        }
+        buf_append_fmt(out, ", %s", desc);
+    }
+    return true;
+}
+
 static char *cg_generic_witness_subject_expr(const char *desc_name,
                                              const char *slot_expr) {
     Buf b; buf_init(&b);
@@ -1364,7 +1405,7 @@ static char *cg_local_cname(CG *cg, const char *feng_name, size_t len) {
     char *base = cg_sanitize(feng_name, len);
     if (!base) return NULL;
     Buf b; buf_init(&b);
-    buf_append_fmt(&b, "_l_%s_%d", base, cg->tmp_counter++);
+    buf_append_fmt(&b, "_l_%s_%d", base, cg->local_counter++);
     free(base);
     return b.data;
 }
@@ -2815,6 +2856,85 @@ static void cg_type_ref_free(FengTypeRef *ref) {
     free(ref);
 }
 
+static FengTypeRef *cg_type_ref_from_cgtype(const CGType *type, FengToken token) {
+    FengTypeRef *ref;
+    FengSlice segment;
+    const char *builtin_name = NULL;
+
+    if (type == NULL) return NULL;
+
+    for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; ++i) {
+        if (k_builtin_types[i].kind == type->kind) {
+            builtin_name = k_builtin_types[i].name;
+            break;
+        }
+    }
+
+    if (builtin_name != NULL) {
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_NAMED;
+        ref->as.named.segment_count = 1U;
+        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
+        if (ref->as.named.segments == NULL) {
+            free(ref);
+            return NULL;
+        }
+        ref->as.named.segments[0].data = builtin_name;
+        ref->as.named.segments[0].length = strlen(builtin_name);
+        return ref;
+    }
+
+    if (type->kind == CG_TYPE_ARRAY && type->element != NULL) {
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_ARRAY;
+        ref->as.inner = cg_type_ref_from_cgtype(type->element, token);
+        if (ref->as.inner == NULL) {
+            free(ref);
+            return NULL;
+        }
+        return ref;
+    }
+
+    if (type->kind != CG_TYPE_OBJECT || type->user == NULL || type->user->decl == NULL ||
+        type->user->decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+
+    ref = calloc(1U, sizeof *ref);
+    if (ref == NULL) return NULL;
+    ref->token = token;
+    ref->kind = FENG_TYPE_REF_NAMED;
+    ref->as.named.segment_count = 1U;
+    ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
+    if (ref->as.named.segments == NULL) {
+        free(ref);
+        return NULL;
+    }
+    segment = type->user->decl->as.type_decl.name;
+    ref->as.named.segments[0] = segment;
+    if (type->user->is_generic_instance) {
+        ref->as.named.type_arg_count = type->user->generic_type_arg_count;
+        ref->as.named.type_args = calloc(ref->as.named.type_arg_count,
+                                         sizeof *ref->as.named.type_args);
+        if (ref->as.named.type_arg_count > 0U && ref->as.named.type_args == NULL) {
+            cg_type_ref_free(ref);
+            return NULL;
+        }
+        for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+            ref->as.named.type_args[i] = cg_type_ref_clone(type->user->generic_type_args[i]);
+            if (ref->as.named.type_args[i] == NULL) {
+                cg_type_ref_free(ref);
+                return NULL;
+            }
+        }
+    }
+    return ref;
+}
+
 static FengTypeRef *cg_type_ref_substitute(const FengTypeRef *ref,
                                            const FengTypeParam *type_params,
                                            size_t type_param_count,
@@ -3108,29 +3228,47 @@ static UserType *cg_find_generic_instance_user_type_with_context(CG *cg,
     return NULL;
 }
 
-static UserType *cg_find_generic_instance_user_type_for_ref(CG *cg,
-                                                            const FengTypeRef *ref) {
-    const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
-    if (generic_decl == NULL) return NULL;
-    char **context_names = NULL;
+static bool cg_type_args_contain_type_param_names(FengTypeRef *const *type_args,
+                                                  size_t type_arg_count,
+                                                  char *const *names,
+                                                  size_t name_count) {
+    if (type_args == NULL || type_arg_count == 0U) return false;
+    for (size_t i = 0; i < type_arg_count; ++i) {
+        if (cg_type_ref_contains_type_param_names(type_args[i], names, name_count)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static UserType *cg_find_generic_instance_user_type_with_active_context(
+    CG *cg,
+    const FengDecl *origin_decl,
+    FengTypeRef *const *type_args,
+    size_t type_arg_count) {
+    char *const *context_names = NULL;
     size_t context_count = 0U;
+
     if (cg->in_generic_fn &&
-        cg_type_ref_contains_type_param_names(ref,
+        cg_type_args_contain_type_param_names(type_args,
+                                              type_arg_count,
                                               cg->generic_fn_type_param_names,
                                               cg->generic_fn_type_param_count)) {
         context_names = cg->generic_fn_type_param_names;
         context_count = cg->generic_fn_type_param_count;
     } else if (cg->ambient_type_param_count > 0U &&
-               cg_type_ref_contains_type_param_names(ref,
+               cg_type_args_contain_type_param_names(type_args,
+                                                     type_arg_count,
                                                      cg->ambient_type_param_names,
                                                      cg->ambient_type_param_count)) {
         context_names = cg->ambient_type_param_names;
         context_count = cg->ambient_type_param_count;
     }
+
     return cg_find_generic_instance_user_type_with_context(cg,
-                                                           generic_decl->decl,
-                                                           ref->as.named.type_args,
-                                                           ref->as.named.type_arg_count,
+                                                           origin_decl,
+                                                           type_args,
+                                                           type_arg_count,
                                                            context_names,
                                                            context_count);
 }
@@ -3363,10 +3501,237 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
             bool ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
             cg_type_ref_free(sub);
             if (!ok) return false;
+        } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
+                   member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            const FengCallableSignature *callable = &member->as.callable;
+            for (size_t param_index = 0; param_index < callable->param_count; ++param_index) {
+                FengTypeRef *sub = cg_type_ref_substitute(callable->params[param_index].type,
+                                                          decl->as.type_decl.type_params,
+                                                          decl->as.type_decl.type_param_count,
+                                                          type_args);
+                bool ok;
+                if (!sub) return false;
+                ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+                cg_type_ref_free(sub);
+                if (!ok) return false;
+            }
+            if (callable->return_type != NULL) {
+                FengTypeRef *sub = cg_type_ref_substitute(callable->return_type,
+                                                          decl->as.type_decl.type_params,
+                                                          decl->as.type_decl.type_param_count,
+                                                          type_args);
+                bool ok;
+                if (!sub) return false;
+                ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+                cg_type_ref_free(sub);
+                if (!ok) return false;
+            }
         }
     }
     cg_free_cstr_array(context_names, context_count);
     return true;
+}
+
+static bool cg_type_ref_is_builtin_fit_param(const FengTypeRef *ref,
+                                             const BuiltinFit *bf,
+                                             size_t *out_index) {
+    if (ref == NULL || bf == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U || ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    for (size_t i = 0; i < bf->target_type_param_count; ++i) {
+        if (ref->as.named.segments[0].length == bf->target_type_params[i].name.length &&
+            memcmp(ref->as.named.segments[0].data,
+                   bf->target_type_params[i].name.data,
+                   ref->as.named.segments[0].length) == 0) {
+            if (out_index != NULL) *out_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static CGType *cg_instantiate_builtin_fit_return_type(CG *cg,
+                                                       const BuiltinFit *bf,
+                                                       const CGType *return_type,
+                                                       const CGType *receiver_element,
+                                                       FengToken blame) {
+    CGType *result;
+
+    if (return_type == NULL) return NULL;
+    if (bf == NULL || bf->target_type_param_count == 0U || receiver_element == NULL) {
+        return cgtype_clone(return_type);
+    }
+
+    if (return_type->kind == CG_TYPE_GENERIC_PARAM) {
+        if (return_type->generic_param_index == 0U) {
+            return cgtype_clone(receiver_element);
+        }
+        return NULL;
+    }
+
+    if (return_type->kind == CG_TYPE_ARRAY || return_type->kind == CG_TYPE_POINTER) {
+        result = cgtype_new(return_type->kind);
+        if (result == NULL) return NULL;
+        result->element = cg_instantiate_builtin_fit_return_type(cg,
+                                                                 bf,
+                                                                 return_type->element,
+                                                                 receiver_element,
+                                                                 blame);
+        if (result->element == NULL) {
+            cgtype_free(result);
+            return NULL;
+        }
+        return result;
+    }
+
+    if (return_type->kind == CG_TYPE_OBJECT && return_type->user != NULL &&
+        return_type->user->is_generic_instance &&
+        return_type->user->generic_context_type_param_count > 0U) {
+        const UserType *open_user = return_type->user;
+        const GenericTypeDecl *generic_decl = cg_find_generic_type_decl_by_decl(cg,
+            open_user->generic_origin_decl);
+        const FengDecl *origin_decl = open_user->generic_origin_decl;
+        size_t open_arg_count = open_user->generic_type_arg_count;
+        FengTypeRef **type_args;
+        UserType *concrete_user;
+
+        if (generic_decl == NULL) return NULL;
+        type_args = open_arg_count > 0U
+            ? calloc(open_arg_count, sizeof *type_args)
+            : NULL;
+        if (open_arg_count > 0U && type_args == NULL) {
+            return NULL;
+        }
+        for (size_t i = 0; i < open_arg_count; ++i) {
+            size_t param_index = 0U;
+            if (cg_type_ref_is_builtin_fit_param(open_user->generic_type_args[i],
+                                                 bf,
+                                                 &param_index)) {
+                if (param_index != 0U) {
+                    for (size_t j = 0; j < i; ++j) cg_type_ref_free(type_args[j]);
+                    free(type_args);
+                    return NULL;
+                }
+                type_args[i] = cg_type_ref_from_cgtype(receiver_element, blame);
+            } else {
+                type_args[i] = cg_type_ref_clone(open_user->generic_type_args[i]);
+            }
+            if (type_args[i] == NULL) {
+                for (size_t j = 0; j < i; ++j) cg_type_ref_free(type_args[j]);
+                free(type_args);
+                return NULL;
+            }
+        }
+        if (!cg_register_generic_type_instance_shell(cg,
+                                                    generic_decl,
+                                                    type_args,
+                                                    open_arg_count,
+                                                    blame,
+                                                    NULL)) {
+            for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+            free(type_args);
+            return NULL;
+        }
+        concrete_user = cg_find_generic_instance_user_type(cg,
+                                                           origin_decl,
+                                                           type_args,
+                                                           open_arg_count);
+        if (concrete_user == NULL) {
+            for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+            free(type_args);
+            return NULL;
+        }
+        if (concrete_user->field_count == 0U &&
+            concrete_user->constructor_count == 0U &&
+            concrete_user->method_count == 0U &&
+            concrete_user->decl != NULL &&
+            concrete_user->decl->kind == FENG_DECL_TYPE &&
+            concrete_user->decl->as.type_decl.member_count > 0U) {
+            const FengProgram *saved_program = cg->cur_program;
+            const FengProgram *instance_program = concrete_user->instantiation_program != NULL
+                ? concrete_user->instantiation_program
+                : concrete_user->owner_program;
+            Buf *saved_cur_body = cg->cur_body;
+            CGType *saved_cur_return_type = cg->cur_return_type;
+            Scope *saved_cur_scope = cg->cur_scope;
+            bool saved_cur_fn_is_main = cg->cur_fn_is_main;
+
+            cg->cur_program = instance_program;
+            if (!cg_register_user_type_members(cg, concrete_user)) {
+                cg->cur_program = saved_program;
+                for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+                free(type_args);
+                return NULL;
+            }
+            concrete_user = cg_find_generic_instance_user_type(cg,
+                                                               origin_decl,
+                                                               type_args,
+                                                               open_arg_count);
+            if (concrete_user == NULL) {
+                cg->cur_program = saved_program;
+                for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+                free(type_args);
+                return NULL;
+            }
+            cg_emit_user_type_forward(cg, concrete_user);
+            cg_emit_user_type_definition(cg, (UserType *)concrete_user);
+            {
+                Buf saved_fn_defs = cg->fn_defs;
+                cg->fn_defs = cg->witness_defs;
+                cg->witness_defs = saved_fn_defs;
+                cg->cur_body = &cg->fn_defs;
+            }
+            for (size_t ci = 0; ci < concrete_user->constructor_count; ++ci) {
+                if (!cg_emit_generic_type_method_wrapper(cg, concrete_user, &concrete_user->constructors[ci])) {
+                    Buf emitted_defs = cg->fn_defs;
+                    cg->fn_defs = cg->witness_defs;
+                    cg->witness_defs = emitted_defs;
+                    cg->cur_body = saved_cur_body;
+                    cg->cur_return_type = saved_cur_return_type;
+                    cg->cur_scope = saved_cur_scope;
+                    cg->cur_fn_is_main = saved_cur_fn_is_main;
+                    cg->cur_program = saved_program;
+                    for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+                    free(type_args);
+                    return NULL;
+                }
+            }
+            for (size_t mi = 0; mi < concrete_user->method_count; ++mi) {
+                if (!cg_emit_generic_type_method_wrapper(cg, concrete_user, &concrete_user->methods[mi])) {
+                    Buf emitted_defs = cg->fn_defs;
+                    cg->fn_defs = cg->witness_defs;
+                    cg->witness_defs = emitted_defs;
+                    cg->cur_body = saved_cur_body;
+                    cg->cur_return_type = saved_cur_return_type;
+                    cg->cur_scope = saved_cur_scope;
+                    cg->cur_fn_is_main = saved_cur_fn_is_main;
+                    cg->cur_program = saved_program;
+                    for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+                    free(type_args);
+                    return NULL;
+                }
+            }
+            {
+                Buf emitted_defs = cg->fn_defs;
+                cg->fn_defs = cg->witness_defs;
+                cg->witness_defs = emitted_defs;
+                cg->cur_body = saved_cur_body;
+                cg->cur_return_type = saved_cur_return_type;
+                cg->cur_scope = saved_cur_scope;
+                cg->cur_fn_is_main = saved_cur_fn_is_main;
+            }
+            cg->cur_program = saved_program;
+        }
+        for (size_t i = 0; i < open_arg_count; ++i) cg_type_ref_free(type_args[i]);
+        free(type_args);
+        result = cgtype_new(CG_TYPE_OBJECT);
+        if (result == NULL) return NULL;
+        result->user = concrete_user;
+        return result;
+    }
+
+    return cgtype_clone(return_type);
 }
 
 static bool cg_register_generic_spec_instance_shell(CG *cg,
@@ -3596,7 +3961,29 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         }
         const FengSlice *seg = &ref->as.named.segments[0];
         if (ref->as.named.type_arg_count > 0U) {
-            UserType *generic_instance = cg_find_generic_instance_user_type_for_ref(cg, ref);
+            const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
+            bool uses_active_context = false;
+            UserType *generic_instance = NULL;
+
+            if (generic_decl != NULL) {
+                uses_active_context =
+                    (cg->in_generic_fn &&
+                     cg_type_args_contain_type_param_names(ref->as.named.type_args,
+                                                           ref->as.named.type_arg_count,
+                                                           cg->generic_fn_type_param_names,
+                                                           cg->generic_fn_type_param_count)) ||
+                    (cg->ambient_type_param_count > 0U &&
+                     cg_type_args_contain_type_param_names(ref->as.named.type_args,
+                                                           ref->as.named.type_arg_count,
+                                                           cg->ambient_type_param_names,
+                                                           cg->ambient_type_param_count));
+                generic_instance = cg_find_generic_instance_user_type_with_active_context(
+                    cg,
+                    generic_decl->decl,
+                    ref->as.named.type_args,
+                    ref->as.named.type_arg_count);
+                (void)uses_active_context;
+            }
             if (generic_instance != NULL) {
                 CGType *t = cgtype_new(CG_TYPE_OBJECT);
                 if (!t) return false;
@@ -5339,6 +5726,9 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
                 candidate->generic_origin_decl != target_decl) {
                 continue;
             }
+            if (candidate->generic_context_type_param_count > 0U) {
+                continue;
+            }
             if (!cg_register_user_fit_shell_for_target(
                     cg,
                     decl,
@@ -5396,7 +5786,15 @@ static bool cg_resolve_type_for_user_fit_member(CG *cg,
     bool ok;
 
     if (sub == NULL) return false;
-    ok = cg_resolve_type(cg, sub, fallback, out_type);
+    if (uf->target->generic_context_type_param_count > 0U) {
+        CGTypeParamScope open_scope = {
+            .first = target_decl->as.type_decl.type_params,
+            .first_count = target_decl->as.type_decl.type_param_count,
+        };
+        ok = cg_resolve_type_with_open_scope(cg, sub, fallback, &open_scope, out_type);
+    } else {
+        ok = cg_resolve_type(cg, sub, fallback, out_type);
+    }
     cg_type_ref_free(sub);
     return ok;
 }
@@ -6142,6 +6540,7 @@ static bool cg_emit_return_expr_result(CG *cg,
 static bool cg_emit_constructor_invoke(CG *cg,
                                        FengExpr *const *args,
                                        size_t arg_count,
+                                       const UserType *owner_type,
                                        const UserMethod *ctor,
                                        const char *self_expr,
                                        FengToken blame) {
@@ -6185,10 +6584,20 @@ static bool cg_emit_constructor_invoke(CG *cg,
     }
 
     buf_append_fmt(cg->cur_body,
-                   "    %s(%s%s);\n",
+                   "    %s(%s",
                    ctor->c_name,
-                   self_expr,
-                   args_buf.data ? args_buf.data : "");
+                   self_expr);
+    if (!cg_append_user_type_context_descriptor_args(cg,
+                                                     cg->cur_body,
+                                                     owner_type,
+                                                     blame)) {
+        buf_free(&args_buf);
+        return false;
+    }
+    if (args_buf.data != NULL) {
+        buf_append(cg->cur_body, args_buf.data, args_buf.length);
+    }
+    buf_append_cstr(cg->cur_body, ");\n");
     buf_free(&args_buf);
     return true;
 }
@@ -6863,6 +7272,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     Buf *saved_body = cg->cur_body;
     Scope *saved_scope = cg->cur_scope;
     int saved_tmp_counter = cg->tmp_counter;
+    int saved_local_counter = cg->local_counter;
     int saved_loop_depth = cg->loop_depth;
     int saved_try_depth = cg->try_depth;
     CGType *saved_return_type = cg->cur_return_type;
@@ -6893,6 +7303,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     cg->cur_body = &fn;
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
     cg->cur_return_type = spec->callable_return_type;
@@ -7007,6 +7418,7 @@ cleanup:
     cg->cur_body = saved_body;
     cg->cur_scope = saved_scope;
     cg->tmp_counter = saved_tmp_counter;
+    cg->local_counter = saved_local_counter;
     cg->loop_depth = saved_loop_depth;
     cg->try_depth = saved_try_depth;
     cg->cur_return_type = saved_return_type;
@@ -8960,11 +9372,72 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 er_free(&ar);
             }
             Buf b; buf_init(&b);
-            buf_append_fmt(&b, "%s(%s%s)", um->c_name, recv.c_expr,
-                           args_buf.data ? args_buf.data : "");
+            buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
+            if (bf->target_type_param_count > 0U) {
+                if (bf->target_type_param_count != 1U ||
+                    recv.type == NULL || recv.type->kind != CG_TYPE_ARRAY ||
+                    recv.type->element == NULL) {
+                    buf_free(&args_buf);
+                    buf_free(&b);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                        "codegen: builtin fit generic descriptor emission only supports array targets in this phase");
+                }
+                char *desc_expr = NULL;
+                if (!cg_generic_descriptor_expr(cg,
+                                                recv.type->element,
+                                                NULL,
+                                                &e->token,
+                                                &desc_expr)) {
+                    buf_free(&args_buf);
+                    buf_free(&b);
+                    er_free(&recv);
+                    return false;
+                }
+                buf_append_fmt(&b, ", %s", desc_expr);
+                free(desc_expr);
+            }
+            if (args_buf.data != NULL) {
+                buf_append(&b, args_buf.data, args_buf.length);
+            }
+            buf_append_cstr(&b, ")");
             buf_free(&args_buf);
             out->c_expr = b.data;
-            out->type = cgtype_clone(um->return_type);
+            out->type = cg_instantiate_builtin_fit_return_type(cg,
+                                                               bf,
+                                                               um->return_type,
+                                                               recv.type != NULL && recv.type->kind == CG_TYPE_ARRAY
+                                                                   ? recv.type->element
+                                                                   : NULL,
+                                                               e->token);
+            if (out->type == NULL) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: failed to instantiate builtin fit return type");
+            }
+            if (bf->target_type_param_count > 0U &&
+                out->type->kind == CG_TYPE_OBJECT &&
+                um->return_type != NULL &&
+                um->return_type->kind == CG_TYPE_OBJECT &&
+                um->return_type->user != out->type->user) {
+                char *target_ctype = cg_ctype_dup(out->type);
+                char *raw_expr = out->c_expr;
+                if (target_ctype == NULL) {
+                    free(raw_expr);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+                Buf cast_expr;
+                buf_init(&cast_expr);
+                buf_append_fmt(&cast_expr, "((%s)(%s))", target_ctype, raw_expr);
+                free(target_ctype);
+                free(raw_expr);
+                out->c_expr = cast_expr.data;
+                if (out->c_expr == NULL) {
+                    er_free(&recv);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+            }
             out->owns_ref = cgtype_is_managed(out->type);
             er_free(&recv);
             return out->c_expr && out->type;
@@ -9041,8 +9514,17 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&ar);
         }
         Buf b; buf_init(&b);
-        buf_append_fmt(&b, "%s(%s%s)", um->c_name, recv.c_expr,
-                       args_buf.data ? args_buf.data : "");
+        buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
+        if (!cg_append_user_type_context_descriptor_args(cg, &b, ut, e->token)) {
+            buf_free(&args_buf);
+            buf_free(&b);
+            er_free(&recv);
+            return false;
+        }
+        if (args_buf.data != NULL) {
+            buf_append(&b, args_buf.data, args_buf.length);
+        }
+        buf_append_cstr(&b, ")");
         buf_free(&args_buf);
         out->c_expr = b.data;
         out->type = cgtype_clone(um->return_type);
@@ -9120,7 +9602,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (rc->owner_type_decl != NULL &&
             rc->owner_type_decl->kind == FENG_DECL_TYPE &&
             rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
-            ut = cg_find_generic_instance_user_type(
+            ut = cg_find_generic_instance_user_type_with_active_context(
                 cg,
                 rc->owner_type_decl,
                 e->as.call.explicit_type_args,
@@ -9165,6 +9647,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!cg_emit_constructor_invoke(cg,
                                         e->as.call.args,
                                         e->as.call.arg_count,
+                                        ut,
                                         ctor,
                                         obj_name,
                                         e->token)) {
@@ -9385,7 +9868,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
             rc->owner_type_decl != NULL &&
             rc->owner_type_decl->kind == FENG_DECL_TYPE &&
             rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
-            UserType *ut = cg_find_generic_instance_user_type(
+            UserType *ut = cg_find_generic_instance_user_type_with_active_context(
                 cg,
                 rc->owner_type_decl,
                 target->as.call.explicit_type_args,
@@ -9467,6 +9950,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!cg_emit_constructor_invoke(cg,
                                         target_call->as.call.args,
                                         target_call->as.call.arg_count,
+                                        ut,
                                         ctor,
                                         tmp,
                                         target_call->token)) {
@@ -10421,13 +10905,24 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, e->token,
                     "codegen: spec coercion references type outside current codegen scope");
             }
-            if (!cg_ensure_witness_instance(cg,
-                                            &cs->src_subject_key,
-                                            tgt_s,
-                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
-                                            e->token,
-                                            &witness_var)) {
-                return false;
+            if (out->type->kind == CG_TYPE_OBJECT && out->type->user != NULL) {
+                src_t = out->type->user;
+                if (!cg_ensure_witness_instance_for_type(cg,
+                                                         src_t,
+                                                         tgt_s,
+                                                         e->token,
+                                                         &witness_var)) {
+                    return false;
+                }
+            } else {
+                if (!cg_ensure_witness_instance(cg,
+                                                &cs->src_subject_key,
+                                                tgt_s,
+                                                FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
+                                                e->token,
+                                                &witness_var)) {
+                    return false;
+                }
             }
             /* Materialise the source so the subject expression evaluates exactly
              * once; object-form spec borrows that managed reference. */
@@ -11736,7 +12231,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
             "codegen: 'return' inside try/catch/finally is not yet supported in Phase 1A");
     }
     /* G6: inside a generic function, all returns use the _out out-parameter. */
-    if (cg->in_generic_fn) {
+    if (cg->in_generic_fn && cg->generic_return_uses_out) {
         return cg_emit_generic_return(cg, stmt);
     }
     if (!cg->cur_return_type ||
@@ -12588,6 +13083,11 @@ static void cg_emit_user_method_proto(Buf *out,
     }
     cg_emit_c_type(out, m->return_type);
     buf_append_fmt(out, " %s(struct %s *self", m->c_name, t->c_struct_name);
+    for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+        buf_append_fmt(out,
+                       ", const FengGenericParamDescriptor *_%s",
+                       t->generic_context_type_param_names[i]);
+    }
     for (size_t i = 0; i < m->param_count; i++) {
         buf_append_cstr(out, ", ");
         cg_emit_c_type(out, m->param_types[i]);
@@ -12607,6 +13107,12 @@ static void cg_emit_builtin_fit_method_proto(Buf *out,
     buf_append_fmt(out, " %s(", m->c_name);
     cg_emit_c_type(out, bf->target_type);
     buf_append_cstr(out, " self");
+    for (size_t i = 0; i < bf->target_type_param_count; ++i) {
+        buf_append_fmt(out,
+                       ", const FengGenericParamDescriptor *_%.*s",
+                       (int)bf->target_type_params[i].name.length,
+                       bf->target_type_params[i].name.data);
+    }
     for (size_t i = 0; i < m->param_count; i++) {
         buf_append_cstr(out, ", ");
         cg_emit_c_type(out, m->param_types[i]);
@@ -13082,6 +13588,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
     /* Activate generic-function emission state. */
     cg->in_generic_fn = true;
+    cg->generic_return_uses_out = true;
     cg->generic_fn_type_param_count = tp_count;
     cg->generic_fn_type_param_names = gfn->type_param_names; /* borrowed */
     cg->generic_fn_type_param_constraints = constraint_specs;  /* owned by frame */
@@ -13208,6 +13715,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         }
         cg->cur_scope = fn_scope;
         cg->tmp_counter = 0;
+        cg->local_counter = 0;
         cg->loop_depth = 0;
         cg->try_depth = 0;
         cg->cur_fn_is_main = false;
@@ -13263,6 +13771,7 @@ cleanup:
     free(desc_names);
     free((void *)constraint_specs);
     cg->in_generic_fn = false;
+    cg->generic_return_uses_out = false;
     cg->generic_fn_type_param_count = 0;
     cg->generic_fn_type_param_names = NULL;
     cg->generic_fn_type_param_constraints = NULL;
@@ -13665,6 +14174,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     /* Temporarily activate generic-fn type param state so cg_resolve_type
      * recognises the param type refs (T, U, …) as generic params. */
     bool saved_in_generic_fn = cg->in_generic_fn;
+    bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
     const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
@@ -13722,6 +14232,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     }
 
     cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_return_uses_out = saved_generic_return_uses_out;
     cg->generic_fn_type_param_count = saved_tp_count;
     cg->generic_fn_type_param_names = saved_tp_names;
     cg->generic_fn_type_param_constraints = saved_tp_constraints;
@@ -13742,6 +14253,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
          * return type ref.  The result may be CG_TYPE_GENERIC_PARAM,
          * which we then substitute. */
         cg->in_generic_fn = true;
+        cg->generic_return_uses_out = false;
         cg->generic_fn_type_param_count = tp_count;
         cg->generic_fn_type_param_names = gfn->type_param_names;
         cg->generic_fn_type_param_constraints = NULL;
@@ -13754,6 +14266,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             ok = (rt != NULL);
         }
         cg->in_generic_fn = saved_in_generic_fn;
+        cg->generic_return_uses_out = saved_generic_return_uses_out;
         cg->generic_fn_type_param_count = saved_tp_count;
         cg->generic_fn_type_param_names = saved_tp_names;
         cg->generic_fn_type_param_constraints = saved_tp_constraints;
@@ -13878,6 +14391,8 @@ static bool cg_emit_function(CG *cg,
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
+    cg->tmp_counter = 0;
+    cg->local_counter = 0;
     if (needs_static) {
         buf_append_cstr(body, "static ");
     }
@@ -13891,6 +14406,7 @@ static bool cg_emit_function(CG *cg,
     }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
 
@@ -14860,8 +15376,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
 
     FengSemanticSubjectKey subject_key =
         feng_semantic_subject_key_for_type_decl(t->decl);
-    const FengSpecWitness *witness = feng_semantic_lookup_spec_witness(
-        cg->analysis, &subject_key, s->decl);
+    const FengSpecWitness *witness = t->is_generic_instance
+        ? NULL
+        : feng_semantic_lookup_spec_witness(cg->analysis, &subject_key, s->decl);
 
     /* Emit one thunk per spec method member (in spec member order). Field
      * accessor thunks are deferred to 4b-β. */
@@ -15345,13 +15862,13 @@ static bool cg_collect_generic_instances_from_type_ref(CG *cg,
             if (ref->as.named.type_arg_count > 0U) {
                 bool contains_type_param = cg_type_ref_contains_type_param(ref, &scope);
                 const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
-                if (generic_decl != NULL && !contains_type_param) {
+                if (generic_decl != NULL) {
                     return cg_register_generic_type_instance_shell(cg,
                                                                   generic_decl,
                                                                   ref->as.named.type_args,
                                                                   ref->as.named.type_arg_count,
                                                                   ref->token,
-                                                                  &scope);
+                                                                  contains_type_param ? &scope : NULL);
                 }
                 {
                     const GenericSpecDecl *generic_spec_decl = cg_find_generic_spec_decl(cg, ref);
@@ -15499,6 +16016,7 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 const GenericTypeDecl *generic_decl =
                     cg_find_generic_type_decl_by_decl(cg,
                         expr->as.call.resolved_callable.owner_type_decl);
+                bool contains_type_param;
                 FengTypeRef temp_ref;
                 FengSlice temp_segment;
                 memset(&temp_ref, 0, sizeof temp_ref);
@@ -15514,13 +16032,14 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 temp_ref.as.named.segment_count = 1U;
                 temp_ref.as.named.type_args = expr->as.call.explicit_type_args;
                 temp_ref.as.named.type_arg_count = expr->as.call.explicit_type_arg_count;
-                if (!cg_type_ref_contains_type_param(&temp_ref, &scope) && generic_decl != NULL) {
+                contains_type_param = cg_type_ref_contains_type_param(&temp_ref, &scope);
+                if (generic_decl != NULL) {
                     if (!cg_register_generic_type_instance_shell(cg,
                                                                 generic_decl,
                                                                 expr->as.call.explicit_type_args,
                                                                 expr->as.call.explicit_type_arg_count,
                                                                 expr->token,
-                                                                &scope)) {
+                                                                contains_type_param ? &scope : NULL)) {
                         return false;
                     }
                 }
@@ -15669,9 +16188,6 @@ static bool cg_collect_generic_instances_from_block(CG *cg, const FengBlock *blo
 }
 
 static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *prog) {
-    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-        return true;
-    }
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; ++i) {
@@ -15898,7 +16414,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                          member_index < d->as.type_decl.member_count;
                          ++member_index) {
                         const FengTypeMember *member = d->as.type_decl.members[member_index];
-                        if (member->kind != FENG_TYPE_MEMBER_METHOD) continue;
+                        if (member->kind != FENG_TYPE_MEMBER_METHOD &&
+                            member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                            continue;
+                        }
                         if (!cg_emit_generic_type_method_shared(cg, d, member, target)) return false;
                     }
                     for (size_t k = 0; k < cg->user_type_count; ++k) {
@@ -15907,6 +16426,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (cg_program_origin(cg, ut->owner_program) ==
                             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                             continue;
+                        }
+                        for (size_t ci = 0; ci < ut->constructor_count; ++ci) {
+                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->constructors[ci])) return false;
                         }
                         for (size_t mi = 0; mi < ut->method_count; ++mi) {
                             if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->methods[mi])) return false;
@@ -16097,6 +16619,9 @@ static bool cg_emit_all_programs(CG *cg,
         if (imported_owner && !cg->user_types[i].is_generic_instance) {
             continue;
         }
+        if (imported_owner && cg->user_types[i].generic_context_type_param_count > 0U) {
+            continue;
+        }
         if (!cg_emit_module_header(cg, cg->user_types[i].owner_program)) {
             return false;
         }
@@ -16169,6 +16694,9 @@ static bool cg_emit_all_programs(CG *cg,
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
         }
+        if (t->generic_context_type_param_count > 0U) {
+            continue;
+        }
         const FengProgram *visibility_program = t->instantiation_program != NULL
             ? t->instantiation_program
             : t->owner_program;
@@ -16176,6 +16704,12 @@ static bool cg_emit_all_programs(CG *cg,
             return false;
         }
         cg->cur_program = visibility_program;
+        for (size_t ci = 0; ci < t->constructor_count; ci++) {
+            if (!cg_emit_generic_type_method_wrapper(cg, t, &t->constructors[ci])) {
+                cg->cur_program = NULL;
+                return false;
+            }
+        }
         for (size_t mi = 0; mi < t->method_count; mi++) {
             if (!cg_emit_generic_type_method_wrapper(cg, t, &t->methods[mi])) {
                 cg->cur_program = NULL;
@@ -16910,6 +17444,7 @@ static bool cg_activate_generic_type_context(CG *cg,
 
 static void cg_clear_generic_type_context(CG *cg) {
     cg->in_generic_fn = false;
+    cg->generic_return_uses_out = false;
     cg->generic_fn_type_param_count = 0;
     cg->generic_fn_type_param_names = NULL;
     cg->generic_fn_type_param_constraints = NULL;
@@ -16940,6 +17475,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     char **param_cnames = NULL;
     char **param_fnames = NULL;
     Scope *fn_scope = NULL;
+    int saved_tmp_counter = cg->tmp_counter;
+    int saved_local_counter = cg->local_counter;
     bool ok = false;
 
     type_param_names = tp_count ? calloc(tp_count, sizeof *type_param_names) : NULL;
@@ -17002,6 +17539,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 
     cg_activate_generic_type_context(cg, tp_count, type_param_names,
                                      constraint_specs, desc_names);
+    cg->generic_return_uses_out = true;
     cg->in_generic_type_method = true;
     cg->generic_type_method_decl = decl;
     cg->generic_type_method_field_offsets_name = "_field_offsets";
@@ -17090,6 +17628,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
     cg->cur_fn_is_main = false;
@@ -17145,6 +17684,8 @@ cleanup:
     free((void *)constraint_specs);
     cg_free_cstr_array(type_param_names, tp_count);
     free(shared_name);
+    cg->tmp_counter = saved_tmp_counter;
+    cg->local_counter = saved_local_counter;
     return ok;
 }
 
@@ -17165,10 +17706,13 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     char **type_param_names = NULL;
     char **method_type_param_names = NULL;
     char **combined_type_param_names = NULL;
+    const char **wrapper_context_desc_names = NULL;
     const UserSpec **constraint_specs = NULL;
     CGType **origin_param_types = NULL;
     char **desc_exprs = NULL;
     const char **method_desc_names = NULL;
+    int saved_tmp_counter = cg->tmp_counter;
+    int saved_local_counter = cg->local_counter;
     bool ok = false;
 
     if (!cg_generic_type_param_names(cg, decl, &type_param_names)) goto cleanup;
@@ -17197,6 +17741,25 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         for (size_t i = 0; i < method_tp_count; ++i) {
             combined_type_param_names[tp_count + i] = strdup(method_type_param_names[i]);
             if (combined_type_param_names[tp_count + i] == NULL) {
+                cg_fail(cg, m->member->token, "codegen: out of memory");
+                goto cleanup;
+            }
+        }
+    }
+    if (t->generic_context_type_param_count > 0U) {
+        wrapper_context_desc_names = calloc(t->generic_context_type_param_count,
+                                            sizeof *wrapper_context_desc_names);
+        if (wrapper_context_desc_names == NULL) {
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
+            Buf b;
+
+            buf_init(&b);
+            buf_append_fmt(&b, "_%s", t->generic_context_type_param_names[i]);
+            wrapper_context_desc_names[i] = b.data;
+            if (wrapper_context_desc_names[i] == NULL) {
                 cg_fail(cg, m->member->token, "codegen: out of memory");
                 goto cleanup;
             }
@@ -17241,15 +17804,31 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
 
     for (size_t i = 0; i < tp_count; ++i) {
         CGType *arg_type = NULL;
+        if (t->generic_context_type_param_count > 0U) {
+            cg_activate_generic_type_context(cg,
+                                             t->generic_context_type_param_count,
+                                             t->generic_context_type_param_names,
+                                             NULL,
+                                             wrapper_context_desc_names);
+        }
         if (i >= t->generic_type_arg_count ||
             !cg_resolve_type(cg, t->generic_type_args[i], &m->member->token, &arg_type)) {
+            if (t->generic_context_type_param_count > 0U) {
+                cg_clear_generic_type_context(cg);
+            }
             cgtype_free(arg_type);
             goto cleanup;
         }
         if (!cg_generic_descriptor_expr(cg, arg_type, constraint_specs[i],
                                         &m->member->token, &desc_exprs[i])) {
+            if (t->generic_context_type_param_count > 0U) {
+                cg_clear_generic_type_context(cg);
+            }
             cgtype_free(arg_type);
             goto cleanup;
+        }
+        if (t->generic_context_type_param_count > 0U) {
+            cg_clear_generic_type_context(cg);
         }
         cgtype_free(arg_type);
     }
@@ -17293,6 +17872,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_cstr(body, "static ");
         cg_emit_c_type(body, m->return_type);
         buf_append_fmt(body, " %s(struct %s *self", m->c_name, t->c_struct_name);
+        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+            buf_append_fmt(body,
+                           ", const FengGenericParamDescriptor *%s",
+                           wrapper_context_desc_names[i]);
+        }
         for (size_t i = 0; i < m->param_count; ++i) {
             buf_append_cstr(body, ", ");
             cg_emit_c_type(body, m->param_types[i]);
@@ -17304,6 +17888,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_fmt(proto, "static void %s(struct %s *self",
                        m->c_name,
                        t->c_struct_name);
+        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+            buf_append_fmt(proto,
+                           ", const FengGenericParamDescriptor *%s",
+                           wrapper_context_desc_names[i]);
+        }
         for (size_t i = 0; i < method_tp_count; ++i) {
             buf_append_fmt(proto, ", const FengGenericParamDescriptor *%s",
                            method_desc_names[i]);
@@ -17328,6 +17917,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_fmt(body, "static void %s(struct %s *self",
                        m->c_name,
                        t->c_struct_name);
+        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+            buf_append_fmt(body,
+                           ", const FengGenericParamDescriptor *%s",
+                           wrapper_context_desc_names[i]);
+        }
         for (size_t i = 0; i < method_tp_count; ++i) {
             buf_append_fmt(body, ", const FengGenericParamDescriptor *%s",
                            method_desc_names[i]);
@@ -17350,6 +17944,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_cstr(body, ") {\n");
     }
     buf_append_cstr(body, "    (void)self;\n");
+    for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+        buf_append_fmt(body, "    (void)%s;\n", wrapper_context_desc_names[i]);
+    }
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(body, "    (void)%s;\n", method_desc_names[i]);
     }
@@ -17434,11 +18031,15 @@ cleanup:
         for (size_t i = 0; i < tp_count; ++i) free(desc_exprs[i]);
     }
     free(desc_exprs);
+    cg_free_const_cstr_array(wrapper_context_desc_names,
+                             t->generic_context_type_param_count);
     cg_free_const_cstr_array(method_desc_names, method_tp_count);
     cg_free_cstr_array(method_type_param_names, method_tp_count);
     cg_free_cstr_array(combined_type_param_names, combined_tp_count);
     cg_free_cstr_array(type_param_names, tp_count);
     free(shared_name);
+    cg->tmp_counter = saved_tmp_counter;
+    cg->local_counter = saved_local_counter;
     return ok;
 }
 
@@ -17447,12 +18048,38 @@ cleanup:
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) {
     char **captured_names = NULL;
     size_t captured_name_count = 0U;
+    const char **context_desc_names = NULL;
     char **saved_captured_names = cg->captured_binding_names;
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    bool saved_generic_return_uses_out = cg->generic_return_uses_out;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     Scope *fn_scope = NULL;
     bool ok = false;
     FengSlice self_name = {"self", 4U};
+
+    if (t->generic_context_type_param_count > 0U) {
+        context_desc_names = calloc(t->generic_context_type_param_count,
+                                    sizeof *context_desc_names);
+        if (context_desc_names == NULL) {
+            return cg_fail(cg, m->member->token, "codegen: out of memory");
+        }
+        for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
+            Buf b;
+
+            buf_init(&b);
+            buf_append_fmt(&b, "_%s", t->generic_context_type_param_names[i]);
+            context_desc_names[i] = b.data;
+            if (context_desc_names[i] == NULL) {
+                cg_fail(cg, m->member->token, "codegen: out of memory");
+                goto cleanup;
+            }
+        }
+    }
 
     cg_emit_user_method_proto(&cg->fn_protos, t, m, true);
 
@@ -17463,6 +18090,11 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
     buf_append_cstr(body, "static ");
     cg_emit_c_type(body, m->return_type);
     buf_append_fmt(body, " %s(struct %s *self", m->c_name, t->c_struct_name);
+    for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
+        buf_append_fmt(body,
+                       ", const FengGenericParamDescriptor *%s",
+                       context_desc_names[i]);
+    }
 
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
@@ -17471,6 +18103,7 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
     }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
 
@@ -17481,6 +18114,18 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
         buf_append_fmt(body, " %s", pn);
     }
     buf_append_cstr(body, ") {\n");
+
+    if (t->generic_context_type_param_count > 0U) {
+        cg->in_generic_fn = true;
+        cg->generic_return_uses_out = false;
+        cg->generic_fn_type_param_count = t->generic_context_type_param_count;
+        cg->generic_fn_type_param_names = t->generic_context_type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = context_desc_names;
+        for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
+            buf_append_fmt(body, "    (void)%s;\n", context_desc_names[i]);
+        }
+    }
 
     if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
                                                   &captured_names,
@@ -17569,6 +18214,14 @@ cleanup:
     cg->captured_binding_names = saved_captured_names;
     cg->captured_binding_name_count = saved_captured_name_count;
     cg->current_callable_captures_self = saved_captures_self;
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_return_uses_out = saved_generic_return_uses_out;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
+    cg_free_const_cstr_array(context_desc_names,
+                             t->generic_context_type_param_count);
     for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
     free(captured_names);
     if (fn_scope != NULL) {
@@ -17587,11 +18240,17 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     char **captured_names = NULL;
     size_t captured_name_count = 0U;
     char **fit_target_type_param_names = NULL;
+    const char **fit_target_desc_names = NULL;
     char **saved_captured_names = cg->captured_binding_names;
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
     size_t saved_ambient_tp_count = cg->ambient_type_param_count;
     char **saved_ambient_tp_names = cg->ambient_type_param_names;
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     Scope *fn_scope = NULL;
     bool ok = false;
     FengSlice self_name = {"self", 4U};
@@ -17613,6 +18272,12 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     buf_append_fmt(body, " %s(", m->c_name);
     cg_emit_c_type(body, bf->target_type);
     buf_append_cstr(body, " self");
+    for (size_t i = 0; i < bf->target_type_param_count; ++i) {
+        buf_append_fmt(body,
+                       ", const FengGenericParamDescriptor *_%.*s",
+                       (int)bf->target_type_params[i].name.length,
+                       bf->target_type_params[i].name.data);
+    }
 
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
@@ -17621,6 +18286,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     }
     cg->cur_scope = fn_scope;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
 
@@ -17631,6 +18297,13 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     }
     buf_append_cstr(body, ") {\n");
 
+    for (size_t i = 0; i < bf->target_type_param_count; ++i) {
+        buf_append_fmt(body,
+                       "    (void)_%.*s;\n",
+                       (int)bf->target_type_params[i].name.length,
+                       bf->target_type_params[i].name.data);
+    }
+
     if (bf->target_type_param_count > 0U) {
         if (!cg_type_param_names_from_decl(cg,
                                            bf->target_type_params,
@@ -17639,8 +18312,30 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                            &fit_target_type_param_names)) {
             goto cleanup;
         }
+        fit_target_desc_names = calloc(bf->target_type_param_count,
+                                       sizeof *fit_target_desc_names);
+        if (fit_target_desc_names == NULL) {
+            cg_fail(cg, m->member->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        for (size_t i = 0U; i < bf->target_type_param_count; ++i) {
+            Buf b;
+
+            buf_init(&b);
+            buf_append_fmt(&b, "_%s", fit_target_type_param_names[i]);
+            fit_target_desc_names[i] = b.data;
+            if (fit_target_desc_names[i] == NULL) {
+                cg_fail(cg, m->member->token, "codegen: out of memory");
+                goto cleanup;
+            }
+        }
         cg->ambient_type_param_count = bf->target_type_param_count;
         cg->ambient_type_param_names = fit_target_type_param_names;
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count = bf->target_type_param_count;
+        cg->generic_fn_type_param_names = fit_target_type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = fit_target_desc_names;
     }
 
     if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
@@ -17723,6 +18418,12 @@ cleanup:
     cg->current_callable_captures_self = saved_captures_self;
     cg->ambient_type_param_count = saved_ambient_tp_count;
     cg->ambient_type_param_names = saved_ambient_tp_names;
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
+    cg_free_const_cstr_array(fit_target_desc_names, bf->target_type_param_count);
     cg_free_cstr_array(fit_target_type_param_names, bf->target_type_param_count);
     for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
     free(captured_names);
@@ -17756,6 +18457,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     cg->cur_return_type = void_t;
     cg->cur_fn_is_main = false;
     cg->tmp_counter = 0;
+    cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
 

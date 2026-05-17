@@ -1044,6 +1044,82 @@ static void test_generic_fit_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+static void test_generic_fit_named_generic_return_ft_roundtrip(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.generic_fit_named_generic_return;\n"
+        "\n"
+        "pu spec Slicer<T> { fn slice(from: i32, to: i32): Span<T>; }\n"
+        "pu type Span<T> {}\n"
+        "pu fit Span<T>: Slicer<T> {\n"
+        "    pu fn slice(from: i32, to: i32): Span<T> { return self; }\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die("generic_fit_named_generic_return.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolFitView *fit_view = NULL;
+    const FengSymbolDeclView *fit_decl = NULL;
+    const FengSymbolDeclView *slice_method = NULL;
+    const FengSymbolTypeView *slice_return = NULL;
+    const FengSymbolTypeView *slice_arg = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("generic_fit_named_generic_return");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_fit_count(module) == 1U);
+
+    fit_view = feng_symbol_module_fit_at(module, 0U);
+    ASSERT(fit_view != NULL);
+    fit_decl = feng_symbol_fit_decl(fit_view);
+    ASSERT(fit_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(fit_decl) == FENG_SYMBOL_DECL_KIND_FIT);
+
+    ASSERT(feng_symbol_decl_member_count(fit_decl) == 1U);
+    slice_method = feng_symbol_decl_member_at(fit_decl, 0U);
+    ASSERT(slice_method != NULL);
+    ASSERT(feng_symbol_decl_kind(slice_method) == FENG_SYMBOL_DECL_KIND_METHOD);
+    ASSERT(slice_equals_cstr(feng_symbol_decl_name(slice_method), "slice"));
+
+    slice_return = feng_symbol_decl_return_type(slice_method);
+    ASSERT(slice_return != NULL);
+    ASSERT(feng_symbol_type_kind(slice_return) == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(slice_return) == 1U);
+    slice_arg = feng_symbol_type_generic_arg_at(slice_return, 0U);
+    ASSERT(slice_arg != NULL);
+    ASSERT(feng_symbol_type_kind(slice_arg) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(slice_arg), "T"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
     static const char *kSource =
         "pu mod feng.test.symbol.fit_target_nodes;\n"
@@ -1243,6 +1319,7 @@ int main(void) {
     test_generic_function_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
+    test_generic_fit_named_generic_return_ft_roundtrip();
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();
     test_fit_array_type_param_target_ft_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
