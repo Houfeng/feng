@@ -2699,79 +2699,21 @@ static FengExpr *parse_postfix(Parser *parser) {
         }
 
         if (parser_match(parser, FENG_TOKEN_LBRACKET)) {
-            if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
-                FengExpr *arr_new;
-                FengExpr *size_expr;
-                FengTypeRef *elem_type;
-                FengExpr *target = expr->as.generic_target.target;
-                FengSlice *seg;
-
-                if (target == NULL || target->kind != FENG_EXPR_IDENTIFIER) {
-                    free_expr(expr);
-                    (void)parser_error_current(
-                        parser,
-                        "array-new requires a simple type name before '<'");
-                    return NULL;
-                }
-
-                size_expr = parse_expression(parser);
-                if (size_expr == NULL) {
-                    free_expr(expr);
-                    return NULL;
-                }
-                if (!parser_expect(parser,
-                                   FENG_TOKEN_RBRACKET,
-                                   "expected ']' after array size")) {
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-
-                arr_new = new_expr(parser, FENG_EXPR_ARRAY_NEW, expr->token);
-                if (arr_new == NULL) {
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-                elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, target->token);
-                if (elem_type == NULL) {
-                    free_expr(arr_new);
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-                seg = (FengSlice *)malloc(sizeof *seg);
-                if (seg == NULL) {
-                    free_type_ref(elem_type);
-                    free_expr(arr_new);
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-
-                *seg = target->as.identifier;
-                elem_type->as.named.segments = seg;
-                elem_type->as.named.segment_count = 1U;
-                elem_type->as.named.type_args = expr->as.generic_target.type_args;
-                elem_type->as.named.type_arg_count = expr->as.generic_target.type_arg_count;
-                arr_new->as.array_new.element_type = elem_type;
-                arr_new->as.array_new.size = size_expr;
-
-                expr->as.generic_target.type_args = NULL;
-                expr->as.generic_target.type_arg_count = 0U;
-                free_expr(expr);
-                expr = arr_new;
-                continue;
-            }
-
             if (parser_match(parser, FENG_TOKEN_COLON)) {
                 FengExpr *size_expr;
                 FengExpr *arr_new;
                 FengTypeRef *elem_type;
                 FengSlice *seg;
+                FengExpr *type_target = expr;
+                FengExpr *generic_target = NULL;
 
-                /* Non-generic array-new now uses Type[:n]. */
-                if (expr->kind != FENG_EXPR_IDENTIFIER) {
+                /* Array-new now consistently uses Type[:n], including Type<Args>[:n]. */
+                if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
+                    generic_target = expr;
+                    type_target = expr->as.generic_target.target;
+                }
+
+                if (type_target == NULL || type_target->kind != FENG_EXPR_IDENTIFIER) {
                     free_expr(expr);
                     (void)parser_error_current(
                         parser,
@@ -2798,7 +2740,7 @@ static FengExpr *parse_postfix(Parser *parser) {
                     free_expr(expr);
                     return NULL;
                 }
-                elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, expr->token);
+                elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, type_target->token);
                 if (elem_type == NULL) {
                     free_expr(arr_new);
                     free_expr(size_expr);
@@ -2814,9 +2756,15 @@ static FengExpr *parse_postfix(Parser *parser) {
                     return NULL;
                 }
 
-                *seg = expr->as.identifier;
+                *seg = type_target->as.identifier;
                 elem_type->as.named.segments = seg;
                 elem_type->as.named.segment_count = 1U;
+                if (generic_target != NULL) {
+                    elem_type->as.named.type_args = generic_target->as.generic_target.type_args;
+                    elem_type->as.named.type_arg_count = generic_target->as.generic_target.type_arg_count;
+                    generic_target->as.generic_target.type_args = NULL;
+                    generic_target->as.generic_target.type_arg_count = 0U;
+                }
                 arr_new->as.array_new.element_type = elem_type;
                 arr_new->as.array_new.size = size_expr;
                 free_expr(expr);

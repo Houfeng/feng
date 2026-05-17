@@ -164,7 +164,7 @@ let ratio = (float)small / 3.0;
 let size: u8 = (u8)257;
 let writable = [1, 2, 3];
 let readonly = (int[])writable;
-let entities: MapEntity<K, V>[!] = MapEntity<K, V>[capacity];
+let entities: MapEntity<K, V>[!] = MapEntity<K, V>[:capacity];
 let readonly_entities = (MapEntity<K, V>[])entities;
 ```
 
@@ -270,13 +270,13 @@ let matrix = [[1, 2], [3, 4]];
 数组创建表达式用于在运行时动态分配指定长度、元素零初始化的数组。语法为：
 
 ```feng
-Type<TypeArgs>[n]
 Type[:n]
+Type<TypeArgs>[:n]
 ```
 
 - `Type` 为元素类型名称，`<TypeArgs>` 为可选的泛型类型参数。
 - `n` 为整数表达式，表示数组长度（运行时求值）。
-- `Type[:n]` 专用于非泛型数组创建；`value[n]` 始终表示索引访问表达式。
+- 数组创建统一使用 `[:n]` 维度段：`Type[:n]` 与 `Type<TypeArgs>[:n]`；`value[n]` 始终表示索引访问表达式。
 - 可写性由目标类型决定：有显式目标类型时按目标数组层可写位贴合；无目标类型时默认推导为只读数组类型。
 - 数组元素按类型的零值默认初始化。
 - 在无目标类型时，结果类型默认推导为 `T[]`。
@@ -286,7 +286,7 @@ Type[:n]
 let nums: int[!] = int[:16];
 
 // 泛型类型参数：分配 16 个 MapEntry<K,V> 的可写数组
-let entries: MapEntry<K,V>[!] = MapEntry<K,V>[16];
+let entries: MapEntry<K,V>[!] = MapEntry<K,V>[:16];
 
 // 运行时长度
 let buf: u8[!] = u8[:capacity];

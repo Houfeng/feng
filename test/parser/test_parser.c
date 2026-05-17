@@ -1054,6 +1054,35 @@ static void test_non_generic_array_new_uses_colon_dimension_syntax(void) {
     feng_program_free(program);
 }
 
+static void test_generic_array_new_uses_colon_dimension_syntax(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Pair<A, B> {\n"
+        "    var left: A;\n"
+        "    var right: B;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let pairs: Pair<int, int>[!] = Pair<int, int>[:2];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengExpr *init;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_array_new_colon_dim.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[1]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_BINDING);
+    init = stmt->as.binding.initializer;
+    ASSERT(init != NULL);
+    ASSERT(init->kind == FENG_EXPR_ARRAY_NEW);
+    ASSERT(init->as.array_new.element_type != NULL);
+    ASSERT(init->as.array_new.element_type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(init->as.array_new.element_type->as.named.type_arg_count == 2U);
+
+    feng_program_free(program);
+}
+
 static void test_index_expression_is_unambiguous_and_remains_value_brackets(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1093,6 +1122,38 @@ static void test_non_generic_type_brackets_without_colon_parses_as_index(void) {
     init = stmt->as.binding.initializer;
     ASSERT(init != NULL);
     ASSERT(init->kind == FENG_EXPR_INDEX);
+
+    feng_program_free(program);
+}
+
+static void test_generic_type_brackets_without_colon_parses_as_index(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Pair<A, B> {\n"
+        "    var left: A;\n"
+        "    var right: B;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let pairs: Pair<int, int>[!] = Pair<int, int>[2];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengExpr *init;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "generic_array_new_without_colon_is_index.f",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[1]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_BINDING);
+    init = stmt->as.binding.initializer;
+    ASSERT(init != NULL);
+    ASSERT(init->kind == FENG_EXPR_INDEX);
+    ASSERT(init->as.index.object != NULL);
+    ASSERT(init->as.index.object->kind == FENG_EXPR_GENERIC_TARGET);
 
     feng_program_free(program);
 }
@@ -1545,8 +1606,10 @@ int main(void) {
     test_for_in_loop();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();
+    test_generic_array_new_uses_colon_dimension_syntax();
     test_index_expression_is_unambiguous_and_remains_value_brackets();
     test_non_generic_type_brackets_without_colon_parses_as_index();
+    test_generic_type_brackets_without_colon_parses_as_index();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
     test_doc_comments_bind_to_declarations_and_members();

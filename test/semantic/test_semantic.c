@@ -4405,6 +4405,56 @@ static void test_non_generic_array_new_legacy_bracket_syntax_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_generic_array_new_colon_dimension_accepts_expected_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Pair<A, B> {\n"
+        "    var left: A;\n"
+        "    var right: B;\n"
+        "}\n"
+        "fn run(n: int) {\n"
+        "    var pairs: Pair<int, int>[!] = Pair<int, int>[:n];\n"
+        "    pairs[0].left = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_array_new_colon_dim_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_array_new_legacy_bracket_syntax_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Pair<A, B> {\n"
+        "    var left: A;\n"
+        "    var right: B;\n"
+        "}\n"
+        "fn run() {\n"
+        "    let pairs: Pair<int, int>[!] = Pair<int, int>[3];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_array_new_legacy_syntax_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count > 0U);
+    ASSERT(errors[0].message != NULL);
+    ASSERT(strstr(errors[0].message, "explicit generic target") != NULL ||
+           strstr(errors[0].message, "index target") != NULL);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_index_access_on_uppercase_local_name_remains_index_expression(void) {
     const char *source =
         "mod demo.main;\n"
@@ -12480,6 +12530,8 @@ int main(void) {
     test_cast_same_type_passes();
     test_non_generic_array_new_colon_dimension_accepts_expected_target();
     test_non_generic_array_new_legacy_bracket_syntax_rejected();
+    test_generic_array_new_colon_dimension_accepts_expected_target();
+    test_generic_array_new_legacy_bracket_syntax_rejected();
     test_index_access_on_uppercase_local_name_remains_index_expression();
     test_index_expression_rejects_float_operand();
     test_index_expression_rejects_bool_operand();
