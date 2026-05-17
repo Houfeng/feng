@@ -1,6 +1,6 @@
 #ifdef __INTELLISENSE__
 #include "feng_runtime.h"  
-#define FENG_RUNTIME_CONTRACT(a, b, c)         
+#define FENG_RUNTIME_CONTRACT(ret_type, name, args) ret_type name args;        
 #endif
 
 // ----------------------------------------------------------------------------
