@@ -85,7 +85,10 @@ perf-constraints: cli runtime
 std-tests: cli runtime
 	$(BIN_DIR)/feng build ./std
 	$(BIN_DIR)/feng build ./std_test
-	printf 'ABCDE' | ./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
+	printf 'ABCDE\nFG' | ./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_INPUT1__=ABCDE$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_INPUT2__=FG$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_INPUT3__=$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_OUTPUT__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
 

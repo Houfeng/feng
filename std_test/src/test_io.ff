@@ -2,16 +2,18 @@ mod std_test;
 
 use std;
 
-fn input_reads_stdin_bytes() {
-  let buffer: byte[!] = byte[:5];
-  let readCount = input(buffer);
+fn input_reads_one_line_per_call() {
+  let first = input();
+  let second = input();
+  let third = input();
 
-  check(readCount == (long)5, "io/input-count");
-  check(buffer[0] == (byte)65, "io/input-byte-0");
-  check(buffer[1] == (byte)66, "io/input-byte-1");
-  check(buffer[2] == (byte)67, "io/input-byte-2");
-  check(buffer[3] == (byte)68, "io/input-byte-3");
-  check(buffer[4] == (byte)69, "io/input-byte-4");
+  check(first.length() == (long)5, "io/input-first-line-length");
+  check(second.length() == (long)2, "io/input-second-line-length");
+  check(third.length() == (long)0, "io/input-eof-empty-length");
+
+  output("__STD_IO_INPUT1__=" + first + "\n");
+  output("__STD_IO_INPUT2__=" + second + "\n");
+  output("__STD_IO_INPUT3__=" + third + "\n");
 }
 
 fn output_writes_stdout() {
@@ -29,7 +31,7 @@ fn print_writes_stdout_with_newline() {
 }
 
 pu fn run_io_tests() {
-  input_reads_stdin_bytes();
+  input_reads_one_line_per_call();
   output_writes_stdout();
   print_writes_stdout_with_newline();
 }

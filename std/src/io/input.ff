@@ -1,13 +1,30 @@
 pu mod std;
 
+use std.collections;
+
 @cdecl("libc")
-extern fn read(fd: int, buf: byte*, count: long): long;
+extern fn getchar(): int;
+
+@runtime
+extern fn feng_string_from_utf8_bytes(value: byte[!], length: long): string;
 
 /**
- * Reads bytes from standard input into `buffer`.
- * @param buffer - destination writable byte buffer
- * @return actual bytes read, `0` on EOF, or a negative value on error
+ * Reads a single line from standard input and returns it as UTF-8 text.
+ * The trailing newline is not included. Returns `""` on EOF before any byte.
  */
-pu fn input(buffer: byte[!]): long {
-	return read(0, &buffer, buffer.length());
+pu fn input(): string {
+	let bytes = List:<byte>();
+
+	while true {
+		let ch = getchar();
+		if ch < 0 || ch == 10 {
+			break;
+		}
+		if ch != 13 {
+			bytes.add((byte)ch);
+		}
+	}
+
+	let data = bytes.entries();
+	return feng_string_from_utf8_bytes(data, data.length());
 }

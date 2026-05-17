@@ -70,6 +70,38 @@ FengString *feng_string_default(void) {
     return feng_string_default_singleton;
 }
 
+FengString *feng_string_from_utf8_bytes(FengArray *value, int64_t length) {
+    size_t available = feng_array_length(value);
+    size_t copy_length;
+    const unsigned char *data;
+    FengString *result;
+
+    if (length < 0) {
+        feng_panic("feng_string_from_utf8_bytes: length must be non-negative, got %lld",
+                   (long long)length);
+    }
+
+    if (length == 0) {
+        return feng_string_default();
+    }
+
+    copy_length = (size_t)length;
+    if (copy_length > available) {
+        feng_panic("feng_string_from_utf8_bytes: length %zu exceeds array length %zu",
+                   copy_length,
+                   available);
+    }
+
+    data = (const unsigned char *)feng_array_data(value);
+    if (data == NULL) {
+        feng_panic("feng_string_from_utf8_bytes: non-empty array has no payload");
+    }
+
+    result = feng_string_allocate(copy_length, 1U);
+    memcpy(((struct FengString *)result)->data, data, copy_length);
+    return result;
+}
+
 FengString *feng_string_concat(const FengString *left, const FengString *right) {
     const struct FengString *l = (const struct FengString *)left;
     const struct FengString *r = (const struct FengString *)right;
