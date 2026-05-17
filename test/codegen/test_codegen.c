@@ -2644,6 +2644,59 @@ static void test_phase_e_aggregate_generic_arg_three_entrances_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kUserConstructorFormsSrc =
+    "mod feng.codegen.ctor1;\n"
+    "type UserType {\n"
+    "    let id: int;\n"
+    "    let name: string;\n"
+    "    fn UserType() {\n"
+    "        self.id = 1;\n"
+    "    }\n"
+    "    fn UserType(next: int) {\n"
+    "        self.id = next;\n"
+    "    }\n"
+    "}\n"
+    "fn use_all(): int {\n"
+    "    let a: UserType = UserType() { id: 11 };\n"
+    "    let b: UserType = UserType { id: 12 };\n"
+    "    let c: UserType = UserType();\n"
+    "    let d: UserType = UserType(7) { id: 13 };\n"
+    "    let e: UserType = UserType(9);\n"
+    "    return a.id + b.id + c.id + d.id + e.id;\n"
+    "}\n";
+
+static void test_user_constructor_forms_codegen(void) {
+    FengProgram *program = parse_or_die(kUserConstructorFormsSrc, "ctor1.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (constructor forms): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "__ctor__UserType") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -2691,6 +2744,7 @@ int main(void) {
     test_generic_type_generic_method_codegen();
     test_generic_scalar_instance_direct_call_codegen();
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
+    test_user_constructor_forms_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

@@ -35,6 +35,84 @@ fn array_length_nested() {
   check(matrix[0].length() == (long)3, "length/array-nested-inner");
 }
 
+fn span_length_readonly() {
+  let values: int[] = [1, 2, 3, 4];
+  let middle = values.slice((long)1, (long)2);
+
+  check(middle.length() == (long)2, "length/span-length-readonly");
+}
+
+fn span_get_readonly() {
+  let values: int[] = [1, 2, 3, 4];
+  let middle = values.slice((long)1, (long)2);
+
+  check(middle.get((long)0) == 2, "length/span-get-readonly-0");
+  check(middle.get((long)1) == 3, "length/span-get-readonly-1");
+}
+
+fn span_slice_writable_source() {
+  let values: int[!] = [10, 20, 30];
+  let tail = values.slice((long)1, (long)2);
+
+  check(tail.length() == (long)2, "length/span-writable-source-length");
+  check(tail.get((long)0) == 20, "length/span-writable-source-0");
+  check(tail.get((long)1) == 30, "length/span-writable-source-1");
+}
+
+fn span_slice_invalid_range() {
+  let values: int[] = [1, 2, 3];
+  var caught: bool = false;
+
+  try {
+    values.slice((long)2, (long)2);
+  } catch {
+    caught = true;
+  }
+
+  check(caught, "length/span-slice-invalid-range");
+}
+
+fn span_slice_negative_start() {
+  let values: int[] = [1, 2, 3];
+  var caught: bool = false;
+
+  try {
+    values.slice((long)-1, (long)1);
+  } catch {
+    caught = true;
+  }
+
+  check(caught, "length/span-slice-negative-start");
+}
+
+fn span_get_invalid_index() {
+  let values: int[] = [1, 2, 3];
+  let middle = values.slice((long)1, (long)2);
+  var caught: bool = false;
+
+  try {
+    middle.get((long)2);
+  } catch {
+    caught = true;
+  }
+
+  check(caught, "length/span-get-invalid-index");
+}
+
+fn span_get_negative_index() {
+  let values: int[] = [1, 2, 3];
+  let middle = values.slice((long)1, (long)2);
+  var caught: bool = false;
+
+  try {
+    middle.get((long)-1);
+  } catch {
+    caught = true;
+  }
+
+  check(caught, "length/span-get-negative-index");
+}
+
 pu fn run_length_tests() {
   string_length_ascii();
   string_length_utf8_bytes();
@@ -43,4 +121,11 @@ pu fn run_length_tests() {
   array_length_writable();
   array_length_empty();
   array_length_nested();
+  span_length_readonly();
+  span_get_readonly();
+  span_slice_writable_source();
+  span_slice_invalid_range();
+  span_slice_negative_start();
+  span_get_invalid_index();
+  span_get_negative_index();
 }

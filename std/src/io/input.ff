@@ -6,7 +6,7 @@ use std.collections;
 extern fn getchar(): int;
 
 @runtime
-extern fn feng_string_from_utf8_bytes(value: byte[!], length: long): string;
+extern fn feng_string_from_utf8_bytes(value: byte[], length: long): string;
 
 /**
  * Reads a single line from standard input and returns it as UTF-8 text.
