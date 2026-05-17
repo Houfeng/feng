@@ -7,10 +7,12 @@
 
 - enum 公开语义已经收敛到 [docs/feng-enum.md](../docs/feng-enum.md)，当前阶段只支持简单的 int enum：无关联值、无字段、无方法、无泛型。
 - 当前规则已明确：只允许“全隐式取值”或“全显式取值”，禁止混合取值。
+- 当前规则已明确：不支持任何形式的 `int -> enum` 显式转换，包括整数字面量与常量表达式 cast。
 - lexer 侧已经把 `enum` 识别为关键字；首版实现不需要新增关键字扫描逻辑，但需要补回归测试。
 - parser / AST 目前没有 enum 顶层声明种类；`FengDeclKind` 只有 binding / type / spec / fit / function。
 - symbol table 目前没有 enum 声明种类；包表导入/导出、provider 查询视图和 LSP 仍只围绕 `type` / `spec` / `fit` / `fn` 等已支持声明。
 - 现有值模型只有 `TRIVIAL` / `MANAGED_POINTER` / `AGGREGATE` 三类；首版 enum 应作为“具名的 `int` 标量”进入 `TRIVIAL` 路径，不新增 runtime 值模型或专用 runtime API。
+- enum 的实现目标是“语义上独立、表示上零成本”：前端保持名义类型与枚举项规则，codegen 固定降为 Feng `int` 对应的稳定标量表示，不依赖 C 原生 `enum` 宽度或 ABI 细节。
 - ABI 侧已收敛：enum 在 ABI 边界视为与 `int` 相同的 ABI 标量，可直接进入 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置。
 - 现有测试入口已经具备分层落地条件：`test_lexer`、`test_parser`、`test_semantic`、`test_codegen`、`test_symbol`、`test_cli` 以及最终 `make test`。
 
@@ -159,7 +161,7 @@
 - [ ] 不支持关联值、payload、字段、方法、构造函数、终结器。
 - [ ] 不支持 enum 泛型。
 - [ ] 不支持显式值与隐式值混用。
-- [ ] 不支持 `int -> enum` 显式转换或任何 `enum <-> int` 隐式转换。
+- [ ] 不支持任何形式的 `int -> enum` 显式转换，包括整数字面量、常量表达式与运行时 `int` 值；也不支持任何 `enum <-> int` 隐式转换。
 - [ ] 不引入新的 runtime 对象表示、runtime API 或额外值模型分类。
 
 ## 4. 建议执行顺序
@@ -174,5 +176,6 @@
 
 - 所有实现必须以 [docs/feng-enum.md](../docs/feng-enum.md) 为准，不得在编码阶段临时放宽为“类 C 混合取值”。
 - enum 首版必须保持“具名的 int 标量”定位，不得偷渡成托管对象、fat value 或 ABI 特判对象。
+- enum 首版必须保持“语义独立但表示零成本”的定位：不得偷渡成托管对象、fat value、反射驱动值或依赖 C 原生 `enum` 的不稳定宽度语义。
 - 若符号表格式、导入查询模型或 LSP 展示需要新事实，先更新对应文档，再进入实现。
 - 若后续要支持 payload enum、位标志语义或可配置底层类型，必须另开规范，不在本待开发项中顺手扩展。
