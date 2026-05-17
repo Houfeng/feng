@@ -3389,6 +3389,24 @@ static bool inferred_expr_type_is_string(InferredExprType expr_type) {
     return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
 }
 
+static bool type_decl_has_field_members(const FengDecl *decl) {
+    size_t member_index;
+
+    if (decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+
+    for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = decl->as.type_decl.members[member_index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContext *context,
                                                              InferredExprType expr_type) {
     const char *builtin_name;
@@ -3413,10 +3431,12 @@ static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContex
             }
             type_decl = resolve_type_ref_decl(context, expr_type.type_ref);
             return type_decl != NULL && type_decl->kind == FENG_DECL_TYPE &&
+                   type_decl_has_field_members(type_decl) &&
                    type_decl_is_abi_stable(context, type_decl, NULL);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
             return expr_type.type_decl != NULL && expr_type.type_decl->kind == FENG_DECL_TYPE &&
+                   type_decl_has_field_members(expr_type.type_decl) &&
                    type_decl_is_abi_stable(context, expr_type.type_decl, NULL);
 
         case FENG_INFERRED_EXPR_TYPE_LAMBDA:
@@ -11355,10 +11375,63 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     return true;
 }
 
+static bool type_ref_uses_c_boundary_compatible_named_types(const ResolveContext *context,
+                                                            const FengTypeRef *type_ref,
+                                                            bool allow_void,
+                                                            bool pointer_pointee) {
+    const FengDecl *type_decl;
+    const char *builtin_name;
+
+    if (type_ref == NULL) {
+        return allow_void;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            builtin_name = type_ref_builtin_canonical_name(type_ref);
+            if (builtin_name != NULL) {
+                return strcmp(builtin_name, "void") != 0 || allow_void;
+            }
+
+            type_decl = resolve_type_ref_decl(context, type_ref);
+            if (type_decl == NULL) {
+                return false;
+            }
+            if (type_decl->kind == FENG_DECL_TYPE) {
+                return annotations_contain_kind(type_decl->annotations,
+                                                type_decl->annotation_count,
+                                                FENG_ANNOTATION_ABI) &&
+                       (pointer_pointee || type_decl_has_field_members(type_decl));
+            }
+
+            return type_decl_is_abi_stable(context, type_decl, NULL);
+
+        case FENG_TYPE_REF_POINTER:
+            return type_ref->as.inner != NULL &&
+                   type_ref_uses_c_boundary_compatible_named_types(context,
+                                                                   type_ref->as.inner,
+                                                                   true,
+                                                                   true);
+
+        case FENG_TYPE_REF_ARRAY:
+            return type_ref->as.inner != NULL &&
+                   type_ref_uses_c_boundary_compatible_named_types(context,
+                                                                   type_ref->as.inner,
+                                                                   false,
+                                                                   false);
+    }
+
+    return false;
+}
+
 static bool type_ref_is_extern_c_abi_compatible(const ResolveContext *context,
                                                 const FengTypeRef *type_ref,
                                                 bool allow_void) {
-    return type_ref_is_abi_stable(context, type_ref, allow_void, NULL);
+    return type_ref_is_abi_stable(context, type_ref, allow_void, NULL) &&
+           type_ref_uses_c_boundary_compatible_named_types(context,
+                                                           type_ref,
+                                                           allow_void,
+                                                           false);
 }
 
 static bool validate_extern_function_signature(ResolveContext *context, const FengDecl *decl) {

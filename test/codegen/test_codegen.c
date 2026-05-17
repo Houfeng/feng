@@ -496,6 +496,66 @@ static void test_abi_value_pointer_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_fieldless_abi_pointer_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.opaquehandle;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_make_handle(): Handle*;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_use_handle(handle: Handle*): void;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_roundtrip_handle(handle: Handle*): Handle*;\n"
+        "fn run() {\n"
+        "    let handle: Handle* = c_make_handle();\n"
+        "    c_use_handle(handle);\n"
+        "    let other: Handle* = c_roundtrip_handle(handle);\n"
+        "    let same: bool = handle == other;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "opaquehandle.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (fieldless ABI pointer): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__feng__codegen__opaquehandle__Handle;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern struct Feng__feng__codegen__opaquehandle__Handle * c_make_handle(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void c_use_handle(struct Feng__feng__codegen__opaquehandle__Handle *") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern struct Feng__feng__codegen__opaquehandle__Handle * c_roundtrip_handle(struct Feng__feng__codegen__opaquehandle__Handle *") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__opaquehandle__Handle__AbiLayout") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__opaquehandle__Handle__abi_ptr(") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_abi_value_extern_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.abivalueextern;\n"
@@ -2542,6 +2602,7 @@ int main(void) {
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();
+    test_fieldless_abi_pointer_codegen();
     test_abi_value_extern_codegen();
     test_runtime_extern_codegen_uses_feng_surface_types();
     test_generic_runtime_extern_call_infers_type_args();

@@ -1190,6 +1190,113 @@ static void test_extern_function_accepts_abi_value_param_and_return(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_accepts_fieldless_abi_type_pointer_param_and_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn handle_open(): Handle*;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn handle_close(handle: Handle*): void;\n"
+        "fn run() {\n"
+        "    let handle: Handle* = handle_open();\n"
+        "    handle_close(handle);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("extern_fieldless_abi_pointer_signature_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_fieldless_abi_type_value_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn handle_close(handle: Handle): void;\n";
+    FengProgram *program = parse_program_or_die("extern_fieldless_abi_value_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fieldless_abi_value_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "parameter 'handle' type 'Handle' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_fieldless_abi_type_value_return(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn handle_open(): Handle;\n";
+    FengProgram *program = parse_program_or_die("extern_fieldless_abi_value_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fieldless_abi_value_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "return type 'Handle' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_non_abi_type_pointer_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Handle {\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn handle_close(handle: Handle*): void;\n";
+    FengProgram *program = parse_program_or_die("extern_non_abi_pointer_param_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_non_abi_pointer_param_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message,
+                  "parameter 'handle' type 'Handle*' is not C ABI-stable") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fixed_function_accepts_abi_array_parameter(void) {
     const char *source =
         "mod demo.main;\n"
@@ -4401,6 +4508,61 @@ static void test_unary_address_of_allows_extern_call_borrowed_data_pointer(void)
     ASSERT(error_count == 0U);
 
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_allows_fielded_abi_type_pointer_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "}\n"
+        "@cdecl(\"c\")\n"
+        "extern fn use_point_ptr(p: Point*): void;\n"
+        "fn run(point: Point) {\n"
+        "    let ptr: Point* = &point;\n"
+        "    use_point_ptr(ptr);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_fielded_abi_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_unary_address_of_rejects_fieldless_abi_type_pointer_binding(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@abi\n"
+        "type Handle {\n"
+        "}\n"
+        "fn run(handle: Handle) {\n"
+        "    let ptr: Handle* = &handle;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_fieldless_abi_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_fieldless_abi_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "unary operator '&' requires an ABI-compatible scalar or @abi value") != NULL);
+    ASSERT(strstr(errors[0].message, "Handle") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -11317,6 +11479,10 @@ int main(void) {
     test_fixed_function_type_rejects_union_annotation();
     test_fixed_function_accepts_abi_stable_signature();
     test_extern_function_accepts_abi_value_param_and_return();
+    test_extern_function_accepts_fieldless_abi_type_pointer_param_and_return();
+    test_extern_function_rejects_fieldless_abi_type_value_parameter();
+    test_extern_function_rejects_fieldless_abi_type_value_return();
+    test_extern_function_rejects_non_abi_type_pointer_parameter();
     test_fixed_function_accepts_abi_array_parameter();
     test_fixed_function_rejects_parameterized_calling_convention();
     test_fixed_method_rejects_managed_signature_type();
@@ -11447,6 +11613,8 @@ int main(void) {
     test_unary_address_of_rejects_returned_array_value();
     test_unary_address_of_rejects_returned_string_value();
     test_unary_address_of_allows_extern_call_borrowed_data_pointer();
+    test_unary_address_of_allows_fielded_abi_type_pointer_binding();
+    test_unary_address_of_rejects_fieldless_abi_type_pointer_binding();
     test_unary_address_of_rejects_string_to_byte_pointer_binding();
     test_unary_address_of_rejects_non_extern_forwarding_via_assignment_alias();
     test_unary_address_of_rejects_object_field_storage();

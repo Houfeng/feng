@@ -313,6 +313,24 @@ static bool cg_pointer_inner_is_lowerable(const CGType *t) {
     }
 }
 
+static bool cg_decl_has_field_members(const FengDecl *decl) {
+    size_t member_index;
+
+    if (decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+
+    for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = decl->as.type_decl.members[member_index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* When generating user-type pointer references we use `<struct>` *` so the
  * field accesses are direct member loads. The generic `void *` form above is
  * used only for fall-back / unknown user types, which never reach the body.
@@ -517,9 +535,12 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         }
         if (t->element->kind == CG_TYPE_OBJECT &&
             t->element->user != NULL &&
-            t->element->user->is_abi_type &&
-            t->element->user->c_abi_layout_name != NULL) {
-            buf_append_fmt(b, "struct %s *", t->element->user->c_abi_layout_name);
+            t->element->user->is_abi_type) {
+            if (t->element->user->c_abi_layout_name != NULL) {
+                buf_append_fmt(b, "struct %s *", t->element->user->c_abi_layout_name);
+            } else {
+                buf_append_fmt(b, "struct %s *", t->element->user->c_struct_name);
+            }
             return;
         }
         if (t->element->kind == CG_TYPE_CALLABLE && t->element->user_spec != NULL &&
@@ -548,7 +569,8 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
 
 static const UserType *cg_abi_value_user_type(const CGType *t) {
     return t != NULL && t->kind == CG_TYPE_OBJECT &&
-           t->user != NULL && t->user->is_abi_type ? t->user : NULL;
+           t->user != NULL && t->user->is_abi_type &&
+           t->user->c_abi_layout_name != NULL ? t->user : NULL;
 }
 
 static void cg_emit_c_abi_surface_type(Buf *b, const CGType *t) {
@@ -3131,7 +3153,7 @@ static bool cg_runtime_contract_contains_name(FengSlice name) {
 }
 
 static bool cg_init_user_type_abi_symbols(UserType *t) {
-    if (t == NULL || !t->is_abi_type) {
+    if (t == NULL || !t->is_abi_type || !cg_decl_has_field_members(t->decl)) {
         return true;
     }
 
@@ -16383,13 +16405,8 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
 static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
     Buf *td = &cg->type_defs;
 
-    if (!t->is_abi_type) {
+    if (!t->is_abi_type || t->c_abi_layout_name == NULL) {
         return true;
-    }
-    if (t->field_count == 0U) {
-        return cg_fail(cg, t->decl->token,
-            "codegen: @abi type '%s' must declare at least one field for pointer lowering",
-            t->feng_name);
     }
 
     buf_append_fmt(td, "struct %s {\n", t->c_abi_layout_name);
