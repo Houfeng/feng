@@ -981,6 +981,10 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                       FengCompileTarget target);
 static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                                   const GenericFn *gfn, ExprResult *out);
+static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
+                                        const FengDecl *decl,
+                                        const ExternFn *ext,
+                                        ExprResult *out);
 static bool cg_emit_generic_type_method_call(CG *cg,
                                              const FengExpr *e,
                                              ExprResult *recv,
@@ -3846,6 +3850,59 @@ static bool cg_callable_type_param_names(CG *cg,
     return true;
 }
 
+static bool cg_type_has_stable_generic_extern_surface(const CGType *type) {
+    if (type == NULL) return true;
+
+    switch (type->kind) {
+        case CG_TYPE_GENERIC_PARAM:
+            return false;
+        case CG_TYPE_ARRAY:
+            return true;
+        case CG_TYPE_POINTER:
+            return cg_type_has_stable_generic_extern_surface(type->element);
+        case CG_TYPE_OBJECT:
+            return type->user == NULL || type->user->generic_context_type_param_count == 0U;
+        case CG_TYPE_SPEC:
+        case CG_TYPE_CALLABLE:
+            return type->user_spec == NULL ||
+                   type->user_spec->generic_context_type_param_count == 0U;
+        default:
+            return true;
+    }
+}
+
+static bool cg_resolve_callable_type_with_explicit_args(
+    CG *cg,
+    const FengCallableSignature *sig,
+    const FengTypeRef *ref,
+    FengTypeRef *const *type_args,
+    size_t type_arg_count,
+    const FengToken *fallback,
+    CGType **out_type) {
+    FengTypeRef *substituted = NULL;
+    const FengTypeRef *effective_ref = ref;
+
+    if (sig != NULL && ref != NULL && sig->type_param_count > 0U) {
+        if (type_arg_count != sig->type_param_count) {
+            return cg_fail(cg,
+                           fallback ? *fallback : sig->token,
+                           "codegen: generic extern type argument count mismatch");
+        }
+        substituted = cg_type_ref_substitute(ref,
+                                             sig->type_params,
+                                             sig->type_param_count,
+                                             type_args);
+        if (substituted == NULL) {
+            return false;
+        }
+        effective_ref = substituted;
+    }
+
+    bool ok = cg_resolve_type(cg, effective_ref, fallback, out_type);
+    cg_type_ref_free(substituted);
+    return ok;
+}
+
 static bool cg_register_open_generic_type_instances_in_ref(CG *cg,
                                                           const FengTypeRef *ref,
                                                           const CGTypeParamScope *scope,
@@ -4221,6 +4278,14 @@ static bool cg_user_spec_append_decl_member(CG *cg,
 /* ===================== symbol tables ===================== */
 
 static bool cg_register_extern(CG *cg, const FengDecl *decl) {
+    char **type_param_names = NULL;
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+    bool ok = false;
+
     if (cg->extern_count + 1 > cg->extern_capacity) {
         size_t cap = cg->extern_capacity ? cg->extern_capacity * 2 : 4;
         void *p = realloc(cg->externs, cap * sizeof *cg->externs);
@@ -4245,17 +4310,58 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     ef->name = strndup(sig->name.data, sig->name.length);
     ef->param_count = sig->param_count;
     ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+
+    if (sig->type_param_count > 0U) {
+        if (!cg_callable_type_param_names(cg, sig, sig->token, &type_param_names)) {
+            return false;
+        }
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count = sig->type_param_count;
+        cg->generic_fn_type_param_names = type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = NULL;
+    }
+
     for (size_t i = 0; i < sig->param_count; i++) {
         if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
                              &ef->param_types[i])) {
-            return false;
+            goto cleanup;
+        }
+        if (sig->type_param_count > 0U &&
+            !cg_type_has_stable_generic_extern_surface(ef->param_types[i])) {
+            cg_fail(cg,
+                    sig->params[i].token,
+                    "codegen: generic extern fn '%.*s' parameter '%.*s' does not lower to a single external surface",
+                    (int)sig->name.length,
+                    sig->name.data,
+                    (int)sig->params[i].name.length,
+                    sig->params[i].name.data);
+            goto cleanup;
         }
     }
     if (!cg_resolve_type(cg, sig->return_type, &sig->token, &ef->return_type)) {
-        return false;
+        goto cleanup;
+    }
+    if (sig->type_param_count > 0U &&
+        !cg_type_has_stable_generic_extern_surface(ef->return_type)) {
+        cg_fail(cg,
+                sig->token,
+                "codegen: generic extern fn '%.*s' return type does not lower to a single external surface",
+                (int)sig->name.length,
+                sig->name.data);
+        goto cleanup;
     }
     cg->extern_count++;
-    return true;
+    ok = true;
+
+cleanup:
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
+    cg_free_cstr_array(type_param_names, sig->type_param_count);
+    return ok;
 }
 
 static const ExternFn *cg_find_extern(const CG *cg, const char *name, size_t len) {
@@ -4266,6 +4372,35 @@ static const ExternFn *cg_find_extern(const CG *cg, const char *name, size_t len
         }
     }
     return NULL;
+}
+
+static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
+    Buf *h = &cg->headers;
+
+    if (ef == NULL) {
+        return false;
+    }
+
+    /* Runtime-contract externs rely on the runtime header as the single
+     * declaration authority. Emitting a second prototype here would drift on
+     * qualifiers such as `const` and create C conflicts for the same symbol. */
+    if (ef->uses_runtime_contract) {
+        return true;
+    }
+
+    buf_append_cstr(h, "extern ");
+    cg_emit_c_abi_surface_type(h, ef->return_type);
+    buf_append_fmt(h, " %s(", ef->name);
+    if (ef->param_count == 0) {
+        buf_append_cstr(h, "void");
+    } else {
+        for (size_t i = 0; i < ef->param_count; i++) {
+            if (i) buf_append_cstr(h, ", ");
+            cg_emit_c_abi_surface_type(h, ef->param_types[i]);
+        }
+    }
+    buf_append_cstr(h, ");\n");
+    return true;
 }
 
 static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
@@ -8902,11 +9037,17 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
     const FreeFn *fn = NULL;
     if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
-        fn = cg_find_free_fn_by_decl(cg, rc->function_decl);
-        /* G6: check if this is a call to a registered generic function. */
-        if (!fn) {
-            const GenericFn *gfn = cg_find_generic_fn_by_decl(cg, rc->function_decl);
-            if (gfn) return cg_emit_generic_call(cg, e, gfn, out);
+        if (rc->function_decl->is_extern) {
+            if (ext != NULL && rc->function_decl->as.function_decl.type_param_count > 0U) {
+                return cg_emit_generic_extern_call(cg, e, rc->function_decl, ext, out);
+            }
+        } else {
+            fn = cg_find_free_fn_by_decl(cg, rc->function_decl);
+            /* G6: check if this is a call to a registered generic function. */
+            if (!fn) {
+                const GenericFn *gfn = cg_find_generic_fn_by_decl(cg, rc->function_decl);
+                if (gfn) return cg_emit_generic_call(cg, e, gfn, out);
+            }
         }
     }
     if (!fn && !ext) {
@@ -9607,6 +9748,26 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     CGType *target = NULL;
     if (!cg_resolve_type(cg, e->as.cast.type, &e->token, &target)) return false;
+    if (target->kind == CG_TYPE_ARRAY) {
+        ExprResult inner;
+
+        if (!cg_emit_expr(cg, e->as.cast.value, &inner)) {
+            cgtype_free(target);
+            return false;
+        }
+        if (inner.type->kind != CG_TYPE_ARRAY || !cg_types_equal(target, inner.type)) {
+            er_free(&inner);
+            cgtype_free(target);
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: array cast requires the same lowered array type");
+        }
+        out->c_expr = strdup(inner.c_expr);
+        out->type = target;
+        out->owns_ref = inner.owns_ref;
+        er_free(&inner);
+        return out->c_expr != NULL && out->type != NULL;
+    }
     if (!cgtype_is_numeric(target->kind) && target->kind != CG_TYPE_BOOL) {
         cgtype_free(target);
         return cg_fail(cg, e->token, "codegen: only numeric/bool casts supported in 1A iter 1");
@@ -12220,28 +12381,7 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
 static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (!cg_register_extern(cg, decl)) return false;
     const ExternFn *ef = &cg->externs[cg->extern_count - 1];
-    Buf *h = &cg->headers;
-
-    /* Runtime-contract externs rely on the runtime header as the single
-     * declaration authority. Emitting a second prototype here would drift on
-     * qualifiers such as `const` and create C conflicts for the same symbol. */
-    if (ef->uses_runtime_contract) {
-        return true;
-    }
-
-    buf_append_cstr(h, "extern ");
-    cg_emit_c_abi_surface_type(h, ef->return_type);
-    buf_append_fmt(h, " %s(", ef->name);
-    if (ef->param_count == 0) {
-        buf_append_cstr(h, "void");
-    } else {
-        for (size_t i = 0; i < ef->param_count; i++) {
-            if (i) buf_append_cstr(h, ", ");
-            cg_emit_c_abi_surface_type(h, ef->param_types[i]);
-        }
-    }
-    buf_append_cstr(h, ");\n");
-    return true;
+    return cg_emit_registered_extern_decl(cg, ef);
 }
 
 static void cg_emit_free_fn_proto(Buf *out, const FreeFn *fn, bool needs_static) {
@@ -12320,6 +12460,13 @@ static void cg_emit_builtin_fit_method_proto(Buf *out,
 }
 
 static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
+    if (decl->is_extern) {
+        if (!cg_register_extern(cg, decl)) {
+            return false;
+        }
+        return cg_emit_registered_extern_decl(cg, &cg->externs[cg->extern_count - 1]);
+    }
+
     if (decl->as.function_decl.type_param_count > 0U) {
         const FengCallableSignature *sig = &decl->as.function_decl;
         const GenericFn *gfn;
@@ -12990,6 +13137,77 @@ static CGType *cg_infer_type_arg(const GenericFn *gfn, size_t tp_idx,
         }
     }
     return NULL;
+}
+
+static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
+                                        const FengDecl *decl,
+                                        const ExternFn *ext,
+                                        ExprResult *out) {
+    const FengCallableSignature *sig = &decl->as.function_decl;
+    CGType **param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
+    CGType *return_type = NULL;
+    ExternFn concrete = {
+        .name = ext != NULL ? ext->name : NULL,
+        .param_types = param_types,
+        .param_count = sig->param_count,
+        .return_type = NULL,
+        .uses_runtime_contract = ext != NULL && ext->uses_runtime_contract,
+    };
+    bool ok = false;
+
+    if (ext == NULL) {
+        return cg_fail(cg, e->token, "codegen: generic extern call is missing extern metadata");
+    }
+    if (!e->as.call.has_explicit_type_args ||
+        e->as.call.explicit_type_arg_count != sig->type_param_count) {
+        free(param_types);
+        return cg_fail(cg,
+                       e->token,
+                       "codegen: generic extern call '%.*s' currently requires explicit type arguments",
+                       (int)sig->name.length,
+                       sig->name.data);
+    }
+
+    for (size_t i = 0; i < sig->param_count; ++i) {
+        if (!cg_resolve_callable_type_with_explicit_args(cg,
+                                                         sig,
+                                                         sig->params[i].type,
+                                                         e->as.call.explicit_type_args,
+                                                         e->as.call.explicit_type_arg_count,
+                                                         &sig->params[i].token,
+                                                         &param_types[i])) {
+            goto cleanup;
+        }
+    }
+
+    if (sig->return_type != NULL) {
+        if (!cg_resolve_callable_type_with_explicit_args(cg,
+                                                         sig,
+                                                         sig->return_type,
+                                                         e->as.call.explicit_type_args,
+                                                         e->as.call.explicit_type_arg_count,
+                                                         &sig->token,
+                                                         &return_type)) {
+            goto cleanup;
+        }
+    } else {
+        return_type = cgtype_new(CG_TYPE_VOID);
+        if (return_type == NULL) {
+            cg_fail(cg, e->token, "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
+    concrete.return_type = return_type;
+    ok = cg_emit_registered_call(cg, e, NULL, &concrete, out);
+
+cleanup:
+    for (size_t i = 0; i < sig->param_count; ++i) {
+        cgtype_free(param_types[i]);
+    }
+    free(param_types);
+    cgtype_free(return_type);
+    return ok;
 }
 
 /* Emit a call to a generic function.
