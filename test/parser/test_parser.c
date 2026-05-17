@@ -1175,6 +1175,38 @@ static void test_generic_type_ref_nested(void) {
     feng_program_free(program);
 }
 
+static void test_cast_with_generic_array_target(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type Entry<K, V> {\n"
+        "    let key: K;\n"
+        "    let value: V;\n"
+        "}\n"
+        "fn run<K, V>(items: Entry<K, V>[!]): Entry<K, V>[] {\n"
+        "    return (Entry<K, V>[])items;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+
+    ASSERT(feng_parse_source(source, strlen(source), "cast_generic_array_target.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[1];
+    ASSERT(fn_decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(fn_decl->as.function_decl.body->statement_count == 1U);
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_RETURN);
+    ASSERT(stmt->as.return_value->kind == FENG_EXPR_CAST);
+    ASSERT(stmt->as.return_value->as.cast.type != NULL);
+    ASSERT(stmt->as.return_value->as.cast.type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(stmt->as.return_value->as.cast.type->as.inner != NULL);
+    ASSERT(stmt->as.return_value->as.cast.type->as.inner->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(stmt->as.return_value->as.cast.type->as.inner->as.named.type_arg_count == 2U);
+
+    feng_program_free(program);
+}
+
 static void test_explicit_generic_call(void) {
     /* Explicit generic call: callee:<int>(arg) */
     const char *source =
@@ -1443,6 +1475,7 @@ int main(void) {
     test_generic_function_multi_type_params();
     test_generic_type_ref_with_args();
     test_generic_type_ref_nested();
+    test_cast_with_generic_array_target();
     test_postfix_pointer_type_refs();
     test_explicit_generic_call();
     test_explicit_generic_call_multi_type_args();

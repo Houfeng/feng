@@ -1754,60 +1754,25 @@ static bool looks_like_lambda(const Parser *parser) {
     return false;
 }
 
-static bool looks_like_type_ref_at(const Parser *parser, size_t *index) {
-    size_t cursor = *index;
-
-    if (!token_is_identifier_like(&parser->tokens[cursor], true)) {
-        return false;
-    }
-    ++cursor;
-
-    while (parser->tokens[cursor].kind == FENG_TOKEN_DOT) {
-        ++cursor;
-        if (!token_is_identifier_like(&parser->tokens[cursor], false)) {
-            return false;
-        }
-        ++cursor;
-    }
-
-    for (;;) {
-        if (parser->tokens[cursor].kind == FENG_TOKEN_STAR) {
-            ++cursor;
-            continue;
-        }
-        if (parser->tokens[cursor].kind != FENG_TOKEN_LBRACKET) {
-            break;
-        }
-
-        ++cursor;
-        if (parser->tokens[cursor].kind == FENG_TOKEN_NOT) {
-            ++cursor;
-        }
-        if (parser->tokens[cursor].kind != FENG_TOKEN_RBRACKET) {
-            return false;
-        }
-        ++cursor;
-    }
-
-    *index = cursor;
-    return true;
-}
-
 static bool looks_like_cast(const Parser *parser) {
-    size_t index;
+    Parser probe = *parser;
+    FengTypeRef *type_ref = NULL;
 
     if (!parser_check(parser, FENG_TOKEN_LPAREN)) {
         return false;
     }
 
-    index = parser->current + 1U;
-    if (!looks_like_type_ref_at(parser, &index)) {
+    (void)parser_advance(&probe);
+    type_ref = parse_type_ref(&probe);
+    if (type_ref == NULL) {
         return false;
     }
-    if (parser->tokens[index].kind != FENG_TOKEN_RPAREN) {
+    free_type_ref(type_ref);
+
+    if (!parser_match(&probe, FENG_TOKEN_RPAREN)) {
         return false;
     }
-    return token_starts_expression(parser->tokens[index + 1U].kind);
+    return token_starts_expression(parser_current(&probe)->kind);
 }
 
 static bool looks_like_object_literal(const Parser *parser) {

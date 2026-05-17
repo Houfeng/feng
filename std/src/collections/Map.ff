@@ -238,8 +238,8 @@ pu type Map<K: Hashable<K>, V> {
    * Returns all occupied entries as an immutable dense array.
    * @return immutable array of map entries
    */
-  pu fn entries(): MapEntity<K, V>[!] {
-    let items: MapEntity<K, V>[!] = MapEntity:<K, V>[self.size];
+  pu fn entries(): MapEntity<K, V>[] {
+    let items: MapEntity<K, V>[!] = MapEntity:<K, V> [self.size];
     var outputIndex: i32 = 0;
     for var i: i32 = 0; i < self.capacity; i = i + 1 {
       if self.states[i] == 1 {
@@ -247,6 +247,6 @@ pu type Map<K: Hashable<K>, V> {
         outputIndex = outputIndex + 1;
       }
     }
-    return items;
+    return (MapEntity<K, V>[])items;
   }
 }

@@ -164,9 +164,11 @@ let ratio = (float)small / 3.0;
 let size: u8 = (u8)257;
 let writable = [1, 2, 3];
 let readonly = (int[])writable;
+let entities: MapEntity<K, V>[!] = MapEntity:<K, V>[capacity];
+let readonly_entities = (MapEntity<K, V>[])entities;
 ```
 
-上例中,`(u8)257` 的结果按目标位宽截断。
+上例中,`(u8)257` 的结果按目标位宽截断。若目标类型本身是泛型类型,cast 目标仍属于类型位置,因此应写作 `(MapEntity<K, V>[])value`,而不是 `(MapEntity:<K, V>[])value`。
 
 ## 4 求值顺序
 
