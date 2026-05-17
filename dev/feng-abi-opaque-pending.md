@@ -154,12 +154,20 @@ fn run() {
 
 ### 9.2 语义实现
 
+涉及文件：
+
+- [src/semantic/analyzer.c](../src/semantic/analyzer.c)：调整 `validate_extern_function_signature`、`inferred_expr_type_is_data_addressable_abi_value`、`type_ref_is_abi_stable` / `type_decl_is_abi_stable` 相关判定。
+
 - [ ] 在 `extern fn` 签名校验中区分“有字段 `@abi type`”与“无字段 `@abi type`”。
 - [ ] 拒绝无字段 `@abi type` 以按值 `T` 形态出现在 `extern fn` 的参数位与返回位。
 - [ ] 调整一元 `&` 的判定，使对象形式 `type` 只有在“带 `@abi` 且声明了字段”时才能形成 `T*`。
 - [ ] 保持没有 `@abi` 的 `type` 不能进入 C 边界。
 
 ### 9.3 代码生成
+
+涉及文件：
+
+- [src/codegen/codegen.c](../src/codegen/codegen.c)：调整 `cg_pointer_inner_is_lowerable`、`cg_emit_c_type`、`cg_init_user_type_abi_symbols`、`cg_emit_user_type_abi_surface` 等 ABI lowering 路径。
 
 - [ ] 让无字段 `@abi type` 的 `T*` 在 C surface 上走 opaque pointer lowering。
 - [ ] 禁止无字段 `@abi type` 的 `T` 进入按值 ABI lowering。
