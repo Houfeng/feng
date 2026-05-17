@@ -35,11 +35,11 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "%*s[--release] \n", compile_indent, "");
     fprintf(stderr, "%*s[--keep-ir]\n", compile_indent, "");
     fprintf(stderr, "\n");
-    fprintf(stderr, "Global:\n");
+    fprintf(stderr, "Global options:\n");
     fprintf(stderr, "  -h, --help      Display this message.\n");
     fprintf(stderr, "  -v, --version   Display version information.\n");
     fprintf(stderr, "\n");
-    fprintf(stderr, "Protocol:\n");
+    fprintf(stderr, "Editor:\n");
     fprintf(stderr, "  %s lsp [--stdio]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
