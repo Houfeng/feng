@@ -63,7 +63,7 @@ static const char *rel_builtin_canonical_name_for_type_ref(
 }
 
 /* Build a subject key from a fit target type ref.  Tries (in order):
- *   1. User type decl (if `resolved_type_decl` is a FENG_DECL_TYPE).
+ *   1. User named decl (if `resolved_type_decl` is a FENG_DECL_TYPE / ENUM).
  *   2. Builtin canonical name (single-segment NAMED ref that maps to a
  *      built-in type).
  *   3. Structured array key (ARRAY ref chain).
@@ -76,7 +76,8 @@ static bool rel_build_subject_key(
         return false;
     }
     if (resolved_type_decl != NULL &&
-        resolved_type_decl->kind == FENG_DECL_TYPE) {
+        (resolved_type_decl->kind == FENG_DECL_TYPE ||
+         resolved_type_decl->kind == FENG_DECL_ENUM)) {
         *out = feng_semantic_subject_key_for_type_decl(resolved_type_decl);
         return true;
     }
@@ -223,6 +224,8 @@ static FengSlice decl_typeish_name(const FengDecl *d) {
     switch (d->kind) {
         case FENG_DECL_TYPE:
             return d->as.type_decl.name;
+        case FENG_DECL_ENUM:
+            return d->as.enum_decl.name;
         case FENG_DECL_SPEC:
             return d->as.spec_decl.name;
         default:
@@ -248,7 +251,8 @@ static const FengDecl *find_decl_by_name_in_module(
             if (d == NULL) {
                 continue;
             }
-            if (d->kind != FENG_DECL_TYPE && d->kind != FENG_DECL_SPEC) {
+            if (d->kind != FENG_DECL_TYPE && d->kind != FENG_DECL_ENUM &&
+                d->kind != FENG_DECL_SPEC) {
                 continue;
             }
             {

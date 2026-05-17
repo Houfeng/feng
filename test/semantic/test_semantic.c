@@ -8266,6 +8266,164 @@ static void test_fit_builtin_method_callable_on_literal(void) {
     feng_program_free(program);
 }
 
+static void test_fit_enum_method_callable_on_item(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Failed\n"
+        "}\n"
+        "fit Status {\n"
+        "    fn code(): int {\n"
+        "        return (int)self;\n"
+        "    }\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return Status.Failed.code();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_enum_call.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_enum_satisfies_spec_typed_parameter(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named {\n"
+        "    fn code(): int;\n"
+        "}\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Failed\n"
+        "}\n"
+        "fit Status: Named {\n"
+        "    fn code(): int {\n"
+        "        return (int)self;\n"
+        "    }\n"
+        "}\n"
+        "fn use_named(value: Named): int {\n"
+        "    return value.code();\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return use_named(Status.Ok);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_enum_spec_param.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_enum_satisfies_generic_constraint(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Hashable<T> {\n"
+        "    fn hash(): int;\n"
+        "    fn same(other: T): bool;\n"
+        "}\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Failed\n"
+        "}\n"
+        "fit Status: Hashable<Status> {\n"
+        "    fn hash(): int {\n"
+        "        return (int)self;\n"
+        "    }\n"
+        "    fn same(other: Status): bool {\n"
+        "        return self == other;\n"
+        "    }\n"
+        "}\n"
+        "fn use_hash<K: Hashable<K>>(value: K): int {\n"
+        "    return value.hash();\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return use_hash(Status.Failed);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_enum_generic_constraint.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_enum_missing_method_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Hashable<T> {\n"
+        "    fn hash(): int;\n"
+        "    fn same(other: T): bool;\n"
+        "}\n"
+        "enum Status {\n"
+        "    Ok\n"
+        "}\n"
+        "fit Status: Hashable<Status> {\n"
+        "    fn hash(): int {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_enum_missing.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message,
+                  "type 'Status' is missing method 'same' required by spec 'Hashable'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_fit_enum_unknown_member_still_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "enum Status {\n"
+        "    Ok\n"
+        "}\n"
+        "fit Status {\n"
+        "    fn label(): string {\n"
+        "        return \"ok\";\n"
+        "    }\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    Status.Ok.missing();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_enum_unknown.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "no member 'missing'") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fit_array_method_callable_on_value(void) {
     const char *source =
         "mod demo.main;\n"
@@ -12677,6 +12835,11 @@ int main(void) {
     test_pu_fit_visible_via_alias_use();
     test_fit_method_callable_on_instance();
     test_fit_builtin_method_callable_on_literal();
+    test_fit_enum_method_callable_on_item();
+    test_fit_enum_satisfies_spec_typed_parameter();
+    test_fit_enum_satisfies_generic_constraint();
+    test_fit_enum_missing_method_rejected();
+    test_fit_enum_unknown_member_still_rejected();
     test_fit_array_method_callable_on_value();
     test_fit_builtin_target_rejects_specs_clause_without_body();
     test_fit_array_target_rejects_specs_clause_without_body();

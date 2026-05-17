@@ -1551,6 +1551,71 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_fit_enum_object_spec_coercion_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.fit_enum_spec;\n"
+        "spec Named { fn code(): int; }\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Failed\n"
+        "}\n"
+        "fit Status: Named {\n"
+        "    fn code(): int {\n"
+        "        return (int)self;\n"
+        "    }\n"
+        "}\n"
+        "fn call_named(value: Named): int {\n"
+        "    return value.code();\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let first: Named = Status.Ok;\n"
+        "    return first.code() + call_named(Status.Failed);\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/fit_enum_spec_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (enum object spec coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
+    ASSERT(strstr(out.c_source, "FengScalarBox") != NULL);
+    ASSERT(strstr(out.c_source, "payload.i32") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_self_value = ((const struct FengScalarBox *)_subject)->payload.i32;") != NULL);
+    ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_object_spec_thunk_subject_cast_shape_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.object_spec_cast;\n"
@@ -1808,6 +1873,70 @@ static void test_generic_constraint_witness_codegen(void) {
     ASSERT(strstr(out.c_source, "get_name") != NULL);
     ASSERT(strstr(out.c_source, "set_name") != NULL);
     ASSERT(strstr(out.c_source, "->greet(") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_fit_enum_generic_constraint_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.fit_enum_generic;\n"
+        "spec Hashable<T> {\n"
+        "    fn hash(): int;\n"
+        "    fn same(other: T): bool;\n"
+        "}\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    Failed\n"
+        "}\n"
+        "fit Status: Hashable<Status> {\n"
+        "    fn hash(): int {\n"
+        "        return (int)self;\n"
+        "    }\n"
+        "    fn same(other: Status): bool {\n"
+        "        return self == other;\n"
+        "    }\n"
+        "}\n"
+        "fn use_hash<K: Hashable<K>>(value: K): int {\n"
+        "    return value.hash();\n"
+        "}\n"
+        "fn use_same<K: Hashable<K>>(left: K, right: K): bool {\n"
+        "    return left.same(right);\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let _same: bool = use_same(Status.Failed, Status.Ok);\n"
+        "    return use_hash(Status.Failed);\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/fit_enum_generic_codegen.ff");
+    const FengProgram *programs[1] = { program };
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (enum generic constraint witness): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "_K->witness") != NULL);
+    ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") != NULL);
+    ASSERT(strstr(out.c_source, "FengScalarBox") == NULL);
+    ASSERT(strstr(out.c_source, "payload.i32") == NULL);
+    compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
     feng_codegen_error_free(&cgerr);
@@ -2921,6 +3050,7 @@ int main(void) {
     test_fit_builtin_direct_call_codegen_shape();
     test_fit_builtin_array_open_generic_return_codegen();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
+    test_fit_enum_object_spec_coercion_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
@@ -2938,6 +3068,7 @@ int main(void) {
     test_callable_spec_other_coercion_codegen();
     test_callable_spec_other_field_read_coercion_codegen();
     test_generic_constraint_witness_codegen();
+    test_fit_enum_generic_constraint_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();
     test_generic_constrained_aggregate_spec_value_codegen();

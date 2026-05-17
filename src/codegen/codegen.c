@@ -11261,7 +11261,9 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         bool subject_owned = false;
         char *subject_expr = NULL;
 
-        if (cs->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
+        if (cs->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL &&
+            (cs->src_subject_key.as.type_decl == NULL ||
+             cs->src_subject_key.as.type_decl->kind != FENG_DECL_ENUM)) {
             const UserType *src_t = cg_find_user_type_by_decl(cg, cs->src_subject_key.as.type_decl);
 
             if (!src_t) {
@@ -11359,8 +11361,8 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         out->type = cgtype_new(CG_TYPE_SPEC);
         if (!out->type) return false;
         out->type->user_spec = tgt_s;
-        /* User/string/array subjects borrow from a materialised local; scalar
-         * subjects are boxed and produced with a fresh +1 ref. */
+        /* Borrowed subjects stay tied to the materialised local; scalar-like
+         * subjects own only when the selected storage mode boxes them. */
         out->owns_ref = subject_owned;
     }
     return true;
@@ -13716,6 +13718,23 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             buf_append_fmt(&wb, "&%s", witness_var);
             owned_witness_expr = wb.data;
             witness_expr = owned_witness_expr;
+        } else if (t && t->enum_decl != NULL) {
+            const char *witness_var = NULL;
+            FengSemanticSubjectKey subject_key =
+                feng_semantic_subject_key_for_type_decl(t->enum_decl);
+            if (!cg_ensure_witness_instance(cg,
+                                            &subject_key,
+                                            constraint_spec,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
+                                            *tok,
+                                            &witness_var)) {
+                buf_free(&b);
+                return false;
+            }
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "&%s", witness_var);
+            owned_witness_expr = wb.data;
+            witness_expr = owned_witness_expr;
         } else if (t && (t->kind == CG_TYPE_SPEC || t->kind == CG_TYPE_CALLABLE) &&
                    t->user_spec) {
             const char *witness_var = NULL;
@@ -14997,6 +15016,18 @@ static bool cg_builtin_fit_targets_spec(const BuiltinFit *fit, const UserSpec *s
     return false;
 }
 
+static bool cg_builtin_fit_matches_subject(const BuiltinFit *fit,
+                                          CGTypeKind subject_kind,
+                                          const FengDecl *enum_decl) {
+    if (fit == NULL || fit->target_type == NULL || fit->target_type->kind != subject_kind) {
+        return false;
+    }
+    if (enum_decl != NULL) {
+        return fit->target_type->enum_decl == enum_decl;
+    }
+    return fit->target_type->enum_decl == NULL;
+}
+
 static bool cg_subject_key_to_target_kind(const FengSemanticSubjectKey *subject_key,
                                           CGTypeKind *out_kind) {
     if (subject_key == NULL || out_kind == NULL) {
@@ -15428,6 +15459,315 @@ static bool cg_ensure_witness_instance(
         return false;
     }
     if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
+        if (subject_key->as.type_decl != NULL &&
+            subject_key->as.type_decl->kind == FENG_DECL_ENUM) {
+            const FengDecl *enum_decl = subject_key->as.type_decl;
+            const FengSpecWitness *witness = NULL;
+            const size_t witness_id = cg->subject_witness_counter++;
+            const char *spec_unique_name =
+                (s->generic_context_type_param_count > 0U && s->c_witness_struct_name)
+                    ? s->c_witness_struct_name
+                    : s->feng_name;
+            char *s_san = NULL;
+            Buf prefix;
+
+            if (scalar_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER &&
+                !cg_emit_scalar_box_support(cg)) {
+                return false;
+            }
+
+            witness = feng_semantic_lookup_spec_witness(cg->analysis, subject_key, s->decl);
+
+            s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
+            if (s_san == NULL) {
+                return cg_fail(cg, blame, "codegen: out of memory");
+            }
+
+            buf_init(&prefix);
+            buf_append_fmt(&prefix, "FengSpecThunk__%s__subject_%zu__as__%s__%s",
+                           cg->module_mangle, witness_id, cg->module_mangle, s_san);
+            if (prefix.data == NULL) {
+                free(s_san);
+                return cg_fail(cg, blame, "codegen: out of memory");
+            }
+
+            for (size_t i = 0U; i < s->member_count; ++i) {
+                const UserSpecMember *sm = &s->members[i];
+                const FengSpecWitnessMember *wm = NULL;
+                const BuiltinFit *bf = NULL;
+                const UserMethod *fm = NULL;
+                size_t fallback_match_count = 0U;
+
+                if (witness != NULL) {
+                    if (i >= witness->member_count) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: internal: witness slot count mismatch for non-type subject");
+                    }
+
+                    wm = &witness->members[i];
+                    if (wm->impl_member == NULL) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: missing implementation for spec member '%s'", sm->feng_name);
+                    }
+                    if (sm->kind != USM_KIND_METHOD ||
+                        wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
+                        wm->via_fit_decl == NULL) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: non-type subject key currently supports fit-method spec members only");
+                    }
+
+                    bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
+                    if (bf != NULL &&
+                        !cg_builtin_fit_matches_subject(bf, CG_TYPE_I32, enum_decl)) {
+                        bf = NULL;
+                    }
+                    if (bf != NULL) {
+                        fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
+                        if (fm == NULL) {
+                            fm = cg_builtin_fit_method(bf, sm->feng_name,
+                                                       strlen(sm->feng_name));
+                        }
+                    }
+                }
+                if (bf == NULL && witness != NULL) {
+                    for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
+                        const BuiltinFit *candidate = &cg->builtin_fits[bi];
+                        const UserMethod *candidate_method = NULL;
+
+                        if (!cg_builtin_fit_matches_subject(candidate, CG_TYPE_I32, enum_decl) ||
+                            !cg_builtin_fit_targets_spec(candidate, s)) {
+                            continue;
+                        }
+                        candidate_method =
+                            cg_builtin_fit_method_by_member(candidate, wm->impl_member);
+                        if (candidate_method == NULL) {
+                            candidate_method = cg_builtin_fit_method(candidate,
+                                                                     sm->feng_name,
+                                                                     strlen(sm->feng_name));
+                        }
+                        if (candidate_method != NULL) {
+                            bf = candidate;
+                            fm = candidate_method;
+                            break;
+                        }
+                    }
+                }
+                if (witness == NULL) {
+                    if (sm->kind != USM_KIND_METHOD) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: enum '%.*s' cannot satisfy spec field '%s' without field support",
+                            (int)enum_decl->as.enum_decl.name.length,
+                            enum_decl->as.enum_decl.name.data,
+                            sm->feng_name);
+                    }
+
+                    for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
+                        const BuiltinFit *candidate = &cg->builtin_fits[bi];
+
+                        if (!cg_builtin_fit_matches_subject(candidate, CG_TYPE_I32, enum_decl) ||
+                            !cg_builtin_fit_targets_spec(candidate, s)) {
+                            continue;
+                        }
+                        for (size_t mi = 0U; mi < candidate->method_count; ++mi) {
+                            const UserMethod *candidate_method = &candidate->methods[mi];
+
+                            if (strcmp(candidate_method->feng_name, sm->feng_name) != 0 ||
+                                !cg_user_method_matches_spec_member(candidate_method, sm)) {
+                                continue;
+                            }
+                            bf = candidate;
+                            fm = candidate_method;
+                            ++fallback_match_count;
+                        }
+                    }
+
+                    if (fallback_match_count == 0U) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: enum '%.*s' is missing an implementation for spec '%s' member '%s'",
+                            (int)enum_decl->as.enum_decl.name.length,
+                            enum_decl->as.enum_decl.name.data,
+                            s->feng_name,
+                            sm->feng_name);
+                    }
+                    if (fallback_match_count > 1U) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame,
+                            "codegen: enum '%.*s' has multiple visible implementations of method '%s' required by spec '%s'",
+                            (int)enum_decl->as.enum_decl.name.length,
+                            enum_decl->as.enum_decl.name.data,
+                            sm->feng_name,
+                            s->feng_name);
+                    }
+                }
+                if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) ||
+                    !cg_builtin_fit_matches_subject(bf, CG_TYPE_I32, enum_decl)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: fit implementation does not match object-form spec coercion source");
+                }
+                if (fm == NULL) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: fit method '%s' was not registered", sm->feng_name);
+                }
+
+                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    Buf *fp = &cg->fn_protos;
+                    Buf *fd = &cg->witness_defs;
+
+                    buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                                   prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        buf_append_cstr(fp, ", ");
+                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        buf_append_fmt(fp, " p%zu", pi);
+                    }
+                    buf_append_cstr(fp, ", void *_out);\n");
+
+                    buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                                   prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        buf_append_cstr(fd, ", ");
+                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        buf_append_fmt(fd, " p%zu", pi);
+                    }
+                    buf_append_cstr(fd, ", void *_out) {\n    ");
+                    cg_emit_c_type(fd, fm->return_type);
+                    buf_append_cstr(fd, " _ret;\n");
+                    if (!cg_emit_scalar_subject_load(cg,
+                                                    fd,
+                                                    CG_TYPE_I32,
+                                                    scalar_subject_storage,
+                                                    blame,
+                                                    "_self_value")) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return false;
+                    }
+                    buf_append_fmt(fd, "    _ret = %s(_self_value", fm->c_name);
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        char pname[32];
+
+                        snprintf(pname, sizeof pname, "p%zu", pi);
+                        buf_append_cstr(fd, ", ");
+                        if (!cg_append_witness_forward_arg(cg,
+                                                           fd,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           pname,
+                                                           blame)) {
+                            buf_free(&prefix);
+                            free(s_san);
+                            return false;
+                        }
+                    }
+                    buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                    continue;
+                }
+
+                {
+                    Buf *fp = &cg->fn_protos;
+                    Buf *fd = &cg->witness_defs;
+
+                    buf_append_cstr(fp, "static ");
+                    cg_emit_c_type(fp, sm->type);
+                    buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        buf_append_cstr(fp, ", ");
+                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        buf_append_fmt(fp, " p%zu", pi);
+                    }
+                    buf_append_cstr(fp, ");\n");
+
+                    buf_append_cstr(fd, "static ");
+                    cg_emit_c_type(fd, sm->type);
+                    buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        buf_append_cstr(fd, ", ");
+                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        buf_append_fmt(fd, " p%zu", pi);
+                    }
+                    buf_append_cstr(fd, ") {\n");
+                    if (!cg_emit_scalar_subject_load(cg,
+                                                    fd,
+                                                    CG_TYPE_I32,
+                                                    scalar_subject_storage,
+                                                    blame,
+                                                    "_self_value")) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return false;
+                    }
+                    if (sm->type->kind == CG_TYPE_VOID) {
+                        buf_append_fmt(fd, "    %s(_self_value", fm->c_name);
+                    } else {
+                        buf_append_fmt(fd, "    return %s(_self_value", fm->c_name);
+                    }
+                    for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                        char pname[32];
+
+                        snprintf(pname, sizeof pname, "p%zu", pi);
+                        buf_append_cstr(fd, ", ");
+                        if (!cg_append_witness_forward_arg(cg,
+                                                           fd,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           pname,
+                                                           blame)) {
+                            buf_free(&prefix);
+                            free(s_san);
+                            return false;
+                        }
+                    }
+                    buf_append_cstr(fd, ");\n}\n\n");
+                }
+            }
+
+            {
+                Buf var;
+                Buf *fd = &cg->witness_defs;
+
+                buf_init(&var);
+                buf_append_fmt(&var, "FengWitness__%s__subject_%zu__as__%s__%s",
+                               cg->module_mangle, witness_id, cg->module_mangle, s_san);
+                if (var.data == NULL) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "codegen: out of memory");
+                }
+
+                buf_append_fmt(&cg->fn_protos, "static const struct %s %s;\n",
+                               s->c_witness_struct_name, var.data);
+                buf_append_fmt(fd, "static const struct %s %s = {\n",
+                               s->c_witness_struct_name, var.data);
+                for (size_t i = 0U; i < s->member_count; ++i) {
+                    const UserSpecMember *sm = &s->members[i];
+
+                    buf_append_fmt(fd, "    .%s = &%s__%s,\n",
+                                   sm->c_field_name, prefix.data, sm->c_field_name);
+                }
+                buf_append_cstr(fd, "};\n\n");
+
+                *out_var = var.data;
+            }
+            buf_free(&prefix);
+            free(s_san);
+            return true;
+        }
+
         const UserType *t = cg_find_user_type_by_decl(cg, subject_key->as.type_decl);
 
         if (t == NULL) {
@@ -15505,6 +15845,9 @@ static bool cg_ensure_witness_instance(
 
         const BuiltinFit *bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
         const UserMethod *fm = NULL;
+        if (bf != NULL && !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
+            bf = NULL;
+        }
         if (bf != NULL) {
             fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
             if (fm == NULL) {
@@ -15515,8 +15858,7 @@ static bool cg_ensure_witness_instance(
         if (bf == NULL) {
             for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
                 const BuiltinFit *candidate = &cg->builtin_fits[bi];
-                if (candidate->target_type == NULL ||
-                    candidate->target_type->kind != subject_kind ||
+                if (!cg_builtin_fit_matches_subject(candidate, subject_kind, NULL) ||
                     !cg_builtin_fit_targets_spec(candidate, s)) {
                     continue;
                 }
@@ -15534,8 +15876,8 @@ static bool cg_ensure_witness_instance(
                 }
             }
         }
-        if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) || bf->target_type == NULL ||
-            bf->target_type->kind != subject_kind) {
+        if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) ||
+            !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,

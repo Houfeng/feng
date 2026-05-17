@@ -14,7 +14,7 @@
 
 ## 2 术语
 
-- 契约适配: `fit A: B`、`fit A: B, C`、`fit A<T>: B<T>` 或 `fit A<T>: B<T>, C<T>` 形式,左侧为具体类型或对目标泛型 `type` 已声明类型参数的直接引用,右侧为一个或多个 object-form `spec`。
+- 契约适配: `fit A: B`、`fit A: B, C`、`fit A<T>: B<T>` 或 `fit A<T>: B<T>, C<T>` 形式,左侧为具体类型（含 `type`、`enum`）或对目标泛型 `type` 已声明类型参数的直接引用,右侧为一个或多个 object-form `spec`。
 - 自扩展: `fit A { ... }` 或 `fit A<T> { ... }` 形式,为类型 `A` 增加成员,不建立新的 `spec` 契约关系。
 - 可见契约关系: 当前作用域可见的“`type` 与 `spec` 已建立适配”的事实。
 - 适配检查: 编译器对 `fit` 声明进行的满足性、冲突和合法性校验。
@@ -210,6 +210,7 @@ fit UserType<T> { ... }
 - union-form `spec` 只描述值进入时的 member 选择与收窄边界,不能作为 `fit A: B` 的目标; union-form 的专门规则见 [feng-union-type.md](./feng-union-type.md)。
 - 契约适配可带块体; 带块体时,编译器先把新增成员计入类型可见能力集合,再做契约满足检查。
 - 自扩展形式 `fit A { ... }` 仅向 `A` 补充能力,不建立新的 `spec` 关系。
+- `enum` 可作为 `fit` 左侧目标；其适配与扩展在语义上与其他具名目标一致，但 `enum` 声明体本身仍不得直接声明方法。
 - 在泛型契约适配右侧继续传递目标类型参数时,其子到父约束传递规则与直接写在 `type` / `spec` 声明头上的泛型父约束规则完全一致; 若当前目标类型参数已带有更强约束,则按同一套“在当前可见契约关系下是否满足父约束”规则判定合法性。
 - 若没有在 `type` 声明头或可见 `fit` 中显式建立关系,即使结构看似满足 `spec`,编译器也不自动建立契约关系。
 - `fit` 建立的契约关系以作用域可见性为生效条件；默认仅在声明所在 `mod` 内有效，不自动对外暴露。
@@ -225,7 +226,7 @@ fit UserType<T> { ... }
 
 分为「必须、禁止、建议」。
 
-- [必须] 契约适配形式中,`fit A: B, C, ...` 的左侧必须是合法 fit 目标（具体 `type` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）,右侧每一项都必须是 object-form `spec`。
+- [必须] 契约适配形式中,`fit A: B, C, ...` 的左侧必须是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）,右侧每一项都必须是 object-form `spec`。
 - [必须] 若目标 `type` 为泛型 `type`,则允许使用 `fit A<T>: B<T>`、`fit A<T>: B<T> {}` 与 `fit A<T> {}` 这类泛型 `fit` 形式。
 - [必须] 泛型 `fit` 左侧的类型参数列表必须逐位置引用目标泛型 `type` 已声明的类型参数。
 - [必须] 当 `fit` 左侧是具名 `type` 目标时,必须按“名称 + 泛型参数数量”解析到一个已存在的 `type` 声明；同名但泛型参数数量不同的 `type` 不得互相代替。
@@ -254,7 +255,7 @@ fit UserType<T> { ... }
 
 ## 6 编译期
 
-- 编译器必须检查 `fit A: ...` 中左侧是否是合法 fit 目标（具体 `type` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）。
+- 编译器必须检查 `fit A: ...` 中左侧是否是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）。
 - 编译器必须在左侧为泛型 `type` 目标时,检查其是否逐位置引用了目标泛型 `type` 已声明的全部类型参数,并拒绝任何特化、增删、重排或改写。
 - 编译器必须在左侧为具名 `type` 目标时,先按“名称 + 泛型参数数量”解析目标 `type`；若不存在精确匹配的 `type` 声明,必须按“找不到目标 type 声明”报错。
 - 编译器必须检查契约适配右侧是否全部为 object-form `spec`。

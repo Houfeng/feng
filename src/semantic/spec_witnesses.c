@@ -165,7 +165,8 @@ FengSemanticSubjectKey feng_semantic_subject_key_for_type_decl(
     FengSemanticSubjectKey key;
 
     memset(&key, 0, sizeof(key));
-    if (type_decl != NULL && type_decl->kind == FENG_DECL_TYPE) {
+    if (type_decl != NULL &&
+        (type_decl->kind == FENG_DECL_TYPE || type_decl->kind == FENG_DECL_ENUM)) {
         key.kind = FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL;
         key.as.type_decl = type_decl;
     }
