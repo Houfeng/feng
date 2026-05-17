@@ -33,7 +33,7 @@ pu fit T[!] {
 }
 
 /**
- * A Span is a read-only view over a contiguous subrange of an array.
+ * A Span is a read-only view over a contiguous sub range of an array.
  * @param <T> - the element type
  */
 pu type Span<T> {
