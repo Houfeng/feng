@@ -348,7 +348,7 @@
     "explicitGenericCall": {
       "patterns": [
         {
-          "match": ":<",
+          "match": "(?<=[A-Za-z0-9_])<(?=[A-Za-z_])",
           "name": "punctuation.definition.generic.begin.feng"
         }
       ]

@@ -22,7 +22,7 @@ fn readInt(reader: Reader<int>): int {
 }
 
 fn main(args: string[]) {
-    let box: Box<int> = Box:<int>();
+    let box: Box<int> = Box<int>();
     box.value = 42;
     if readInt(box) == 42 {
         puts(&"generic fit ok");

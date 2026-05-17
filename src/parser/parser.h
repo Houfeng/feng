@@ -150,6 +150,7 @@ typedef enum FengExprKind {
     FENG_EXPR_STRING,
     FENG_EXPR_ARRAY_LITERAL,
     FENG_EXPR_OBJECT_LITERAL,
+    FENG_EXPR_GENERIC_TARGET,
     FENG_EXPR_CALL,
     FENG_EXPR_MEMBER,
     FENG_EXPR_INDEX,
@@ -181,11 +182,16 @@ struct FengExpr {
             size_t field_count;
         } object_literal;
         struct {
+            FengExpr *target;
+            FengTypeRef **type_args;
+            size_t type_arg_count;
+        } generic_target;
+        struct {
             FengExpr *callee;
             FengExpr **args;
             size_t arg_count;
             FengResolvedCallable resolved_callable;
-            FengTypeRef **explicit_type_args;  /* for callee:<T1, T2>(...) */
+            FengTypeRef **explicit_type_args;  /* for callee<T1, T2>(...) */
             size_t explicit_type_arg_count;
             bool has_explicit_type_args;
         } call;

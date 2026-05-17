@@ -7595,6 +7595,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
             }
             return false;
 
+        case FENG_EXPR_GENERIC_TARGET:
+            return expr_type_inference_is_pending(context, expr->as.generic_target.target);
+
         case FENG_EXPR_MEMBER:
             return expr_type_inference_is_pending(context, expr->as.member.object);
 
@@ -8299,6 +8302,9 @@ static char *format_expr_target_name(const FengExpr *expr) {
         case FENG_EXPR_CALL:
             return format_expr_target_name(expr->as.call.callee);
 
+        case FENG_EXPR_GENERIC_TARGET:
+            return format_expr_target_name(expr->as.generic_target.target);
+
         default:
             return duplicate_cstr("<expression>");
     }
@@ -8492,6 +8498,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return target.type_decl != NULL ? inferred_expr_type_from_decl(target.type_decl)
                                             : inferred_expr_type_unknown();
         }
+
+        case FENG_EXPR_GENERIC_TARGET:
+            return inferred_expr_type_unknown();
 
         case FENG_EXPR_CALL:
             return infer_call_expr_type(context, expr);
@@ -13228,6 +13237,29 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 return true;
             }
 
+        case FENG_EXPR_GENERIC_TARGET: {
+            char *target_name;
+            bool appended;
+
+            if (!resolve_expr(context, expr->as.generic_target.target, allow_self)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
+                if (!resolve_type_ref(context, expr->as.generic_target.type_args[index], false)) {
+                    return false;
+                }
+            }
+
+            target_name = format_expr_target_name(expr->as.generic_target.target);
+            appended = resolver_append_error(
+                context,
+                expr->token,
+                format_message("explicit generic target '%s' cannot be used as a value expression",
+                               target_name != NULL ? target_name : "<expression>"));
+            free(target_name);
+            return appended;
+        }
+
         case FENG_EXPR_CALL:
             if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
                 return false;
@@ -13237,7 +13269,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
-            /* G4-13a: Resolve explicit type args (callee:<T1, T2>(...) syntax). */
+            /* G4-13a: Resolve explicit type args (callee<T1, T2>(...) syntax). */
             if (expr->as.call.has_explicit_type_args) {
                 size_t type_arg_index;
                 for (type_arg_index = 0U;
@@ -13270,7 +13302,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 } else if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
                            rc->owner_type_decl != NULL &&
                            rc->owner_type_decl->kind == FENG_DECL_TYPE) {
-                    /* Type:<T1, T2>(...) constructor syntax: validate arity
+                    /* Type<T1, T2>(...) constructor syntax: validate arity
                      * against the type declaration's type parameters. */
                     callable_type_param_count =
                         rc->owner_type_decl->as.type_decl.type_param_count;

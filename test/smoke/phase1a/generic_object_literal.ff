@@ -8,7 +8,7 @@ type Box<T> {
 }
 
 fn main(args: string[]) {
-    let box: Box<i32> = Box:<i32>() { value: 7 };
+    let box: Box<i32> = Box<i32>() { value: 7 };
     if box.value == 7 {
         puts(&"generic object literal ok");
     }

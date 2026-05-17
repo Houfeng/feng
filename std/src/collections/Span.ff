@@ -13,7 +13,7 @@ pu fit T[] {
    * @param length - number of elements in the view
    */
   pu fn slice(start: long, length: long): Span<T> {
-    return Span:<T>(self, start, start + length);
+    return Span<T>(self, start, start + length);
   }
 }
 
@@ -28,7 +28,7 @@ pu fit T[!] {
    * @param length - number of elements in the view
    */
   pu fn slice(start: long, length: long): Span<T> {
-    return Span:<T>((T[])self, start, start + length);
+    return Span<T>((T[])self, start, start + length);
   }
 }
 

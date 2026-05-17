@@ -38,7 +38,7 @@ type MiniMap<K: Eq<K>, V> {
 
 fn main(args: string[]) {
     let key: Key = Key{id: 7};
-    let map: MiniMap<Key, string> = MiniMap:<Key, string>();
+    let map: MiniMap<Key, string> = MiniMap<Key, string>();
     map.put(key, "self constraint ok");
     if map.hasKey(key) {
         puts(&map.getValue(key));

@@ -21,10 +21,10 @@ fn useNamed<T: Named>(value: T): string {
 }
 
 fn useLabelled<U: Labelled>(value: U): string {
-    return useNamed:<U>(value);
+    return useNamed<U>(value);
 }
 
 fn main(args: string[]) {
     let item: Item = Item{};
-    puts(&useLabelled:<Item>(item));
+    puts(&useLabelled<Item>(item));
 }

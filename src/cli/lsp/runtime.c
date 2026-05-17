@@ -1977,6 +1977,22 @@ static size_t expr_end(const FengExpr *expr) {
                 }
             }
             break;
+        case FENG_EXPR_GENERIC_TARGET:
+            if (expr->as.generic_target.target != NULL) {
+                size_t target_end = expr_end(expr->as.generic_target.target);
+
+                if (target_end > end) {
+                    end = target_end;
+                }
+            }
+            for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
+                size_t type_end = type_ref_end(expr->as.generic_target.type_args[index]);
+
+                if (type_end > end) {
+                    end = type_end;
+                }
+            }
+            break;
         case FENG_EXPR_CALL:
             if (expr->as.call.callee != NULL) {
                 size_t callee_end = expr_end(expr->as.call.callee);
@@ -4733,6 +4749,8 @@ static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
                 }
             }
             break;
+        case FENG_EXPR_GENERIC_TARGET:
+            return find_expr_hit(expr->as.generic_target.target, offset);
         case FENG_EXPR_OBJECT_LITERAL:
             if (expr->as.object_literal.target != NULL) {
                 const FengExpr *hit = find_expr_hit(expr->as.object_literal.target, offset);
@@ -6107,6 +6125,8 @@ static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
                 }
             }
             break;
+        case FENG_EXPR_GENERIC_TARGET:
+            return find_call_hit_expr(expr->as.generic_target.target, offset);
         case FENG_EXPR_OBJECT_LITERAL:
             if (expr->as.object_literal.target != NULL) {
                 const FengExpr *hit = find_call_hit_expr(expr->as.object_literal.target, offset);
@@ -6793,6 +6813,13 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
                 }
             }
             return false;
+        case FENG_EXPR_GENERIC_TARGET:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.generic_target.target,
+                                                    offset,
+                                                    locals,
+                                                    target);
         case FENG_EXPR_ARRAY_NEW:
             return resolve_object_field_target_expr(session, program,
                                                     expr->as.array_new.size,
@@ -7379,6 +7406,15 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                 }
             }
             return true;
+        case FENG_EXPR_GENERIC_TARGET:
+            return collect_references_in_expr(session,
+                                              program,
+                                              source,
+                                              owner_decl,
+                                              owner_member,
+                                              expr->as.generic_target.target,
+                                              target,
+                                              references);
         case FENG_EXPR_ARRAY_NEW:
             return collect_references_in_expr(session, program, source, owner_decl,
                                               owner_member, expr->as.array_new.size,

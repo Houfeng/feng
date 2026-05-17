@@ -98,9 +98,9 @@ runCase(
 );
 
 runCase(
-    'formats explicit generic call :< without extra spaces',
-    'fn main():void {\nlet x=identity:<int>(42);\n}\n',
-    'fn main(): void {\n    let x = identity:<int>(42);\n}\n'
+    'formats explicit generic call <...> without extra spaces',
+    'fn main():void {\nlet x=identity<int>(42);\n}\n',
+    'fn main(): void {\n    let x = identity<int>(42);\n}\n'
 );
 
 runCase(

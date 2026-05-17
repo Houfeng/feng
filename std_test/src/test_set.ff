@@ -3,20 +3,20 @@ mod std_test;
 use std.collections;
 
 fn set_add_has() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k = IntKey { value: 10 };
   s.add(k);
   check(s.has(k), "set/add-has");
 }
 
 fn set_has_false() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k = IntKey { value: 99 };
   check(!s.has(k), "set/has-false");
 }
 
 fn set_add_duplicate() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k = IntKey { value: 5 };
   s.add(k);
   s.add(k);
@@ -24,7 +24,7 @@ fn set_add_duplicate() {
 }
 
 fn set_remove() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k = IntKey { value: 8 };
   s.add(k);
   s.remove(k);
@@ -32,14 +32,14 @@ fn set_remove() {
 }
 
 fn set_remove_absent() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k = IntKey { value: 42 };
   s.remove(k);
   check(!s.has(k), "set/remove-absent");
 }
 
 fn set_multiple_elements() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   for var i: i32 = 0; i < 20; i = i + 1 {
     s.add(IntKey { value: i });
   }
@@ -58,7 +58,7 @@ fn set_multiple_elements() {
 }
 
 fn set_count() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   check(s.count() == 0, "set/count-empty");
   s.add(IntKey { value: 1 });
   s.add(IntKey { value: 2 });
@@ -69,7 +69,7 @@ fn set_count() {
 }
 
 fn set_entities_two() {
-  let s = Set:<IntKey>();
+  let s = Set<IntKey>();
   let k7 = IntKey { value: 7 };
   let k13 = IntKey { value: 13 };
   s.add(k7);
@@ -84,7 +84,7 @@ fn set_entities_two() {
 fn set_int_direct_call() {
   let h: Hashable<i32> = 7;
   check(h.same(7), "set/int-hashable-same");
-  let s = Set:<int>();
+  let s = Set<int>();
   s.add(7);
   s.add(13);
   check(s.count() == 2, "set/int-count-2");

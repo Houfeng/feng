@@ -25,16 +25,16 @@ fn forwardNamed<T>(named: Named): Named {
 }
 
 fn reboundNamed<T>(name: string): Named {
-    return makeNamed:<T>(name);
+    return makeNamed<T>(name);
 }
 
 fn main(args: string[]) {
-    let created: Named = makeNamed:<int>("generic aggregate return ok");
+    let created: Named = makeNamed<int>("generic aggregate return ok");
     puts(&created.greet());
 
-    let forwarded: Named = forwardNamed:<int>(created);
+    let forwarded: Named = forwardNamed<int>(created);
     puts(&forwarded.greet());
 
-    let rebound: Named = reboundNamed:<int>("generic aggregate return ok");
+    let rebound: Named = reboundNamed<int>("generic aggregate return ok");
     puts(&rebound.greet());
 }

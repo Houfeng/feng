@@ -1693,6 +1693,12 @@ static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
                 }
             }
             return true;
+        case FENG_EXPR_GENERIC_TARGET:
+            return cg_collect_capture_requirements_in_expr(expr->as.generic_target.target,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           out_captures_self);
         case FENG_EXPR_CALL:
             if (!cg_collect_capture_requirements_in_expr(expr->as.call.callee,
                                                          out_names,
@@ -8031,6 +8037,10 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_CALL:          ok = cg_emit_call(cg, e, out); break;
         case FENG_EXPR_MEMBER:        ok = cg_emit_member(cg, e, out); break;
         case FENG_EXPR_OBJECT_LITERAL:ok = cg_emit_object_literal(cg, e, out); break;
+        case FENG_EXPR_GENERIC_TARGET:
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: explicit generic target must be consumed before emission");
         case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
         case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
         case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
@@ -14107,7 +14117,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
 
     if (e->as.call.has_explicit_type_args &&
         e->as.call.explicit_type_arg_count == tp_count) {
-        /* Use explicit type arguments, e.g. identity:<int>(42). */
+        /* Use explicit type arguments, e.g. identity<int>(42). */
         for (size_t i = 0; i < tp_count; i++) {
             if (!cg_resolve_type(cg, e->as.call.explicit_type_args[i],
                                  &e->token, &type_args[i])) {
@@ -15981,6 +15991,17 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 }
             }
             return true;
+        case FENG_EXPR_GENERIC_TARGET:
+            for (size_t i = 0; i < expr->as.generic_target.type_arg_count; ++i) {
+                if (!cg_collect_generic_instances_from_type_ref(cg,
+                                                               expr->as.generic_target.type_args[i],
+                                                               scope)) {
+                    return false;
+                }
+            }
+            return cg_collect_generic_instances_from_expr(cg,
+                                                          expr->as.generic_target.target,
+                                                          scope);
         case FENG_EXPR_CALL:
             if (expr->as.call.has_explicit_type_args) {
                 for (size_t i = 0; i < expr->as.call.explicit_type_arg_count; ++i) {

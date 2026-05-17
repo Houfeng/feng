@@ -293,12 +293,6 @@ function tokenize(source) {
             continue;
         }
 
-        if (current === ':' && next === '<') {
-            tokens.push({ type: 'punctuation', value: ':<' });
-            index += 2;
-            continue;
-        }
-
         if (MULTI_CHAR_OPERATORS.has(twoChars)) {
             tokens.push(classifySymbol(twoChars));
             index += 2;
@@ -414,22 +408,12 @@ function needsSpaceBetween(previousEmittedToken,
         return false;
     }
 
-    /* Explicit generic call marker: no space before :<  */
-    if (currentToken.type === 'punctuation' && currentToken.value === ':<') {
-        return false;
-    }
-
     if (isOperator(previousSignificantToken) && previousEmittedToken === previousSignificantToken) {
         return !isPrefixOperator(previousSignificantToken, tokenBeforePreviousSignificant);
     }
 
     if (previousEmittedToken.value === ',' || previousEmittedToken.value === ':') {
         return true;
-    }
-
-    /* No space after :< — the generic open < is handled by genericDepth in formatLineTokens */
-    if (previousEmittedToken.type === 'punctuation' && previousEmittedToken.value === ':<') {
-        return false;
     }
 
     if (previousEmittedToken.value === ';') {
@@ -529,6 +513,76 @@ function isUppercaseIdentifier(token) {
         token.value[0] <= 'Z';
 }
 
+function tokenCanFollowExplicitGenericTarget(token) {
+    return token != null &&
+        ((token.type === 'delimiter' &&
+          (token.value === '(' || token.value === '[' || token.value === '{' ||
+           token.value === ')' || token.value === ']' || token.value === '}')) ||
+         (token.type === 'punctuation' &&
+          (token.value === ',' || token.value === ';')));
+}
+
+function tokenCanAppearInGenericTypeArgs(token) {
+    if (token == null || token.type === 'newline' || token.type === 'comment') {
+        return false;
+    }
+
+    if (token.type === 'identifier') {
+        return true;
+    }
+
+    if (token.type === 'punctuation') {
+        return token.value === ',' || token.value === '.';
+    }
+
+    if (token.type === 'delimiter') {
+        return token.value === '[' || token.value === ']';
+    }
+
+    return token.type === 'operator' &&
+        (token.value === '<' || token.value === '>' || token.value === '!' || token.value === '*');
+}
+
+function looksLikeExplicitGenericOpen(tokens, index, previousSignificantToken) {
+    let depth = 1;
+    let sawTypeToken = false;
+
+    if (tokens[index] == null || tokens[index].type !== 'operator' || tokens[index].value !== '<') {
+        return false;
+    }
+
+    if (previousSignificantToken == null || previousSignificantToken.type !== 'identifier') {
+        return false;
+    }
+
+    for (let lookahead = index + 1; lookahead < tokens.length; lookahead += 1) {
+        const token = tokens[lookahead];
+
+        if (token.type === 'operator' && token.value === '<') {
+            depth += 1;
+            continue;
+        }
+
+        if (token.type === 'operator' && token.value === '>') {
+            depth -= 1;
+            if (depth === 0) {
+                return sawTypeToken && tokenCanFollowExplicitGenericTarget(tokens[lookahead + 1]);
+            }
+            continue;
+        }
+
+        if (!tokenCanAppearInGenericTypeArgs(token)) {
+            return false;
+        }
+
+        if (token.type === 'identifier') {
+            sawTypeToken = true;
+        }
+    }
+
+    return false;
+}
+
 function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     let result = '';
     let previousEmittedToken = null;
@@ -536,35 +590,15 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     let tokenBeforePreviousSignificant = null;
     let lastLineSignificantToken = null;
     let genericDepth = 0;
-    let lastEmittedWasGenericOpen = false;   /* just emitted a generic < or :< */
+    let lastEmittedWasGenericOpen = false;   /* just emitted a generic < */
     let lastEmittedWasGenericClose = false;  /* just emitted a generic > */
 
-    for (const token of tokens) {
-        const isGenericOpen = token.type === 'operator' && token.value === '<' &&
-            (isUppercaseIdentifier(previousSignificantToken) ||
-             (previousSignificantToken != null &&
-              previousSignificantToken.type === 'identifier' &&
-              tokenBeforePreviousSignificant != null &&
-              tokenBeforePreviousSignificant.type === 'keyword' &&
-              (tokenBeforePreviousSignificant.value === 'fn' ||
-               tokenBeforePreviousSignificant.value === 'type' ||
-               tokenBeforePreviousSignificant.value === 'spec')) ||
-             (previousEmittedToken != null && previousEmittedToken.type === 'punctuation' && previousEmittedToken.value === ':<'));
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        const isGenericOpen = looksLikeExplicitGenericOpen(tokens, index, previousSignificantToken);
         const isGenericClose = token.type === 'operator' && token.value === '>' && genericDepth > 0;
-        const isExplicitGenericMarker = token.type === 'punctuation' && token.value === ':<';
 
-        if (isExplicitGenericMarker) {
-            if (needsSpaceBetween(previousEmittedToken,
-                previousSignificantToken,
-                tokenBeforePreviousSignificant,
-                token)) {
-                result += ' ';
-            }
-            result += token.value;
-            genericDepth += 1;
-            lastEmittedWasGenericOpen = true;
-            lastEmittedWasGenericClose = false;
-        } else if (isGenericOpen) {
+        if (isGenericOpen) {
             result += token.value;
             genericDepth += 1;
             lastEmittedWasGenericOpen = true;

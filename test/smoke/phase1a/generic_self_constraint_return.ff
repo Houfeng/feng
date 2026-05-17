@@ -23,7 +23,7 @@ type Copier<K: Cloneable<K>> {
 
 fn main(args: string[]) {
     let key: Key = Key{id: 7};
-    let copier: Copier<Key> = Copier:<Key>();
+    let copier: Copier<Key> = Copier<Key>();
     let copied: Key = copier.copy(key);
     if copied.id == 7 {
         puts(&"self constraint return ok");

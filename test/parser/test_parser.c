@@ -1208,11 +1208,11 @@ static void test_cast_with_generic_array_target(void) {
 }
 
 static void test_explicit_generic_call(void) {
-    /* Explicit generic call: callee:<int>(arg) */
+    /* Explicit generic call: callee<int>(arg) */
     const char *source =
         "mod demo.main;\n"
         "fn run(): void {\n"
-        "    callee:<int>(42);\n"
+        "    callee<int>(42);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1235,11 +1235,11 @@ static void test_explicit_generic_call(void) {
 }
 
 static void test_explicit_generic_call_multi_type_args(void) {
-    /* Explicit generic call with two type args: callee:<A, B>(x, y) */
+    /* Explicit generic call with two type args: callee<A, B>(x, y) */
     const char *source =
         "mod demo.main;\n"
         "fn run(): void {\n"
-        "    callee:<A, B>(x, y);\n"
+        "    callee<A, B>(x, y);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1263,11 +1263,11 @@ static void test_explicit_generic_call_multi_type_args(void) {
 /* G7 parser additions */
 
 static void test_explicit_generic_type_constructor_call(void) {
-    /* 正确语法六-b: Type:<T1, T2>() generic type constructor call. */
+    /* 正确语法六-b: Type<T1, T2>() generic type constructor call. */
     const char *source =
         "mod demo.main;\n"
         "fn run(): void {\n"
-        "    Map:<string, int>();\n"
+        "    Map<string, int>();\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1366,7 +1366,7 @@ static void test_generic_method_uses_both_outer_and_method_type_params(void) {
 }
 
 static void test_generic_parse_error_colon_angle_in_type_position(void) {
-    /* 错误语法八: `:<T>` in non-call position (type declaration head) must fail. */
+    /* 旧语法 `:<T>` in non-call position (type declaration head) must fail. */
     const char *source =
         "mod demo.main;\n"
         "type Box:<T> {\n"
@@ -1381,11 +1381,11 @@ static void test_generic_parse_error_colon_angle_in_type_position(void) {
 }
 
 static void test_generic_parse_error_nested_colon_angle_in_type_arg(void) {
-    /* 错误语法七: `foo:<Map:<int>>(x)` — nested `:<` inside type arg list must fail. */
+    /* 旧语法 `foo<Map:<int>>(x)` — nested `:<` inside type arg list must fail. */
     const char *source =
         "mod demo.main;\n"
         "fn run(): void {\n"
-        "    foo:<Map:<int>>(x);\n"
+        "    foo<Map:<int>>(x);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1422,6 +1422,32 @@ static void test_generic_parse_error_missing_type_param_name(void) {
     ASSERT(!feng_parse_source(source, strlen(source), "generic_err2.f", &program, &error));
     ASSERT(program == NULL);
     ASSERT(error.message != NULL);
+}
+
+static void test_generic_target_expression_argument_parses(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): void {\n"
+        "    callee(a<b>);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengExpr *call;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_target_arg.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_EXPR);
+    call = stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.arg_count == 1U);
+    ASSERT(call->as.call.args[0]->kind == FENG_EXPR_GENERIC_TARGET);
+    ASSERT(call->as.call.args[0]->as.generic_target.type_arg_count == 1U);
+
+    feng_program_free(program);
 }
 
 int main(void) {
@@ -1485,6 +1511,7 @@ int main(void) {
     test_generic_parse_error_nested_colon_angle_in_type_arg();
     test_generic_parse_error_missing_closing_gt();
     test_generic_parse_error_missing_type_param_name();
+    test_generic_target_expression_argument_parses();
     puts("parser tests passed");
     return 0;
 }

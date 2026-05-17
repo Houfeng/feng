@@ -3,7 +3,7 @@ mod std_test;
 use std.collections;
 
 fn map_set_get() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 10 };
   m.set(k, 100);
   let v: i32 = m.get(k);
@@ -11,27 +11,27 @@ fn map_set_get() {
 }
 
 fn map_get_missing_default() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 99 };
   let v: i32 = m.get(k);
   check(v == 0, "map/get-missing-default");
 }
 
 fn map_has_true() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 5 };
   m.set(k, 5);
   check(m.has(k), "map/has-true");
 }
 
 fn map_has_false() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 7 };
   check(!m.has(k), "map/has-false");
 }
 
 fn map_overwrite() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 3 };
   m.set(k, 1);
   m.set(k, 2);
@@ -40,7 +40,7 @@ fn map_overwrite() {
 }
 
 fn map_remove() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 8 };
   m.set(k, 8);
   m.remove(k);
@@ -48,14 +48,14 @@ fn map_remove() {
 }
 
 fn map_remove_absent() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   let k = IntKey { value: 42 };
   m.remove(k);
   check(!m.has(k), "map/remove-absent");
 }
 
 fn map_multiple_keys() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   for var i: i32 = 0; i < 20; i = i + 1 {
     let k = IntKey { value: i };
     m.set(k, i);
@@ -76,7 +76,7 @@ fn map_multiple_keys() {
 }
 
 fn map_count() {
-  let m = Map:<IntKey, i32>();
+  let m = Map<IntKey, i32>();
   check(m.count() == 0, "map/count-empty");
   m.set(IntKey { value: 1 }, 1);
   m.set(IntKey { value: 2 }, 2);

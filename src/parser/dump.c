@@ -168,8 +168,29 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             }
             fputc('}', stream);
             break;
+        case FENG_EXPR_GENERIC_TARGET:
+            dump_expr(stream, expr->as.generic_target.target, 0);
+            fputc('<', stream);
+            for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
+                if (index != 0U) {
+                    fputs(", ", stream);
+                }
+                dump_type_ref(stream, expr->as.generic_target.type_args[index]);
+            }
+            fputc('>', stream);
+            break;
         case FENG_EXPR_CALL:
             dump_expr(stream, expr->as.call.callee, 0);
+            if (expr->as.call.has_explicit_type_args) {
+                fputc('<', stream);
+                for (index = 0U; index < expr->as.call.explicit_type_arg_count; ++index) {
+                    if (index != 0U) {
+                        fputs(", ", stream);
+                    }
+                    dump_type_ref(stream, expr->as.call.explicit_type_args[index]);
+                }
+                fputc('>', stream);
+            }
             fputc('(', stream);
             for (index = 0U; index < expr->as.call.arg_count; ++index) {
                 if (index != 0U) {

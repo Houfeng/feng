@@ -38,12 +38,12 @@ type Holder<T: Named> {
 fn main(args: string[]) {
     let named: Named = User{name: "phase-e-ok"};
 
-    let fromFn: Named = idNamed:<Named>(named);
+    let fromFn: Named = idNamed<Named>(named);
 
-    let holder: Holder<Named> = Holder:<Named>();
+    let holder: Holder<Named> = Holder<Named>();
     holder.set(fromFn);
 
-    let fromMethod: string = holder.relay:<Named>(fromFn);
+    let fromMethod: string = holder.relay<Named>(fromFn);
     puts(&fromMethod);
     puts(&holder.read());
 }

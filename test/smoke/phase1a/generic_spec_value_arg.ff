@@ -45,7 +45,7 @@ fn main(args: string[]) {
     let fromFn: Named = identity(named);
     puts(&fromFn.greet());
 
-    let holder: Holder<Named> = Holder:<Named>();
+    let holder: Holder<Named> = Holder<Named>();
     holder.put(named);
     let fromTypeArg: Named = holder.readValue();
     puts(&fromTypeArg.greet());

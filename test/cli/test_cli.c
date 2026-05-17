@@ -1325,7 +1325,7 @@ static void test_direct_build_consumes_package_generic_type(void) {
         "@cdecl(\"libc\")\n"
         "extern fn puts(msg: string*): int;\n"
         "fn main(args: string[]) {\n"
-        "  let box: Box<int> = Box:<int>();\n"
+        "  let box: Box<int> = Box<int>();\n"
         "  box.setValue(11);\n"
         "  if box.readValue() == 11 { puts(&\"generic type ok\"); }\n"
         "}\n",
@@ -1473,7 +1473,7 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
         "fn main(args: string[]) {\n"
         "  let a = Key{id: 8};\n"
         "  let b = Key{id: 8};\n"
-        "  let map: MiniMap<Key, string> = MiniMap:<Key, string>();\n"
+        "  let map: MiniMap<Key, string> = MiniMap<Key, string>();\n"
         "  map.put(a, \"value\");\n"
         "  if map.hasKey(b) { puts(&\"constrained generic type ok\"); }\n"
         "}\n",

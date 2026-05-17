@@ -110,7 +110,7 @@ type Set<T> {
     }
 }
 fn use_it(): int {
-    let set: Set<int> = Set:<int>();
+    let set: Set<int> = Set<int>();
     set.put(7);
     return set.get();
 }

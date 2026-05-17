@@ -239,11 +239,11 @@ pu type Map<K: Hashable<K>, V> {
    * @return immutable array of map entries
    */
   pu fn entries(): MapEntity<K, V>[] {
-    let items: MapEntity<K, V>[!] = MapEntity:<K, V> [self.size];
+    let items: MapEntity<K, V>[!] = MapEntity<K, V>[self.size];
     var outputIndex: i32 = 0;
     for var i: i32 = 0; i < self.capacity; i = i + 1 {
       if self.states[i] == 1 {
-        items[outputIndex] = MapEntity:<K, V>() { key: self.keys[i], value: self.values[i] };
+        items[outputIndex] = MapEntity<K, V>() { key: self.keys[i], value: self.values[i] };
         outputIndex = outputIndex + 1;
       }
     }

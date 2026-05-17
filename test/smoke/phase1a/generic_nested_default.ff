@@ -12,7 +12,7 @@ type Holder<T> {
 }
 
 fn main(args: string[]) {
-    let holder: Holder<i32> = Holder:<i32>();
+    let holder: Holder<i32> = Holder<i32>();
     holder.inner.value = 11;
     if holder.inner.value == 11 {
         puts(&"generic nested default ok");

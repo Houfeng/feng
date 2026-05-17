@@ -13,7 +13,7 @@ extern fn feng_string_from_utf8_bytes(value: byte[], length: long): string;
  * The trailing newline is not included. Returns `""` on EOF before any byte.
  */
 pu fn input(): string {
-	let bytes = List:<byte>();
+	let bytes = List<byte>();
 
 	while true {
 		let ch = getchar();

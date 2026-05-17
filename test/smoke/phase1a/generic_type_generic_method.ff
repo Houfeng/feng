@@ -29,9 +29,9 @@ type Box<T> {
 }
 
 fn main(args: string[]) {
-    let box = Box:<int>();
+    let box = Box<int>();
     let first: int = box.echo(20);
-    let second: int = box.replace:<int>(22, first);
+    let second: int = box.replace<int>(22, first);
     if box.currentAgain() + second + box.echoInt(1) == 43 {
         puts(&"ok");
     } else {

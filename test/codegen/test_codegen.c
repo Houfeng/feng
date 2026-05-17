@@ -744,7 +744,7 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
         "@runtime\n"
         "extern fn feng_array_length_i64<T>(value: T[]): long;\n"
         "fn run(values: int[]): long {\n"
-        "    return feng_array_length_i64:<int>(values);\n"
+        "    return feng_array_length_i64<int>(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexternexplicit.ff");
     const FengProgram *programs[1] = {program};
@@ -1250,7 +1250,7 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
         "}\n"
         "fit T[] {\n"
         "    fn slice(start: long, length: long): Span<T> {\n"
-        "        return Span:<T>(self, start, start + length);\n"
+        "        return Span<T>(self, start, start + length);\n"
         "    }\n"
         "}\n"
         "fn run(): int {\n"
@@ -1600,7 +1600,7 @@ static const char *kGenericSpecArgSrc =
     "\n"
     "fn use_it() {\n"
     "    let s: Spec1 = User();\n"
-    "    let x = MyType:<Spec1, int>();\n"
+    "    let x = MyType<Spec1, int>();\n"
     "    x.test(s);\n"
     "}\n";
 
@@ -1742,7 +1742,7 @@ static const char *kGenericCallableConstraintSrc =
     "}\n"
     "fn use_it(): int {\n"
     "    let mapper: Mapper = add1;\n"
-    "    return apply:<Mapper>(mapper, 41);\n"
+    "    return apply<Mapper>(mapper, 41);\n"
     "}\n";
 
 static void test_generic_callable_constraint_codegen(void) {
@@ -2210,7 +2210,7 @@ static const char *kGenericConstrainedSpecValueSrc =
     "}\n"
     "fn use_it(): string {\n"
     "    let named: Named = User{name: \"before\"};\n"
-    "    return rename:<Named>(named, \"after\");\n"
+    "    return rename<Named>(named, \"after\");\n"
     "}\n";
 
 static void test_generic_constrained_spec_value_codegen(void) {
@@ -2332,7 +2332,7 @@ static const char *kGenericConstrainedAggregateSpecValueSrc =
     "fn use_it(): string {\n"
     "    let holder: Holder = Holder{child: User{name: \"before\"}};\n"
     "    let box: HasChild = holder;\n"
-    "    return rewrite:<HasChild>(box, User{name: \"after\"});\n"
+    "    return rewrite<HasChild>(box, User{name: \"after\"});\n"
     "}\n";
 
 static void test_generic_constrained_aggregate_spec_value_codegen(void) {
@@ -2500,7 +2500,7 @@ static const char *kGenericAggregateReturnSrc =
     "    return named;\n"
     "}\n"
     "fn rebound_named<T>(name: string): Named {\n"
-    "    return make_named:<T>(name);\n"
+    "    return make_named<T>(name);\n"
     "}\n";
 
 static void test_generic_aggregate_return_codegen(void) {
@@ -2551,9 +2551,9 @@ static const char *kGenericTypeGenericMethodSrc =
     "    }\n"
     "}\n"
     "fn use_it(): int {\n"
-    "    let box = Box:<int>();\n"
+    "    let box = Box<int>();\n"
     "    let first: int = box.echo(20);\n"
-    "    let second: int = box.replace:<int>(22, first);\n"
+    "    let second: int = box.replace<int>(22, first);\n"
     "    return box.current() + second;\n"
     "}\n";
 
@@ -2602,7 +2602,7 @@ static const char *kGenericScalarInstanceDirectCallSrc =
     "    }\n"
     "}\n"
     "fn use_it(): int {\n"
-    "    let set: Set<int> = Set:<int>();\n"
+    "    let set: Set<int> = Set<int>();\n"
     "    set.put(7);\n"
     "    return set.get();\n"
     "}\n";
@@ -2675,10 +2675,10 @@ static const char *kPhaseEAggregateGenericArgThreeEntrancesSrc =
     "    }\n"
     "}\n"
     "fn use_it(input: Named): string {\n"
-    "    let holder: Holder<Named> = Holder:<Named>();\n"
-    "    let fromFn: Named = idNamed:<Named>(input);\n"
+    "    let holder: Holder<Named> = Holder<Named>();\n"
+    "    let fromFn: Named = idNamed<Named>(input);\n"
     "    holder.set(fromFn);\n"
-    "    let fromMethod: string = holder.relay:<Named>(fromFn);\n"
+    "    let fromMethod: string = holder.relay<Named>(fromFn);\n"
     "    holder.read();\n"
     "    return fromMethod;\n"
     "}\n";

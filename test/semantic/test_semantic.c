@@ -8203,7 +8203,7 @@ static void test_fit_user_type_path_still_uses_current_type_decl(void) {
         "    }\n"
         "}\n"
         "fn run(): int {\n"
-        "    let b: Box<int> = Box:<int>();\n"
+        "    let b: Box<int> = Box<int>();\n"
         "    return b.get();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_user_type_path_ok.f", source);
@@ -11309,7 +11309,7 @@ static void test_generic_explicit_type_args_ok(void) {
         "    return x;\n"
         "}\n"
         "fn check(): void {\n"
-        "    let result = identity:<int>(42);\n"
+        "    let result = identity<int>(42);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_explicit_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -11424,7 +11424,7 @@ static void test_generic_explicit_type_args_arity_mismatch(void) {
         "    return x;\n"
         "}\n"
         "fn check(): void {\n"
-        "    let result = identity:<int, bool>(42);\n"
+        "    let result = identity<int, bool>(42);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_explicit_bad.f", source);
     const FengProgram *programs[] = {program};
@@ -11442,14 +11442,14 @@ static void test_generic_explicit_type_args_arity_mismatch(void) {
 }
 
 static void test_generic_type_constructor_explicit_type_args_ok(void) {
-    /* Type:<T>() constructor with correct arity must be accepted (G4-13b). */
+    /* Type<T>() constructor with correct arity must be accepted (G4-13b). */
     const char *source =
         "mod demo.main;\n"
         "type Box<T> {\n"
         "    pu let value: T;\n"
         "}\n"
         "fn run(): void {\n"
-        "    let b = Box:<int>();\n"
+        "    let b = Box<int>();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_ctor_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -11466,14 +11466,14 @@ static void test_generic_type_constructor_explicit_type_args_ok(void) {
 }
 
 static void test_generic_type_constructor_explicit_type_args_arity_mismatch(void) {
-    /* Type:<T1, T2>() on a 1-param type must be rejected with an arity error. */
+    /* Type<T1, T2>() on a 1-param type must be rejected with an arity error. */
     const char *source =
         "mod demo.main;\n"
         "type Box<T> {\n"
         "    pu let value: T;\n"
         "}\n"
         "fn run(): void {\n"
-        "    let b = Box:<int, string>();\n"
+        "    let b = Box<int, string>();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_ctor_bad.f", source);
     const FengProgram *programs[] = {program};

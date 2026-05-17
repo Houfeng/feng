@@ -108,16 +108,16 @@ const typeParamNamePattern = genericPatterns.find(
 );
 assert(typeParamNamePattern, 'expected entity.name.type.parameter.feng pattern in genericTypeParams');
 
-// 2. explicitGenericCall rule exists for :< syntax
+// 2. explicitGenericCall rule exists for <...> syntax
 const explicitGenericCall = findExplicitGenericCall();
 assert(explicitGenericCall, 'expected explicitGenericCall rule in grammar repository');
 const explicitPatterns = Array.isArray(explicitGenericCall.patterns) ? explicitGenericCall.patterns : [];
 const colonAnglePattern = explicitPatterns.find(
     p => p.name === 'punctuation.definition.generic.begin.feng'
 );
-assert(colonAnglePattern, 'expected punctuation.definition.generic.begin.feng for :< syntax');
+assert(colonAnglePattern, 'expected punctuation.definition.generic.begin.feng for <...> syntax');
 const colonAngleRegex = new RegExp(colonAnglePattern.match);
-assert(colonAngleRegex.test(':<'), 'explicit generic call pattern should match :<');
+assert(colonAngleRegex.test('identity<int>'), 'explicit generic call pattern should match identity<int>');
 
 // 3. functionDefinitions has a begin/end pattern with type-param support
 const fnPatterns = findFunctionDefinitionPatterns();

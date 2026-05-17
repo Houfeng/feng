@@ -43,7 +43,7 @@ type MiniMap<K: Hashable, V> {
 
 fn main(args: string[]) {
     let key: Key = Key{id: 41};
-    let map: MiniMap<Key, string> = MiniMap:<Key, string>();
+    let map: MiniMap<Key, string> = MiniMap<Key, string>();
     map.put(key, "answer");
     puts(&map.getValue(key));
     if map.hasKey(key) {
