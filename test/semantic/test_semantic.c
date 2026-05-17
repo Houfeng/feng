@@ -6137,6 +6137,147 @@ static void test_external_imported_declared_specs_enable_spec_coercion(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_external_imported_enum_item_participates_in_typecheck(void) {
+    const char *external_source =
+        "pu mod vendor.http;\n"
+        "pu enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.http as http;\n"
+        "fn run(): int {\n"
+        "    let status: http.HttpStatus = http.HttpStatus.NotFound;\n"
+        "    return (int)status;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_enum.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_enum_main.f", main_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_enum_conflicts_with_local_type_name(void) {
+    const char *external_source =
+        "pu mod vendor.http;\n"
+        "pu enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.http;\n"
+        "type HttpStatus {}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_enum_conflict.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_enum_conflict_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "external_enum_conflict_main.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "imported enum 'HttpStatus'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_private_enum_is_not_visible(void) {
+    const char *external_source =
+        "pu mod vendor.http;\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use vendor.http as http;\n"
+        "fn run(): int {\n"
+        "    return (int)http.HttpStatus.Ok;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool saw_visibility_error = false;
+    size_t error_index;
+
+    imported_source_fixture_init(&fixture, "external_enum_private.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_enum_private_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "external_enum_private_main.f") == 0);
+    for (error_index = 0U; error_index < error_count; ++error_index) {
+        if (strcmp(errors[error_index].path, "external_enum_private_main.f") == 0 &&
+            strstr(errors[error_index].message, "does not export public name 'HttpStatus'") != NULL) {
+            saw_visibility_error = true;
+            break;
+        }
+    }
+    ASSERT(saw_visibility_error);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_undefined_identifier_in_function_body(void) {
     const char *source =
         "mod demo.main;\n"
@@ -11161,6 +11302,208 @@ static void test_enum_relational_compare_is_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_enum_is_valid_in_ordinary_type_positions(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "type Packet {\n"
+        "    var status: Status;\n"
+        "}\n"
+        "fn echo(status: Status): Status {\n"
+        "    return status;\n"
+        "}\n"
+        "fn run(history: Status[]): Status {\n"
+        "    let current: Status = Status.Ok;\n"
+        "    let packet: Packet = Packet { status: current };\n"
+        "    let picked: Status = history[0];\n"
+        "    if packet.status == current {\n"
+        "        return echo(picked);\n"
+        "    }\n"
+        "    return current;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_ordinary_positions_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_different_enum_assignment(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status { Ok, NotFound }\n"
+        "enum Color { Red, Blue }\n"
+        "fn bad(): Status {\n"
+        "    return Color.Red;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_cross_assign_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_cross_assign_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'Status'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_different_enum_equality_compare(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status { Ok, NotFound }\n"
+        "enum Color { Red, Blue }\n"
+        "fn bad(): bool {\n"
+        "    return Status.Ok == Color.Red;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_cross_compare_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_cross_compare_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '==' requires operands of the same type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_rejects_different_enum_cast(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status { Ok, NotFound }\n"
+        "enum Color { Red, Blue }\n"
+        "fn bad(): Color {\n"
+        "    return (Color)Status.Ok;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_cross_cast_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_cross_cast_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message, "cast from 'Status' to 'Color' is not allowed") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_arithmetic_is_rejected(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status { Ok, NotFound }\n"
+        "fn bad(): Status {\n"
+        "    return Status.Ok + Status.NotFound;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_arithmetic_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_arithmetic_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '+' requires operands of the same numeric or string type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_enum_abi_surfaces_accept_enum_signatures(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "@cdecl(\"m\")\n"
+        "extern fn fetch(status: Status): Status;\n"
+        "@abi\n"
+        "fn publish(status: Status): Status {\n"
+        "    return status;\n"
+        "}\n"
+        "@abi\n"
+        "spec StatusCb(status: Status): Status;\n"
+        "@abi\n"
+        "type Packet {\n"
+        "    var status: Status;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_abi_surfaces_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_enum_address_of_matches_int_pointer_rules(void) {
+    const char *src =
+        "mod demo.enums;\n"
+        "enum Status {\n"
+        "    Ok,\n"
+        "    NotFound\n"
+        "}\n"
+        "@cdecl(\"m\")\n"
+        "extern fn use_status_ptr(status: Status*): void;\n"
+        "fn run(history: Status[]): Status {\n"
+        "    let current: Status = history[0];\n"
+        "    let ptr: Status* = &current;\n"
+        "    use_status_ptr(ptr);\n"
+        "    return current;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("enum_address_of_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_extern_function_accepts_enum_types(void) {
     const char *src =
         "mod demo.enums;\n"
@@ -12203,6 +12546,9 @@ int main(void) {
     test_external_imported_function_argument_type_match();
     test_external_imported_field_type_participates_in_typecheck();
     test_external_imported_declared_specs_enable_spec_coercion();
+    test_external_imported_enum_item_participates_in_typecheck();
+    test_external_imported_enum_conflicts_with_local_type_name();
+    test_external_imported_private_enum_is_not_visible();
     test_undefined_identifier_in_function_body();
     test_unknown_type_reference_in_function_signature();
     test_self_is_valid_inside_type_method();
@@ -12327,6 +12673,13 @@ int main(void) {
     test_enum_rejects_duplicate_item_value();
     test_enum_rejects_int_to_enum_cast();
     test_enum_relational_compare_is_rejected();
+    test_enum_is_valid_in_ordinary_type_positions();
+    test_enum_rejects_different_enum_assignment();
+    test_enum_rejects_different_enum_equality_compare();
+    test_enum_rejects_different_enum_cast();
+    test_enum_arithmetic_is_rejected();
+    test_enum_abi_surfaces_accept_enum_signatures();
+    test_enum_address_of_matches_int_pointer_rules();
     test_extern_function_accepts_enum_types();
     test_abi_type_accepts_enum_field();
     test_value_kind_enum_is_trivial();

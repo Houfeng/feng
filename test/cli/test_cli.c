@@ -532,6 +532,31 @@ static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
     return captured;
 }
 
+static char *run_project_check_capture_stderr(int argc, char **argv, int *out_rc) {
+    int saved_stderr;
+    FILE *errors = tmpfile();
+    int rc;
+    char *captured;
+
+    ASSERT(errors != NULL);
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
+
+    rc = feng_cli_project_check_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    captured = read_text_stream(errors);
+    fclose(errors);
+    if (out_rc != NULL) {
+        *out_rc = rc;
+    }
+    return captured;
+}
+
 static char *read_text_stream(FILE *file) {
     long length;
     char *content;
@@ -1689,6 +1714,61 @@ static void test_project_check_accepts_source_file_path_and_local_dependencies(v
     free(dep_src_dir);
     free(dep_manifest_path);
     free(dep_project_dir);
+}
+
+static void test_project_check_reports_enum_semantic_error_without_unknown_type(void) {
+    char template_path[] = "/tmp/feng_cli_check_enum_diag_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *stderr_text;
+    char *remove_error = NULL;
+    int rc = 0;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "root");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"enum_diag_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_path,
+                    "mod test.cli.enumdiag;\n"
+                    "enum Status {\n"
+                    "  Ok,\n"
+                    "  NotFound\n"
+                    "}\n"
+                    "fn main(args: string[]) {\n"
+                    "  let value: Status = (Status)1;\n"
+                    "}\n");
+
+    {
+        char *argv[] = { source_path };
+        stderr_text = run_project_check_capture_stderr(1, argv, &rc);
+    }
+
+    ASSERT(rc != 0);
+    ASSERT(strstr(stderr_text, "to 'Status' is not allowed") != NULL);
+    ASSERT(strstr(stderr_text, "unknown type 'Status'") == NULL);
+
+    free(stderr_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
 }
 
 static void test_frontend_outputs_absolute_bundle_paths(void) {
@@ -6849,6 +6929,7 @@ int main(void) {
     test_direct_build_consumes_package_constrained_generic_type();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
+    test_project_check_reports_enum_semantic_error_without_unknown_type();
     test_frontend_outputs_absolute_bundle_paths();
     test_frontend_source_overlay_replaces_disk_source();
     test_frontend_source_overlay_rejects_duplicate_paths();

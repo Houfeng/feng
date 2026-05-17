@@ -982,6 +982,134 @@ static void test_imported_feng_function_prototypes_compile(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_enum_codegen_emits_stable_symbols(void) {
+    static const char *kSource =
+        "mod feng.codegen.enumvalue;\n"
+        "enum HttpStatus { Ok = 200, NotFound = 404 }\n"
+        "@cdecl(\"m\")\n"
+        "extern fn use_status_ptr(status: HttpStatus*): void;\n"
+        "type Response {\n"
+        "    let status: HttpStatus;\n"
+        "}\n"
+        "fn fallback(): HttpStatus {\n"
+        "    let status: HttpStatus;\n"
+        "    return status;\n"
+        "}\n"
+        "fn roundtrip(status: HttpStatus, history: HttpStatus[]): HttpStatus {\n"
+        "    let current: HttpStatus = history[0];\n"
+        "    let ptr: HttpStatus* = &current;\n"
+        "    use_status_ptr(ptr);\n"
+        "    if status == current {\n"
+        "        return status;\n"
+        "    }\n"
+        "    return current;\n"
+        "}\n"
+        "fn selected(): int {\n"
+        "    let response: Response = Response { status: HttpStatus.NotFound };\n"
+        "    return (int)response.status;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/enum_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "typedef int32_t FengEnum__feng__codegen__enumvalue__HttpStatus;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static const FengEnum__feng__codegen__enumvalue__HttpStatus FengEnum__feng__codegen__enumvalue__HttpStatus__Ok = ((int32_t)200);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static const FengEnum__feng__codegen__enumvalue__HttpStatus FengEnum__feng__codegen__enumvalue__HttpStatus__NotFound = ((int32_t)404);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__enumvalue__HttpStatus__NotFound") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__enumvalue__HttpStatus__Ok") != NULL);
+    ASSERT(strstr(out.c_source, "use_status_ptr") != NULL);
+    ASSERT(strstr(out.c_source, "feng_scalar_box_new_i32") == NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_imported_enum_codegen_emits_visible_symbols(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.http;\n"
+        "pu enum HttpStatus { Ok = 200, NotFound = 404 }\n";
+    static const char *kConsumerSource =
+        "mod demo.enumconsumer;\n"
+        "use vendor.http as http;\n"
+        "fn selected(): int {\n"
+        "    return (int)http.HttpStatus.NotFound;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_enum_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_enum_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "typedef int32_t FengEnum__vendor__http__HttpStatus;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static const FengEnum__vendor__http__HttpStatus FengEnum__vendor__http__HttpStatus__NotFound = ((int32_t)404);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__vendor__http__HttpStatus__NotFound") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_bin_public_functions_remain_static(void) {
     static const char *kSource =
         "mod feng.codegen.exportbin;\n"
@@ -2786,6 +2914,8 @@ int main(void) {
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
     test_imported_feng_function_prototypes_compile();
+    test_enum_codegen_emits_stable_symbols();
+    test_imported_enum_codegen_emits_visible_symbols();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();

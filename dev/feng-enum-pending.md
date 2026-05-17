@@ -72,11 +72,11 @@
 - [x] 禁止 `int -> enum` 的显式转换。
 - [x] 禁止 `enum` 与 `int` 之间的隐式转换。
 - [x] 仅允许同一 enum 类型之间直接做 `==` / `!=`。
-- [ ] 禁止不同 enum 之间直接赋值、比较与转换。
-- [ ] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为 `int`。
-- [ ] 让 enum 能出现在变量、参数、返回值、成员、数组元素等普通类型位置，并沿用 trivial 值复制路径。
-- [ ] 让 enum 能直接出现在 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
-- [ ] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&int_value` 一致。
+- [x] 禁止不同 enum 之间直接赋值、比较与转换。
+- [x] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为 `int`。
+- [x] 让 enum 能出现在变量、参数、返回值、成员、数组元素等普通类型位置，并沿用 trivial 值复制路径。
+- [x] 让 enum 能直接出现在 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
+- [x] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&int_value` 一致。
 
 验收口径：
 
@@ -94,11 +94,11 @@
 
 - [x] 为 enum 选择稳定的 C 落地表示。
 - [x] 不要把 Feng enum 的值存储直接依赖到 C 原生 `enum` 类型宽度；首版应固定走 `int32_t` / Feng `int` 对应的稳定表示。
-- [ ] 为 enum 声明生成稳定的 C 名称与枚举项常量符号。
+- [x] 为 enum 声明生成稳定的 C 名称与枚举项常量符号。
 - [x] 为 `EnumName.ItemName` 发出对应常量值。
 - [x] 为 enum 默认值发出“首个枚举项底层值”。
-- [ ] 让 enum 在局部变量、参数、返回值、数组、对象字段中都走 trivial copy 路径。
-- [ ] 复核 enum 到 `int` 的显式转换发码，避免引入多余 runtime 调用。
+- [x] 让 enum 在局部变量、参数、返回值、数组、对象字段中都走 trivial copy 路径。
+- [x] 复核 enum 到 `int` 的显式转换发码，避免引入多余 runtime 调用。
 - [x] 在 ABI surface 上把 enum 按 `int32_t` / Feng `int` 的固定标量表示发码，不单独生成另一套 ABI layout。
 - [x] 复核 enum 进入 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置时的 C surface 一致性。
 
@@ -129,7 +129,7 @@
 - [x] 在 `src/symbol/ft_write.c` / `ft_read.c` / `export.c` / `provider.c` 中补齐 enum 的导出、读取与查询视图接入。
 - [x] 导出 enum 的名称、可见性、声明顺序、各枚举项名称及其底层值。
 - [x] 让跨模块 / 跨包 `use` 后的 enum 类型引用与枚举项访问可被正确解析。
-- [ ] 把 enum 纳入 imported-module 的重名冲突检查与可见性查询。
+- [x] 把 enum 纳入 imported-module 的重名冲突检查与可见性查询。
 - [x] 让 LSP completion / hover / definition 至少能识别 enum 声明与 `Enum.` 后的枚举项候选。
 - [x] 若 `.ft` 格式需要新增 decl kind / attr kind / relation kind，先回写 `docs/feng-symbol-table.md`，再落代码。
 
@@ -143,14 +143,14 @@
 建议验证：
 
 - [x] 新增 `test/symbol/test_symbol.c` 用例覆盖导出/导入 enum 与枚举项值读取。
-- [ ] 新增 `test/semantic/test_semantic.c` 跨模块 / 跨导入用例。
+- [x] 新增 `test/semantic/test_semantic.c` 跨模块 / 跨导入用例。
 - [x] 运行 `make build/bin/test_symbol && build/bin/test_symbol`。
 - [x] 运行 `make build/bin/test_cli && build/bin/test_cli` 或补对应 CLI 项目级用例。
 
 ### 2.6 回归与收尾
 
-- [ ] 复核所有涉及“顶层声明种类”“公开声明查询视图”“类型引用”的实现分支，补上 enum。
-- [ ] 复核 CLI parse / semantic / build / check 的诊断文本，确保 enum 错误信息清晰、不退化成“unknown type”。
+- [x] 复核所有涉及“顶层声明种类”“公开声明查询视图”“类型引用”的实现分支，补上 enum。
+- [x] 复核 CLI parse / semantic / build / check 的诊断文本，确保 enum 错误信息清晰、不退化成“unknown type”。
 - [x] 若实现过程中发现规范仍有缺口，先回写 `docs/feng-enum.md` 或相关权威文档，再继续编码。
 - [x] 每个阶段都以“先文档、后代码、再测试”的顺序落地，不修改已有测试语义，只新增覆盖。
 - [ ] 阶段完成后执行全量回归。
