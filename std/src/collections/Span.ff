@@ -1,0 +1,86 @@
+pu mod std.collections;
+
+use std;
+
+/**
+ * Extends immutable arrays with read-only slicing operations.
+ * @param <T> - the element type
+ */
+pu fit T[] {
+  /**
+   * Returns a read-only view over a contiguous range of this array.
+   * @param start - zero-based index of the first element in the view
+   * @param length - number of elements in the view
+   */
+  pu fn slice(start: long, length: long): Span<T> {
+    return Span:<T>(self, start, start + length);
+  }
+}
+
+/**
+ * Extends writable arrays with read-only slicing operations.
+ * @param <T> - the element type
+ */
+pu fit T[!] {
+  /**
+   * Returns a read-only view over a contiguous range of this array.
+   * @param start - zero-based index of the first element in the view
+   * @param length - number of elements in the view
+   */
+  pu fn slice(start: long, length: long): Span<T> {
+    return Span:<T>((T[])self, start, start + length);
+  }
+}
+
+/**
+ * A Span is a read-only view over a contiguous subrange of an array.
+ * @param <T> - the element type
+ */
+pu type Span<T> {
+  pr let origin: T[];
+  pr let start: long;
+  pr let end: long;
+
+  /**
+   * Creates a span covering the right-open range `[start, end)`.
+   * @param origin - source array shared by this view
+   * @param start - zero-based inclusive start offset
+   * @param end - zero-based exclusive end offset
+   */
+  pu fn Span(origin: T[], start: long, end: long) {
+    if start < (long)0 {
+      throw "Span start out of bounds";
+    }
+    if end < start {
+      throw "Span end out of bounds";
+    }
+    if end > origin.length() {
+      throw "Span end out of bounds";
+    }
+    self.origin = origin;
+    self.start = start;
+    self.end = end;
+  }
+
+  /**
+   * Returns the number of elements covered by this span.
+   * @return element count inside the view
+   */
+  pu fn length(): long {
+    return self.end - self.start;
+  }
+
+  /**
+   * Returns the element at the span-relative position `index`.
+   * @param index - zero-based index relative to the span start
+   */
+  pu fn get(index: long): T {
+    if index < (long)0 {
+      throw "Span index out of bounds";
+    }
+    if index >= self.length() {
+      throw "Span index out of bounds";
+    }
+    return self.origin[self.start + index];
+  }
+}
