@@ -1,4 +1,4 @@
-# Feng enum 待开发项
+# Feng enum 已交付项
 
 > 本文档用于拆解 enum 从现有规范进入实现的施工顺序、边界与验收口径。
 > [docs/feng-enum.md](../docs/feng-enum.md) 是 enum 的专项规范；本文只写开发步骤与 TODO，不重复规范定义。
