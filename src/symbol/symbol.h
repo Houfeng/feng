@@ -18,6 +18,7 @@ typedef enum FengSymbolProfile {
 typedef enum FengSymbolDeclKind {
     FENG_SYMBOL_DECL_KIND_MODULE = 0,
     FENG_SYMBOL_DECL_KIND_TYPE,
+    FENG_SYMBOL_DECL_KIND_ENUM,
     FENG_SYMBOL_DECL_KIND_SPEC,
     FENG_SYMBOL_DECL_KIND_FIT,
     FENG_SYMBOL_DECL_KIND_FUNCTION,
@@ -26,6 +27,7 @@ typedef enum FengSymbolDeclKind {
     FENG_SYMBOL_DECL_KIND_METHOD,
     FENG_SYMBOL_DECL_KIND_CONSTRUCTOR,
     FENG_SYMBOL_DECL_KIND_FINALIZER,
+    FENG_SYMBOL_DECL_KIND_ENUM_ITEM,
     FENG_SYMBOL_DECL_KIND_TYPE_PARAM  /* generic type-parameter placeholder */
 } FengSymbolDeclKind;
 

@@ -18,7 +18,8 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_DECLARED_SPECS = 1,
     FENG_SYMBOL_ATTR_UNION = 2,
     FENG_SYMBOL_ATTR_CALL_CONV = 3,
-    FENG_SYMBOL_ATTR_ABI_LIBRARY = 4
+    FENG_SYMBOL_ATTR_ABI_LIBRARY = 4,
+    FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE = 6
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -83,6 +84,9 @@ struct FengSymbolDeclView {
     size_t member_count;
     struct FengSymbolDeclView *owner;
     FengSymbolTypeView *fit_target;
+    int64_t enum_item_value;
+    size_t enum_item_ordinal;
+    bool has_enum_item_value;
     size_t type_param_count;  /* number of generic type parameters (TYPE_PARAM children) */
 };
 

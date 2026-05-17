@@ -527,6 +527,68 @@ static void test_provider_loads_bundle_public_module(void) {
     free(tmp_dir);
 }
 
+static void test_enum_ft_roundtrip_exports_items_and_values(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.enum_roundtrip;\n"
+        "\n"
+        "pu enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *enum_decl = NULL;
+    const FengSymbolDeclView *ok_decl = NULL;
+    const FengSymbolDeclView *not_found_decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/enum_roundtrip_mod", tmp_dir) > 0);
+    export_public_source_or_die("enum_roundtrip.ff", kSource, public_root);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("enum_roundtrip");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    enum_decl = feng_symbol_module_find_public_enum(module, slice_from_cstr("HttpStatus"));
+    ASSERT(enum_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(enum_decl) == FENG_SYMBOL_DECL_KIND_ENUM);
+    ASSERT(feng_symbol_module_find_public_type(module, slice_from_cstr("HttpStatus")) == NULL);
+    ASSERT(feng_symbol_module_find_public_value(module, slice_from_cstr("Ok")) == NULL);
+    ASSERT(feng_symbol_decl_member_count(enum_decl) == 2U);
+
+    ok_decl = feng_symbol_decl_find_public_member(enum_decl, slice_from_cstr("Ok"));
+    ASSERT(ok_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(ok_decl) == FENG_SYMBOL_DECL_KIND_ENUM_ITEM);
+    ASSERT(feng_symbol_decl_has_enum_item_value(ok_decl));
+    ASSERT(feng_symbol_decl_enum_item_ordinal(ok_decl) == 0U);
+    ASSERT(feng_symbol_decl_enum_item_value(ok_decl) == 200);
+
+    not_found_decl = feng_symbol_decl_find_public_member(enum_decl, slice_from_cstr("NotFound"));
+    ASSERT(not_found_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(not_found_decl) == FENG_SYMBOL_DECL_KIND_ENUM_ITEM);
+    ASSERT(feng_symbol_decl_has_enum_item_value(not_found_decl));
+    ASSERT(feng_symbol_decl_enum_item_ordinal(not_found_decl) == 1U);
+    ASSERT(feng_symbol_decl_enum_item_value(not_found_decl) == 404);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_provider_rejects_duplicate_bundle_module(void) {
     static const char *kSource =
         "pu mod feng.test.symbol.conflict;\n"
@@ -667,6 +729,146 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
 
     feng_symbol_imported_module_cache_free(cache);
     feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_imported_module_cache_preserves_enum_items(void) {
+    static const char *kSource =
+        "pu mod feng.test.symbol.imported_enum_cache;\n"
+        "pu enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSemanticModule *module = NULL;
+    const FengProgram *program = NULL;
+    const FengDecl *decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_enum_cache_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/imported_enum_cache.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_enum_cache.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("imported_enum_cache.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/imported_enum_cache.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("imported_enum_cache");
+    module = query.get_module(query.user, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(module->program_count == 1U);
+
+    program = module->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl != NULL);
+    ASSERT(decl->kind == FENG_DECL_ENUM);
+    ASSERT(slice_equals_cstr(decl->as.enum_decl.name, "HttpStatus"));
+    ASSERT(decl->as.enum_decl.item_count == 2U);
+    ASSERT(slice_equals_cstr(decl->as.enum_decl.items[0].name, "Ok"));
+    ASSERT(decl->as.enum_decl.items[0].has_explicit_value);
+    ASSERT(decl->as.enum_decl.items[0].explicit_value == 200);
+    ASSERT(slice_equals_cstr(decl->as.enum_decl.items[1].name, "NotFound"));
+    ASSERT(decl->as.enum_decl.items[1].has_explicit_value);
+    ASSERT(decl->as.enum_decl.items[1].explicit_value == 404);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_imported_enum_value_participates_in_semantic_analysis(void) {
+    static const char *kExternalSource =
+        "pu mod vendor.status;\n"
+        "pu enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n";
+    static const char *kMainSource =
+        "mod demo.main;\n"
+        "use vendor.status as status;\n"
+        "fn run(): int {\n"
+        "    let value: status.HttpStatus = status.HttpStatus.NotFound;\n"
+        "    return (int)value;\n"
+        "}\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError symbol_error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSemanticAnalyzeOptions options = {0};
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_enum_semantic_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/vendor/status.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_enum_semantic.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("external_enum.ff", kExternalSource, public_root);
+    write_bundle_with_file_or_die(bundle_path, "mod/vendor/status.ft", public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &symbol_error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die("imported_enum_main.ff", kMainSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
     (void)remove_dir_recursive(tmp_dir);
     free(tmp_dir);
 }
@@ -1311,9 +1513,12 @@ int main(void) {
     test_private_module_skipped();
     test_reader_rejects_bad_magic();
     test_provider_loads_bundle_public_module();
+    test_enum_ft_roundtrip_exports_items_and_values();
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();
+    test_imported_module_cache_preserves_enum_items();
+    test_imported_enum_value_participates_in_semantic_analysis();
     test_imported_module_cache_keeps_bundle_fit_modules_alive();
     test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive();
     test_generic_function_ft_roundtrip();

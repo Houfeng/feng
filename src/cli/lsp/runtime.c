@@ -3349,7 +3349,8 @@ static bool symbol_decl_is_value(const FengSymbolDeclView *decl) {
 static bool symbol_decl_is_type(const FengSymbolDeclView *decl) {
     FengSymbolDeclKind kind = feng_symbol_decl_kind(decl);
 
-    return kind == FENG_SYMBOL_DECL_KIND_TYPE || kind == FENG_SYMBOL_DECL_KIND_SPEC;
+    return kind == FENG_SYMBOL_DECL_KIND_TYPE || kind == FENG_SYMBOL_DECL_KIND_ENUM ||
+           kind == FENG_SYMBOL_DECL_KIND_SPEC;
 }
 
 static bool symbol_decl_is_completion_decl(const FengSymbolDeclView *decl) {
@@ -3362,6 +3363,7 @@ static bool symbol_decl_is_completion_decl(const FengSymbolDeclView *decl) {
     return kind == FENG_SYMBOL_DECL_KIND_BINDING ||
            kind == FENG_SYMBOL_DECL_KIND_FUNCTION ||
            kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+            kind == FENG_SYMBOL_DECL_KIND_ENUM ||
            kind == FENG_SYMBOL_DECL_KIND_SPEC;
 }
 
@@ -3373,6 +3375,7 @@ static bool symbol_decl_is_instance_member(const FengSymbolDeclView *decl) {
     }
     kind = feng_symbol_decl_kind(decl);
     return kind == FENG_SYMBOL_DECL_KIND_FIELD ||
+            kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM ||
            kind == FENG_SYMBOL_DECL_KIND_METHOD ||
            kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
            kind == FENG_SYMBOL_DECL_KIND_FINALIZER;
@@ -3387,7 +3390,7 @@ static bool symbol_decl_matches_ast_decl_kind(const FengSymbolDeclView *decl,
         case FENG_DECL_GLOBAL_BINDING:
             return feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_BINDING;
         case FENG_DECL_ENUM:
-            return false;
+            return feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_ENUM;
         case FENG_DECL_TYPE:
             return feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE;
         case FENG_DECL_SPEC:
@@ -3919,9 +3922,20 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_object_expr(cons
                                             feng_symbol_decl_value_type(decl));
         }
         if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE ||
+            feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_ENUM ||
             feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
             return decl;
         }
+    }
+    decl = resolve_symbol_type_name(context->provider,
+                                    context->current_module,
+                                    context->program,
+                                    object->as.identifier);
+    if (decl != NULL &&
+        (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE ||
+         feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_ENUM ||
+         feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_SPEC)) {
+        return decl;
     }
     return NULL;
 }
@@ -4361,6 +4375,12 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
             decl->kind == FENG_DECL_SPEC) {
             return decl;
         }
+    }
+    decl = resolve_type_name(session, program, object->as.identifier);
+    if (decl != NULL &&
+        (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+         decl->kind == FENG_DECL_SPEC)) {
+        return decl;
     }
     return NULL;
 }
@@ -5727,6 +5747,9 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
             }
             return true;
         }
+        case FENG_SYMBOL_DECL_KIND_ENUM:
+            return string_append_cstr(buffer, "enum ") &&
+                   string_append_bytes(buffer, name.data, name.length);
         case FENG_SYMBOL_DECL_KIND_FIT:
             return string_append_cstr(buffer, "fit");
         case FENG_SYMBOL_DECL_KIND_FUNCTION: {
@@ -5784,6 +5807,7 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
         case FENG_SYMBOL_DECL_KIND_METHOD:
         case FENG_SYMBOL_DECL_KIND_CONSTRUCTOR:
         case FENG_SYMBOL_DECL_KIND_FINALIZER:
+        case FENG_SYMBOL_DECL_KIND_ENUM_ITEM:
             break;
         case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
             break;
@@ -5803,6 +5827,17 @@ static bool symbol_member_signature_to_string(FengLspString *buffer,
                string_append_bytes(buffer, name.data, name.length) &&
                string_append_cstr(buffer, ": ") &&
                symbol_type_to_string(buffer, feng_symbol_decl_value_type(member));
+    }
+    if (kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
+        if (!string_append_bytes(buffer, name.data, name.length)) {
+            return false;
+        }
+        if (feng_symbol_decl_has_enum_item_value(member)) {
+            return string_append_format(buffer,
+                                        " = %lld",
+                                        (long long)feng_symbol_decl_enum_item_value(member));
+        }
+        return true;
     }
     if (!string_append_cstr(buffer,
                             kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ? "ctor " :
@@ -9445,10 +9480,35 @@ static bool append_symbol_member_completion_item(FengLspString *json,
     if (!symbol_decl_is_instance_member(member)) {
         return true;
     }
-    kind = feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_FIELD ? 5 : 2;
+    kind = feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_FIELD
+               ? 5
+               : feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_ENUM_ITEM ? 20 : 2;
     ok = symbol_member_signature_to_string(&signature, member) &&
          append_completion_item(json, first, feng_symbol_decl_name(member), signature.data, kind);
     string_dispose(&signature);
+    return ok;
+}
+
+static bool append_enum_item_completion_item(FengLspString *json,
+                                             bool *first,
+                                             const FengEnumItem *item) {
+    FengLspString detail = {0};
+    bool ok;
+
+    if (item == NULL) {
+        return true;
+    }
+    if (!string_append_bytes(&detail, item->name.data, item->name.length)) {
+        string_dispose(&detail);
+        return false;
+    }
+    if (item->has_explicit_value &&
+        !string_append_format(&detail, " = %lld", (long long)item->explicit_value)) {
+        string_dispose(&detail);
+        return false;
+    }
+    ok = append_completion_item(json, first, item->name, detail.data, 20);
+    string_dispose(&detail);
     return ok;
 }
 
@@ -9559,6 +9619,13 @@ static bool append_owner_member_completion_items(FengLspString *json,
                 continue;
             }
             if (!append_member_completion_item(json, first, member)) {
+                return false;
+            }
+        }
+    }
+    if (owner_decl->kind == FENG_DECL_ENUM) {
+        for (index = 0U; index < owner_decl->as.enum_decl.item_count; ++index) {
+            if (!append_enum_item_completion_item(json, first, &owner_decl->as.enum_decl.items[index])) {
                 return false;
             }
         }
@@ -10390,6 +10457,12 @@ static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysis
             decl->kind == FENG_DECL_SPEC) {
             return decl;
         }
+    }
+    decl = resolve_type_name(session, program, object_name);
+    if (decl != NULL &&
+        (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+         decl->kind == FENG_DECL_SPEC)) {
+        return decl;
     }
     return NULL;
 }

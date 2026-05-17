@@ -603,6 +603,8 @@ static FengSymbolDeclKind decode_decl_kind(uint16_t kind) {
             return FENG_SYMBOL_DECL_KIND_MODULE;
         case FENG_SYMBOL_FT_SYM_KIND_TYPE:
             return FENG_SYMBOL_DECL_KIND_TYPE;
+        case FENG_SYMBOL_FT_SYM_KIND_ENUM:
+            return FENG_SYMBOL_DECL_KIND_ENUM;
         case FENG_SYMBOL_FT_SYM_KIND_SPEC:
             return FENG_SYMBOL_DECL_KIND_SPEC;
         case FENG_SYMBOL_FT_SYM_KIND_FIT:
@@ -621,6 +623,8 @@ static FengSymbolDeclKind decode_decl_kind(uint16_t kind) {
         case FENG_SYMBOL_FT_SYM_KIND_TOP_LET:
         case FENG_SYMBOL_FT_SYM_KIND_TOP_VAR:
             return FENG_SYMBOL_DECL_KIND_BINDING;
+        case FENG_SYMBOL_FT_SYM_KIND_ENUM_ITEM:
+            return FENG_SYMBOL_DECL_KIND_ENUM_ITEM;
         case FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM:
             return FENG_SYMBOL_DECL_KIND_TYPE_PARAM;
     }
@@ -656,12 +660,14 @@ static bool parse_symbols(ReadContext *ctx,
         uint32_t type_ref = read_u32_le(record + 0x10);
         uint32_t extra_ref = read_u32_le(record + 0x14);
         uint32_t doc_ref = read_u32_le(record + 0x18);
+        FengSymbolDeclKind decl_kind;
         bool is_callable_kind;
 
         if (decl == NULL) {
             return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory allocating declaration view");
         }
-        decl->kind = decode_decl_kind(kind);
+        decl_kind = decode_decl_kind(kind);
+        decl->kind = decl_kind;
         decl->visibility = (flags & FENG_SYMBOL_FT_SYM_FLAG_PUBLIC) != 0U ? FENG_VISIBILITY_PUBLIC
                                                                           : FENG_VISIBILITY_PRIVATE;
         decl->mutability = (flags & FENG_SYMBOL_FT_SYM_FLAG_MUTABLE) != 0U ? FENG_MUTABILITY_VAR
@@ -690,7 +696,9 @@ static bool parse_symbols(ReadContext *ctx,
                 free(decl);
                 return false;
             }
-        } else {
+        } else if (decl_kind == FENG_SYMBOL_DECL_KIND_BINDING ||
+                   decl_kind == FENG_SYMBOL_DECL_KIND_FIELD ||
+                   decl_kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
             decl->value_type = parse_type_by_id(ctx, type_ref, path, out_error);
             if (type_ref != 0U && decl->value_type == NULL) {
                 feng_symbol_internal_decl_free_members(decl);
@@ -700,18 +708,15 @@ static bool parse_symbols(ReadContext *ctx,
         }
 
         /* extra_ref: MODULE → full-name string id; FIT → target TYPS.id; else 0 */
-        decl->fit_target = decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_MODULE
-                               ? NULL
-                               : parse_type_by_id(ctx, extra_ref, path, out_error);
-        if (decode_decl_kind(kind) != FENG_SYMBOL_DECL_KIND_MODULE &&
-            extra_ref != 0U && decl->fit_target == NULL) {
-            /* For non-FIT kinds extra_ref is typically 0, so this only fires
-             * for FIT with a missing target type – a genuine parse error. */
-            if (decode_decl_kind(kind) == FENG_SYMBOL_DECL_KIND_FIT) {
+        if (decl_kind == FENG_SYMBOL_DECL_KIND_FIT) {
+            decl->fit_target = parse_type_by_id(ctx, extra_ref, path, out_error);
+            if (extra_ref != 0U && decl->fit_target == NULL) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return false;
             }
+        } else if (decl_kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
+            decl->enum_item_ordinal = extra_ref;
         }
         if (name_str != 0U && decl->name == NULL) {
             feng_symbol_internal_decl_free_members(decl);
@@ -979,6 +984,11 @@ static bool parse_attrs(ReadContext *ctx,
                                                       (FengToken){0},
                                                       "out of memory loading abi_library string");
             }
+            continue;
+        }
+        if (kind == FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE) {
+            decl->enum_item_value = (int64_t)(int32_t)value0;
+            decl->has_enum_item_value = true;
             continue;
         }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {

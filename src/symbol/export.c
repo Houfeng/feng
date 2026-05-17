@@ -1,5 +1,6 @@
 #include "symbol/export.h"
 
+#include <stdint.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -605,6 +606,9 @@ static FengSymbolTypeView *build_named_type_from_decl(const FengSemanticAnalysis
     if (decl->kind == FENG_DECL_TYPE) {
         type->as.named.segments[module->segment_count] =
             feng_symbol_internal_dup_slice(decl->as.type_decl.name);
+    } else if (decl->kind == FENG_DECL_ENUM) {
+        type->as.named.segments[module->segment_count] =
+            feng_symbol_internal_dup_slice(decl->as.enum_decl.name);
     } else if (decl->kind == FENG_DECL_SPEC) {
         type->as.named.segments[module->segment_count] =
             feng_symbol_internal_dup_slice(decl->as.spec_decl.name);
@@ -1108,6 +1112,14 @@ static bool append_member_decl(FengSymbolDeclView *owner,
                                const char *path,
                                FengToken token,
                                FengSymbolError *out_error);
+static bool apply_decl_annotations(FengSymbolDeclView *decl,
+                                   const FengSemanticModule *module,
+                                   const FengAnnotation *annotations,
+                                   size_t annotation_count,
+                                   bool allow_library,
+                                   const char *path,
+                                   FengToken token,
+                                   FengSymbolError *out_error);
 
 /* Append TYPE_PARAM child decls and set type_param_count on the owner decl. */
 static bool emit_type_param_children(FengSymbolDeclView *decl,
@@ -1284,6 +1296,128 @@ static bool append_member_decl(FengSymbolDeclView *owner,
                                FengSymbolError *out_error) {
     member->owner = owner;
     return append_decl_pointer(&owner->members, &owner->member_count, member, path, token, out_error);
+}
+
+static bool enum_item_value_fits_ft_range(int64_t value) {
+    return value >= (int64_t)INT32_MIN && value <= (int64_t)INT32_MAX;
+}
+
+static FengSymbolDeclView *build_enum_item_decl(BuildContext *ctx,
+                                                const char *path,
+                                                FengVisibility visibility,
+                                                const FengDecl *enum_decl,
+                                                const FengEnumItem *item,
+                                                FengSymbolError *out_error) {
+    const FengSemanticEnumItemInfo *item_info;
+    FengSymbolDeclView *decl;
+
+    item_info = feng_semantic_find_enum_item_info(ctx->analysis, enum_decl, item->name);
+    if (item_info == NULL) {
+        feng_symbol_internal_set_error(out_error,
+                                       path,
+                                       item->token,
+                                       "missing semantic enum info for item '%.*s'",
+                                       (int)item->name.length,
+                                       item->name.data != NULL ? item->name.data : "");
+        return NULL;
+    }
+    if (!enum_item_value_fits_ft_range(item_info->value)) {
+        feng_symbol_internal_set_error(out_error,
+                                       path,
+                                       item->token,
+                                       "enum item '%.*s' value %lld is outside the .ft int32 range",
+                                       (int)item->name.length,
+                                       item->name.data != NULL ? item->name.data : "",
+                                       (long long)item_info->value);
+        return NULL;
+    }
+
+    decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_ENUM_ITEM,
+                               visibility,
+                               FENG_MUTABILITY_LET,
+                               item->name,
+                               path,
+                               item->token,
+                               out_error);
+    if (decl == NULL) {
+        return NULL;
+    }
+    decl->enum_item_ordinal = item_info->ordinal;
+    decl->enum_item_value = item_info->value;
+    decl->has_enum_item_value = true;
+    return decl;
+}
+
+static FengSymbolDeclView *build_enum_decl(BuildContext *ctx,
+                                           const char *path,
+                                           const FengDecl *source_decl,
+                                           FengSymbolError *out_error) {
+    const FengSemanticEnumInfo *enum_info;
+    FengSymbolDeclView *decl;
+    size_t index;
+
+    enum_info = feng_semantic_lookup_enum_info(ctx->analysis, source_decl);
+    if (enum_info == NULL) {
+        feng_symbol_internal_set_error(out_error,
+                                       path,
+                                       source_decl->token,
+                                       "missing semantic enum info for '%.*s' during symbol export",
+                                       (int)source_decl->as.enum_decl.name.length,
+                                       source_decl->as.enum_decl.name.data != NULL
+                                           ? source_decl->as.enum_decl.name.data
+                                           : "");
+        return NULL;
+    }
+
+    decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_ENUM,
+                               source_decl->visibility,
+                               FENG_MUTABILITY_LET,
+                               source_decl->as.enum_decl.name,
+                               path,
+                               source_decl->token,
+                               out_error);
+    if (decl == NULL) {
+        return NULL;
+    }
+    if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error) ||
+        !apply_decl_annotations(decl,
+                                ctx->module,
+                                source_decl->annotations,
+                                source_decl->annotation_count,
+                                false,
+                                path,
+                                source_decl->token,
+                                out_error) ||
+        !register_source_decl(ctx, source_decl, decl, path, source_decl->token, out_error)) {
+        feng_symbol_internal_decl_free_members(decl);
+        free(decl);
+        return NULL;
+    }
+
+    for (index = 0U; index < source_decl->as.enum_decl.item_count; ++index) {
+        FengSymbolDeclView *item_decl = build_enum_item_decl(ctx,
+                                                             path,
+                                                             source_decl->visibility,
+                                                             source_decl,
+                                                             &source_decl->as.enum_decl.items[index],
+                                                             out_error);
+        if (item_decl == NULL ||
+            !append_member_decl(decl,
+                                item_decl,
+                                path,
+                                source_decl->as.enum_decl.items[index].token,
+                                out_error)) {
+            if (item_decl != NULL && item_decl->owner == NULL) {
+                feng_symbol_internal_decl_free_members(item_decl);
+                free(item_decl);
+            }
+            feng_symbol_internal_decl_free_members(decl);
+            free(decl);
+            return NULL;
+        }
+    }
+
+    return decl;
 }
 
 static bool apply_decl_annotations(FengSymbolDeclView *decl,
@@ -2083,11 +2217,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             return decl;
 
         case FENG_DECL_ENUM:
-            feng_symbol_internal_set_error(out_error,
-                                           path,
-                                           source_decl->token,
-                                           "enum symbol export requires the enum .ft format to be specified first");
-            return NULL;
+            return build_enum_decl(ctx, path, source_decl, out_error);
 
         case FENG_DECL_SPEC:
             decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_SPEC,

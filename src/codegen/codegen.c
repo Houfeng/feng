@@ -115,6 +115,10 @@ typedef struct CGType {
      * otherwise. The UserSpec is owned by the CG context and outlives every
      * CGType. */
     const struct UserSpec *user_spec;
+    /* For nominal enums lowered as i32: borrowed pointer to the enum decl so
+     * codegen can preserve enum identity for equality/default-value paths
+     * while still emitting the stable int32_t ABI surface. */
+    const FengDecl *enum_decl;
     /* For GENERIC_PARAM (G6): 0-based index into the enclosing generic
      * function's type_params array (e.g. 0 for T, 1 for U). */
     size_t generic_param_index;
@@ -139,8 +143,18 @@ static CGType *cgtype_clone(const CGType *t) {
     c->element = cgtype_clone(t->element);
     c->user = t->user;
     c->user_spec = t->user_spec;
+    c->enum_decl = t->enum_decl;
     c->generic_param_index = t->generic_param_index;
     return c;
+}
+
+static CGType *cgtype_new_enum(const FengDecl *enum_decl) {
+    CGType *type = cgtype_new(CG_TYPE_I32);
+
+    if (type != NULL) {
+        type->enum_decl = enum_decl;
+    }
+    return type;
 }
 
 /* Value-kind classifier for codegen-side dispatch on per-field lifetime
@@ -2209,6 +2223,11 @@ static bool cg_module_segments_equal(const FengSlice *a, size_t an,
     return true;
 }
 
+static bool cg_slice_equals(FengSlice a, FengSlice b) {
+    return a.length == b.length &&
+           (a.length == 0U || memcmp(a.data, b.data, a.length) == 0);
+}
+
 /* True iff `consumer` can see top-level decls owned by `provider`:
  *   - same program (a decl always sees itself / its own siblings); or
  *   - same module across different files (semantic groups them together); or
@@ -2256,6 +2275,147 @@ static FengSemanticModuleOrigin cg_program_origin(const CG *cg,
     }
 
     return FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
+}
+
+static bool cg_decl_visible_from_program(const CG *cg,
+                                         const FengProgram *owner_program,
+                                         FengVisibility visibility) {
+    if (cg == NULL || cg->cur_program == NULL || owner_program == NULL) {
+        return true;
+    }
+    if (owner_program == cg->cur_program ||
+        cg_module_segments_equal(owner_program->module_segments,
+                                 owner_program->module_segment_count,
+                                 cg->cur_program->module_segments,
+                                 cg->cur_program->module_segment_count)) {
+        return true;
+    }
+
+    return visibility == FENG_VISIBILITY_PUBLIC &&
+           cg_program_can_see(cg->cur_program, owner_program);
+}
+
+static const FengSemanticModule *cg_find_semantic_module_by_segments(const CG *cg,
+                                                                     const FengSlice *segments,
+                                                                     size_t segment_count) {
+    size_t module_index;
+
+    if (cg == NULL || cg->analysis == NULL) {
+        return NULL;
+    }
+
+    for (module_index = 0U; module_index < cg->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &cg->analysis->modules[module_index];
+
+        if (cg_module_segments_equal(module->segments,
+                                     module->segment_count,
+                                     segments,
+                                     segment_count)) {
+            return module;
+        }
+    }
+
+    return NULL;
+}
+
+static const FengDecl *cg_find_public_enum_decl_in_module(const FengSemanticModule *module,
+                                                           FengSlice name) {
+    size_t program_index;
+
+    if (module == NULL) {
+        return NULL;
+    }
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_ENUM && decl->visibility == FENG_VISIBILITY_PUBLIC &&
+                cg_slice_equals(decl->as.enum_decl.name, name)) {
+                return decl;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static const FengDecl *cg_find_visible_enum_decl(const CG *cg, const char *name, size_t len) {
+    const FengDecl *visible = NULL;
+    size_t module_index;
+
+    if (cg == NULL || cg->analysis == NULL) {
+        return NULL;
+    }
+
+    for (module_index = 0U; module_index < cg->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &cg->analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_ENUM || decl->as.enum_decl.name.length != len ||
+                    memcmp(decl->as.enum_decl.name.data, name, len) != 0) {
+                    continue;
+                }
+                if (cg->cur_program != NULL && program == cg->cur_program) {
+                    return decl;
+                }
+                if (cg_decl_visible_from_program(cg, program, decl->visibility) && visible == NULL) {
+                    visible = decl;
+                }
+            }
+        }
+    }
+
+    return visible;
+}
+
+static const FengDecl *cg_resolve_type_target_enum_decl(const CG *cg, const FengExpr *target_expr) {
+    if (cg == NULL || target_expr == NULL) {
+        return NULL;
+    }
+
+    switch (target_expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return cg_find_visible_enum_decl(cg,
+                                             target_expr->as.identifier.data,
+                                             target_expr->as.identifier.length);
+
+        case FENG_EXPR_MEMBER:
+            if (cg->cur_program != NULL && target_expr->as.member.object != NULL &&
+                target_expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+                size_t use_index;
+
+                for (use_index = 0U; use_index < cg->cur_program->use_count; ++use_index) {
+                    const FengUseDecl *use_decl = &cg->cur_program->uses[use_index];
+
+                    if (!use_decl->has_alias ||
+                        !cg_slice_equals(use_decl->alias,
+                                         target_expr->as.member.object->as.identifier)) {
+                        continue;
+                    }
+
+                    return cg_find_public_enum_decl_in_module(
+                        cg_find_semantic_module_by_segments(cg,
+                                                            use_decl->segments,
+                                                            use_decl->segment_count),
+                        target_expr->as.member.member);
+                }
+            }
+            return NULL;
+
+        default:
+            return NULL;
+    }
 }
 
 static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
@@ -4064,6 +4224,14 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
             t->user_spec = us;
             *out_type = t;
             return true;
+        }
+        {
+            const FengDecl *enum_decl = cg_find_visible_enum_decl(cg, seg->data, seg->length);
+
+            if (enum_decl != NULL) {
+                *out_type = cgtype_new_enum(enum_decl);
+                return *out_type != NULL;
+            }
         }
         FengToken tk = fallback ? *fallback : ref->token;
         (void)tk;
@@ -9702,7 +9870,36 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
 }
 
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
+    const FengDecl *enum_decl;
+
     er_init(out);
+
+    enum_decl = cg_resolve_type_target_enum_decl(cg, e->as.member.object);
+    if (enum_decl != NULL) {
+        const FengSemanticEnumItemInfo *item_info =
+            cg->analysis != NULL
+                ? feng_semantic_find_enum_item_info(cg->analysis, enum_decl, e->as.member.member)
+                : NULL;
+        Buf b;
+
+        if (item_info == NULL) {
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: enum '%.*s' has no item '%.*s'",
+                           (int)enum_decl->as.enum_decl.name.length,
+                           enum_decl->as.enum_decl.name.data,
+                           (int)e->as.member.member.length,
+                           e->as.member.member.data);
+        }
+
+        buf_init(&b);
+        buf_append_fmt(&b, "((int32_t)%" PRId64 ")", item_info->value);
+        out->c_expr = b.data;
+        out->type = cgtype_new_enum(enum_decl);
+        out->owns_ref = false;
+        return out->c_expr != NULL && out->type != NULL;
+    }
+
     ExprResult recv;
     if (!cg_emit_expr(cg, e->as.member.object, &recv)) return false;
     if (cg->in_generic_type_method &&
@@ -11144,7 +11341,23 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "false"); break;
         case CG_TYPE_I8: case CG_TYPE_I16: case CG_TYPE_I32: case CG_TYPE_I64:
         case CG_TYPE_U8: case CG_TYPE_U16: case CG_TYPE_U32: case CG_TYPE_U64:
-            buf_append_cstr(&b, "0"); break;
+            if (type->enum_decl != NULL) {
+                const FengSemanticEnumInfo *enum_info =
+                    cg->analysis != NULL
+                        ? feng_semantic_lookup_enum_info(cg->analysis, type->enum_decl)
+                        : NULL;
+
+                if (enum_info == NULL) {
+                    buf_free(&b);
+                    return cg_fail(cg,
+                                   blame ? *blame : (FengToken){0},
+                                   "codegen: missing semantic enum info for default value");
+                }
+                buf_append_fmt(&b, "((int32_t)%" PRId64 ")", enum_info->first_value);
+            } else {
+                buf_append_cstr(&b, "0");
+            }
+            break;
         case CG_TYPE_F32: case CG_TYPE_F64:
             buf_append_cstr(&b, "0.0"); break;
         case CG_TYPE_POINTER:

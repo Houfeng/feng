@@ -670,6 +670,86 @@ static FengTypeMember **synthesize_type_members(const FengSymbolDeclView *symbol
     return members;
 }
 
+static FengEnumItem *synthesize_enum_items(const FengSymbolDeclView *symbol_decl,
+                                          size_t *out_count) {
+    FengEnumItem *items;
+    bool *filled;
+    size_t enum_item_count = 0U;
+    size_t index;
+
+    if (out_count == NULL) {
+        return NULL;
+    }
+    *out_count = 0U;
+    if (symbol_decl == NULL || symbol_decl->member_count == 0U) {
+        return NULL;
+    }
+
+    for (index = 0U; index < symbol_decl->member_count; ++index) {
+        if (symbol_decl->members[index] != NULL &&
+            symbol_decl->members[index]->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
+            ++enum_item_count;
+        }
+    }
+    if (enum_item_count == 0U) {
+        return NULL;
+    }
+
+    items = (FengEnumItem *)calloc(enum_item_count, sizeof(*items));
+    filled = (bool *)calloc(enum_item_count, sizeof(*filled));
+    if (items == NULL || filled == NULL) {
+        free(items);
+        free(filled);
+        return NULL;
+    }
+
+    for (index = 0U; index < symbol_decl->member_count; ++index) {
+        const FengSymbolDeclView *member = symbol_decl->members[index];
+        size_t ordinal;
+
+        if (member == NULL || member->kind != FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
+            continue;
+        }
+        ordinal = member->enum_item_ordinal;
+        if (ordinal >= enum_item_count || filled[ordinal]) {
+            free(filled);
+            free(items);
+            return NULL;
+        }
+        items[ordinal].token = member->token;
+        if (!clone_cstr_as_slice(member->name, &items[ordinal].name)) {
+            size_t cleanup_index;
+
+            for (cleanup_index = 0U; cleanup_index < enum_item_count; ++cleanup_index) {
+                free((void *)items[cleanup_index].name.data);
+            }
+            free(filled);
+            free(items);
+            return NULL;
+        }
+        items[ordinal].has_explicit_value = true;
+        items[ordinal].explicit_value = member->enum_item_value;
+        filled[ordinal] = true;
+    }
+
+    for (index = 0U; index < enum_item_count; ++index) {
+        if (!filled[index]) {
+            size_t cleanup_index;
+
+            for (cleanup_index = 0U; cleanup_index < enum_item_count; ++cleanup_index) {
+                free((void *)items[cleanup_index].name.data);
+            }
+            free(filled);
+            free(items);
+            return NULL;
+        }
+    }
+
+    free(filled);
+    *out_count = enum_item_count;
+    return items;
+}
+
 static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                                         const FengSymbolDeclView *symbol_decl) {
     FengSlice name;
@@ -762,6 +842,17 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                     synth_decl->decl.as.spec_decl.as.callable.return_type == NULL) {
                     break;
                 }
+            }
+            return true;
+
+        case FENG_SYMBOL_DECL_KIND_ENUM:
+            synth_decl->decl.kind = FENG_DECL_ENUM;
+            synth_decl->decl.as.enum_decl.name = name;
+            synth_decl->decl.as.enum_decl.items =
+                synthesize_enum_items(symbol_decl, &synth_decl->decl.as.enum_decl.item_count);
+            if (symbol_decl->member_count > 0U &&
+                synth_decl->decl.as.enum_decl.item_count == 0U) {
+                break;
             }
             return true;
 
@@ -909,6 +1000,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
 
         switch (symbol_decl->kind) {
             case FENG_SYMBOL_DECL_KIND_TYPE:
+            case FENG_SYMBOL_DECL_KIND_ENUM:
             case FENG_SYMBOL_DECL_KIND_SPEC:
             case FENG_SYMBOL_DECL_KIND_FUNCTION:
             case FENG_SYMBOL_DECL_KIND_FIT:

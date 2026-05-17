@@ -605,6 +605,8 @@ static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
             return FENG_SYMBOL_FT_SYM_KIND_MODULE;
         case FENG_SYMBOL_DECL_KIND_TYPE:
             return FENG_SYMBOL_FT_SYM_KIND_TYPE;
+        case FENG_SYMBOL_DECL_KIND_ENUM:
+            return FENG_SYMBOL_FT_SYM_KIND_ENUM;
         case FENG_SYMBOL_DECL_KIND_SPEC:
             return FENG_SYMBOL_FT_SYM_KIND_SPEC;
         case FENG_SYMBOL_DECL_KIND_FIT:
@@ -622,6 +624,8 @@ static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
             return FENG_SYMBOL_FT_SYM_KIND_CTOR;
         case FENG_SYMBOL_DECL_KIND_FINALIZER:
             return FENG_SYMBOL_FT_SYM_KIND_DTOR;
+        case FENG_SYMBOL_DECL_KIND_ENUM_ITEM:
+            return FENG_SYMBOL_FT_SYM_KIND_ENUM_ITEM;
         case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
             return FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM;
     }
@@ -774,6 +778,23 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM && decl->has_enum_item_value) {
+        FengSymbolFtAttrRecord attr;
+
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE;
+        attr.value0 = (uint32_t)(int32_t)decl->enum_item_value;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -886,6 +907,16 @@ static bool writer_collect_decl(WriterContext *ctx,
             }
             break;
 
+        case FENG_SYMBOL_DECL_KIND_ENUM_ITEM:
+            if (decl->enum_item_ordinal > UINT32_MAX) {
+                return feng_symbol_internal_set_error(out_error,
+                                                      path,
+                                                      decl->token,
+                                                      "enum item ordinal exceeds .ft range");
+            }
+            record.extra_ref = (uint32_t)decl->enum_item_ordinal;
+            break;
+
         case FENG_SYMBOL_DECL_KIND_MODULE:
             if (ctx->module->segment_count > 0U) {
                 size_t total = 0U;
@@ -917,7 +948,8 @@ static bool writer_collect_decl(WriterContext *ctx,
             }
             break;
 
-        case FENG_SYMBOL_DECL_KIND_TYPE:
+    case FENG_SYMBOL_DECL_KIND_TYPE:
+    case FENG_SYMBOL_DECL_KIND_ENUM:
         default:
             break;
     }

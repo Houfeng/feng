@@ -818,6 +818,12 @@ const FengSymbolDeclView *feng_symbol_module_find_public_type(
     return module_find_public_decl_by_kind(module, name, FENG_SYMBOL_DECL_KIND_TYPE);
 }
 
+const FengSymbolDeclView *feng_symbol_module_find_public_enum(
+    const FengSymbolImportedModule *module,
+    FengSlice name) {
+    return module_find_public_decl_by_kind(module, name, FENG_SYMBOL_DECL_KIND_ENUM);
+}
+
 const FengSymbolDeclView *feng_symbol_module_find_public_spec(
     const FengSymbolImportedModule *module,
     FengSlice name) {
@@ -998,6 +1004,18 @@ const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDecl
 
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->type_param_count : 0U;
+}
+
+bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM && decl->has_enum_item_value;
+}
+
+int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl) {
+    return feng_symbol_decl_has_enum_item_value(decl) ? decl->enum_item_value : 0;
+}
+
+size_t feng_symbol_decl_enum_item_ordinal(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM ? decl->enum_item_ordinal : 0U;
 }
 
 const FengSymbolDeclView *feng_symbol_fit_decl(const FengSymbolFitView *fit) {

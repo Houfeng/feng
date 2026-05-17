@@ -1337,6 +1337,43 @@ static void test_direct_build_consumes_package_generic_type(void) {
     free(remove_error);
 }
 
+static void test_direct_build_consumes_package_enum(void) {
+    char template_path[] = "/tmp/feng_cli_pkg_enum_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgenum",
+        "pu mod test.cli.pkgenum;\n"
+        "pu enum HttpStatus {\n"
+        "  Ok = 200,\n"
+        "  NotFound = 404\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "mod test.cli.pkgenummain;\n"
+        "use test.cli.pkgenum;\n"
+        "@cdecl(\"libc\")\n"
+        "extern fn puts(msg: string*): int;\n"
+        "fn main(args: string[]) {\n"
+        "  let status: HttpStatus;\n"
+        "  if status == HttpStatus.Ok { puts(&\"enum package ok\"); }\n"
+        "}\n",
+        "enum_pkg_main",
+        "enum package ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_direct_build_consumes_package_generic_spec_constraint(void) {
     char template_path[] = "/tmp/feng_cli_pkg_generic_spec_XXXXXX";
     char *workspace_dir;
@@ -2677,6 +2714,35 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kDotSource, "user.;", 5U);
     assert_lsp_completion_contains_name(kPrefixSource, "user.n;", 6U);
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
+}
+static void test_lsp_enum_member_completion_survives_incomplete_member_access(void) {
+    static const char *kDotSource =
+        "mod test.lsp.enumcompletiondot;\n"
+        "\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let status: HttpStatus = HttpStatus.;\n"
+        "}\n";
+    static const char *kPrefixSource =
+        "mod test.lsp.enumcompletionprefix;\n"
+        "\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let status: HttpStatus = HttpStatus.N;\n"
+        "}\n";
+    const char *labels[] = {"Ok", "NotFound"};
+    const char *prefix_labels[] = {"NotFound"};
+
+    assert_lsp_completion_contains_labels(kDotSource, "HttpStatus.;", 11U, labels, 2U);
+    assert_lsp_completion_contains_labels(kPrefixSource, "HttpStatus.N;", 12U, prefix_labels, 1U);
 }
 
 static void test_lsp_completion_uses_source_scoped_edit_context(void) {
@@ -6751,6 +6817,7 @@ int main(void) {
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_member_completion_survives_incomplete_member_access();
+        test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();
     test_lsp_member_references_and_rename_from_object_literal_field();
@@ -6776,6 +6843,7 @@ int main(void) {
     test_project_pack_bundle_can_be_consumed();
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
+    test_direct_build_consumes_package_enum();
     test_direct_build_consumes_package_generic_spec_constraint();
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();

@@ -513,12 +513,14 @@ attr key 常量建议如下:
 | `FT_ATTR_CALL_CONV` | `0x0003` | `extern_fn` | ABI 调用约定枚举值；`value0` = 调用约定枚举 |
 | `FT_ATTR_ABI_LIBRARY` | `0x0004` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
 | `FT_ATTR_FIT_SPECS` | `0x0005` | `fit` | `fit A: B, C` 右侧 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
+| `FT_ATTR_ENUM_ITEM_VALUE` | `0x0006` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
 
 补充规则:
 
 - `FT_ATTR_DECLARED_SPECS` 在 `type` 上表示 `type A: B, C` 头部的 `spec` 使用列表,在 `spec` 上表示 `spec Child: Parent, Other` 的父 `spec` 使用列表。
 - `FT_ATTR_FIT_SPECS` 用于 `fit` 右侧 `spec` 使用列表; `fit` 目标类型自身继续走 `SYMS.extra_ref`。
 - `FT_ATTR_CALL_CONV` 与 `FT_ATTR_ABI_LIBRARY` 仅出现在 `extern_fn` 符号上; 普通函数与方法无需这两个 attr。
+- `FT_ATTR_ENUM_ITEM_VALUE` 只出现在 `enum_item` 子符号上,记录 consumer 恢复 `Enum.Item` 所需的稳定值事实; 不再额外导出“原本是显式赋值还是隐式赋值”的源码细节。
 - 泛型第一阶段不要求新增其他 attr key。类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达,而不是把核心语义塞进 `ATRS`。
 
 ### 6.4 `STRS` 字符串池
@@ -580,6 +582,8 @@ attr key 常量建议如下:
 - `method`
 - `top_let`
 - `top_var`
+- `enum`
+- `enum_item`
 - `type_param`
 
 建议第一版 `SYMS.kind` 固定常量值如下:
@@ -596,7 +600,9 @@ attr key 常量建议如下:
 - `FT_SYM_KIND_METHOD = 10`
 - `FT_SYM_KIND_TOP_LET = 11`
 - `FT_SYM_KIND_TOP_VAR = 12`
-- `FT_SYM_KIND_TYPE_PARAM = 13`
+- `FT_SYM_KIND_ENUM = 13`
+- `FT_SYM_KIND_ENUM_ITEM = 14`
+- `FT_SYM_KIND_TYPE_PARAM = 15`
 
 建议支持的 `flags`:
 
@@ -610,8 +616,28 @@ attr key 常量建议如下:
 说明:
 
 - `owner_id` 负责表达层级关系,例如字段/方法归属于某个 `type` 或某个 `fit`。
+- `enum_item` 是 `enum` 的子符号而不是独立顶层声明: `owner_id` 指向所属 `enum`, `name_str` 表达 item 名称, `extra_ref` 固定表达其 0-based 声明顺序。
+- `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
 - 被语义分析判定为“不得导出”的声明,不进入公开 `.ft`; 本地缓存 `.ft` 可按本地需要保留。
+
+#### 6.5.1 enum / enum_item 导出与查询视图补充
+
+enum item 的 `.ft` 形状在 v1 中固定为“**顶层 `enum` 符号 + 子符号 `enum_item`**”,不采用“把所有 item 平铺成 enum owner 上的 attr 列表”这种形状。原因如下:
+
+- `enum_item` 需要同时承载名称、所属 enum、声明顺序与底层值事实,其中名称与 owner 天然属于 `SYMS` 子符号关系。
+- workspace-cache profile 需要让 LSP 对 `Enum.Item` 做精确 definition; 将 item 建模成独立子符号后,可直接复用现有 `SPNS` 节为 item 记录源码位置,无需为 item 额外设计一套 span attr。
+- package-public profile 仍不泄露源码位置,因为公开 `.ft` 本就不包含 `SPNS`; 它只导出 item 名称、顺序和值,满足跨包语义恢复所需的最小事实。
+
+固定规则如下:
+
+- `enum` 使用 `FT_SYM_KIND_ENUM`, 作为模块根下的公开 type-like 顶层声明参与公开 decl 枚举与重名检查。
+- 每个 `enum_item` 使用 `FT_SYM_KIND_ENUM_ITEM`, `owner_id` 指向所属 `enum`, `extra_ref` 固定保存 0-based 声明顺序。
+- `enum_item` 的归一化底层值通过 `FT_ATTR_ENUM_ITEM_VALUE` 导出; `value0` 存放该值按 `int32_t` 二补码重解释后的 `u32` 位模式。consumer 读取时必须按 `int32_t` 语义恢复,不得把它解释成无符号业务值。
+- `enum_item` 不进入模块级“公开 value”集合; consumer 恢复 `Enum.Item` 时,必须先解析 owner `enum`, 再在其子符号中按名称查找 `enum_item`。
+- imported-module 查询视图必须至少提供三类能力: 1) 顶层按名查找公开 `enum`; 2) 按 owner 枚举/按名查找其 `enum_item`; 3) 返回 item 的声明顺序与归一化底层值,以恢复 `Enum.Item` 语义、completion 候选与 hover 文本。
+- workspace-cache `.ft` 可以像其他 decl 一样为 `enum_item` 写入 `SPNS`; package-public `.ft` 不得为 item 暴露源码路径或行列号。
+- v1 不为 `enum_item` 单独导出文档注释、显式/隐式赋值来源或其他源码细节; 这些不属于跨包消费恢复 `Enum.Item` 所需的最小事实。
 
 针对泛型,`SYMS` 还必须满足以下规则:
 

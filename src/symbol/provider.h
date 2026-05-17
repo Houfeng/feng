@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "symbol/symbol.h"
 
@@ -43,6 +44,10 @@ const FengSymbolImportedModule *feng_symbol_provider_module_at(
     size_t index);
 
 const FengSymbolDeclView *feng_symbol_module_find_public_type(
+    const FengSymbolImportedModule *module,
+    FengSlice name);
+
+const FengSymbolDeclView *feng_symbol_module_find_public_enum(
     const FengSymbolImportedModule *module,
     FengSlice name);
 
@@ -117,6 +122,9 @@ size_t feng_symbol_decl_declared_spec_count(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDeclView *decl,
                                                             size_t index);
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
+bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl);
+int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl);
+size_t feng_symbol_decl_enum_item_ordinal(const FengSymbolDeclView *decl);
 
 const FengSymbolDeclView *feng_symbol_fit_decl(const FengSymbolFitView *fit);
 
