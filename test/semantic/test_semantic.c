@@ -7120,6 +7120,66 @@ static void test_object_literal_reports_inaccessible_imported_constructor(void) 
     feng_program_free(main_program);
 }
 
+static void test_constructor_call_reports_inaccessible_imported_constructor(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {\n"
+        "    pr fn User() {}\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn make(): User {\n"
+        "    return User();\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("ctor_call_import_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("ctor_call_import_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_call_import_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "no accessible constructor accepting 0 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_object_literal_constructor_call_reports_inaccessible_imported_constructor(void) {
+    const char *base_source =
+        "pu mod demo.base;\n"
+        "pu type User {\n"
+        "    pr fn User() {}\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "use demo.base;\n"
+        "fn make(): User {\n"
+        "    return User() {};\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("ctor_objcall_import_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("ctor_objcall_import_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "ctor_objcall_import_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "no accessible constructor accepting 0 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 static void test_object_literal_rejects_decl_bound_let_member(void) {
     const char *source =
         "mod demo.main;\n"
@@ -11871,6 +11931,8 @@ int main(void) {
     test_constructor_call_rejects_function_type();
     test_constructor_call_rejects_object_form_spec();
     test_object_literal_reports_inaccessible_imported_constructor();
+    test_constructor_call_reports_inaccessible_imported_constructor();
+    test_object_literal_constructor_call_reports_inaccessible_imported_constructor();
     test_object_literal_rejects_decl_bound_let_member();
     test_constructor_rejects_decl_bound_let_member_assignment();
     test_constructor_rejects_repeated_let_member_binding();
