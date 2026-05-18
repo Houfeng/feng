@@ -3,7 +3,8 @@
 > **状态**: 草案。
 > 本文档只定义“内建类型作为 `fit` 左侧目标”的补充规则。
 > `fit` 的通用语法、通用语义、通用冲突判定、通用可见性、导出与孤儿适配规则统一见 [feng-fit.md](./feng-fit.md)。
-> 内建类型本体语义统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
+> 内建数值、布尔、字符串与别名规则统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
+> 数组本体语义与标准库数组能力统一见 [feng-std-array.md](./feng-std-array.md)。
 > 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。
 > 开发指导见 [dev/feng-fit-optimize-delivered.md](../dev/feng-fit-optimize-delivered.md)。
 
@@ -24,7 +25,7 @@
 
 内建类型别名按 [feng-builtin-type.md](./feng-builtin-type.md) 的现有规则处理。例如 `int` 视为 `i32`、`float` 视为 `f32`。`fit int` 与 `fit i32` 指向同一个语言类型目标, 编译器必须按规范化后的内建类型名处理。
 
-数组目标形式 `T[]` 与 `T[!]` 的数组层级、逐层 `!` 语义、元素类型规则与数组本体语义统一遵循 [feng-builtin-type.md](./feng-builtin-type.md)。本文只补充“数组可作为 `fit` 左侧目标”这一规则, 不重复定义数组语义本体。
+数组目标形式 `T[]` 与 `T[!]` 的数组层级、逐层 `!` 语义、元素类型规则与数组本体语义统一遵循 [feng-std-array.md](./feng-std-array.md)。本文只补充“数组可作为 `fit` 左侧目标”这一规则, 不重复定义数组语义本体。
 
 其中 `T[]` 与 `T[!]` 中的 `T` 表示数组元素类型引用。`T` 可以是具体类型；当写作单个类型参数名时, 该类型参数由数组目标形式引入, 其作用域覆盖整个 `fit` 声明。
 
@@ -123,7 +124,7 @@ fit *byte {
 
 - [必须] `fit` 左侧使用内建类型时, 目标类型必须属于本草案 §2 列出的范围。
 - [必须] `fit` 左侧使用内建类型别名时, 编译器必须按 [feng-builtin-type.md](./feng-builtin-type.md) 的既有别名规则将其归并到同一个规范化内建类型目标。
-- [必须] `fit` 左侧使用数组目标形式时, 只允许 `T[]` 与 `T[!]` 两类形态；其数组层级与逐层 `!` 语义统一遵循 [feng-builtin-type.md](./feng-builtin-type.md)。
+- [必须] `fit` 左侧使用数组目标形式时, 只允许 `T[]` 与 `T[!]` 两类形态；其数组层级与逐层 `!` 语义统一遵循 [feng-std-array.md](./feng-std-array.md)。
 - [必须] `fit T[]` 或 `fit T[!]` 中, `T` 必须表示数组元素类型引用；当 `T` 由数组目标形式引入时, 其作用域必须覆盖整个 `fit` 声明。
 - [必须] 对 `fit X[]` / `fit X[!]` 的 `X` 解析必须遵循“可见符号优先”原则: 若当前可见范围已有同名 `type` 或同名类型参数, 必须绑定已有符号；仅在未命中且 `X` 非内建类型名时, 才可把 `X` 视为由数组目标形式引入的局部元素类型参数。
 - [必须] `[]` 与 `[!]` 必须视为不同 `fit` 目标；`fit X[]` 的声明不得自动覆盖 `fit X[!]`，`fit X[!]` 的声明也不得自动覆盖 `fit X[]`。
@@ -139,12 +140,12 @@ fit *byte {
 ## 5 编译期
 
 - 编译器必须允许 [feng-fit.md](./feng-fit.md) 中的 `fit` 通用语法以本草案 §2 列出的内建类型作为左侧目标。
-- 编译器必须允许数组目标形式 `T[]` 与 `T[!]` 出现在 `fit` 左侧, 并按 [feng-builtin-type.md](./feng-builtin-type.md) 的数组类型规则解析其元素类型、数组层级与逐层 `!` 语义。
+- 编译器必须允许数组目标形式 `T[]` 与 `T[!]` 出现在 `fit` 左侧, 并按 [feng-std-array.md](./feng-std-array.md) 的数组类型规则解析其元素类型、数组层级与逐层 `!` 语义。
 - 编译器必须在 `fit T[]` 或 `fit T[!]` 中把 `T` 解析为数组元素类型引用；当 `T` 由数组目标形式引入时, 编译器必须建立覆盖整个 `fit` 声明的类型参数作用域。
 - 编译器必须把数组目标形式引入的元素类型参数作为 `fit` 方法成员体可见的泛型上下文处理,并在需要时向生成的 `fit` 方法实现转发元素类型描述符。
 - 编译器必须在数组 `fit` 方法调用点对包含元素类型参数的返回类型进行实例化,例如把 `Span<T>` 具体化为 `Span<i32>`；后续成员调用、赋值、返回和 C 代码生成均必须使用实例化后的类型。
 - 编译器必须在语义分析阶段拒绝 C 指针类型出现在 `fit` 左侧目标位置。
-- 编译器必须在解析 `fit` 左侧目标时, 先按现有规则尝试解析用户 `type`, 未命中时再按 [feng-builtin-type.md](./feng-builtin-type.md) 的内建类型规则识别标量、`string` 与数组目标。
+- 编译器必须在解析 `fit` 左侧目标时, 先按现有规则尝试解析用户 `type`, 未命中时再按 [feng-builtin-type.md](./feng-builtin-type.md) 的标量 / `string` 规则与 [feng-std-array.md](./feng-std-array.md) 的数组目标规则识别内建目标。
 - 编译器必须把内建类型别名规范化为同一个 canonical builtin target, 不得把 `fit int` 与 `fit i32` 视为两个不同目标。
 - 编译器必须在内建类型的 `fit` 块中把 `self` 解析为对应的内建类型表达式。不得把 `self` 伪装成对象类型, 也不得要求额外用户可见载体。
 - 编译器必须允许内建类型通过 `fit` 建立 object-form `spec` 契约关系, 并继续遵循现有 `spec` 满足性、冲突检测与 witness materialization 主路径。
@@ -194,6 +195,7 @@ fit *byte {
 ## 7 关联
 
 - [feng-fit.md](./feng-fit.md): `fit` 的通用语法、通用语义、通用规则、导出与孤儿适配。
-- [feng-builtin-type.md](./feng-builtin-type.md): 内建类型集合、别名规则、`string` 与数组语义。
+- [feng-builtin-type.md](./feng-builtin-type.md): 内建数值、布尔、字符串与别名规则。
+- [feng-std-array.md](./feng-std-array.md): 数组语义、切片与 `Span<T>` 规则。
 - [feng-spec.md](./feng-spec.md): object-form `spec` 的匹配、冲突与运行时约束。
 - [feng-symbol-table.md](./feng-symbol-table.md): `.ft` 中 BUILTIN / ARRAY type node 与 fit 目标导出格式。

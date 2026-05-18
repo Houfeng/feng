@@ -16,7 +16,7 @@
 - 具名类型: 通过 `type` 声明的类型。
 - 对象类型: 以对象语法声明的具名类型(如 `type User { ... }`); 是否标注 `@abi` 不改变其类型命名,只影响 ABI 边界约束。
 - 对象字面量: 以 `Type() { ... }`、`Type() {}`、`Type(args) { ... }`、`Type(args) {}`、`Type { ... }` 或 `Type {}` 形式进行的对象初始化表达式; 其中 `Type { ... }` 是 `Type() { ... }` 的简写,`Type {}` 是 `Type() {}` 的简写; 泛型对象类型使用 `Type<Args>() { ... }`、`Type<Args>() {}`、`Type<Args> { ... }` 或 `Type<Args> {}` 形式显式给出类型实参。
-- 数组类型: 使用数组类型语法声明的类型; 其具体定义、层级可写性、类型兼容与显式转换规则统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
+- 数组类型: 使用数组类型语法声明的类型; 其具体定义、层级可写性、类型兼容与显式转换规则统一见 [feng-std-array.md](./feng-std-array.md)。
 - C 指针类型: 使用 `T*` 语法声明、仅用于 C 互操作的指针类型。
 - ABI 约束: 类型标注 `@abi` 后,在 C ABI 边界需要满足的兼容性与使用约束。
 - 成员绑定: `type` 成员上的 `let`/`var` 绑定声明,用于定义成员可变性与赋值约束。
@@ -326,7 +326,8 @@ type Resource {
 ## 8 关联
 
 - [Feng 语言核心规范](./feng-language.md): 类型系统总览与跨章节总约束。
-- [Feng 内建类型规范](./feng-builtin-type.md): 内建基础类型总表、字符串与数组规范、整数溢出策略。
+- [Feng 内建类型规范](./feng-builtin-type.md): 内建基础类型总表、字符串规范与整数溢出策略。
+- [Feng 数组与标准库数组规范](./feng-std-array.md): 基础数组、数组切片与 `Span<T>` 规则。
 - [Feng 语言 `spec` 规范](./feng-spec.md): 契约形状、匹配规则与运行时约束。
 - [Feng 语言 `fit` 规范](./feng-fit.md): 契约适配与自扩展规则。
 - [Feng 语言绑定规范](./feng-binding.md): `let`/`var` 绑定语义、作用域与赋值规则。

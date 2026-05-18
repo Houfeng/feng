@@ -39,5 +39,6 @@
 ## 5 关联
 
 - [feng-language.md](./feng-language.md): 语言核心总览。
-- [feng-builtin-type.md](./feng-builtin-type.md): `string`、`byte` 与数组的语义。
+- [feng-builtin-type.md](./feng-builtin-type.md): `string` 与 `byte` 的语义。
+- [feng-std-array.md](./feng-std-array.md): 数组与 `byte[]` 的语义。
 - [feng-interop.md](./feng-interop.md): 标准库通过普通 `extern fn` 暴露原生能力时的 ABI 约束。

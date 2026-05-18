@@ -105,7 +105,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 说明:
 
 - `int`、`long`、`byte`、`float`、`double` 只是别名，不引入新的类型实体。
-- 详细语义见 [Feng 内建类型规范](./feng-builtin-type.md) 与 [Feng 语言表达式与运算规范](./feng-expression.md)。
+- 详细语义见 [Feng 内建类型规范](./feng-builtin-type.md)、[Feng 数组与标准库数组规范](./feng-std-array.md) 与 [Feng 语言表达式与运算规范](./feng-expression.md)。
 
 ### 3.3 字面量
 
