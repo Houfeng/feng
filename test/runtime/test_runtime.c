@@ -280,6 +280,88 @@ static void test_array_payload_alignment(void) {
     feng_release(trivial);
 }
 
+static void test_array_slice_trivial_copies_subrange(void) {
+    FengArray *source = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
+    int32_t *source_items = (int32_t *)feng_array_data(source);
+    FengArray *slice;
+    FengArray *empty;
+    int32_t *slice_items;
+
+    source_items[0] = 10;
+    source_items[1] = 20;
+    source_items[2] = 30;
+    source_items[3] = 40;
+
+    slice = feng_array_slice(source, 1, 3);
+    slice_items = (int32_t *)feng_array_data(slice);
+
+    ASSERT(feng_array_length(slice) == 2U);
+    ASSERT(feng_array_element_kind(slice) == FENG_VALUE_TRIVIAL);
+    ASSERT(slice_items != NULL);
+    ASSERT(slice_items[0] == 20);
+    ASSERT(slice_items[1] == 30);
+
+    slice_items[0] = 99;
+    ASSERT(source_items[1] == 20);
+
+    empty = feng_array_slice(source, 2, 2);
+    ASSERT(feng_array_length(empty) == 0U);
+    ASSERT(feng_array_data(empty) == NULL);
+
+    feng_release(empty);
+    feng_release(slice);
+    feng_release(source);
+}
+
+static void test_array_slice_managed_pointer_retains_elements(void) {
+    FengArray *source;
+    FengArray *slice;
+    void **source_slots;
+    void **slice_slots;
+    TestObject *a;
+    TestObject *b;
+    TestObject *c;
+    TestObject *sliced_b;
+    TestObject *sliced_c;
+
+    g_finalize_count = 0;
+    source = feng_array_new(&test_object_descriptor, sizeof(void *), true, 3U);
+    source_slots = (void **)feng_array_data(source);
+
+    a = (TestObject *)feng_object_new(&test_object_descriptor);
+    b = (TestObject *)feng_object_new(&test_object_descriptor);
+    c = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    feng_assign(&source_slots[0], a);
+    feng_assign(&source_slots[1], b);
+    feng_assign(&source_slots[2], c);
+    feng_release(a);
+    feng_release(b);
+    feng_release(c);
+
+    slice = feng_array_slice(source, 1, 3);
+    slice_slots = (void **)feng_array_data(slice);
+    sliced_b = (TestObject *)slice_slots[0];
+    sliced_c = (TestObject *)slice_slots[1];
+
+    ASSERT(feng_array_length(slice) == 2U);
+    ASSERT(feng_array_element_kind(slice) == FENG_VALUE_MANAGED_POINTER);
+    ASSERT(sliced_b == source_slots[1]);
+    ASSERT(sliced_c == source_slots[2]);
+    ASSERT(sliced_b->header.refcount == 2U);
+    ASSERT(sliced_c->header.refcount == 2U);
+
+    feng_release(source);
+    ASSERT(g_finalize_count == 1);
+    ASSERT(sliced_b->header.refcount == 1U);
+    ASSERT(sliced_c->header.refcount == 1U);
+
+    feng_release(slice);
+    ASSERT(g_finalize_count == 3);
+}
+
+static void test_array_slice_aggregate_assigns_elements(void);
+
 static void test_exception_caught(void) {
     FengExceptionFrame frame;
     int caught = 0;
@@ -834,6 +916,13 @@ static void arc_throw_body(void) {
     feng_release(o); /* triggers throwing_finalizer */
 }
 
+static void array_slice_out_of_range_body(void) {
+    FengArray *source = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
+    FengArray *slice = feng_array_slice(source, 1, 3);
+    feng_release(slice);
+    feng_release(source);
+}
+
 static void cycle_throw_body(void) {
     /* Build a 2-node cycle whose nodes carry the throwing finalizer; force
      * collection so Phase 1 invokes the finalizer through the cycle path. */
@@ -854,6 +943,10 @@ static void test_finalizer_throw_on_arc_path_aborts(void) {
 
 static void test_finalizer_throw_on_cycle_path_aborts(void) {
     assert_child_aborts(cycle_throw_body);
+}
+
+static void test_array_slice_out_of_range_aborts(void) {
+    assert_child_aborts(array_slice_out_of_range_body);
 }
 
 /* --- Threshold-triggered collection ------------------------------------ */
@@ -1029,6 +1122,53 @@ static const FengAggregateValueDescriptor outer_desc = {
     .managed_slot_count = sizeof(outer_slots) / sizeof(outer_slots[0]),
     .managed_slots = outer_slots,
 };
+
+static void test_array_slice_aggregate_assigns_elements(void) {
+    FengArray *source;
+    FengArray *slice;
+    FatPair *source_items;
+    FatPair *slice_items;
+    TestObject *subject1;
+    TestObject *subject2;
+
+    g_finalize_count = 0;
+    source = feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                                   &fat_pair_desc,
+                                   NULL,
+                                   fat_pair_desc.size,
+                                   3U);
+    source_items = (FatPair *)feng_array_data(source);
+    source_items[0].tag = 10;
+    source_items[1].tag = 20;
+    source_items[2].tag = 30;
+    subject1 = (TestObject *)source_items[1].subject;
+    subject2 = (TestObject *)source_items[2].subject;
+
+    slice = feng_array_slice(source, 1, 3);
+    slice_items = (FatPair *)feng_array_data(slice);
+
+    ASSERT(feng_array_length(slice) == 2U);
+    ASSERT(feng_array_element_kind(slice) == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS);
+    ASSERT(feng_array_element_aggregate(slice) == &fat_pair_desc);
+    ASSERT(slice_items[0].subject == subject1);
+    ASSERT(slice_items[1].subject == subject2);
+    ASSERT(slice_items[0].tag == 20);
+    ASSERT(slice_items[1].tag == 30);
+    ASSERT(subject1->header.refcount == 2U);
+    ASSERT(subject2->header.refcount == 2U);
+    ASSERT(g_finalize_count == 2);
+
+    slice_items[0].tag = 99;
+    ASSERT(source_items[1].tag == 20);
+
+    feng_release(source);
+    ASSERT(g_finalize_count == 3);
+    ASSERT(subject1->header.refcount == 1U);
+    ASSERT(subject2->header.refcount == 1U);
+
+    feng_release(slice);
+    ASSERT(g_finalize_count == 5);
+}
 
 static void test_aggregate_retain_release_paired(void) {
     g_finalize_count = 0;
@@ -1417,6 +1557,9 @@ int main(void) {
     test_array_managed_releases_elements();
     test_array_zero_length();
     test_array_payload_alignment();
+    test_array_slice_trivial_copies_subrange();
+    test_array_slice_managed_pointer_retains_elements();
+    test_array_slice_aggregate_assigns_elements();
     test_exception_caught();
     test_exception_managed_value_caught();
     test_exception_nested_propagation();
@@ -1431,6 +1574,7 @@ int main(void) {
     test_cycle_collector_acyclic_object_never_enqueued();
     test_finalizer_throw_on_arc_path_aborts();
     test_finalizer_throw_on_cycle_path_aborts();
+    test_array_slice_out_of_range_aborts();
     test_cycle_collector_threshold_triggers_collection();
     test_cycle_collector_multithreaded_stress();
 

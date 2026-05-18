@@ -249,6 +249,7 @@ extern fn feng_string_length(value: string): long;
 1. 返回的标量值按普通返回值处理。
 2. 返回的托管值按普通 Feng 返回语义交给调用方。
 3. `@runtime` 不引入额外“隐式借用返回值”规则。
+4. 若 helper 返回的是新构造的托管值（例如 `feng_array_slice(array, start, end)` 这类复制型数组 helper），则 helper 必须在返回前把结果构造为一个完整、可独立持有的 Feng 值；若结果中包含托管子元素，也必须由 helper 先取得这些子元素所需的独立持有权，而不是把“仍借用输入参数中的元素引用”暴露给调用方。
 
 ### 7.3 异常边界
 
@@ -321,8 +322,10 @@ fn size_of(s: string): long {
 
 ```feng
 @runtime
-extern fn feng_array_length_int(values: int[]): long;
+extern fn feng_array_slice<T>(values: T[], start: long, end: long): T[];
 ```
+
+该类 helper 的 contract 语义应由具体符号精确定义；例如 `feng_array_slice` 可定义为按右开区间 `[start, end)` 复制数组子区间并返回新的数组值，而不是返回借用视图。
 
 ### 9.3 错误示例：混用 C ABI 与 runtime 注解
 
