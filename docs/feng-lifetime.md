@@ -149,7 +149,7 @@ typedef struct FengArray_T {
 - `T` 表示该数组层元素的运行时存储类型；若元素类型本身是引用语义类型（如 `string`、数组、普通 `type` 对象或闭包），则 `items[]` 中存放的是对应引用，而不是对象内联本体。
 - 多维数组不需要单独的专用布局；每一层数组都按自身元素类型复用同一数组对象表示。例如 `int[][]` 的最外层 `items[]` 存放的是内层数组引用。
 - 数组对象创建完成后长度固定；`len` 在对象生命周期内不再变化。
-- 数组各层元素是否允许原地改写，属于语言层数组语义，统一见 [Feng 数组与标准库数组规范](./feng-std-array.md)；该可写性规则不额外编码进运行时对象头布局。
+- 数组各层元素是否允许原地改写，属于语言层数组语义，统一见 [Feng 内建类型规范](./feng-builtin-type.md)；该可写性规则不额外编码进运行时对象头布局。
 
 ## 13 循环检测
 
@@ -204,7 +204,7 @@ C 代码持有 Feng 对象时，retain/release 约定的详细接口文档与规
 
 - [Feng 语言核心规范](./feng-language.md): 语言总体规范、对象模型与 C 互操作概要。
 - [Feng 语言类型规范](./feng-type.md): Feng 原生对象的引用语义与实例创建方式。
-- [Feng 内建类型规范](./feng-builtin-type.md): `string` 的默认零值及核心语义说明。
-- [Feng 数组与标准库数组规范](./feng-std-array.md): 数组默认零值、切片与核心语义说明。
+- [Feng 内建类型规范](./feng-builtin-type.md): `string` 与数组的默认零值及核心语义说明。
+- [Feng 标准库数组扩展规范](./feng-std-array.md): 数组上的 `clone()`、`slice()` 与 `Span<T>` 视图规则。
 - [Feng 语言 ABI 互操作规范](./feng-interop.md): `@abi` ABI 边界上的借用、原始指针与 ABI 约束。
 - [Feng 语言异常规范](./feng-exception.md): 异常传播与 `finally` 清理语义。
