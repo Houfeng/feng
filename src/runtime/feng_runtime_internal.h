@@ -49,6 +49,14 @@ void feng_array_finalize_internal(struct FengArray *a);
 void *feng_array_payload_inline(struct FengArray *a);
 const void *feng_array_payload_inline_const(const struct FengArray *a);
 
+/* Copy `length` elements from `src[start, start+length)` into `dst[0, length)`.
+ * Retain/release semantics are handled per element kind. Caller must ensure
+ * both arrays are kind-compatible and ranges are in-bounds. */
+void feng_array_slice_copy_into(struct FengArray *dst,
+                                const struct FengArray *src,
+                                size_t start,
+                                size_t length);
+
 /* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
  * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let
  * an exception propagate past its body; if one does, the runtime panics

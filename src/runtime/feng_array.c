@@ -41,6 +41,53 @@ const void *feng_array_payload_inline_const(const struct FengArray *a) {
     return (const void *)(base + feng_array_data_offset());
 }
 
+void feng_array_slice_copy_into(struct FengArray *dst,
+                                const struct FengArray *src,
+                                size_t start,
+                                size_t length) {
+    const unsigned char *src_payload;
+    unsigned char *dst_payload;
+
+    if (length == 0U) {
+        return;
+    }
+
+    src_payload = (const unsigned char *)feng_array_payload_inline_const(src);
+    dst_payload = (unsigned char *)feng_array_payload_inline(dst);
+
+    switch (src->element_kind) {
+        case FENG_VALUE_TRIVIAL:
+            memcpy(dst_payload,
+                   src_payload + start * src->element_size,
+                   length * src->element_size);
+            return;
+        case FENG_VALUE_MANAGED_POINTER: {
+            void **dst_slots = (void **)dst_payload;
+            void *const *src_slots = (void *const *)src_payload;
+            size_t i;
+
+            for (i = 0U; i < length; ++i) {
+                dst_slots[i] = feng_retain(src_slots[start + i]);
+            }
+            return;
+        }
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
+            const unsigned char *src_base = src_payload + start * src->element_size;
+            size_t i;
+
+            for (i = 0U; i < length; ++i) {
+                feng_aggregate_assign(dst_payload + i * src->element_size,
+                                      src_base + i * src->element_size,
+                                      src->element_aggregate);
+            }
+            return;
+        }
+        default:
+            feng_panic("feng_array_slice: corrupted element_kind=%d",
+                       (int)src->element_kind);
+    }
+}
+
 const FengTypeDescriptor feng_array_descriptor = {
     .name = "feng.builtin.array",
     .size = 0U, /* variable layout per instance */
