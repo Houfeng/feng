@@ -1234,6 +1234,20 @@ static const char *cg_generic_param_desc_name(const CG *cg, size_t index) {
     return cg->generic_fn_type_param_descs[index];
 }
 
+static const char *cg_generic_param_name(const CG *cg, size_t index) {
+    if (cg->generic_fn_type_param_names != NULL &&
+        index < cg->generic_fn_type_param_count &&
+        cg->generic_fn_type_param_names[index] != NULL) {
+        return cg->generic_fn_type_param_names[index];
+    }
+    if (cg->ambient_type_param_names != NULL &&
+        index < cg->ambient_type_param_count &&
+        cg->ambient_type_param_names[index] != NULL) {
+        return cg->ambient_type_param_names[index];
+    }
+    return NULL;
+}
+
 static const char *cg_generic_param_desc_name_for_name(const CG *cg,
                                                        const char *type_param_name) {
     if (type_param_name == NULL ||
@@ -3171,12 +3185,36 @@ static void cg_type_ref_free(FengTypeRef *ref) {
     free(ref);
 }
 
-static FengTypeRef *cg_type_ref_from_cgtype(const CGType *type, FengToken token) {
+static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
+                                            const CGType *type,
+                                            FengToken token) {
     FengTypeRef *ref;
     FengSlice segment;
     const char *builtin_name = NULL;
 
     if (type == NULL) return NULL;
+
+    if (type->kind == CG_TYPE_GENERIC_PARAM) {
+        const char *type_param_name = cg_generic_param_name(cg,
+                                                            type->generic_param_index);
+
+        if (type_param_name == NULL) {
+            return NULL;
+        }
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_NAMED;
+        ref->as.named.segment_count = 1U;
+        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
+        if (ref->as.named.segments == NULL) {
+            free(ref);
+            return NULL;
+        }
+        ref->as.named.segments[0].data = type_param_name;
+        ref->as.named.segments[0].length = strlen(type_param_name);
+        return ref;
+    }
 
     for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; ++i) {
         if (k_builtin_types[i].kind == type->kind) {
@@ -3206,7 +3244,7 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CGType *type, FengToken token)
         if (ref == NULL) return NULL;
         ref->token = token;
         ref->kind = FENG_TYPE_REF_ARRAY;
-        ref->as.inner = cg_type_ref_from_cgtype(type->element, token);
+        ref->as.inner = cg_type_ref_from_cgtype(cg, type->element, token);
         if (ref->as.inner == NULL) {
             free(ref);
             return NULL;
@@ -3928,7 +3966,7 @@ static CGType *cg_instantiate_builtin_fit_return_type(CG *cg,
                     free(type_args);
                     return NULL;
                 }
-                type_args[i] = cg_type_ref_from_cgtype(receiver_element, blame);
+                type_args[i] = cg_type_ref_from_cgtype(cg, receiver_element, blame);
             } else {
                 type_args[i] = cg_type_ref_clone(open_user->generic_type_args[i]);
             }

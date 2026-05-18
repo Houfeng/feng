@@ -140,7 +140,7 @@ pu type Span<T> {
    * Returns a read-only new view relative to this span.
    * @return view over the specified range
    */
-  pu fn slice() {
+  pu fn slice(): Span<T> {
     return self.slice(0, self.length());
   }
 

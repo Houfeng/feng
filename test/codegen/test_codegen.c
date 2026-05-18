@@ -1380,11 +1380,15 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
         "    fn slice(start: long, end: long): Span<T> {\n"
         "        return Span<T>(self, start, end);\n"
         "    }\n"
+        "    fn slice(start: long): Span<T> {\n"
+        "        return self.slice(start, (long)4);\n"
+        "    }\n"
         "}\n"
         "fn run(): int {\n"
         "    let values: int[] = [1, 2, 3, 4];\n"
         "    let middle = values.slice((long)1, (long)3);\n"
-        "    return middle.get((long)0) + (int)middle.length();\n"
+        "    let tail = values.slice((long)1);\n"
+        "    return middle.get((long)0) + (int)middle.length() + tail.get((long)0) + (int)tail.length();\n"
         "}\n";
 
     FengProgram *program = parse_or_die(kSource,

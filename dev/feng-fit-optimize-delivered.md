@@ -384,6 +384,7 @@ struct FengScalarBox {
 - [x] D9：thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
 - [x] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。
 - [x] D11：数组元素类型引用 `T` 通过 TYPE_PARAM_REF / ARRAY 组合导出，不拍平文本。
+    D11 补充：builtin / array fit 的开放泛型对象返回（如 `Span<T>`）在 direct-call 转发时，返回类型实例化必须能把目标元素上的 `CG_TYPE_GENERIC_PARAM` 恢复为对应的类型参数引用；不能因为缺少反向映射而在 codegen 阶段失败。
 - [x] D12：补齐 semantic、codegen、smoke 三层用例并执行 `make test`。
 - [x] D13：补齐泛型标量实例（如 `Set<int>`）的单态化发码路径，确保 direct-call 不触发运行时装箱。
 - [x] D14：新增泛型标量 direct-call 回归用例，对齐非标量泛型的调用形态。

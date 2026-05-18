@@ -51,6 +51,25 @@ fn array_clone_negative_end() {
   check(caught, "slice/array-clone-negative-length");
 }
 
+fn array_slice_to_end_readonly() {
+  let values: int[] = [1, 2, 3, 4];
+  let tail = values.slice((long)1);
+
+  check(tail.length() == (long)3, "slice/array-tail-readonly-length");
+  check(tail.get((long)0) == 2, "slice/array-tail-readonly-0");
+  check(tail.get((long)1) == 3, "slice/array-tail-readonly-1");
+  check(tail.get((long)2) == 4, "slice/array-tail-readonly-2");
+}
+
+fn array_slice_to_end_writable() {
+  let values: int[!] = [10, 20, 30, 40];
+  let tail = values.slice((long)2);
+
+  check(tail.length() == (long)2, "slice/array-tail-writable-length");
+  check(tail.get((long)0) == 30, "slice/array-tail-writable-0");
+  check(tail.get((long)1) == 40, "slice/array-tail-writable-1");
+}
+
 fn span_slice_relative_range() {
   let values: int[] = [1, 2, 3, 4, 5];
   let middle = values.slice((long)1, (long)4);
@@ -59,6 +78,16 @@ fn span_slice_relative_range() {
   check(tail.length() == (long)2, "slice/span-subslice-length");
   check(tail.get((long)0) == 3, "slice/span-subslice-0");
   check(tail.get((long)1) == 4, "slice/span-subslice-1");
+}
+
+fn span_slice_relative_tail() {
+  let values: int[] = [1, 2, 3, 4, 5];
+  let middle = values.slice((long)1, (long)4);
+  let tail = middle.slice((long)1);
+
+  check(tail.length() == (long)2, "slice/span-subslice-tail-length");
+  check(tail.get((long)0) == 3, "slice/span-subslice-tail-0");
+  check(tail.get((long)1) == 4, "slice/span-subslice-tail-1");
 }
 
 fn span_slice_invalid_relative_range() {
@@ -100,7 +129,10 @@ pu fn run_slice_tests() {
   array_clone_range_is_independent();
   array_clone_invalid_range();
   array_clone_negative_end();
+  array_slice_to_end_readonly();
+  array_slice_to_end_writable();
   span_slice_relative_range();
+  span_slice_relative_tail();
   span_slice_invalid_relative_range();
   span_to_array_is_independent();
   span_to_array_empty();
