@@ -5,5 +5,6 @@ fn main(args: string[]) {
   run_set_tests();
   run_list_tests();
   run_length_tests();
+  run_slice_tests();
   run_io_tests();
 }

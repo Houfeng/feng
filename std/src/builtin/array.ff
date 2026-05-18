@@ -3,6 +3,9 @@ pu mod std;
 @runtime
 extern fn feng_array_length_i64<T>(value: T[]): long;
 
+@runtime
+extern fn feng_array_slice<T>(value: T[], start: long, end: long): T[];
+
 /**
  * Extends immutable arrays with standard length-related operations.
  * @param <T> - the element type
@@ -14,6 +17,38 @@ pu fit T[] {
    */
   pu fn length(): long {
     return feng_array_length_i64(self);
+  }
+
+  /**
+   * Returns a dense copy of this array.
+   * @return copied array containing all elements
+   */
+  pu fn clone(): T[] {
+    return feng_array_slice(self, (long)0, self.length());
+  }
+
+  /**
+   * Returns a dense copy of the range `[start, start + length)`.
+   * @param start - zero-based start offset of the copied range
+   * @param length - number of elements to copy
+   */
+  pu fn clone(start: long, length: long): T[] {
+    if start < (long)0 {
+      throw "Array clone start out of bounds";
+    }
+    if length < (long)0 {
+      throw "Array clone length out of bounds";
+    }
+
+    let end = start + length;
+    if end < start {
+      throw "Array clone end out of bounds";
+    }
+    if end > self.length() {
+      throw "Array clone end out of bounds";
+    }
+
+    return feng_array_slice(self, start, end);
   }
 }
 
@@ -28,5 +63,22 @@ pu fit T[!] {
    */
   pu fn length(): long {
     return feng_array_length_i64((T[])self);
+  }
+
+  /**
+   * Returns a dense read-only copy of this array.
+   * @return copied array containing all elements
+   */
+  pu fn clone(): T[] {
+    return ((T[])self).clone();
+  }
+
+  /**
+   * Returns a dense read-only copy of the range `[start, start + length)`.
+   * @param start - zero-based start offset of the copied range
+   * @param length - number of elements to copy
+   */
+  pu fn clone(start: long, length: long): T[] {
+    return ((T[])self).clone(start, length);
   }
 }

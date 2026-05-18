@@ -71,6 +71,30 @@ pu type Span<T> {
   }
 
   /**
+   * Returns a read-only sub view relative to this span.
+   * @param start - zero-based start offset relative to this span
+   * @param length - number of elements to expose in the sub view
+   */
+  pu fn slice(start: long, length: long): Span<T> {
+    if start < (long)0 {
+      throw "Span slice start out of bounds";
+    }
+    if length < (long)0 {
+      throw "Span slice length out of bounds";
+    }
+
+    let end = start + length;
+    if end < start {
+      throw "Span slice end out of bounds";
+    }
+    if end > self.length() {
+      throw "Span slice end out of bounds";
+    }
+
+    return Span<T>(self.origin, self.start + start, self.start + end);
+  }
+
+  /**
    * Returns the element at the span-relative position `index`.
    * @param index - zero-based index relative to the span start
    */
@@ -82,5 +106,13 @@ pu type Span<T> {
       throw "Span index out of bounds";
     }
     return self.origin[self.start + index];
+  }
+
+  /**
+   * Returns a dense array copy of this span.
+   * @return copied array containing all elements in this span
+   */
+  pu fn toArray(): T[] {
+    return self.origin.clone(self.start, self.length());
   }
 }
