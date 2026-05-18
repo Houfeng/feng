@@ -292,7 +292,7 @@ static void test_array_slice_trivial_copies_subrange(void) {
     source_items[2] = 30;
     source_items[3] = 40;
 
-    slice = feng_array_slice(source, 1, 3);
+    slice = feng_array_slice(source, 1, 2);
     slice_items = (int32_t *)feng_array_data(slice);
 
     ASSERT(feng_array_length(slice) == 2U);
@@ -304,7 +304,7 @@ static void test_array_slice_trivial_copies_subrange(void) {
     slice_items[0] = 99;
     ASSERT(source_items[1] == 20);
 
-    empty = feng_array_slice(source, 2, 2);
+    empty = feng_array_slice(source, 2, 0);
     ASSERT(feng_array_length(empty) == 0U);
     ASSERT(feng_array_data(empty) == NULL);
 
@@ -339,7 +339,7 @@ static void test_array_slice_managed_pointer_retains_elements(void) {
     feng_release(b);
     feng_release(c);
 
-    slice = feng_array_slice(source, 1, 3);
+    slice = feng_array_slice(source, 1, 2);
     slice_slots = (void **)feng_array_data(slice);
     sliced_b = (TestObject *)slice_slots[0];
     sliced_c = (TestObject *)slice_slots[1];
@@ -1144,7 +1144,7 @@ static void test_array_slice_aggregate_assigns_elements(void) {
     subject1 = (TestObject *)source_items[1].subject;
     subject2 = (TestObject *)source_items[2].subject;
 
-    slice = feng_array_slice(source, 1, 3);
+    slice = feng_array_slice(source, 1, 2);
     slice_items = (FatPair *)feng_array_data(slice);
 
     ASSERT(feng_array_length(slice) == 2U);

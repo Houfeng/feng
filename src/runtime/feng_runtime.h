@@ -402,8 +402,8 @@ FengValueKind feng_array_element_kind(const FengArray *array);
  * or NULL otherwise. */
 const FengAggregateValueDescriptor *feng_array_element_aggregate(const FengArray *array);
 
-/* Runtime-contract note: `feng_array_slice(array, start, end)` copies the
- * right-open range [start, end) into a fresh +1 FengArray. The returned
+/* Runtime-contract note: `feng_array_slice(array, start, length)` copies the
+ * right-open range [start, start + length) into a fresh +1 FengArray. The returned
  * array reuses the source array's per-element metadata (kind / descriptor /
  * aggregate descriptor) but owns an independent payload allocation. When
  * the sliced range contains managed children, the helper acquires the

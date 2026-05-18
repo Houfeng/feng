@@ -24,10 +24,9 @@ int64_t feng_array_length_i64(const FengArray *value) {
     return (int64_t)length;
 }
 
-FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t end) {
+FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t length) {
     const struct FengArray *src = (const struct FengArray *)value;
     size_t slice_start;
-    size_t slice_end;
     size_t slice_length;
     FengArray *result;
 
@@ -42,30 +41,25 @@ FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t end) 
     if ((uint64_t)start > (uint64_t)SIZE_MAX) {
         feng_panic("feng_array_slice: start exceeds runtime size range");
     }
-    if (end < 0) {
-        feng_panic("feng_array_slice: end must be non-negative, got %" PRId64,
-                   end);
+    if (length < 0) {
+        feng_panic("feng_array_slice: length must be non-negative, got %" PRId64,
+                   length);
     }
-    if ((uint64_t)end > (uint64_t)SIZE_MAX) {
-        feng_panic("feng_array_slice: end exceeds runtime size range");
+    if ((uint64_t)length > (uint64_t)SIZE_MAX) {
+        feng_panic("feng_array_slice: length exceeds runtime size range");
     }
 
     slice_start = (size_t)start;
-    slice_end = (size_t)end;
+    slice_length = (size_t)length;
 
-    if (slice_end < slice_start) {
-        feng_panic("feng_array_slice: end (%" PRId64 ") must be >= start (%" PRId64 ")",
-                   end,
-                   start);
-    }
-    if (slice_end > src->length) {
-        feng_panic("feng_array_slice: range [%" PRId64 ", %" PRId64 ") out of range (length=%zu)",
+    if (slice_start > src->length ||
+        slice_length > src->length - slice_start) {
+        feng_panic("feng_array_slice: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
                    start,
-                   end,
+                   length,
                    src->length);
     }
 
-    slice_length = slice_end - slice_start;
     result = feng_array_new_kinded(src->element_kind,
                                    src->element_aggregate,
                                    src->element_desc,

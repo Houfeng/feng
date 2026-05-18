@@ -15,7 +15,7 @@ fn array_clone_all_readonly() {
 
 fn array_clone_range_is_independent() {
   let values: int[!] = [10, 20, 30, 40];
-  let copied = values.clone((long)1, (long)2);
+  let copied = values.clone((long)1, (long)3);
 
   values[(int)1] = 99;
   values[(int)2] = 88;
@@ -30,7 +30,7 @@ fn array_clone_invalid_range() {
   var caught: bool = false;
 
   try {
-    values.clone((long)2, (long)2);
+    values.clone((long)2, (long)4);
   } catch {
     caught = true;
   }
@@ -38,7 +38,7 @@ fn array_clone_invalid_range() {
   check(caught, "slice/array-clone-invalid-range");
 }
 
-fn array_clone_negative_length() {
+fn array_clone_negative_end() {
   let values: int[] = [1, 2, 3];
   var caught: bool = false;
 
@@ -53,8 +53,8 @@ fn array_clone_negative_length() {
 
 fn span_slice_relative_range() {
   let values: int[] = [1, 2, 3, 4, 5];
-  let middle = values.slice((long)1, (long)3);
-  let tail = middle.slice((long)1, (long)2);
+  let middle = values.slice((long)1, (long)4);
+  let tail = middle.slice((long)1, (long)3);
 
   check(tail.length() == (long)2, "slice/span-subslice-length");
   check(tail.get((long)0) == 3, "slice/span-subslice-0");
@@ -63,11 +63,11 @@ fn span_slice_relative_range() {
 
 fn span_slice_invalid_relative_range() {
   let values: int[] = [1, 2, 3, 4];
-  let middle = values.slice((long)1, (long)2);
+  let middle = values.slice((long)1, (long)3);
   var caught: bool = false;
 
   try {
-    middle.slice((long)1, (long)2);
+    middle.slice((long)1, (long)3);
   } catch {
     caught = true;
   }
@@ -77,7 +77,7 @@ fn span_slice_invalid_relative_range() {
 
 fn span_to_array_is_independent() {
   let values: int[!] = [7, 8, 9, 10];
-  let middle = values.slice((long)1, (long)2);
+  let middle = values.slice((long)1, (long)3);
   let copied = middle.toArray();
 
   values[(int)1] = 99;
@@ -90,7 +90,7 @@ fn span_to_array_is_independent() {
 
 fn span_to_array_empty() {
   let values: int[] = [1, 2, 3];
-  let empty = values.slice((long)1, (long)0).toArray();
+  let empty = values.slice((long)1, (long)1).toArray();
 
   check(empty.length() == (long)0, "slice/span-to-array-empty");
 }
@@ -99,7 +99,7 @@ pu fn run_slice_tests() {
   array_clone_all_readonly();
   array_clone_range_is_independent();
   array_clone_invalid_range();
-  array_clone_negative_length();
+  array_clone_negative_end();
   span_slice_relative_range();
   span_slice_invalid_relative_range();
   span_to_array_is_independent();

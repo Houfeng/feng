@@ -10,10 +10,10 @@ pu fit T[] {
   /**
    * Returns a read-only view over a contiguous range of this array.
    * @param start - zero-based index of the first element in the view
-   * @param length - number of elements in the view
+   * @param end - zero-based exclusive end offset of the view
    */
-  pu fn slice(start: long, length: long): Span<T> {
-    return Span<T>(self, start, start + length);
+  pu fn slice(start: long, end: long): Span<T> {
+    return Span<T>(self, start, end);
   }
 }
 
@@ -25,10 +25,10 @@ pu fit T[!] {
   /**
    * Returns a read-only view over a contiguous range of this array.
    * @param start - zero-based index of the first element in the view
-   * @param length - number of elements in the view
+   * @param end - zero-based exclusive end offset of the view
    */
-  pu fn slice(start: long, length: long): Span<T> {
-    return Span<T>((T[])self, start, start + length);
+  pu fn slice(start: long, end: long): Span<T> {
+    return Span<T>((T[])self, start, end);
   }
 }
 
@@ -73,17 +73,12 @@ pu type Span<T> {
   /**
    * Returns a read-only sub view relative to this span.
    * @param start - zero-based start offset relative to this span
-   * @param length - number of elements to expose in the sub view
+   * @param end - zero-based exclusive end offset relative to this span
    */
-  pu fn slice(start: long, length: long): Span<T> {
+  pu fn slice(start: long, end: long): Span<T> {
     if start < (long)0 {
       throw "Span slice start out of bounds";
     }
-    if length < (long)0 {
-      throw "Span slice length out of bounds";
-    }
-
-    let end = start + length;
     if end < start {
       throw "Span slice end out of bounds";
     }
@@ -113,6 +108,6 @@ pu type Span<T> {
    * @return copied array containing all elements in this span
    */
   pu fn toArray(): T[] {
-    return self.origin.clone(self.start, self.length());
+    return self.origin.clone(self.start, self.end);
   }
 }

@@ -1377,13 +1377,13 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
         "    }\n"
         "}\n"
         "fit T[] {\n"
-        "    fn slice(start: long, length: long): Span<T> {\n"
-        "        return Span<T>(self, start, start + length);\n"
+        "    fn slice(start: long, end: long): Span<T> {\n"
+        "        return Span<T>(self, start, end);\n"
         "    }\n"
         "}\n"
         "fn run(): int {\n"
         "    let values: int[] = [1, 2, 3, 4];\n"
-        "    let middle = values.slice((long)1, (long)2);\n"
+        "    let middle = values.slice((long)1, (long)3);\n"
         "    return middle.get((long)0) + (int)middle.length();\n"
         "}\n";
 

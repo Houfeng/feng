@@ -47,19 +47,19 @@
 
 ### 2.4 `feng_array_slice`
 
-- C 符号：`FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t end)`
-- Feng 声明形态：`extern fn feng_array_slice<T>(value: T[], start: long, end: long): T[];`
-- 用途：复制数组的一个右开区间子段 `[start, end)`，并返回一个新的 `FengArray`。适用于调用方需要“独立数组值”而不是共享视图的场景。
+- C 符号：`FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t length)`
+- Feng 声明形态：`extern fn feng_array_slice<T>(value: T[], start: long, length: long): T[];`
+- 用途：复制数组的一个右开区间子段 `[start, start + length)`，并返回一个新的 `FengArray`。适用于调用方需要“独立数组值”而不是共享视图的场景。
 - 语义说明：
-  - `start`、`end` 必须非负，且满足 `start <= end <= value.length()`。
+  - `start`、`length` 必须非负，且满足 `start + length <= value.length()`。
   - 返回值是新数组，不与源数组共享 payload 存储。
   - 对元素的复制策略由源数组的元素类别决定：
     - trivial 元素按字节复制；
     - managed pointer 元素逐槽 retain；
     - aggregate 元素逐元素走 `feng_aggregate_assign`。
   - 因而返回数组对托管子元素拥有独立持有权。
-- 当前状态：已进入 runtime contract 白名单，但标准库中尚未发现现有使用点。
-- 边界说明：这是一条“复制型数组 helper”，不等同于语言层 `std.collections` 的 `slice(start, length) -> Span<T>` 只读视图语义；后者共享底层数组，这里返回的是新数组。
+- 当前状态：已进入 runtime contract 白名单，并作为标准库数组复制能力的底层 helper。
+- 边界说明：这是一条“复制型数组 helper”，不等同于语言层 `std.collections` 的 `slice(start, end) -> Span<T>` 只读视图语义；后者共享底层数组，这里返回的是新数组。
 
 ## 3. 维护规则
 
