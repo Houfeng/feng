@@ -20,6 +20,22 @@ pu fit T[] {
   }
 
   /**
+   * Returns the element at the specified index.
+   * @param index - zero-based index of the element to return
+   * @return element at the specified index
+   */
+  pu fn at(index: long): T {
+    if index < (long)0 {
+      throw "Array index out of bounds";
+    }
+    if index >= self.length() {
+      throw "Array index out of bounds";
+    }
+    return ((T[])self)[index];
+  }
+
+
+  /**
    * Returns a dense copy of this array.
    * @return copied array containing all elements
    */
@@ -31,6 +47,7 @@ pu fit T[] {
    * Returns a dense copy of the range `[start, end)`.
    * @param start - zero-based start offset of the copied range
    * @param end - zero-based exclusive end offset of the copied range
+   * @return copied array containing all elements from `start` to `end`
    */
   pu fn clone(start: long, end: long): T[] {
     if start < (long)0 {
@@ -42,8 +59,16 @@ pu fit T[] {
     if end > self.length() {
       throw "Array clone end out of bounds";
     }
-
     return feng_array_slice(self, start, end - start);
+  }
+
+  /**
+   * Returns a dense read-only copy of this array.
+   * @param start - zero-based start offset of the copied range
+   * @return copied array containing all elements from `start` to the end of this array
+   */
+  pu fn clone(start: long): T[] {
+    return self.clone(start, self.length());
   }
 }
 
@@ -61,6 +86,15 @@ pu fit T[!] {
   }
 
   /**
+   * Returns the element at the specified index.
+   * @param index - zero-based index of the element to return
+   * @return element at the specified index
+   */
+  pu fn at(index: long): T {
+    return ((T[])self).at(index);
+  }
+
+  /**
    * Returns a dense read-only copy of this array.
    * @return copied array containing all elements
    */
@@ -72,8 +106,19 @@ pu fit T[!] {
    * Returns a dense read-only copy of the range `[start, end)`.
    * @param start - zero-based start offset of the copied range
    * @param end - zero-based exclusive end offset of the copied range
+   * @return copied array containing all elements from `start` to `end`
    */
   pu fn clone(start: long, end: long): T[] {
     return ((T[])self).clone(start, end);
   }
+
+  /**
+   * Returns a dense read-only copy of the range `[start, length)`.
+   * @param start - zero-based start offset of the copied range
+   * @return copied array containing all elements from `start` to the end of this array
+   */
+  pu fn clone(start: long): T[] {
+    return ((T[])self).clone(start);
+  }
+
 }

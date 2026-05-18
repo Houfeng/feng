@@ -11,9 +11,19 @@ pu fit T[] {
    * Returns a read-only view over a contiguous range of this array.
    * @param start - zero-based index of the first element in the view
    * @param end - zero-based exclusive end offset of the view
+   * @return view over the specified range
    */
   pu fn slice(start: long, end: long): Span<T> {
     return Span<T>(self, start, end);
+  }
+
+  /**
+   * Returns a read-only view over a contiguous range of this array.
+   * @param start - zero-based index of the first element in the view
+   * @return view over the specified range
+   */
+  pu fn slice(start: long): Span<T> {
+    return self.slice(start, self.length());
   }
 }
 
@@ -26,9 +36,19 @@ pu fit T[!] {
    * Returns a read-only view over a contiguous range of this array.
    * @param start - zero-based index of the first element in the view
    * @param end - zero-based exclusive end offset of the view
+   * @return view over the specified range
    */
   pu fn slice(start: long, end: long): Span<T> {
     return Span<T>((T[])self, start, end);
+  }
+
+  /**
+   * Returns a read-only view over a contiguous range of this array.
+   * @param start - zero-based index of the first element in the view
+   * @return view over the specified range
+   */
+  pu fn slice(start: long): Span<T> {
+    return self.slice(start, self.length());
   }
 }
 
@@ -46,6 +66,7 @@ pu type Span<T> {
    * @param origin - source array shared by this view
    * @param start - zero-based inclusive start offset
    * @param end - zero-based exclusive end offset
+   * @throws IllegalArgumentException if `start` or `end` are out of bounds
    */
   pu fn Span(origin: T[], start: long, end: long) {
     if start < (long)0 {
@@ -71,9 +92,26 @@ pu type Span<T> {
   }
 
   /**
+   * Returns the element at the span-relative position `index`.
+   * @param index - zero-based index relative to the span start
+   * @return element at the specified position
+   */
+  pu fn at(index: long): T {
+    if index < (long)0 {
+      throw "Span index out of bounds";
+    }
+    if index >= self.length() {
+      throw "Span index out of bounds";
+    }
+    return self.origin[self.start + index];
+  }
+
+
+  /**
    * Returns a read-only sub view relative to this span.
    * @param start - zero-based start offset relative to this span
    * @param end - zero-based exclusive end offset relative to this span
+   * @return view over the specified range
    */
   pu fn slice(start: long, end: long): Span<T> {
     if start < (long)0 {
@@ -90,17 +128,29 @@ pu type Span<T> {
   }
 
   /**
+   * Returns a read-only sub view relative to this span.
+   * @param start - zero-based start offset relative to this span
+   * @return view over the specified range
+   */
+  pu fn slice(start: long): Span<T> {
+    return self.slice(start, self.length());
+  }
+
+  /**
+   * Returns a read-only new view relative to this span.
+   * @return view over the specified range
+   */
+  pu fn slice() {
+    return self.slice(0, self.length());
+  }
+
+  /**
    * Returns the element at the span-relative position `index`.
    * @param index - zero-based index relative to the span start
+   * @return element at the specified position
    */
   pu fn get(index: long): T {
-    if index < (long)0 {
-      throw "Span index out of bounds";
-    }
-    if index >= self.length() {
-      throw "Span index out of bounds";
-    }
-    return self.origin[self.start + index];
+    return self.at(index);
   }
 
   /**

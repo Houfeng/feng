@@ -120,6 +120,7 @@ pu type Set<K: Hashable<K >> {
 	/**
 	 * Adds `key` into this set.
 	 * @param key - element to add
+	 * @return true if `key` was added, otherwise false
 	 */
 	pu fn add(key: K) {
 		self.ensureWritableForInsert();
@@ -163,6 +164,7 @@ pu type Set<K: Hashable<K >> {
 	/**
 	 * Removes `key` from this set if it exists.
 	 * @param key - element to remove
+	 * @return true if `key` was removed, otherwise false
 	 */
 	pu fn remove(key: K) {
 		let keyHash: u64 = key.hash();
@@ -180,6 +182,7 @@ pu type Set<K: Hashable<K >> {
 	/**
 	 * Returns true if `key` exists in this set, otherwise false.
 	 * @param key - element to test
+	 * @return true if `key` exists in this set, otherwise false
 	 */
 	pu fn has(key: K): bool {
 		let keyHash: u64 = key.hash();
@@ -188,6 +191,7 @@ pu type Set<K: Hashable<K >> {
 
 	/**
 	 * Returns the number of occupied elements in the set.
+	 * @return number of elements
 	 */
 	pu fn count(): i32 {
 		return self.size;
