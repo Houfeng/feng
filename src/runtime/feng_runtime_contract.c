@@ -4,20 +4,6 @@
 #include <inttypes.h>
 #include <limits.h>
 
-static size_t feng_array_slice_index_from_i64(int64_t value,
-                                              const char *name) {
-    if (value < 0) {
-        feng_panic("feng_array_slice: %s must be non-negative, got %" PRId64,
-                   name,
-                   value);
-    }
-    if ((uint64_t)value > (uint64_t)SIZE_MAX) {
-        feng_panic("feng_array_slice: %s exceeds runtime size range", name);
-    }
-
-    return (size_t)value;
-}
-
 int64_t feng_string_utf8_length(FengString *value) {
     size_t length = feng_string_length(value);
 
@@ -49,8 +35,23 @@ FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t end) 
         feng_panic("feng_array_slice: array must not be NULL");
     }
 
-    slice_start = feng_array_slice_index_from_i64(start, "start");
-    slice_end = feng_array_slice_index_from_i64(end, "end");
+    if (start < 0) {
+        feng_panic("feng_array_slice: start must be non-negative, got %" PRId64,
+                   start);
+    }
+    if ((uint64_t)start > (uint64_t)SIZE_MAX) {
+        feng_panic("feng_array_slice: start exceeds runtime size range");
+    }
+    if (end < 0) {
+        feng_panic("feng_array_slice: end must be non-negative, got %" PRId64,
+                   end);
+    }
+    if ((uint64_t)end > (uint64_t)SIZE_MAX) {
+        feng_panic("feng_array_slice: end exceeds runtime size range");
+    }
+
+    slice_start = (size_t)start;
+    slice_end = (size_t)end;
 
     if (slice_end < slice_start) {
         feng_panic("feng_array_slice: end (%" PRId64 ") must be >= start (%" PRId64 ")",
