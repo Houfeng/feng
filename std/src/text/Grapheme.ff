@@ -1,0 +1,29 @@
+pu mod std.text;
+
+/**
+ * A view of a string as a sequence of graphemes.
+ */
+pub type GraphemeView {
+  pr let text: string;
+  pr Grapheme(text: string) {
+    self.text = text;
+  }
+  pu length(): long {
+    return 0;
+  }
+}
+
+/**
+ * Extends `string` with standard length-related operations.
+ */
+pu fit string {
+
+  /**
+   * Returns a view of this string as a sequence of graphemes.
+   * @return grapheme view of this string
+   */
+  pu graphemes(): GraphemeView {
+    return GraphemeView(self);
+  }
+
+}

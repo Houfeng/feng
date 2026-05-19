@@ -202,7 +202,7 @@ type Point {
 @abi
 spec PointCB(p: Point): void;
 
-let point_lib = "./libpoint.so";
+let point_lib = "point";
 
 // 声明 C 外部函数
 @cdecl(point_lib)

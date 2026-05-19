@@ -1,0 +1,30 @@
+pu mod std.text;
+
+/**
+ * Extends `string` with standard length-related operations.
+ */
+pu fit string {
+
+  /**
+   * Returns a view of this string as a sequence of runes.
+   * @return rune view of this string
+   */
+  pu runes(): RuneView {
+    return RuneView(self);
+  }
+
+}
+
+
+/**
+ * A view of a string as a sequence of runes.
+ */
+pu type RuneView {
+  pr let text: string;
+  pr Rune(text: string) {
+    self.text = text;
+  }
+  pu length(): long {
+    return 0;
+  }
+}

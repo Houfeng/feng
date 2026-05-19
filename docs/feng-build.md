@@ -73,11 +73,11 @@ runtime 链接边界:
 @cdecl("m")
 extern fn sin(x: float): float;
 
-@cdecl("./libssl.so")
+@cdecl("ssl")
 extern fn ssl_connect(fd: int): int;
 ```
 
-编译器读取注解参数，解析为系统库名、相对路径或绝对路径，生成对应链接参数。
+编译器读取注解参数，解析为库名并生成对应链接参数。
 
 **来源②: `--pkg` 指定的 `.fb` 包内正式库文件**
 

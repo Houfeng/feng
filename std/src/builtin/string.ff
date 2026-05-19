@@ -15,32 +15,20 @@ pu fit string {
     return feng_string_utf8_length(self);
   }
 
+  /**
+   * Returns a view of this string as a sequence of runes.
+   * @return rune view of this string
+   */
   pu runes(): RuneView {
     return RuneView(self);
   }
 
+  /**
+   * Returns a view of this string as a sequence of graphemes.
+   * @return grapheme view of this string
+   */
   pu graphemes(): GraphemeView {
     return GraphemeView(self);
   }
 
-}
-
-pu type RuneView {
-  pr let text: string;
-  pr Rune(text: string) {
-    self.text = text;
-  }
-  pu length(): long {
-    return 0;
-  }
-}
-
-pub type GraphemeView {
-  pr let text: string;
-  pr Grapheme(text: string) {
-    self.text = text;
-  }
-  pu length(): long {
-    return 0;
-  }
 }

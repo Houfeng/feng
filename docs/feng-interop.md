@@ -22,21 +22,17 @@
 
 ## 2 C库来源与调用方式注解
 
-使用 `@cdecl("库名/路径")`、`@stdcall("库名/路径")` 或 `@fastcall("库名/路径")` 为无函数体的 `extern fn` 声明指定 C ABI 导入路径下的 C 库来源与调用方式。这三个注解在导入场景下的唯一参数支持以下两种写法:
+使用 `@cdecl("库名")`、`@stdcall("库名")` 或 `@fastcall("库名")` 为无函数体的 `extern fn` 声明指定 C ABI 导入路径下的 C 库来源与调用方式。这三个注解在导入场景下的唯一参数支持以下两种写法:
 
 1. 直接书写字符串字面量
 2. 引用在当前可见作用域中、以字符串字面量直接初始化的 `let` 绑定; 来源文件或模块不限
 
-无论采用哪种写法,编译器最终都会在编译期把参数解析为以下三种库来源之一:
-
-1. 系统库名: 无特殊路径前缀,编译器自动补全系统库前缀和后缀
-2. 相对路径: 以 `./` 或 `../` 开头,相对于当前 `.ff` 文件路径
-3. 绝对路径: 以 `/` 开头,直接指定库文件完整路径
+无论采用哪种写法,编译器最终都会在编译期把参数解析为库名（无特殊路径前缀）,并按系统规则补全库前后缀。
 
 补充规则:
 
 - `@cdecl("...")`、`@stdcall("...")` 和 `@fastcall("...")` 的带参数形式仅适用于无函数体的 `extern fn` 声明。
-- 带参数的调用方式注解必须且只能带一个参数,该参数表示库名或路径。
+- 带参数的调用方式注解必须且只能带一个参数,该参数表示库名。
 - 若该参数使用 `let` 绑定引用,则该绑定必须以字符串字面量直接初始化,不可使用计算表达式或 `var` 绑定; 来源文件或模块不限,只要在使用点可见即可。
 - 不同 `extern fn` 声明在同一文件或同一 `mod` 中可以指向不同原生库,不再要求“一个文件只归属于一个 C ABI 库”。
 - C ABI 路径下,无函数体的 `extern fn` 声明必须且只能使用一个带参数的调用方式注解; 调用方式由注解名本身唯一确定。
@@ -46,16 +42,13 @@
 
 ```feng
 let math_lib = "m";
-let local_lib = "./libtest.so";
+let local_lib = "test";
 
 @cdecl(math_lib)
 extern fn sin(x: float): float;
 
 @stdcall(local_lib)
 extern fn create_point(x: int, y: int): Point;
-
-@cdecl("/usr/local/lib/libcurl.so")
-extern fn curl_global_init(flags: u64): int;
 
 @abi
 @stdcall
@@ -258,7 +251,7 @@ fn handle_point(p: Point) {
 
 let cb: PointOperate* = &handle_point;
 
-@cdecl("./libpoint.so")
+@cdecl("point")
 extern fn run_point_operate(p: Point, cb: PointOperate*): void;
 ```
 
@@ -319,7 +312,7 @@ type Point {
 @abi
 spec PointOperate(p: Point): void;
 
-let point_lib = "./libpoint.so";
+let point_lib = "point";
 
 @cdecl(point_lib)
 extern fn point_distance(p1: Point, p2: Point): float;
