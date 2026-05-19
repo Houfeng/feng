@@ -34,7 +34,7 @@ Feng 源层仍用普通泛型声明语法表达类型参数；codegen 在调用 
 - 类型大小。
 - 值模型分类（`FengValueKind`）。
 - by-value aggregate 描述符。
-- 内建标量 / `string` / 数组 / 对象 / closure / 指针 / enum / `type` / object-form spec 等类型类别。
+- 内建标量 / enum / `string` / 数组 / 对象 / C 指针 / object-form spec / callable-form spec 等当前已有类型类别。
 - 约束 witness（仅普通 Feng 泛型约束分发使用）。
 
 首版不单独引入 runtime 专用泛型描述符；后续若某个 runtime contract 需要递归类型 payload、数组元素 descriptor、指针目标描述符、union member 表等更复杂信息，再先更新本文并由人工确认扩展方式。
@@ -65,32 +65,33 @@ Feng 源层仍用普通泛型声明语法表达类型参数；codegen 在调用 
 ```c
 typedef enum FengRuntimeTypeKind {
     FENG_RUNTIME_TYPE_BOOL = 1,
-    FENG_RUNTIME_TYPE_I8,
-    FENG_RUNTIME_TYPE_I16,
-    FENG_RUNTIME_TYPE_I32,
-    FENG_RUNTIME_TYPE_I64,
-    FENG_RUNTIME_TYPE_U8,
-    FENG_RUNTIME_TYPE_U16,
-    FENG_RUNTIME_TYPE_U32,
-    FENG_RUNTIME_TYPE_U64,
-    FENG_RUNTIME_TYPE_F32,
-    FENG_RUNTIME_TYPE_F64,
-    FENG_RUNTIME_TYPE_ENUM,
-    FENG_RUNTIME_TYPE_STRING,
-    FENG_RUNTIME_TYPE_ARRAY,
-    FENG_RUNTIME_TYPE_OBJECT,
-    FENG_RUNTIME_TYPE_CLOSURE,
-    FENG_RUNTIME_TYPE_TYPE,
-    FENG_RUNTIME_TYPE_POINTER,
-    FENG_RUNTIME_TYPE_SPEC_OBJECT,
-    FENG_RUNTIME_TYPE_AGGREGATE
+    FENG_RUNTIME_TYPE_I8 = 2,
+    FENG_RUNTIME_TYPE_I16 = 3,
+    FENG_RUNTIME_TYPE_I32 = 4,
+    FENG_RUNTIME_TYPE_I64 = 5,
+    FENG_RUNTIME_TYPE_U8 = 6,
+    FENG_RUNTIME_TYPE_U16 = 7,
+    FENG_RUNTIME_TYPE_U32 = 8,
+    FENG_RUNTIME_TYPE_U64 = 9,
+    FENG_RUNTIME_TYPE_F32 = 10,
+    FENG_RUNTIME_TYPE_F64 = 11,
+    FENG_RUNTIME_TYPE_ENUM = 12,       /* user enum lowered as its integer representation */
+    FENG_RUNTIME_TYPE_STRING = 13,
+    FENG_RUNTIME_TYPE_ARRAY = 14,
+    FENG_RUNTIME_TYPE_OBJECT = 15,     /* concrete user type value, represented as a managed object reference */
+    FENG_RUNTIME_TYPE_POINTER = 16,    /* C interop pointer type written as T* */
+    FENG_RUNTIME_TYPE_SPEC = 17,       /* object-form spec fat value */
+    FENG_RUNTIME_TYPE_CALLABLE = 18    /* callable-form spec value, including lambdas and bound method values */
 } FengRuntimeTypeKind;
 ```
+
+首版枚举只包含当前语言和实现已经存在的类型分类，不预留尚未引入的未来类型成员；后续新增语言类型时，必须先更新本文再扩展 `FengRuntimeTypeKind`。
+枚举值必须全部显式指定，避免混用显式值与隐式递增值；新增成员时只能追加新值，不得复用或重排已有值。
 
 `FengRuntimeTypeKind` 不是 `FengValueKind` 的重复：
 
 - `FengValueKind` 回答值生命周期和复制策略：trivial / managed pointer / aggregate。
-- `FengRuntimeTypeKind` 回答 runtime helper 的语义分派：整数、浮点、字符串、数组、对象、指针、object-form spec 等。
+- `FengRuntimeTypeKind` 回答 runtime helper 的语义分派：整数、浮点、enum、字符串、数组、对象、C 指针、object-form spec、callable-form spec 等当前已有类型。
 
 ### 3.2 扩展 `FengGenericParamDescriptor`
 
@@ -184,7 +185,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 - 由标准库显式调用 helper，而不是让任意泛型 `T == T` 自动通过。
 - 相等语义必须与语言规范中的表达式 / spec 相等语义对齐；本文不重新定义 equality 主语义。
 - 不得使用 `memcmp` 作为浮点、aggregate、object-form spec 等类型的语义兜底。
-- 标量、enum、`string`、数组、指针、对象、callable、`type`、object-form spec 等可进入数组的元素类型，都必须有明确且生产级的处理策略。
+- 标量、enum、`string`、数组、C 指针、对象、object-form spec、callable-form spec 等当前可进入数组的元素类型，都必须有明确且生产级的处理策略。
 - helper 可以读取 `FengGenericParamDescriptor.type_kind` 做语义分派，可以读取 `size` / `kind` / `aggregate` 完成必要的值访问判断，但不得读取 `witness`。
 
 如果某一类类型当前缺少规范化相等语义，必须先回到对应权威规范确定语义，再实现 helper，不得在 runtime 中临时补特殊规则。
@@ -194,7 +195,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 ### 6.1 规范与 ABI 收敛
 
 - [ ] 在本文确认 runtime API 泛型与普通 Feng 泛型分层独立。
-- [ ] 明确 `FengRuntimeTypeKind` 的枚举成员、稳定性边界和与 `FengValueKind` 的职责区分。
+- [ ] 明确 `FengRuntimeTypeKind` 的枚举成员、稳定性边界、不得预留未来类型成员，以及与 `FengValueKind` 的职责区分。
 - [ ] 明确 `FengGenericParamDescriptor.type_kind` 固定紧跟 `kind`，并同步生命周期和 ABI 兼容策略。
 - [ ] 明确裸 `T` 参数、裸 `T` 返回值、`T[]` 参数、`T[]` 返回值的 C contract carrier，以及隐藏 `FengGenericParamDescriptor` 参数顺序。
 - [ ] 明确 descriptor 与 `src/runtime/feng_runtime_contract.inc` 的关系：contract 白名单仍是唯一允许符号来源，`FengGenericParamDescriptor` 是泛型 contract 符号的隐藏 ABI 参数。
