@@ -15,8 +15,8 @@
 补充定义:
 
 - `std` 在数组目标 `T[]` 与 `T[!]` 上提供 `length()`，返回类型为 `long`（`i64`），表示当前数组层元素个数。
-- `std` 在可写数组目标 `T[!]` 上提供 `indexOf(value)`，返回指定值第一次出现的零基索引；若不存在匹配元素，则返回 `-1`。
-- `indexOf(value)` 的匹配判定由运行时表达式相等 helper 执行，比较当前数组中的元素槽位与只含目标值的临时数组元素槽位；该 helper 不改变数组长度、元素所有权或数组 payload。
+- `std` 在数组目标 `T[]` 与 `T[!]` 上提供 `indexOf(value)`，返回指定值第一次出现的零基索引；若不存在匹配元素，则返回 `-1`。
+- `indexOf(value)` 的匹配判定由运行时表达式相等 helper 执行，直接比较当前数组元素与目标值；该 helper 不改变数组长度、元素所有权或数组 payload。
 - `std` 提供 `clone()` 与 `clone(start, end)`。`clone()` 返回复制当前数组全部元素得到的新数组；`clone(start, end)` 返回复制区间 `[start, end)` 得到的新数组，不与源数组共享底层元素存储。
 - 标准库模块 `std.collections` 在数组目标上提供 `slice(start, end)`，返回只读切片视图 `Span<T>`。`Span<T>` 是 `std.collections` 中定义的共享底层数组的普通对象，不是新的内建数组类型，也不改变数组实例长度固定的语义；当前阶段应通过数组 `slice` 获得该视图。
 - `Span<T>` 采用右开区间 `[start, end)` 表示视图范围；`length()` 返回 `end - start`，`get(index)` 以视图左端为基准访问元素。

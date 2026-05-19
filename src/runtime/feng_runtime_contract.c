@@ -3,6 +3,44 @@
 
 #include <inttypes.h>
 #include <limits.h>
+#include <string.h>
+
+static void runtime_contract_copy_value_to_out(const char *name,
+                                               const FengGenericParamDescriptor *type,
+                                               const void *value,
+                                               void *out) {
+    if (type == NULL) {
+        feng_panic("%s: type must not be NULL", name);
+    }
+    if (value == NULL) {
+        feng_panic("%s: value must not be NULL", name);
+    }
+    if (out == NULL) {
+        feng_panic("%s: out must not be NULL", name);
+    }
+
+    switch (type->kind) {
+        case FENG_VALUE_TRIVIAL:
+            memcpy(out, value, type->size);
+            return;
+        case FENG_VALUE_MANAGED_POINTER: {
+            void *managed = *(void *const *)value;
+
+            feng_retain(managed);
+            *(void **)out = managed;
+            return;
+        }
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            if (type->aggregate == NULL) {
+                feng_panic("%s: aggregate descriptor must not be NULL", name);
+            }
+            feng_aggregate_retain((void *)value, type->aggregate);
+            memcpy(out, value, type->size);
+            return;
+    }
+
+    feng_panic("%s: unknown value kind=%d", name, (int)type->kind);
+}
 
 int64_t feng_string_utf8_length(FengString *value) {
     size_t length = feng_string_length(value);
@@ -78,4 +116,10 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
                                slice_start,
                                slice_length);
     return result;
+}
+
+void __test_value_identity(const FengGenericParamDescriptor *type,
+                           const void *value,
+                           void *out) {
+    runtime_contract_copy_value_to_out("__test_value_identity", type, value, out);
 }

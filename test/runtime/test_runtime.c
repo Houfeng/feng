@@ -1170,6 +1170,58 @@ static const FengGenericParamDescriptor fat_pair_runtime_generic_descriptor = {
     .witness = NULL,
 };
 
+static void test_test_value_identity_contract_copies_trivial_value(void) {
+    int32_t value = 42;
+    int32_t out = 0;
+
+    __test_value_identity(&i32_runtime_generic_descriptor, &value, &out);
+    ASSERT(out == 42);
+}
+
+static void test_test_value_identity_contract_retains_managed_pointer(void) {
+    TestObject *value;
+    TestObject *out = NULL;
+
+    g_finalize_count = 0;
+    value = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    __test_value_identity(&object_runtime_generic_descriptor, &value, &out);
+
+    ASSERT(out == value);
+    ASSERT(value->header.refcount == 2U);
+
+    feng_release(value);
+    ASSERT(g_finalize_count == 0);
+    ASSERT(out->header.refcount == 1U);
+
+    feng_release(out);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_test_value_identity_contract_retains_aggregate(void) {
+    FatPair value = {0};
+    FatPair out = {0};
+    TestObject *subject;
+
+    g_finalize_count = 0;
+    subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    value.subject = subject;
+    value.tag = 7;
+
+    __test_value_identity(&fat_pair_runtime_generic_descriptor, &value, &out);
+
+    ASSERT(out.subject == subject);
+    ASSERT(out.tag == 7);
+    ASSERT(subject->header.refcount == 2U);
+
+    feng_aggregate_release(&value, &fat_pair_desc);
+    ASSERT(g_finalize_count == 0);
+    ASSERT(subject->header.refcount == 1U);
+
+    feng_aggregate_release(&out, &fat_pair_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
 typedef struct OuterAgg {
     void   *head;            /* managed pointer */
     FatPair inner;           /* nested aggregate */
@@ -1632,6 +1684,9 @@ int main(void) {
     test_array_slice_trivial_copies_subrange();
     test_array_slice_managed_pointer_retains_elements();
     test_expression_equal_contract_uses_descriptor();
+    test_test_value_identity_contract_copies_trivial_value();
+    test_test_value_identity_contract_retains_managed_pointer();
+    test_test_value_identity_contract_retains_aggregate();
     test_array_slice_aggregate_assigns_elements();
     test_exception_caught();
     test_exception_managed_value_caught();

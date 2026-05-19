@@ -5181,14 +5181,22 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     if (!cg_resolve_type(cg, sig->return_type, &sig->token, &ef->return_type)) {
         goto cleanup;
     }
-    if (sig->type_param_count > 0U &&
-        !cg_type_has_stable_generic_extern_surface(ef->return_type)) {
-        cg_fail(cg,
-                sig->token,
-                "codegen: generic extern fn '%.*s' return type does not lower to a single external surface",
-                (int)sig->name.length,
-                sig->name.data);
-        goto cleanup;
+    if (sig->type_param_count > 0U) {
+        bool has_stable_surface = cg_type_has_stable_generic_extern_surface(ef->return_type);
+
+        if (!has_stable_surface && ef->uses_runtime_contract &&
+            ef->return_type != NULL &&
+            ef->return_type->kind == CG_TYPE_GENERIC_PARAM) {
+            has_stable_surface = true;
+        }
+        if (!has_stable_surface) {
+            cg_fail(cg,
+                    sig->token,
+                    "codegen: generic extern fn '%.*s' return type does not lower to a single external surface",
+                    (int)sig->name.length,
+                    sig->name.data);
+            goto cleanup;
+        }
     }
     cg->extern_count++;
     ok = true;
@@ -14463,6 +14471,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
         .return_type = NULL,
         .uses_runtime_contract = ext != NULL && ext->uses_runtime_contract,
     };
+    bool return_is_direct_type_param = false;
     bool ok = false;
 
     if (ext == NULL) {
@@ -14588,6 +14597,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                                                &pattern)) {
             goto cleanup;
         }
+        return_is_direct_type_param = pattern->kind == CG_TYPE_GENERIC_PARAM;
         return_type = cg_instantiate_callable_type_from_args(pattern,
                                                              type_args,
                                                              sig->type_param_count);
@@ -14607,6 +14617,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     concrete.return_type = return_type;
     if (concrete.uses_runtime_contract && sig->type_param_count > 0U) {
         Buf args_buf;
+        char *ret_cname = NULL;
 
         if (!cg_build_generic_param_constraints(cg,
                                                 sig->type_params,
@@ -14698,14 +14709,56 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             er_free(&ar);
         }
 
-        Buf b;
-        buf_init(&b);
-        buf_append_fmt(&b, "%s(%s)", concrete.name, args_buf.data ? args_buf.data : "");
+        if (return_is_direct_type_param) {
+            char *cty = cg_ctype_dup(concrete.return_type);
+
+            ret_cname = cg_fresh_temp(cg, "_rgr");
+            if (cty == NULL || ret_cname == NULL) {
+                free(cty);
+                free(ret_cname);
+                buf_free(&args_buf);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            free(cty);
+
+            buf_append_cstr(&args_buf, ", ");
+            buf_append_fmt(&args_buf, "&%s", ret_cname);
+            buf_append_fmt(cg->cur_body,
+                           "    %s(%s);\n",
+                           concrete.name,
+                           args_buf.data ? args_buf.data : "");
+
+            out->c_expr = strdup(ret_cname);
+            out->type = cgtype_clone(concrete.return_type);
+            if (out->c_expr == NULL || out->type == NULL) {
+                free(out->c_expr);
+                out->c_expr = NULL;
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(ret_cname);
+                buf_free(&args_buf);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+            if (cgtype_is_managed(out->type)) {
+                cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
+            } else if (cgtype_is_aggregate(out->type)) {
+                cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname);
+            }
+            ok = true;
+            free(ret_cname);
+        } else {
+            Buf b;
+
+            buf_init(&b);
+            buf_append_fmt(&b, "%s(%s)", concrete.name, args_buf.data ? args_buf.data : "");
+            out->c_expr = b.data;
+            out->type = cgtype_clone(concrete.return_type);
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+            ok = out->c_expr != NULL && out->type != NULL;
+        }
         buf_free(&args_buf);
-        out->c_expr = b.data;
-        out->type = cgtype_clone(concrete.return_type);
-        out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
-        ok = out->c_expr != NULL && out->type != NULL;
     } else {
         ok = cg_emit_registered_call(cg, e, NULL, &concrete, out);
     }

@@ -820,6 +820,49 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.genericruntimeidentityreturn;\n"
+        "@runtime\n"
+        "extern fn __test_value_identity<T>(value: T): T;\n"
+        "fn run(value: int): int {\n"
+        "    return __test_value_identity(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genericruntimeidentityreturn.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic runtime extern bare return): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__test_value_identity(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, &_rga") != NULL);
+    ASSERT(strstr(out.c_source, ", &_rgr") != NULL);
+    ASSERT(count_substr(out.c_source, "int32_t _rga") == 1U);
+    ASSERT(count_substr(out.c_source, "int32_t _rgr") == 1U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_runtime_extern_codegen_rejects_non_contract_symbol(void) {
     static const char *kSource =
         "mod feng.codegen.runtimeexternreject;\n"
@@ -3183,6 +3226,7 @@ int main(void) {
     test_generic_runtime_extern_call_infers_type_args();
     test_generic_runtime_extern_call_accepts_explicit_type_args();
     test_generic_runtime_extern_expression_equal_codegen();
+    test_generic_runtime_extern_direct_type_param_return_codegen();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();
