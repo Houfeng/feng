@@ -209,6 +209,31 @@ typedef enum FengValueKind {
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS = 3
 } FengValueKind;
 
+/* Runtime-facing semantic type classification used by runtime-generic
+ * helpers. This is intentionally separate from FengValueKind: value kind
+ * answers lifecycle/copy strategy, while runtime type kind answers semantic
+ * dispatch such as enum/string/array/object/pointer/spec/callable. */
+typedef enum FengRuntimeTypeKind {
+    FENG_RUNTIME_TYPE_BOOL = 1,
+    FENG_RUNTIME_TYPE_I8 = 2,
+    FENG_RUNTIME_TYPE_I16 = 3,
+    FENG_RUNTIME_TYPE_I32 = 4,
+    FENG_RUNTIME_TYPE_I64 = 5,
+    FENG_RUNTIME_TYPE_U8 = 6,
+    FENG_RUNTIME_TYPE_U16 = 7,
+    FENG_RUNTIME_TYPE_U32 = 8,
+    FENG_RUNTIME_TYPE_U64 = 9,
+    FENG_RUNTIME_TYPE_F32 = 10,
+    FENG_RUNTIME_TYPE_F64 = 11,
+    FENG_RUNTIME_TYPE_ENUM = 12,       /* user enum lowered as its integer representation */
+    FENG_RUNTIME_TYPE_STRING = 13,
+    FENG_RUNTIME_TYPE_ARRAY = 14,
+    FENG_RUNTIME_TYPE_OBJECT = 15,     /* concrete user type value, represented as a managed object reference */
+    FENG_RUNTIME_TYPE_POINTER = 16,    /* C interop pointer type written as T* */
+    FENG_RUNTIME_TYPE_SPEC = 17,       /* object-form spec fat value */
+    FENG_RUNTIME_TYPE_CALLABLE = 18    /* callable-form spec value, including lambdas and bound method values */
+} FengRuntimeTypeKind;
+
 /* ---- Generic parameter descriptor (G6 — layout monomorphization + method sharing) ----
  * Passed as one hidden argument per type parameter to generic shared bodies.
  * Carries the minimum runtime information needed by erased code to correctly
@@ -217,6 +242,9 @@ typedef enum FengValueKind {
  *
  *   size      — sizeof(T); used for memcpy when kind == TRIVIAL or AGGREGATE.
  *   kind      — ARC classification; drives the switch in generic return/copy.
+ *   type_kind — semantic runtime type classification for runtime-generic
+ *               helper dispatch; ordinary generic shared bodies do not branch
+ *               on it.
  *   aggregate — required when kind == AGGREGATE_WITH_MANAGED_SLOTS; NULL
  *               otherwise.
  *   witness   — optional static witness instance for the current generic
@@ -225,6 +253,7 @@ typedef enum FengValueKind {
 typedef struct FengGenericParamDescriptor {
     size_t          size;
     FengValueKind   kind;
+    FengRuntimeTypeKind type_kind;
     const struct FengAggregateValueDescriptor *aggregate;
     const void     *witness;
 } FengGenericParamDescriptor;

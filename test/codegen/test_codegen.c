@@ -1885,6 +1885,103 @@ static void test_generic_constraint_witness_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericRuntimeTypeKindSrc =
+    "mod feng.codegen.gf9;\n"
+    "spec Named {\n"
+    "    fn name(): string;\n"
+    "}\n"
+    "spec Mapper(x: int): int;\n"
+    "enum Status {\n"
+    "    Ok = 200,\n"
+    "    Failed = 500\n"
+    "}\n"
+    "type User: Named {\n"
+    "    fn name(): string {\n"
+    "        return \"user\";\n"
+    "    }\n"
+    "}\n"
+    "fn add1(x: int): int {\n"
+    "    return x + 1;\n"
+    "}\n"
+    "fn identity<T>(value: T): T {\n"
+    "    return value;\n"
+    "}\n"
+    "fn use_it(values: int[]): int {\n"
+    "    let ok = identity(true);\n"
+    "    let text = identity(\"hi\");\n"
+    "    let arr = identity(values);\n"
+    "    let user = identity(User());\n"
+    "    let named: Named = User();\n"
+    "    let spec_value = identity(named);\n"
+    "    let mapper: Mapper = add1;\n"
+    "    let callable = identity(mapper);\n"
+    "    let current: Status = Status.Ok;\n"
+    "    let ptr: Status* = &current;\n"
+    "    let handle = identity(ptr);\n"
+    "    let status = identity(Status.Failed);\n"
+    "    if ok {\n"
+    "        return 1;\n"
+    "    }\n"
+    "    return 0;\n"
+    "}\n";
+
+static void test_generic_runtime_type_kind_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericRuntimeTypeKindSrc, "gf9.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    "<unknown>",
+                    errors[i].token.line,
+                    errors[i].token.column,
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic runtime type kind): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_BOOL") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_ENUM") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_STRING") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_ARRAY") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_OBJECT") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_POINTER") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = FENG_RUNTIME_TYPE_SPEC") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_CALLABLE") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_fit_enum_generic_constraint_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.fit_enum_generic;\n"
@@ -3072,6 +3169,7 @@ int main(void) {
     test_callable_spec_other_coercion_codegen();
     test_callable_spec_other_field_read_coercion_codegen();
     test_generic_constraint_witness_codegen();
+    test_generic_runtime_type_kind_codegen();
     test_fit_enum_generic_constraint_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();

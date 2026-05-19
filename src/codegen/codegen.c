@@ -301,6 +301,35 @@ static const char *cgtype_to_c(CGTypeKind k) {
     }
 }
 
+static const char *cg_runtime_type_kind_name(const CGType *t) {
+    if (t == NULL) {
+        return NULL;
+    }
+    if (t->enum_decl != NULL) {
+        return "FENG_RUNTIME_TYPE_ENUM";
+    }
+    switch (t->kind) {
+        case CG_TYPE_BOOL: return "FENG_RUNTIME_TYPE_BOOL";
+        case CG_TYPE_I8: return "FENG_RUNTIME_TYPE_I8";
+        case CG_TYPE_I16: return "FENG_RUNTIME_TYPE_I16";
+        case CG_TYPE_I32: return "FENG_RUNTIME_TYPE_I32";
+        case CG_TYPE_I64: return "FENG_RUNTIME_TYPE_I64";
+        case CG_TYPE_U8: return "FENG_RUNTIME_TYPE_U8";
+        case CG_TYPE_U16: return "FENG_RUNTIME_TYPE_U16";
+        case CG_TYPE_U32: return "FENG_RUNTIME_TYPE_U32";
+        case CG_TYPE_U64: return "FENG_RUNTIME_TYPE_U64";
+        case CG_TYPE_F32: return "FENG_RUNTIME_TYPE_F32";
+        case CG_TYPE_F64: return "FENG_RUNTIME_TYPE_F64";
+        case CG_TYPE_STRING: return "FENG_RUNTIME_TYPE_STRING";
+        case CG_TYPE_ARRAY: return "FENG_RUNTIME_TYPE_ARRAY";
+        case CG_TYPE_OBJECT: return "FENG_RUNTIME_TYPE_OBJECT";
+        case CG_TYPE_POINTER: return "FENG_RUNTIME_TYPE_POINTER";
+        case CG_TYPE_SPEC: return "FENG_RUNTIME_TYPE_SPEC";
+        case CG_TYPE_CALLABLE: return "FENG_RUNTIME_TYPE_CALLABLE";
+        default: return NULL;
+    }
+}
+
 static bool cg_pointer_inner_is_lowerable(const CGType *t) {
     if (t == NULL) {
         return false;
@@ -13725,8 +13754,8 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             }
             Buf adapter; buf_init(&adapter);
             buf_append_fmt(&adapter,
-                "&(const FengGenericParamDescriptor){%s->size, %s->kind, %s->aggregate, %s->witness}",
-                desc, desc, desc, desc);
+                "&(const FengGenericParamDescriptor){.size = %s->size, .kind = %s->kind, .type_kind = %s->type_kind, .aggregate = %s->aggregate, .witness = %s->witness}",
+                desc, desc, desc, desc, desc);
             *out = adapter.data;
             return *out != NULL;
         }
@@ -13736,7 +13765,14 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
 
     Buf b; buf_init(&b);
     const char *witness_expr = "NULL";
+    const char *runtime_type_kind = cg_runtime_type_kind_name(t);
     char *owned_witness_expr = NULL;
+
+    if (runtime_type_kind == NULL) {
+        buf_free(&b);
+        return cg_fail(cg, *tok,
+            "codegen: concrete generic type argument currently requires a runtime type classification");
+    }
 
     if (constraint_spec) {
         if (t && t->kind == CG_TYPE_OBJECT && t->user) {
@@ -13821,14 +13857,14 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
         case CG_VK_TRIVIAL: {
             const char *cty = cgtype_to_c(t->kind);
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_TRIVIAL, NULL, %s}",
-                cty, witness_expr);
+                "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_TRIVIAL, .type_kind = %s, .aggregate = NULL, .witness = %s}",
+                cty, runtime_type_kind, witness_expr);
             break;
         }
         case CG_VK_MANAGED_POINTER:
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){sizeof(void *), FENG_VALUE_MANAGED_POINTER, NULL, %s}",
-                witness_expr);
+                "&(const FengGenericParamDescriptor){.size = sizeof(void *), .kind = FENG_VALUE_MANAGED_POINTER, .type_kind = %s, .aggregate = NULL, .witness = %s}",
+                runtime_type_kind, witness_expr);
             break;
         case CG_VK_AGGREGATE: {
             const char *desc = cg_aggregate_field_desc_name(t);
@@ -13841,8 +13877,8 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                     "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
             }
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){sizeof(%s), FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, %s}",
-                cty, desc, witness_expr);
+                "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = %s, .aggregate = &%s, .witness = %s}",
+                cty, runtime_type_kind, desc, witness_expr);
             free(cty);
             break;
         }

@@ -65,6 +65,7 @@ runtime API 泛型的 descriptor 传递模型必须与普通 Feng 泛型保持�
 新增 runtime 可识别的类型分类枚举，例如：
 
 ```c
+// 实现时，需要按下的结构，且下方枚举值的注释也要保留
 typedef enum FengRuntimeTypeKind {
     FENG_RUNTIME_TYPE_BOOL = 1,
     FENG_RUNTIME_TYPE_I8 = 2,
