@@ -5,6 +5,9 @@
 #include <limits.h>
 #include <string.h>
 
+/* Shared helper for bare-T return contracts. Copies the source value into the
+ * caller-provided output slot while preserving Feng ownership semantics for
+ * managed pointers and by-value aggregates. */
 static void runtime_contract_copy_value_to_out(const char *name,
                                                const FengGenericParamDescriptor *type,
                                                const void *value,
@@ -42,6 +45,8 @@ static void runtime_contract_copy_value_to_out(const char *name,
     feng_panic("%s: unknown value kind=%d", name, (int)type->kind);
 }
 
+/* Returns the UTF-8 byte length of a Feng string as a stable i64 contract
+ * result, trapping if the runtime size exceeds the contract range. */
 int64_t feng_string_utf8_length(FengString *value) {
     size_t length = feng_string_length(value);
 
@@ -52,6 +57,9 @@ int64_t feng_string_utf8_length(FengString *value) {
     return (int64_t)length;
 }
 
+/* Returns the logical element count of an array as a stable i64 contract
+ * result. The generic descriptor is accepted for ABI uniformity but is not
+ * consulted by this helper. */
 int64_t feng_array_length_i64(const FengGenericParamDescriptor *type,
                               const FengArray *value) {
     size_t length = feng_array_length(value);
@@ -65,6 +73,9 @@ int64_t feng_array_length_i64(const FengGenericParamDescriptor *type,
     return (int64_t)length;
 }
 
+/* Copies the right-open range [start, start + length) into a fresh array while
+ * preserving per-element ownership semantics recorded on the source array. The
+ * generic descriptor is currently carried only to match the runtime generic ABI. */
 FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
                             const FengArray *value,
                             int64_t start,
@@ -118,6 +129,8 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
     return result;
 }
 
+/* Test-only runtime contract used to exercise bare-T return lowering with a
+ * real descriptor-aware out carrier. */
 void __test_value_identity(const FengGenericParamDescriptor *type,
                            const void *value,
                            void *out) {
