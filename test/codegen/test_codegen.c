@@ -728,7 +728,8 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_array_length_i64(values)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, values)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -767,7 +768,48 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_array_length_i64(values)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, values)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_generic_runtime_extern_expression_equal_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.genericruntimeexprequal;\n"
+        "@runtime\n"
+        "extern fn feng_expression_equal<T>(left: T[], leftIndex: long, right: T[], rightIndex: long): bool;\n"
+        "fn run(left: int[], right: int[], index: long): bool {\n"
+        "    return feng_expression_equal(left, index, right, index);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genericruntimeexprequal.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic runtime extern expression_equal): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_expression_equal(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, left, index, right, index)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -3139,6 +3181,7 @@ int main(void) {
     test_runtime_extern_codegen_uses_feng_surface_types();
     test_generic_runtime_extern_call_infers_type_args();
     test_generic_runtime_extern_call_accepts_explicit_type_args();
+    test_generic_runtime_extern_expression_equal_codegen();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();

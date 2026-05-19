@@ -14385,12 +14385,15 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                                         const ExternFn *ext,
                                         ExprResult *out) {
     const FengCallableSignature *sig = &decl->as.function_decl;
-    /* Generic externs do not use the GenericFn descriptor ABI. We first pick a
-     * concrete erased surface from explicit or inferred type arguments, then
-     * emit a normal extern call against that concrete signature. */
+    /* Generic externs are specialized to a concrete erased surface after
+     * resolving/inferencing type arguments. Runtime-contract generic externs
+     * still prepend one hidden FengGenericParamDescriptor argument per type
+     * parameter before the concrete surface arguments. */
     CGType **param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
     CGType **type_args = sig->type_param_count ? calloc(sig->type_param_count, sizeof *type_args) : NULL;
     CGType *return_type = NULL;
+    const UserSpec **constraint_specs = NULL;
+    char **desc_exprs = NULL;
     ExternFn concrete = {
         .name = ext != NULL ? ext->name : NULL,
         .param_types = param_types,
@@ -14535,9 +14538,78 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     }
 
     concrete.return_type = return_type;
-    ok = cg_emit_registered_call(cg, e, NULL, &concrete, out);
+    if (concrete.uses_runtime_contract && sig->type_param_count > 0U) {
+        Buf args_buf;
+
+        if (!cg_build_generic_param_constraints(cg,
+                                                sig->type_params,
+                                                sig->type_param_count,
+                                                e->token,
+                                                &constraint_specs)) {
+            goto cleanup;
+        }
+        desc_exprs = calloc(sig->type_param_count, sizeof *desc_exprs);
+        if (desc_exprs == NULL) {
+            cg_fail(cg, e->token, "codegen: out of memory");
+            goto cleanup;
+        }
+        for (size_t i = 0; i < sig->type_param_count; ++i) {
+            if (!cg_generic_descriptor_expr(cg,
+                                            type_args[i],
+                                            constraint_specs ? constraint_specs[i] : NULL,
+                                            &e->token,
+                                            &desc_exprs[i])) {
+                goto cleanup;
+            }
+        }
+
+        buf_init(&args_buf);
+        for (size_t i = 0; i < sig->type_param_count; ++i) {
+            if (i != 0U) {
+                buf_append_cstr(&args_buf, ", ");
+            }
+            buf_append_cstr(&args_buf, desc_exprs[i]);
+        }
+        for (size_t i = 0; i < sig->param_count; ++i) {
+            ExprResult ar;
+
+            er_init(&ar);
+            if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+                buf_free(&args_buf);
+                goto cleanup;
+            }
+            if (cgtype_is_managed(ar.type) && ar.owns_ref) {
+                cg_materialize_to_local(cg, &ar, "_t");
+            } else if (cgtype_is_aggregate(ar.type)) {
+                cg_materialize_to_local(cg, &ar, "_t");
+            }
+            if (sig->type_param_count != 0U || i != 0U) {
+                buf_append_cstr(&args_buf, ", ");
+            }
+            buf_append_cstr(&args_buf, ar.c_expr);
+            er_free(&ar);
+        }
+
+        Buf b;
+        buf_init(&b);
+        buf_append_fmt(&b, "%s(%s)", concrete.name, args_buf.data ? args_buf.data : "");
+        buf_free(&args_buf);
+        out->c_expr = b.data;
+        out->type = cgtype_clone(concrete.return_type);
+        out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
+        ok = out->c_expr != NULL && out->type != NULL;
+    } else {
+        ok = cg_emit_registered_call(cg, e, NULL, &concrete, out);
+    }
 
 cleanup:
+    if (desc_exprs != NULL) {
+        for (size_t i = 0; i < sig->type_param_count; ++i) {
+            free(desc_exprs[i]);
+        }
+    }
+    free(desc_exprs);
+    free((void *)constraint_specs);
     for (size_t i = 0; i < sig->param_count; ++i) {
         cgtype_free(param_types[i]);
     }

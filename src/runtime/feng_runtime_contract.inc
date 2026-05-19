@@ -16,9 +16,9 @@
 
 FENG_RUNTIME_CONTRACT(int64_t, feng_string_utf8_length, (FengString *value))
 FENG_RUNTIME_CONTRACT(FengString *, feng_string_from_utf8_bytes, (FengArray *value, int64_t length))
-FENG_RUNTIME_CONTRACT(int64_t, feng_array_length_i64, (const FengArray *value))
-FENG_RUNTIME_CONTRACT(FengArray *, feng_array_slice, (const FengArray *value, int64_t start, int64_t length))
-FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengArray *left, int64_t left_index, const FengArray *right, int64_t right_index))
+FENG_RUNTIME_CONTRACT(int64_t, feng_array_length_i64, (const FengGenericParamDescriptor *type, const FengArray *value))
+FENG_RUNTIME_CONTRACT(FengArray *, feng_array_slice, (const FengGenericParamDescriptor *type, const FengArray *value, int64_t start, int64_t length))
+FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengGenericParamDescriptor *type, const FengArray *left, int64_t left_index, const FengArray *right, int64_t right_index))
 
 
 // Only for IntelliSense ------------------------------------------------------

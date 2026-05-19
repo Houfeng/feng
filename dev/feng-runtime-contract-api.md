@@ -6,12 +6,13 @@
 - 允许列表的唯一权威来源是 `src/runtime/feng_runtime_contract.inc`；本文是解释性索引，不是第二份白名单定义。
 - 若 future 变更新增、删除或重命名 runtime contract API，必须先修改 `src/runtime/feng_runtime_contract.inc`，再同步更新本文。
 
-当前 contract API 共 4 个：
+当前 contract API 共 5 个：
 
 1. `feng_string_utf8_length`
 2. `feng_string_from_utf8_bytes`
 3. `feng_array_length_i64`
 4. `feng_array_slice`
+5. `feng_expression_equal`
 
 ## 2. API 清单
 
@@ -38,18 +39,20 @@
 
 ### 2.3 `feng_array_length_i64`
 
-- C 符号：`int64_t feng_array_length_i64(const FengArray *value)`
+- C 符号：`int64_t feng_array_length_i64(const FengGenericParamDescriptor *type, const FengArray *value)`
 - Feng 声明形态：`extern fn feng_array_length_i64<T>(value: T[]): long;`
 - 用途：读取数组当前层的元素个数，并把 runtime 内部的 `size_t` 长度转换成 Feng 侧 `long`（`i64`）。
+- ABI 说明：Feng 层的 `<T>` 不直接出现在显式声明中；generated C 会在调用点把 `T` 对应的 `FengGenericParamDescriptor` 作为隐藏参数放在最前面传给 runtime contract。
 - 语义说明：返回的是“元素个数”，不是字节数，也不是递归展开后的总元素数。
 - 主要使用点：标准库 `std/src/builtin/array.ff` 用它实现数组 `length()`。
 - 边界说明：实现对 `NULL` 做了容错并返回 `0`，但 contract 的正常使用语义仍然是“对一个合法数组值取长度”。若数组长度无法装入 `int64_t`，runtime 直接失败。
 
 ### 2.4 `feng_array_slice`
 
-- C 符号：`FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t length)`
+- C 符号：`FengArray *feng_array_slice(const FengGenericParamDescriptor *type, const FengArray *value, int64_t start, int64_t length)`
 - Feng 声明形态：`extern fn feng_array_slice<T>(value: T[], start: long, length: long): T[];`
 - 用途：复制数组的一个右开区间子段 `[start, start + length)`，并返回一个新的 `FengArray`。适用于调用方需要“独立数组值”而不是共享视图的场景。
+- ABI 说明：generated C 会把元素类型 `T` 的 `FengGenericParamDescriptor` 作为隐藏参数放在最前面传入；当前 helper 沿用现有数组 carrier，不额外暴露第二套数组类型元数据。
 - 语义说明：
   - `start`、`length` 必须非负，且满足 `start + length <= value.length()`。
   - 返回值是新数组，不与源数组共享 payload 存储。
@@ -60,6 +63,16 @@
   - 因而返回数组对托管子元素拥有独立持有权。
 - 当前状态：已进入 runtime contract 白名单，并作为标准库数组复制能力的底层 helper。
 - 边界说明：这是一条“复制型数组 helper”，不等同于语言层 `std.collections` 的 `slice(start, end) -> Span<T>` 只读视图语义；后者共享底层数组，这里返回的是新数组。
+
+### 2.5 `feng_expression_equal`
+
+- C 符号：`bool feng_expression_equal(const FengGenericParamDescriptor *type, const FengArray *left, int64_t left_index, const FengArray *right, int64_t right_index)`
+- Feng 声明形态：`extern fn feng_expression_equal<T>(left: T[], leftIndex: long, right: T[], rightIndex: long): bool;`
+- 用途：比较两个数组槽位中 `T` 值的运行时相等性，用于标准库数组 `indexOf` 等显式 helper 场景。
+- ABI 说明：generated C 会把 `T` 的 `FengGenericParamDescriptor` 作为隐藏首参传入；普通 Feng 泛型共享体与 runtime helper 共用同一 descriptor 载体，但 runtime helper 不消费 `witness`。
+- 语义说明：当前 helper 仍按既有 runtime 值模型比较数组槽位，并维持现有字符串 / 指针 / aggregate 路径。
+- 主要使用点：标准库 `std/src/builtin/array.ff` 用它实现 `T[!].indexOf(value)`。
+- 边界说明：这是标准库显式调用的 runtime helper，不改变普通 `==` 运算符的 analyzer / codegen 规则。
 
 ## 3. 维护规则
 

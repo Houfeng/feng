@@ -14,8 +14,11 @@ int64_t feng_string_utf8_length(FengString *value) {
     return (int64_t)length;
 }
 
-int64_t feng_array_length_i64(const FengArray *value) {
+int64_t feng_array_length_i64(const FengGenericParamDescriptor *type,
+                              const FengArray *value) {
     size_t length = feng_array_length(value);
+
+    (void)type;
 
     if (length > (size_t)INT64_MAX) {
         feng_panic("feng_array_length_i64: length overflow");
@@ -24,11 +27,16 @@ int64_t feng_array_length_i64(const FengArray *value) {
     return (int64_t)length;
 }
 
-FengArray *feng_array_slice(const FengArray *value, int64_t start, int64_t length) {
+FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
+                            const FengArray *value,
+                            int64_t start,
+                            int64_t length) {
     const struct FengArray *src = (const struct FengArray *)value;
     size_t slice_start;
     size_t slice_length;
     FengArray *result;
+
+    (void)type;
 
     if (src == NULL) {
         feng_panic("feng_array_slice: array must not be NULL");

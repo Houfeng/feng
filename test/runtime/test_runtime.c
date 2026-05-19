@@ -210,6 +210,20 @@ static const FengTypeDescriptor i32_element_descriptor = {
     .size = sizeof(int32_t),
     .finalizer = NULL,
 };
+static const FengGenericParamDescriptor i32_runtime_generic_descriptor = {
+    .size = sizeof(int32_t),
+    .kind = FENG_VALUE_TRIVIAL,
+    .type_kind = FENG_RUNTIME_TYPE_I32,
+    .aggregate = NULL,
+    .witness = NULL,
+};
+static const FengGenericParamDescriptor object_runtime_generic_descriptor = {
+    .size = sizeof(void *),
+    .kind = FENG_VALUE_MANAGED_POINTER,
+    .type_kind = FENG_RUNTIME_TYPE_OBJECT,
+    .aggregate = NULL,
+    .witness = NULL,
+};
 
 static void test_array_primitive(void) {
     FengArray *array = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
@@ -280,6 +294,15 @@ static void test_array_payload_alignment(void) {
     feng_release(trivial);
 }
 
+static void test_array_length_contract_uses_descriptor(void) {
+    FengArray *array = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
+
+    ASSERT(feng_array_length_i64(&i32_runtime_generic_descriptor, array) == 4);
+    ASSERT(feng_array_length_i64(&i32_runtime_generic_descriptor, NULL) == 0);
+
+    feng_release(array);
+}
+
 static void test_array_slice_trivial_copies_subrange(void) {
     FengArray *source = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
     int32_t *source_items = (int32_t *)feng_array_data(source);
@@ -292,7 +315,7 @@ static void test_array_slice_trivial_copies_subrange(void) {
     source_items[2] = 30;
     source_items[3] = 40;
 
-    slice = feng_array_slice(source, 1, 2);
+    slice = feng_array_slice(&i32_runtime_generic_descriptor, source, 1, 2);
     slice_items = (int32_t *)feng_array_data(slice);
 
     ASSERT(feng_array_length(slice) == 2U);
@@ -304,7 +327,7 @@ static void test_array_slice_trivial_copies_subrange(void) {
     slice_items[0] = 99;
     ASSERT(source_items[1] == 20);
 
-    empty = feng_array_slice(source, 2, 0);
+    empty = feng_array_slice(&i32_runtime_generic_descriptor, source, 2, 0);
     ASSERT(feng_array_length(empty) == 0U);
     ASSERT(feng_array_data(empty) == NULL);
 
@@ -339,7 +362,7 @@ static void test_array_slice_managed_pointer_retains_elements(void) {
     feng_release(b);
     feng_release(c);
 
-    slice = feng_array_slice(source, 1, 2);
+    slice = feng_array_slice(&object_runtime_generic_descriptor, source, 1, 2);
     slice_slots = (void **)feng_array_data(slice);
     sliced_b = (TestObject *)slice_slots[0];
     sliced_c = (TestObject *)slice_slots[1];
@@ -358,6 +381,24 @@ static void test_array_slice_managed_pointer_retains_elements(void) {
 
     feng_release(slice);
     ASSERT(g_finalize_count == 3);
+}
+
+static void test_expression_equal_contract_uses_descriptor(void) {
+    FengArray *left = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
+    FengArray *right = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
+    int32_t *left_items = (int32_t *)feng_array_data(left);
+    int32_t *right_items = (int32_t *)feng_array_data(right);
+
+    left_items[0] = 10;
+    left_items[1] = 20;
+    right_items[0] = 10;
+    right_items[1] = 30;
+
+    ASSERT(feng_expression_equal(&i32_runtime_generic_descriptor, left, 0, right, 0));
+    ASSERT(!feng_expression_equal(&i32_runtime_generic_descriptor, left, 1, right, 1));
+
+    feng_release(right);
+    feng_release(left);
 }
 
 static void test_array_slice_aggregate_assigns_elements(void);
@@ -918,7 +959,7 @@ static void arc_throw_body(void) {
 
 static void array_slice_out_of_range_body(void) {
     FengArray *source = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
-    FengArray *slice = feng_array_slice(source, 1, 3);
+    FengArray *slice = feng_array_slice(&i32_runtime_generic_descriptor, source, 1, 3);
     feng_release(slice);
     feng_release(source);
 }
@@ -1098,6 +1139,14 @@ static const FengAggregateValueDescriptor fat_pair_desc = {
     .managed_slots = fat_pair_slots,
 };
 
+static const FengGenericParamDescriptor fat_pair_runtime_generic_descriptor = {
+    .size = sizeof(FatPair),
+    .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+    .type_kind = FENG_RUNTIME_TYPE_SPEC,
+    .aggregate = &fat_pair_desc,
+    .witness = NULL,
+};
+
 typedef struct OuterAgg {
     void   *head;            /* managed pointer */
     FatPair inner;           /* nested aggregate */
@@ -1144,7 +1193,7 @@ static void test_array_slice_aggregate_assigns_elements(void) {
     subject1 = (TestObject *)source_items[1].subject;
     subject2 = (TestObject *)source_items[2].subject;
 
-    slice = feng_array_slice(source, 1, 2);
+    slice = feng_array_slice(&fat_pair_runtime_generic_descriptor, source, 1, 2);
     slice_items = (FatPair *)feng_array_data(slice);
 
     ASSERT(feng_array_length(slice) == 2U);
@@ -1184,7 +1233,6 @@ static void test_aggregate_retain_release_paired(void) {
     feng_aggregate_release(&p, &fat_pair_desc);
     ASSERT(o->header.refcount == 1U);
     ASSERT(g_finalize_count == 0);
-
     /* Drop p's ownership. */
     feng_aggregate_release(&p, &fat_pair_desc);
     ASSERT(g_finalize_count == 1);
@@ -1557,8 +1605,10 @@ int main(void) {
     test_array_managed_releases_elements();
     test_array_zero_length();
     test_array_payload_alignment();
+    test_array_length_contract_uses_descriptor();
     test_array_slice_trivial_copies_subrange();
     test_array_slice_managed_pointer_retains_elements();
+    test_expression_equal_contract_uses_descriptor();
     test_array_slice_aggregate_assigns_elements();
     test_exception_caught();
     test_exception_managed_value_caught();

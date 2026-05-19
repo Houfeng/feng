@@ -71,7 +71,8 @@ static void expression_require_compatible_arrays(const struct FengArray *left,
 }
 
 /* Compare two array element slots using the runtime value classification. */
-bool feng_expression_equal(const FengArray *left_value,
+bool feng_expression_equal(const FengGenericParamDescriptor *type,
+                           const FengArray *left_value,
                            int64_t left_index,
                            const FengArray *right_value,
                            int64_t right_index) {
@@ -83,6 +84,8 @@ bool feng_expression_equal(const FengArray *left_value,
         expression_checked_index("right", right_value, right_index);
     const unsigned char *left_element;
     const unsigned char *right_element;
+
+    (void)type;
 
     expression_require_compatible_arrays(left, right);
     left_element = expression_array_element(left, checked_left_index);
