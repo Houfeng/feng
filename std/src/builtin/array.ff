@@ -37,6 +37,18 @@ pu fit T[] {
     return ((T[])self)[index];
   }
 
+  /**
+   * Returns the index of the first occurrence of the specified value, or -1 if not found.
+   * @param value - the value to search for
+   * @return zero-based index of the first occurrence of `value`, or -1 if not found
+   */
+  pu fn indexOf(value: T): long {
+    let len = self.length();
+    for var i: long = 0; i < len; i += (long)1 {
+      if feng_expression_equal(self[i], value) { return i; }
+    }
+    return -1;
+  }
 
   /**
    * Returns a dense copy of this array.
@@ -103,10 +115,7 @@ pu fit T[!] {
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
   pu fn indexOf(value: T): long {
-    for var i: long = 0; i < self.length(); i += (long)1 {
-      if feng_expression_equal(((T[])self)[i], value) { return i; }
-    }
-    return -1;
+    return ((T[])self).indexOf(value);
   }
 
   /**
