@@ -783,9 +783,9 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.genericruntimeexprequal;\n"
         "@runtime\n"
-        "extern fn feng_expression_equal<T>(left: T[], leftIndex: long, right: T[], rightIndex: long): bool;\n"
-        "fn run(left: int[], right: int[], index: long): bool {\n"
-        "    return feng_expression_equal(left, index, right, index);\n"
+        "extern fn feng_expression_equal<T>(left: T, right: T): bool;\n"
+        "fn run(left: int, right: int): bool {\n"
+        "    return feng_expression_equal(left, right);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexprequal.ff");
     const FengProgram *programs[1] = {program};
@@ -809,7 +809,8 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_expression_equal(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, left, index, right, index)") != NULL);
+                  "feng_expression_equal(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, &_rga") != NULL);
+    ASSERT(count_substr(out.c_source, "int32_t _rga") == 2U);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);

@@ -5889,6 +5889,7 @@ static bool callable_parameters_match_args_for_owner_instance(
     ResolveContext *context,
     const FengCallableSignature *callable,
     const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
     InferredExprType owner_type,
     FengExpr *const *args,
     size_t arg_count,
@@ -5922,6 +5923,10 @@ static bool callable_parameters_match_args_for_owner_instance(
                                                             owner_type_decl,
                                                             owner_type,
                                                             param_type);
+        param_type = substitute_type_ref_for_fit_instance(context,
+                                                          fit_decl,
+                                                          owner_type,
+                                                          param_type);
         if (allow_wrapped_inference &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
@@ -6851,6 +6856,7 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     if (!callable_parameters_match_args_for_owner_instance(st->context,
                                                            &member->as.callable,
                                                            st->owner_type_decl,
+                                                           fit_decl,
                                                            st->owner_type,
                                                            st->args,
                                                            st->arg_count,
@@ -6932,6 +6938,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     !callable_parameters_match_args_for_owner_instance(context,
                                                                        &member->as.callable,
                                                                        type_decl,
+                                                                       NULL,
                                                                        owner_type,
                                                                        args,
                                                                        arg_count,
@@ -6982,6 +6989,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 !callable_parameters_match_args_for_owner_instance(context,
                                                                    &member->as.callable,
                                                                    type_decl,
+                                                                   NULL,
                                                                    owner_type,
                                                                    args,
                                                                    arg_count,

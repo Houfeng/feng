@@ -224,6 +224,13 @@ static const FengGenericParamDescriptor object_runtime_generic_descriptor = {
     .aggregate = NULL,
     .witness = NULL,
 };
+static const FengGenericParamDescriptor string_runtime_generic_descriptor = {
+    .size = sizeof(void *),
+    .kind = FENG_VALUE_MANAGED_POINTER,
+    .type_kind = FENG_RUNTIME_TYPE_STRING,
+    .aggregate = NULL,
+    .witness = NULL,
+};
 
 static void test_array_primitive(void) {
     FengArray *array = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
@@ -384,21 +391,37 @@ static void test_array_slice_managed_pointer_retains_elements(void) {
 }
 
 static void test_expression_equal_contract_uses_descriptor(void) {
-    FengArray *left = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
-    FengArray *right = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 2U);
-    int32_t *left_items = (int32_t *)feng_array_data(left);
-    int32_t *right_items = (int32_t *)feng_array_data(right);
+    int32_t left_i32 = 10;
+    int32_t right_i32 = 10;
+    int32_t other_i32 = 30;
+    FengString *left_string = feng_string_literal("hello", 5U);
+    FengString *right_string = feng_string_concat(feng_string_literal("he", 2U),
+                                                  feng_string_literal("llo", 3U));
+    FengString *other_string = feng_string_literal("world", 5U);
+    TestObject *left_object = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *same_object = left_object;
+    TestObject *other_object = (TestObject *)feng_object_new(&test_object_descriptor);
 
-    left_items[0] = 10;
-    left_items[1] = 20;
-    right_items[0] = 10;
-    right_items[1] = 30;
+    ASSERT(feng_expression_equal(&i32_runtime_generic_descriptor, &left_i32, &right_i32));
+    ASSERT(!feng_expression_equal(&i32_runtime_generic_descriptor, &left_i32, &other_i32));
 
-    ASSERT(feng_expression_equal(&i32_runtime_generic_descriptor, left, 0, right, 0));
-    ASSERT(!feng_expression_equal(&i32_runtime_generic_descriptor, left, 1, right, 1));
+    ASSERT(feng_expression_equal(&string_runtime_generic_descriptor,
+                                 &left_string,
+                                 &right_string));
+    ASSERT(!feng_expression_equal(&string_runtime_generic_descriptor,
+                                  &left_string,
+                                  &other_string));
 
-    feng_release(right);
-    feng_release(left);
+    ASSERT(feng_expression_equal(&object_runtime_generic_descriptor,
+                                 &left_object,
+                                 &same_object));
+    ASSERT(!feng_expression_equal(&object_runtime_generic_descriptor,
+                                  &left_object,
+                                  &other_object));
+
+    feng_release(other_object);
+    feng_release(left_object);
+    feng_release(right_string);
 }
 
 static void test_array_slice_aggregate_assigns_elements(void);

@@ -66,11 +66,11 @@
 
 ### 2.5 `feng_expression_equal`
 
-- C 符号：`bool feng_expression_equal(const FengGenericParamDescriptor *type, const FengArray *left, int64_t left_index, const FengArray *right, int64_t right_index)`
-- Feng 声明形态：`extern fn feng_expression_equal<T>(left: T[], leftIndex: long, right: T[], rightIndex: long): bool;`
-- 用途：比较两个数组槽位中 `T` 值的运行时相等性，用于标准库数组 `indexOf` 等显式 helper 场景。
-- ABI 说明：generated C 会把 `T` 的 `FengGenericParamDescriptor` 作为隐藏首参传入；普通 Feng 泛型共享体与 runtime helper 共用同一 descriptor 载体，但 runtime helper 不消费 `witness`。
-- 语义说明：当前 helper 仍按既有 runtime 值模型比较数组槽位，并维持现有字符串 / 指针 / aggregate 路径。
+- C 符号：`bool feng_expression_equal(const FengGenericParamDescriptor *type, const void *left, const void *right)`
+- Feng 声明形态：`extern fn feng_expression_equal<T>(left: T, right: T): bool;`
+- 用途：比较两个 `T` 值的运行时相等性，用于标准库数组 `indexOf` 等显式 helper 场景。
+- ABI 说明：generated C 会把 `T` 的 `FengGenericParamDescriptor` 作为隐藏首参传入；裸 `T` 参数按地址 carrier 传给 runtime contract，因此 helper 不再接收旧的 `T[] + index` 过渡形态。
+- 语义说明：helper 按 `type_kind` 与当前值模型分派，实现基础数值 / `bool` / `enum` / `string` 的值语义，以及数组 / 对象 / 指针 / `spec` / callable 的引用身份语义。
 - 主要使用点：标准库 `std/src/builtin/array.ff` 用它实现 `T[!].indexOf(value)`。
 - 边界说明：这是标准库显式调用的 runtime helper，不改变普通 `==` 运算符的 analyzer / codegen 规则。
 

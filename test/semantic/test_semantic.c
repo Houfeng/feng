@@ -2799,6 +2799,57 @@ static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
     feng_program_free(program);
 }
 
+static void test_generic_extern_call_accepts_bare_type_param_inference(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "@runtime\n"
+        "extern fn same<T>(left: T, right: T): bool;\n"
+        "fn run(left: int, right: int): bool {\n"
+        "    return same(left, right);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_extern_bare_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_fit_method_accepts_fit_type_param_argument(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fit T[!] {\n"
+        "    fn pick(value: T): long {\n"
+        "        return (long)1;\n"
+        "    }\n"
+        "}\n"
+        "fn run(values: int[!]): long {\n"
+        "    return values.pick(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_method_type_param_arg_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference(void) {
     const char *source =
         "mod demo.main;\n"
@@ -12623,6 +12674,8 @@ int main(void) {
     test_top_level_function_call_selects_overload_by_inferred_local_binding();
     test_top_level_function_call_reports_type_mismatch();
     test_generic_extern_call_accepts_wrapped_array_inference();
+    test_generic_extern_call_accepts_bare_type_param_inference();
+    test_fit_method_accepts_fit_type_param_argument();
     test_generic_extern_call_rejects_conflicting_wrapped_array_inference();
     test_generic_non_extern_call_does_not_expand_wrapped_array_inference();
     test_imported_function_call_selects_overload_by_literal_type();

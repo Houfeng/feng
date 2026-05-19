@@ -36,6 +36,21 @@ fn array_length_nested() {
   check(matrix[0].length() == (long)3, "length/array-nested-inner");
 }
 
+fn array_index_of_int() {
+  let values: int[!] = [10, 20, 30, 20];
+
+  check(values.indexOf(20) == (long)1, "length/array-index-of-int-hit");
+  check(values.indexOf(99) == (long)-1, "length/array-index-of-int-miss");
+}
+
+fn array_index_of_string() {
+  let values: string[!] = ["zero", "hello", "world"];
+  let joined = "he" + "llo";
+
+  check(values.indexOf(joined) == (long)1, "length/array-index-of-string-hit");
+  check(values.indexOf("missing") == (long)-1, "length/array-index-of-string-miss");
+}
+
 fn span_length_readonly() {
   let values: int[] = [1, 2, 3, 4];
   let middle = values.slice((long)1, (long)3);
@@ -122,6 +137,8 @@ pu fn run_length_tests() {
   array_length_writable();
   array_length_empty();
   array_length_nested();
+  array_index_of_int();
+  array_index_of_string();
   span_length_readonly();
   span_get_readonly();
   span_slice_writable_source();

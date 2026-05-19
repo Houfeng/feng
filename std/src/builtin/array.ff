@@ -7,7 +7,7 @@ extern fn feng_array_length_i64<T>(value: T[]): long;
 extern fn feng_array_slice<T>(value: T[], start: long, length: long): T[];
 
 @runtime
-extern fn feng_expression_equal<T>(left: T[], leftIndex: long, right: T[], rightIndex: long): bool;
+extern fn feng_expression_equal<T>(left: T, right: T): bool;
 
 /**
  * Extends immutable arrays with standard length-related operations.
@@ -103,9 +103,8 @@ pu fit T[!] {
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
   pu fn indexOf(value: T): long {
-    let target: T[] = [value];
     for var i: long = 0; i < self.length(); i += (long)1 {
-      if feng_expression_equal((T[])self, i, target, (long)0) { return i; }
+      if feng_expression_equal(((T[])self)[i], value) { return i; }
     }
     return -1;
   }
