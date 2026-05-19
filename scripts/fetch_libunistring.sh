@@ -7,6 +7,8 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
 TARGET_DIR="${PROJECT_ROOT}/third_party/libunistring"
+PUBLIC_INCLUDE_DIR="${TARGET_DIR}/include"
+INTERNAL_SRC_DIR="${TARGET_DIR}/src/lib"
 
 echo "========================================================"
 echo "🚀 启动 libunistring 静态库源码提取程序"
@@ -16,7 +18,11 @@ echo "========================================================"
 
 # 清理并重建目标物理现场
 rm -rf "${TARGET_DIR}"
-mkdir -p "${TARGET_DIR}/include"
+mkdir -p "${PUBLIC_INCLUDE_DIR}/unistring"
+mkdir -p "${INTERNAL_SRC_DIR}/unistr"
+mkdir -p "${INTERNAL_SRC_DIR}/unigbrk"
+mkdir -p "${INTERNAL_SRC_DIR}/unictype"
+mkdir -p "${INTERNAL_SRC_DIR}/unistring"
 mkdir -p "${TARGET_DIR}/src"
 
 # 将临时工作区显式指定到项目根目录下的 temp/ 目录中
@@ -45,55 +51,169 @@ cd "${EXTRACTED_SRC}"
 # 禁止一切不需要的模块，只做纯净的本地配置生成
 ./configure --disable-shared --disable-rpath --without-libiconv-prefix > /dev/null
 
-# ------------------------------------------------------------------------------
-# 🚚 [4/4] 提取已经生成完毕的、正统的 C 源码与头文件
-# ------------------------------------------------------------------------------
-echo "🚚 正在精准提取正统骨骼文件到 third_party..."
+# 本仓库当前只保留 UTF-8 rune / grapheme 统计与遍历所需的最小子集。
+GENERATED_HEADERS=(
+       unitypes.h
+       unistr.h
+       unigbrk.h
+       unictype.h
+)
 
-# 1. 搬运已经由 configure 正常生成的标准头文件 (不再是 .in.h)
-cp "lib/unitypes.h" "${TARGET_DIR}/include/"
-cp "lib/unistr.h"   "${TARGET_DIR}/include/"
-cp "lib/uninorm.h"  "${TARGET_DIR}/include/"
-cp "lib/unicase.h"  "${TARGET_DIR}/include/"
-
-# 2. 搬运正常生成的编译配置环境
-cp "config.h"       "${TARGET_DIR}/src/"
-
-# 3. 搬运核心物理实现 (.c 文件)
-cp "lib/unistr/u8-mbtowc.c"      "${TARGET_DIR}/src/"
-cp "lib/unistr/u8-mbtowc-aux.c"  "${TARGET_DIR}/src/"
-cp "lib/unistr/u8-next.c"        "${TARGET_DIR}/src/"
-cp "lib/unistr/u8-prev.c"        "${TARGET_DIR}/src/"
-cp "lib/unistr/u8-strlen.c"      "${TARGET_DIR}/src/"
-cp "lib/unistr/u8-cpy.c"         "${TARGET_DIR}/src/"
-cp "lib/uninorm/normalize.c"     "${TARGET_DIR}/src/"
-cp "lib/uninorm/u8-normalize.c"  "${TARGET_DIR}/src/"
-cp "lib/unicase/u8-tolower.c"    "${TARGET_DIR}/src/"
-cp "lib/unicase/u8-toupper.c"    "${TARGET_DIR}/src/"
+make -C "lib" \
+       "${GENERATED_HEADERS[@]}" \
+       unistring/stdint.h \
+       unistring/woe32dll.h > /dev/null
 
 # ------------------------------------------------------------------------------
-# 📝 原地为 third_party/libunistring 写入一个极其干净的标准 Makefile
+# 🚚 [4/4] 提取 rune / grapheme 最小公开头与源码闭包
 # ------------------------------------------------------------------------------
-echo "📝 正在生成标准 Makefile 编译脚本..."
+echo "🚚 正在导出 rune / grapheme 最小闭包到 third_party..."
+
+# 1. 公开头：只暴露 rune / grapheme 所需接口
+cp "lib/unitypes.h" "${PUBLIC_INCLUDE_DIR}/"
+cp "lib/unistring/stdint.h" "${PUBLIC_INCLUDE_DIR}/unistring/"
+
+cat << 'EOF' > "${PUBLIC_INCLUDE_DIR}/feng_u8_rune.h"
+#ifndef FENG_U8_RUNE_H
+#define FENG_U8_RUNE_H
+
+#include "unitypes.h"
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+size_t u8_mbsnlen(const uint8_t *s, size_t n);
+const uint8_t *u8_next(ucs4_t *puc, const uint8_t *s);
+const uint8_t *u8_prev(ucs4_t *puc, const uint8_t *s, const uint8_t *start);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+
+cat << 'EOF' > "${PUBLIC_INCLUDE_DIR}/feng_u8_grapheme.h"
+#ifndef FENG_U8_GRAPHEME_H
+#define FENG_U8_GRAPHEME_H
+
+#include "unitypes.h"
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void u8_grapheme_breaks(const uint8_t *s, size_t n, char *p);
+const uint8_t *u8_grapheme_next(const uint8_t *s, const uint8_t *end);
+const uint8_t *u8_grapheme_prev(const uint8_t *s, const uint8_t *start);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+
+cat << 'EOF' > "${TARGET_DIR}/README.md"
+# libunistring minimal subset
+
+This directory vendors only the UTF-8 rune and grapheme subset needed by Feng.
+
+Public headers:
+- include/unitypes.h
+- include/feng_u8_rune.h
+- include/feng_u8_grapheme.h
+
+Supported operations:
+- UTF-8 rune count: u8_mbsnlen
+- UTF-8 rune traversal: u8_next, u8_prev
+- UTF-8 grapheme traversal: u8_grapheme_next, u8_grapheme_prev
+- UTF-8 grapheme boundary map: u8_grapheme_breaks
+
+Build:
+- make
+EOF
+
+# 2. 内部配置、完整内部头与最小源码闭包
+cp "config.h" "${TARGET_DIR}/src/"
+
+cp "lib/unitypes.h" "${INTERNAL_SRC_DIR}/"
+cp "lib/unistr.h" "${INTERNAL_SRC_DIR}/"
+cp "lib/unigbrk.h" "${INTERNAL_SRC_DIR}/"
+cp "lib/unictype.h" "${INTERNAL_SRC_DIR}/"
+cp "lib/unistring-notinline.h" "${INTERNAL_SRC_DIR}/"
+
+cp "lib/unistring/cdefs.h" "${INTERNAL_SRC_DIR}/unistring/"
+cp "lib/unistring/inline.h" "${INTERNAL_SRC_DIR}/unistring/"
+cp "lib/unistring/stdint.h" "${INTERNAL_SRC_DIR}/unistring/"
+cp "lib/unistring/woe32dll.h" "${INTERNAL_SRC_DIR}/unistring/"
+
+UNISTR_SOURCES=(
+       u8-mbtouc-aux.c
+       u8-mbtoucr.c
+       u8-mbsnlen.c
+       u8-strmbtouc.c
+       u8-next.c
+       u8-prev.c
+)
+
+for source in "${UNISTR_SOURCES[@]}"; do
+       cp "lib/unistr/${source}" "${INTERNAL_SRC_DIR}/unistr/"
+done
+
+UNIGBRK_FILES=(
+       u8-grapheme-breaks.c
+       u8-grapheme-next.c
+       u8-grapheme-prev.c
+       uc-gbrk-prop.c
+       u-grapheme-breaks.h
+       u-grapheme-next.h
+       u-grapheme-prev.h
+       gbrkprop.h
+)
+
+for file in "${UNIGBRK_FILES[@]}"; do
+       cp "lib/unigbrk/${file}" "${INTERNAL_SRC_DIR}/unigbrk/"
+done
+
+UNICTYPE_FILES=(
+       bitmap.h
+       pr_extended_pictographic.c
+       pr_extended_pictographic.h
+       incb_of.c
+       incb_of.h
+)
+
+for file in "${UNICTYPE_FILES[@]}"; do
+       cp "lib/unictype/${file}" "${INTERNAL_SRC_DIR}/unictype/"
+done
+
+# 3. 极简构建脚本：仅编译 rune / grapheme 最小子集
 cat << 'EOF' > "${TARGET_DIR}/Makefile"
-CC ?= gcc
+CC ?= cc
 AR ?= ar
-CFLAGS ?= -O2 -Wall -I./include -I./src
+CFLAGS ?= -O2 -Wall -Wextra
+CPPFLAGS ?= -I./src -I./src/lib
 
-# 核心目标静态库
-TARGET = libunistring.a
+TARGET = libfeng_u8_text.a
 
-# 所有的源文件
-SRCS = src/u8-mbtowc.c \
-       src/u8-mbtowc-aux.c \
-       src/u8-next.c \
-       src/u8-prev.c \
-       src/u8-strlen.c \
-       src/u8-cpy.c \
-       src/normalize.c \
-       src/u8-normalize.c \
-       src/u8-tolower.c \
-       src/u8-toupper.c
+SRCS = src/lib/unistr/u8-mbtouc-aux.c \
+                      src/lib/unistr/u8-mbtoucr.c \
+                      src/lib/unistr/u8-mbsnlen.c \
+                      src/lib/unistr/u8-strmbtouc.c \
+                      src/lib/unistr/u8-next.c \
+                      src/lib/unistr/u8-prev.c \
+                      src/lib/unigbrk/u8-grapheme-breaks.c \
+                      src/lib/unigbrk/u8-grapheme-next.c \
+                      src/lib/unigbrk/u8-grapheme-prev.c \
+                      src/lib/unigbrk/uc-gbrk-prop.c \
+                      src/lib/unictype/pr_extended_pictographic.c \
+                      src/lib/unictype/incb_of.c
 
 OBJS = $(SRCS:.c=.o)
 
@@ -103,13 +223,16 @@ $(TARGET): $(OBJS)
 	$(AR) rcs $@ $^
 
 %.o: %.c
-	$(CC) $(CFLAGS) -DHAVE_CONFIG_H -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) $(TARGET)
 
 .PHONY: all clean
 EOF
+
+cp "COPYING" "${TARGET_DIR}/"
+cp "COPYING.LIB" "${TARGET_DIR}/"
 
 # ==============================================================================
 # 🧹 物理痕迹擦除
@@ -119,5 +242,6 @@ rm -rf "${TMP_ROOT}"
 
 echo "========================================================"
 echo "🎉 提取完美收工！"
-echo "👉 请进入目录执行: cd third_party/libunistring && make"
+echo "👉 已导出 UTF-8 rune / grapheme 最小头文件与源码闭包"
+echo "👉 可进入目录执行: cd third_party/libunistring && make"
 echo "========================================================"

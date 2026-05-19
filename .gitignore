@@ -5,3 +5,5 @@
 node_modules/
 build/
 temp/
+third_party/**/*.a
+third_party/**/*.o
