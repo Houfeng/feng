@@ -94,7 +94,7 @@ typedef enum FengRuntimeTypeKind {
 
 ### 3.2 扩展 `FengGenericParamDescriptor`
 
-首版不新增独立的 runtime 泛型描述符，而是在现有 `FengGenericParamDescriptor` 中增加 `type_kind`：
+首版不新增独立的 runtime 泛型描述符，而是在现有 `FengGenericParamDescriptor` 中增加 `type_kind`。字段顺序固定为 `size` / `kind` / `type_kind` / `aggregate` / `witness`，其中 `type_kind` 必须紧跟 `kind`，位于 `aggregate` 之前：
 
 ```c
 typedef struct FengGenericParamDescriptor {
@@ -112,6 +112,7 @@ typedef struct FengGenericParamDescriptor {
 - 普通受约束泛型共享体在此基础上消费 `witness`。
 - runtime helper 消费 `type_kind`，必要时消费 `size` / `kind` / `aggregate`，但不得消费 `witness`。
 - codegen 在具体实例化点填充全部字段，因为只有 codegen 同时知道具体类型、值模型、runtime 类型分类和当前约束面的 witness。
+- codegen 生成 `FengGenericParamDescriptor` compound literal 时应使用 designated initializer，不能依赖字段位置；其中 `.type_kind` 必须紧随 `.kind` 填充。
 
 ### 3.3 不把 witness 暴露给 runtime
 
@@ -194,7 +195,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 - [ ] 在本文确认 runtime API 泛型与普通 Feng 泛型分层独立。
 - [ ] 明确 `FengRuntimeTypeKind` 的枚举成员、稳定性边界和与 `FengValueKind` 的职责区分。
-- [ ] 明确 `FengGenericParamDescriptor.type_kind` 的字段位置、生命周期和 ABI 兼容策略。
+- [ ] 明确 `FengGenericParamDescriptor.type_kind` 固定紧跟 `kind`，并同步生命周期和 ABI 兼容策略。
 - [ ] 明确裸 `T` 参数、裸 `T` 返回值、`T[]` 参数、`T[]` 返回值的 C contract carrier，以及隐藏 `FengGenericParamDescriptor` 参数顺序。
 - [ ] 明确 descriptor 与 `src/runtime/feng_runtime_contract.inc` 的关系：contract 白名单仍是唯一允许符号来源，`FengGenericParamDescriptor` 是泛型 contract 符号的隐藏 ABI 参数。
 - [ ] 更新 [dev/feng-runtime-interop-pending.md](./feng-runtime-interop-pending.md) 中的 runtime lowering 章节，只做引用，不重复展开本文细节。
