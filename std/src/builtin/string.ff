@@ -14,4 +14,33 @@ pu fit string {
   pu fn length(): long {
     return feng_string_utf8_length(self);
   }
+
+  pu runes(): RuneView {
+    return RuneView(self);
+  }
+
+  pu graphemes(): GraphemeView {
+    return GraphemeView(self);
+  }
+
+}
+
+pu type RuneView {
+  pr let text: string;
+  pr Rune(text: string) {
+    self.text = text;
+  }
+  pu length(): long {
+    return 0;
+  }
+}
+
+pub type GraphemeView {
+  pr let text: string;
+  pr Grapheme(text: string) {
+    self.text = text;
+  }
+  pu length(): long {
+    return 0;
+  }
 }
