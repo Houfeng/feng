@@ -143,7 +143,7 @@ feng build [<path>] [--release]
 - `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置,不接受编译器级别的细粒度选项。
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - `build` 负责解析依赖树并展平为 `--pkg <.fb路径>` 列表,再调用核心编译器。
-- `build` 读取 `feng.fm` 的 `[assets]` 配置：`target=bin` 时复制到可执行文件同级目标目录，`target=lib` 时复制并打包到 `.fb` 内对应目标目录。
+- `build` 读取 `feng.fm` 的 `[assets]` 配置：`target=bin` 时复制到可执行文件同级目标目录，`target=lib` 时先复制到 `build/assets/` staging，后续 `pack` 再写入 `.fb` 内对应目标目录。
 - 当构建目标是 `target=bin` 时,核心编译器仅释放运行时确需加载的动态库到可执行文件同目录；对 feng 编译生成且已提供同平台静态库的 C 库,不要求释放对应动态库。
 - 未指定 `--release` 时使用调试友好的构建模式; 指定 `--release` 时改用发布优化模式。
 
@@ -227,6 +227,7 @@ feng pack [<path>]
 - `pack` 总是先复用与 `feng build --release` 相同的项目构建主链,完成当前项目及其递归本地 `target: "lib"` 依赖的 release 构建后,再对产物打包,不接受 `--release` 选项。
 - `<path>` 透传给 `feng build`。
 - 若项目的 `target` 不是 `lib`,报错退出。
+- `pack` 直接复用 `build/mod/`、正式库文件、可选 `build/extlib/` 目录树以及 `build/assets/` staging 目录写入 `.fb`,不重新推导资源目标路径。
 
 ## 5 依赖管理命令
 

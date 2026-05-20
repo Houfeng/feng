@@ -145,8 +145,8 @@ base: "1.0.0"
 1. 编译器扫描所有 `.ff` 源文件,按 `mod` 声明分组,将同一模块的全部公开声明合并
 2. 在语义分析成功后按模块名层级导出每个公开模块的 `.ft` 文件,放入 `build/mod/` 目录
 3. 将 feng 普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为 C → 生成静态库,放入 `lib/` 对应平台子目录（若 `abi` 含 `feng`）
-4. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息; 需要随包分发的依赖型原生库按平台写入 `extlib/`
-5. 生成 `feng.fm`,并将 `build/mod/**/*.ft`、对应平台正式库文件以及 `[assets]` 指定资源打包为 `.fb`
+4. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息; 需要随包分发的依赖型原生库按平台放入 `build/extlib/<platform>/`
+5. 生成 `feng.fm`,并将 `build/mod/**/*.ft`、对应平台正式库文件、可选 `build/extlib/` 目录树以及 `[assets]` 在 `build/assets/` 中的 staging 目录打包为 `.fb`
 
 ### 6.2 feng 使用方流程
 

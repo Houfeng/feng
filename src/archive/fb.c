@@ -121,15 +121,26 @@ static int compare_strings(const void *a, const void *b) {
     return strcmp(*lhs, *rhs);
 }
 
-/* Recursively walks `disk_dir` and mirrors its contents into the open zip
- * `writer` under `entry_prefix/`. Only regular files whose name ends with
- * `.ft` are added; intermediate directories are emitted as zip directory
- * entries so the bundle layout matches the on-disk module tree. Entries are
- * added in lexicographic order to keep the produced bundle deterministic. */
-static bool add_mod_tree(FengZipWriter *writer,
-                         const char *disk_dir,
-                         const char *entry_prefix,
-                         char **out_error_message) {
+static bool name_has_suffix(const char *name, const char *suffix) {
+    size_t name_len = strlen(name);
+    size_t suffix_len = strlen(suffix);
+
+    return name_len >= suffix_len && strcmp(name + name_len - suffix_len, suffix) == 0;
+}
+
+static bool include_mod_file(const char *name) {
+    return name_has_suffix(name, ".ft");
+}
+
+static bool include_any_regular_file(const char *name) {
+    (void)name;
+    return true;
+}
+
+static bool collect_sorted_names(const char *disk_dir,
+                                 char ***out_names,
+                                 size_t *out_count,
+                                 char **out_error_message) {
     DIR *dir = NULL;
     struct dirent *entry;
     char **names = NULL;
@@ -138,10 +149,13 @@ static bool add_mod_tree(FengZipWriter *writer,
     size_t index;
     bool ok = false;
 
+    *out_names = NULL;
+    *out_count = 0U;
+
     dir = opendir(disk_dir);
     if (dir == NULL) {
         set_errorf(out_error_message,
-                   "failed to scan public module directory %s: %s",
+                   "failed to scan directory %s: %s",
                    disk_dir,
                    strerror(errno));
         goto done;
@@ -169,10 +183,137 @@ static bool add_mod_tree(FengZipWriter *writer,
         }
         names[name_count++] = copy;
     }
-    closedir(dir);
-    dir = NULL;
 
     qsort(names, name_count, sizeof(char *), compare_strings);
+    *out_names = names;
+    *out_count = name_count;
+    names = NULL;
+    name_count = 0U;
+    ok = true;
+
+done:
+    if (dir != NULL) {
+        closedir(dir);
+    }
+    for (index = 0U; index < name_count; ++index) {
+        free(names[index]);
+    }
+    free(names);
+    return ok;
+}
+
+static bool tree_has_payload(const char *disk_dir,
+                             bool (*include_file)(const char *name),
+                             bool *out_has_payload,
+                             char **out_error_message) {
+    DIR *dir = NULL;
+    struct dirent *entry;
+    bool has_payload = false;
+    bool ok = false;
+
+    *out_has_payload = false;
+
+    dir = opendir(disk_dir);
+    if (dir == NULL) {
+        set_errorf(out_error_message,
+                   "failed to scan directory %s: %s",
+                   disk_dir,
+                   strerror(errno));
+        goto done;
+    }
+    while ((entry = readdir(dir)) != NULL) {
+        char *child_disk = NULL;
+        struct stat st;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        child_disk = dup_printf("%s/%s", disk_dir, entry->d_name);
+        if (child_disk == NULL) {
+            set_errorf(out_error_message, "out of memory");
+            goto done;
+        }
+        if (stat(child_disk, &st) != 0) {
+            set_errorf(out_error_message,
+                       "failed to stat %s: %s",
+                       child_disk,
+                       strerror(errno));
+            free(child_disk);
+            goto done;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            bool child_has_payload = false;
+
+            if (!tree_has_payload(child_disk,
+                                  include_file,
+                                  &child_has_payload,
+                                  out_error_message)) {
+                free(child_disk);
+                goto done;
+            }
+            if (child_has_payload) {
+                has_payload = true;
+                free(child_disk);
+                break;
+            }
+        } else if (S_ISREG(st.st_mode) && include_file(entry->d_name)) {
+            has_payload = true;
+            free(child_disk);
+            break;
+        }
+        free(child_disk);
+    }
+
+    *out_has_payload = has_payload;
+    ok = true;
+
+done:
+    if (dir != NULL) {
+        closedir(dir);
+    }
+    return ok;
+}
+
+/* Recursively walks `disk_dir` and mirrors selected regular files into the
+ * open zip `writer` beneath `entry_prefix/`. When `add_root_directory` is
+ * true, the root directory entry itself is emitted only if the subtree has at
+ * least one included regular file, which avoids empty-directory noise in the
+ * bundle. Entries are emitted in lexicographic order to keep bundles
+ * deterministic. */
+static bool add_tree_filtered(FengZipWriter *writer,
+                              const char *disk_dir,
+                              const char *entry_prefix,
+                              bool (*include_file)(const char *name),
+                              bool add_root_directory,
+                              char **out_error_message) {
+    char **names = NULL;
+    size_t name_count = 0U;
+    size_t index;
+    bool ok = false;
+    bool has_payload = false;
+
+    if (!dir_exists(disk_dir)) {
+        set_errorf(out_error_message,
+                   "bundle directory not found: %s",
+                   disk_dir != NULL ? disk_dir : "(null)");
+        goto done;
+    }
+    if (add_root_directory) {
+        if (!tree_has_payload(disk_dir, include_file, &has_payload, out_error_message)) {
+            goto done;
+        }
+        if (!has_payload) {
+            ok = true;
+            goto done;
+        }
+        if (!feng_zip_writer_add_directory(writer, entry_prefix, out_error_message)) {
+            goto done;
+        }
+    }
+    if (!collect_sorted_names(disk_dir, &names, &name_count, out_error_message)) {
+        goto done;
+    }
 
     for (index = 0U; index < name_count; ++index) {
         const char *name = names[index];
@@ -196,28 +337,25 @@ static bool add_mod_tree(FengZipWriter *writer,
             goto done;
         }
         if (S_ISDIR(st.st_mode)) {
-            if (!feng_zip_writer_add_directory(writer, child_entry, out_error_message)) {
+            if (!add_tree_filtered(writer,
+                                   child_disk,
+                                   child_entry,
+                                   include_file,
+                                   true,
+                                   out_error_message)) {
                 free(child_disk);
                 free(child_entry);
                 goto done;
             }
-            if (!add_mod_tree(writer, child_disk, child_entry, out_error_message)) {
+        } else if (S_ISREG(st.st_mode) && include_file(name)) {
+            if (!feng_zip_writer_add_file(writer,
+                                          child_entry,
+                                          child_disk,
+                                          FENG_ZIP_COMPRESSION_DEFLATE,
+                                          out_error_message)) {
                 free(child_disk);
                 free(child_entry);
                 goto done;
-            }
-        } else if (S_ISREG(st.st_mode)) {
-            size_t name_len = strlen(name);
-            if (name_len >= 3U && strcmp(name + name_len - 3U, ".ft") == 0) {
-                if (!feng_zip_writer_add_file(writer,
-                                              child_entry,
-                                              child_disk,
-                                              FENG_ZIP_COMPRESSION_DEFLATE,
-                                              out_error_message)) {
-                    free(child_disk);
-                    free(child_entry);
-                    goto done;
-                }
             }
         }
         free(child_disk);
@@ -227,9 +365,6 @@ static bool add_mod_tree(FengZipWriter *writer,
     ok = true;
 
 done:
-    if (dir != NULL) {
-        closedir(dir);
-    }
     for (index = 0U; index < name_count; ++index) {
         free(names[index]);
     }
@@ -305,7 +440,12 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
         goto done;
     }
     if (spec->public_mod_root != NULL && dir_exists(spec->public_mod_root)) {
-        if (!add_mod_tree(&writer, spec->public_mod_root, "mod", out_error_message)) {
+        if (!add_tree_filtered(&writer,
+                               spec->public_mod_root,
+                               "mod",
+                               include_mod_file,
+                               false,
+                               out_error_message)) {
             goto done;
         }
     }
@@ -321,6 +461,28 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
                                   FENG_ZIP_COMPRESSION_STORE,
                                   out_error_message)) {
         goto done;
+    }
+    if (spec->extlib_root != NULL) {
+        if (!add_tree_filtered(&writer,
+                               spec->extlib_root,
+                               "extlib",
+                               include_any_regular_file,
+                               true,
+                               out_error_message)) {
+            goto done;
+        }
+    }
+    for (index = 0U; index < spec->asset_entry_count; ++index) {
+        const FengFbBundleDirectoryEntry *entry = &spec->asset_entries[index];
+
+        if (!add_tree_filtered(&writer,
+                               entry->source_root,
+                               entry->entry_path,
+                               include_any_regular_file,
+                               true,
+                               out_error_message)) {
+            goto done;
+        }
     }
     if (!feng_zip_writer_finalize(&writer, out_error_message)) {
         goto done;
@@ -376,6 +538,7 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
     char *host_target = NULL;
     char *temp_path = NULL;
     int temp_fd = -1;
+    size_t index;
     bool ok = false;
 
     if (spec == NULL) {
@@ -391,10 +554,36 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
         return set_errorf(out_error_message,
                           "bundle package version must not be empty");
     }
+    if (spec->asset_entry_count > 0U && spec->asset_entries == NULL) {
+        return set_errorf(out_error_message,
+                          "bundle asset entries must not be null when count is non-zero");
+    }
     if (!file_exists(spec->library_path)) {
         return set_errorf(out_error_message,
                           "bundle library artifact not found: %s",
                           spec->library_path != NULL ? spec->library_path : "(null)");
+    }
+    if (spec->extlib_root != NULL && !dir_exists(spec->extlib_root)) {
+        return set_errorf(out_error_message,
+                          "bundle extlib directory not found: %s",
+                          spec->extlib_root);
+    }
+    for (index = 0U; index < spec->asset_entry_count; ++index) {
+        const FengFbBundleDirectoryEntry *entry = &spec->asset_entries[index];
+
+        if (entry->entry_path == NULL || entry->entry_path[0] == '\0') {
+            return set_errorf(out_error_message,
+                              "bundle asset entry path must not be empty");
+        }
+        if (entry->source_root == NULL || entry->source_root[0] == '\0') {
+            return set_errorf(out_error_message,
+                              "bundle asset source directory must not be empty");
+        }
+        if (!dir_exists(entry->source_root)) {
+            return set_errorf(out_error_message,
+                              "bundle asset source directory not found: %s",
+                              entry->source_root);
+        }
     }
     if (!feng_fb_detect_host_target(&host_target, out_error_message)) {
         goto done;

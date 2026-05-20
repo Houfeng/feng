@@ -290,6 +290,24 @@ static void write_library_bundle_or_die(const char *bundle_path,
     free(error_message);
 }
 
+static int zip_contains_path_prefix(const FengZipReader *reader, const char *prefix) {
+    size_t entry_count = feng_zip_reader_entry_count(reader);
+    size_t index;
+    size_t prefix_len = strlen(prefix);
+
+    for (index = 0U; index < entry_count; ++index) {
+        FengZipEntryInfo info = {0};
+        char *zip_error = NULL;
+
+        ASSERT(feng_zip_reader_entry_at(reader, index, &info, &zip_error));
+        free(zip_error);
+        if (strncmp(info.path, prefix, prefix_len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static char *run_binary_capture_stdout_or_die(const char *binary_path);
 
 static char *build_single_source_package_bundle(const char *workspace_dir,
@@ -1282,6 +1300,180 @@ static void test_project_pack_bundle_can_be_consumed(void) {
     free(lib_src_dir);
     free(lib_manifest_path);
     free(lib_project_dir);
+}
+
+static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(void) {
+    char template_path[] = "/tmp/feng_fb_bundle_assets_extlib_XXXXXX";
+    char *workspace_dir;
+    char *library_dir;
+    char *library_path;
+    char *mod_dir;
+    char *mod_nested_dir;
+    char *mod_path;
+    char *extlib_root;
+    char *extlib_platform_dir;
+    char *extlib_static_path;
+    char *extlib_dynamic_path;
+    char *asset_root;
+    char *asset_nested_dir;
+    char *asset_config_path;
+    char *asset_nested_path;
+    char *empty_asset_root;
+    char *bundle_path;
+    char *host_target = NULL;
+    char *error_message = NULL;
+    char *remove_error = NULL;
+    FengFbBundleDirectoryEntry asset_entries[2] = {0};
+    FengFbLibraryBundleSpec spec = {0};
+    FengZipReader reader = {0};
+    char *zip_error = NULL;
+    void *bytes = NULL;
+    size_t byte_count = 0U;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    library_dir = path_join(workspace_dir, "artifacts/lib");
+    library_path = path_join(library_dir, "libbundle_demo.a");
+    mod_dir = path_join(workspace_dir, "public_mod");
+    mod_nested_dir = path_join(mod_dir, "test/cli");
+    mod_path = path_join(mod_nested_dir, "bundle_demo.ft");
+    extlib_root = path_join(workspace_dir, "extlib");
+    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    free(error_message);
+    error_message = NULL;
+    extlib_platform_dir = path_join(extlib_root, host_target);
+    extlib_static_path = path_join(extlib_platform_dir, "libhelper.a");
+    extlib_dynamic_path = path_join(extlib_platform_dir, "libhelper.dylib");
+    asset_root = path_join(workspace_dir, "asset_runtime");
+    asset_nested_dir = path_join(asset_root, "nested");
+    asset_config_path = path_join(asset_root, "config.json");
+    asset_nested_path = path_join(asset_nested_dir, "value.txt");
+    empty_asset_root = path_join(workspace_dir, "empty_asset");
+    bundle_path = path_join(workspace_dir, "bundle_demo-0.1.0.fb");
+
+    mkdir_p(library_dir);
+    mkdir_p(mod_nested_dir);
+    mkdir_p(extlib_platform_dir);
+    mkdir_p(asset_nested_dir);
+    mkdir_p(empty_asset_root);
+    write_text_file(library_path, "FAKE-ARCHIVE\n");
+    write_text_file(mod_path, "FT-PAYLOAD\n");
+    write_text_file(extlib_static_path, "STATIC\n");
+    write_text_file(extlib_dynamic_path, "DYNAMIC\n");
+    write_text_file(asset_config_path, "{\"env\":\"prod\"}\n");
+    write_text_file(asset_nested_path, "nested\n");
+
+    asset_entries[0].entry_path = "runtime";
+    asset_entries[0].source_root = asset_root;
+    asset_entries[1].entry_path = "empty-assets";
+    asset_entries[1].source_root = empty_asset_root;
+
+    spec.package_path = bundle_path;
+    spec.package_name = "bundle_demo";
+    spec.package_version = "0.1.0";
+    spec.library_path = library_path;
+    spec.public_mod_root = mod_dir;
+    spec.extlib_root = extlib_root;
+    spec.asset_entries = asset_entries;
+    spec.asset_entry_count = 2U;
+
+    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
+    free(error_message);
+    error_message = NULL;
+
+    ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
+    ASSERT(feng_zip_reader_read(&reader,
+                                "mod/test/cli/bundle_demo.ft",
+                                &bytes,
+                                &byte_count,
+                                &zip_error));
+    ASSERT(byte_count == strlen("FT-PAYLOAD\n"));
+    ASSERT(memcmp(bytes, "FT-PAYLOAD\n", byte_count) == 0);
+    feng_zip_free(bytes);
+    bytes = NULL;
+
+    ASSERT(feng_zip_reader_read(&reader,
+                                "runtime/config.json",
+                                &bytes,
+                                &byte_count,
+                                &zip_error));
+    ASSERT(memcmp(bytes, "{\"env\":\"prod\"}\n", byte_count) == 0);
+    feng_zip_free(bytes);
+    bytes = NULL;
+
+    ASSERT(feng_zip_reader_read(&reader,
+                                "runtime/nested/value.txt",
+                                &bytes,
+                                &byte_count,
+                                &zip_error));
+    ASSERT(memcmp(bytes, "nested\n", byte_count) == 0);
+    feng_zip_free(bytes);
+    bytes = NULL;
+
+    {
+        char *entry_path = dup_printf("lib/%s/libbundle_demo.a", host_target);
+        ASSERT(entry_path != NULL);
+        ASSERT(feng_zip_reader_read(&reader,
+                                    entry_path,
+                                    &bytes,
+                                    &byte_count,
+                                    &zip_error));
+        ASSERT(memcmp(bytes, "FAKE-ARCHIVE\n", byte_count) == 0);
+        free(entry_path);
+        feng_zip_free(bytes);
+        bytes = NULL;
+    }
+
+    {
+        char *entry_path = dup_printf("extlib/%s/libhelper.a", host_target);
+        ASSERT(entry_path != NULL);
+        ASSERT(feng_zip_reader_read(&reader,
+                                    entry_path,
+                                    &bytes,
+                                    &byte_count,
+                                    &zip_error));
+        ASSERT(memcmp(bytes, "STATIC\n", byte_count) == 0);
+        free(entry_path);
+        feng_zip_free(bytes);
+        bytes = NULL;
+    }
+
+    {
+        char *entry_path = dup_printf("extlib/%s/libhelper.dylib", host_target);
+        ASSERT(entry_path != NULL);
+        ASSERT(feng_zip_reader_read(&reader,
+                                    entry_path,
+                                    &bytes,
+                                    &byte_count,
+                                    &zip_error));
+        ASSERT(memcmp(bytes, "DYNAMIC\n", byte_count) == 0);
+        free(entry_path);
+        feng_zip_free(bytes);
+        bytes = NULL;
+    }
+
+    ASSERT(!zip_contains_path_prefix(&reader, "empty-assets"));
+
+    feng_zip_reader_dispose(&reader);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(empty_asset_root);
+    free(asset_nested_path);
+    free(asset_config_path);
+    free(asset_nested_dir);
+    free(asset_root);
+    free(extlib_dynamic_path);
+    free(extlib_static_path);
+    free(extlib_platform_dir);
+    free(extlib_root);
+    free(host_target);
+    free(mod_path);
+    free(mod_nested_dir);
+    free(mod_dir);
+    free(library_path);
+    free(library_dir);
 }
 
 static void test_direct_build_consumes_package_generic_function(void) {
@@ -6089,6 +6281,98 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
     free(dep_project_dir);
 }
 
+static void test_project_pack_includes_staged_assets_in_bundle(void) {
+    char template_path[] = "/tmp/feng_cli_pack_assets_bundle_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *asset_dir;
+    char *asset_nested_dir;
+    char *asset_config_path;
+    char *asset_nested_path;
+    char *bundle_path;
+    char *remove_error = NULL;
+    FengZipReader reader = {0};
+    char *zip_error = NULL;
+    void *bytes = NULL;
+    size_t byte_count = 0U;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "libproj");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "lib.ff");
+    asset_dir = path_join(project_dir, "bundle_assets");
+    asset_nested_dir = path_join(asset_dir, "nested");
+    asset_config_path = path_join(asset_dir, "config.txt");
+    asset_nested_path = path_join(asset_nested_dir, "value.txt");
+    bundle_path = path_join(project_dir, "build/asset_pack-0.1.0.fb");
+
+    mkdir_p(src_dir);
+    mkdir_p(asset_nested_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"asset_pack\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[assets]\n"
+                    "runtime: \"bundle_assets/\"\n");
+    write_text_file(source_path,
+                    "pu mod test.cli.assetpack;\n"
+                    "pu fn value(): int {\n"
+                    "  return 3;\n"
+                    "}\n");
+    write_text_file(asset_config_path, "config\n");
+    write_text_file(asset_nested_path, "nested\n");
+
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(bundle_path));
+    ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
+    ASSERT(feng_zip_reader_read(&reader,
+                                "runtime/config.txt",
+                                &bytes,
+                                &byte_count,
+                                &zip_error));
+    ASSERT(memcmp(bytes, "config\n", byte_count) == 0);
+    feng_zip_free(bytes);
+    bytes = NULL;
+
+    ASSERT(feng_zip_reader_read(&reader,
+                                "runtime/nested/value.txt",
+                                &bytes,
+                                &byte_count,
+                                &zip_error));
+    ASSERT(memcmp(bytes, "nested\n", byte_count) == 0);
+    feng_zip_free(bytes);
+    bytes = NULL;
+
+    ASSERT(!zip_contains_path_prefix(&reader, "extlib"));
+
+    feng_zip_reader_dispose(&reader);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundle_path);
+    free(asset_nested_path);
+    free(asset_config_path);
+    free(asset_nested_dir);
+    free(asset_dir);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
 static void test_project_pack_rejects_release_flag(void) {
     char template_path[] = "/tmp/feng_cli_pack_no_release_flag_XXXXXX";
     char *project_dir;
@@ -7248,6 +7532,7 @@ int main(void) {
     test_direct_build_links_library_from_package_bundle();
     test_direct_build_sorts_package_libraries_by_dependency();
     test_project_pack_bundle_can_be_consumed();
+    test_bundle_writer_includes_extlib_and_assets_without_empty_dirs();
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_enum();
@@ -7267,6 +7552,7 @@ int main(void) {
     test_project_build_lib_stages_assets_under_output_root();
     test_project_run_release_reuses_build_pipeline();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
+    test_project_pack_includes_staged_assets_in_bundle();
     test_project_pack_rejects_release_flag();
     fprintf(stdout, "cli tests passed\n");
     return 0;

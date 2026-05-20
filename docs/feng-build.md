@@ -171,7 +171,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
 3. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
-5. 直接复用 `build/mod/**/*.ft`、正式库文件与 `[assets]` 指定资源（写入 `.fb` 内对应目标目录）打包为 `.fb` ZIP 归档
+5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树与 `build/assets/` 中的 `[assets]` staging 目录打包为 `.fb` ZIP 归档
 
 ## 4 交互协议总览
 

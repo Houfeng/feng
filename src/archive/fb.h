@@ -9,6 +9,11 @@ typedef struct FengFbBundleDependency {
     const char *version;
 } FengFbBundleDependency;
 
+typedef struct FengFbBundleDirectoryEntry {
+    const char *entry_path;
+    const char *source_root;
+} FengFbBundleDirectoryEntry;
+
 typedef struct FengFbLibraryBundleSpec {
     const char *package_path;
     const char *package_name;
@@ -21,6 +26,15 @@ typedef struct FengFbLibraryBundleSpec {
      * ends with `.ft` are included; intermediate directories are added so
      * the bundle reflects the on-disk module layout. */
     const char *public_mod_root;
+    /* Optional. When non-NULL, mirrors the entire directory tree at this path
+     * into the `.fb` archive under `extlib/`. The source root is expected to
+     * contain per-platform subdirectories such as `<host-target>/`. */
+    const char *extlib_root;
+    /* Optional. Each entry mirrors one staged asset directory into the `.fb`
+     * archive at the configured target directory. `entry_path` is relative to
+     * the `.fb` root. */
+    const FengFbBundleDirectoryEntry *asset_entries;
+    size_t asset_entry_count;
 } FengFbLibraryBundleSpec;
 
 bool feng_fb_detect_host_target(char **out_host_target, char **out_error_message);
