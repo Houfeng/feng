@@ -1,0 +1,13 @@
+pu mod std.math;
+
+@cdecl("libm")
+extern fn sin(x: f64): f64;
+
+pu type Math {
+  pu fn sin(x: f64): f64 {
+    return sin(x);
+  }
+}
+
+// pu let math: Math = Math(); 这行会报错
+pu let math: Math = Math();

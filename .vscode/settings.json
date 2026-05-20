@@ -9,6 +9,7 @@
     "finalizer",
     "kinded",
     "libc",
+    "libm",
     "libname",
     "miniz",
     "nums",
