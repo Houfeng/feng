@@ -17,6 +17,7 @@
 每个顶层绑定编译为一个 getter 函数，第一次访问时执行初始化表达式。
 
 **核心规则：**
+
 - 每个 binding 有独立的存储变量和 `_inited` flag
 - Getter 内先计算 init expr，完成后再设 `_inited = true`
 - 所有对顶层 binding 的读取引用改为调用 getter
@@ -29,7 +30,7 @@
 
 ### Feng 源码
 
-```
+```text
 // Module A
 type Foo { x: i32 }
 let a1: Foo = Foo { x: 42 }        // UserType，无依赖
@@ -135,12 +136,46 @@ static struct Feng__A__Foo *_feng_get_g__A__a3(void) {
 ## 解决的问题
 
 | 场景 | 当前 | Lazy 后 |
-|------|------|---------|
+| ------ | ------ | --------- |
 | 同模块多文件，跨文件 binding 引用 | ❌ 依赖文件处理顺序 | ✅ getter 按需触发 |
 | 跨模块 binding 引用（无环） | ❌ 依赖模块注册顺序 | ✅ getter 按需触发 |
 | 未使用的 binding（无访问） | ❌ startup 仍全量初始化 | ✅ 从不初始化 |
 | UserType 零值差距（BSS NULL） | ❌ 读时可能得 NULL | ✅ 首次读时构造合法对象 |
-| 循环 binding 依赖 | ❌ 不确定（错误值或 crash）| ✅ 栈溢出（等同普通函数循环调用，行为一致）|
+| 循环 binding 依赖 | ❌ 不确定（错误值或 crash） | ✅ 栈溢出（等同普通函数循环调用，行为一致） |
+
+---
+
+## TODO 拆解
+
+1. 文档对齐
+    - 保持本文档作为唯一设计依据
+    - 实现过程若发现与本文不一致，先回到文档修正，再继续代码
+
+2. Getter 基础设施
+    - 扩展 `ModuleBinding`：增加 `c_getter_name`、`c_inited_name`
+    - 在 `cg_register_module_binding` 中统一生成 getter / flag 的 C 名称
+    - 在 `cg_pass_register_module_bindings` 中补 `_inited` 静态存储声明
+
+3. 读取路径切换到 lazy
+    - 新增 `cg_emit_module_binding_getter`
+    - 新增 `cg_pass_emit_module_binding_getters`
+    - `cg_emit_identifier` 命中模块 binding 时改为返回 getter 调用表达式
+    - 删除 `main()` 启动时的 eager binding 初始化循环
+
+4. 写入路径保持语义一致
+    - `var` 模块绑定写入时直接写存储槽
+    - 写入后统一标记 `_inited = true`
+    - managed / scalar / compound assignment 三条路径都补齐
+
+5. 测试用例补齐
+    - codegen case：顶层 binding 读取生成 getter 调用，而不是直接读静态槽
+    - codegen case：`main()` 中不再内联模块 binding 初始化
+    - codegen case：模块级 `var` 写入时会标记 `_inited = true`
+    - codegen case：无 initializer 的顶层 UserType 走 getter 默认值构造
+
+6. 验证顺序
+    - 每完成一个实现步骤，先补对应 case，再跑最窄的 `test_codegen`
+    - 全部完成后，执行全量回归测试
 
 ---
 
@@ -149,12 +184,12 @@ static struct Feng__A__Foo *_feng_get_g__A__a3(void) {
 仅修改 `src/codegen/codegen.c`：
 
 | 位置 | 改动 |
-|------|------|
+| ------ | ------ |
 | `ModuleBinding` 结构体（L755） | 新增 `c_getter_name`、`c_inited_name` 两个字段 |
 | `cg_register_module_binding`（L6789） | 计算并存储新字段 |
 | `cg_pass_register_module_bindings`（L17438） | 额外 emit `_inited` flag 声明 |
 | `cg_emit_identifier`（L8091） | 模块 binding 引用改为返回 getter 调用表达式 |
-| 新增 `cg_emit_module_binding_getter` | 生成每个 binding 的 getter 函数体（复用现有 init expr 逻辑）|
+| 新增 `cg_emit_module_binding_getter` | 生成每个 binding 的 getter 函数体（复用现有 init expr 逻辑） |
 | 新增 `cg_pass_emit_module_binding_getters` | 遍历所有 binding，调用上一项 |
 | `cg_emit_assign`（var 写入路径） | LHS 为模块 var 时，插入 `_inited = true` |
 | `cg_emit_main_wrapper`（L17968） | 删除 binding 初始化循环 |

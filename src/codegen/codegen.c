@@ -755,6 +755,8 @@ static bool cg_free_fn_has_abi_wrapper(const FreeFn *fn) {
 typedef struct ModuleBinding {
     char    *feng_name;
     char    *c_name;          /* e.g., _feng_g_examples_user — globally unique */
+    char    *c_getter_name;   /* e.g., _feng_get_g__examples__user */
+    char    *c_inited_name;   /* e.g., _feng_g__examples__user__inited */
     CGType  *type;            /* heap-owned */
     bool     is_var;          /* false = let, true = var */
     const FengBinding *binding;
@@ -6803,10 +6805,24 @@ static bool cg_register_module_binding(CG *cg, const FengDecl *decl) {
     char *san = cg_sanitize(decl->as.binding.name.data, decl->as.binding.name.length);
     if (!san) return false;
     Buf b; buf_init(&b);
+    Buf getter; buf_init(&getter);
+    Buf inited; buf_init(&inited);
     buf_append_fmt(&b, "_feng_g__%s__%s", cg->module_mangle, san);
+    buf_append_fmt(&getter, "_feng_get_g__%s__%s", cg->module_mangle, san);
+    buf_append_fmt(&inited, "_feng_g__%s__%s__inited", cg->module_mangle, san);
     free(san);
     mb->c_name = b.data;
-    if (!mb->c_name) return false;
+    mb->c_getter_name = getter.data;
+    mb->c_inited_name = inited.data;
+    if (!mb->c_name || !mb->c_getter_name || !mb->c_inited_name) {
+        free(mb->c_name);
+        free(mb->c_getter_name);
+        free(mb->c_inited_name);
+        mb->c_name = NULL;
+        mb->c_getter_name = NULL;
+        mb->c_inited_name = NULL;
+        return false;
+    }
     /* Type: explicit annotation required at module scope unless initializer
      * present. We can't fully infer from a user-type literal here without
      * doing expression emission first — which we cannot do until all types
@@ -6845,6 +6861,24 @@ static const ModuleBinding *cg_find_module_binding(const CG *cg, const char *nam
         }
     }
     return NULL;
+}
+
+static const ModuleBinding *cg_find_module_binding_by_binding(const CG *cg,
+                                                              const FengBinding *binding) {
+    for (size_t i = 0; i < cg->module_binding_count; i++) {
+        if (cg->module_bindings[i].binding == binding) {
+            return &cg->module_bindings[i];
+        }
+    }
+    return NULL;
+}
+
+static char *cg_module_binding_getter_call_dup(const ModuleBinding *mb) {
+    Buf b;
+
+    buf_init(&b);
+    buf_append_fmt(&b, "%s()", mb->c_getter_name);
+    return b.data;
 }
 
 /* ===================== expression emission ===================== */
@@ -7540,9 +7574,27 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         if (cg_type_kind_is_scalar_builtin(inner.type->kind)) {
+            const ModuleBinding *addr_binding = NULL;
             Buf b;
 
-            if (!cg_expr_is_direct_lvalue(e->as.unary.operand)) {
+            if (e->as.unary.operand->kind == FENG_EXPR_IDENTIFIER) {
+                const FengSlice name = e->as.unary.operand->as.identifier;
+
+                if (scope_lookup(cg->cur_scope, name.data, name.length) == NULL) {
+                    addr_binding = cg_find_module_binding(cg, name.data, name.length);
+                }
+            }
+
+            /* Scalar module bindings are lowered through getters for reads,
+             * but address-of must still point at the backing storage slot. */
+            if (addr_binding != NULL) {
+                free(inner.c_expr);
+                inner.c_expr = strdup(addr_binding->c_name);
+                if (inner.c_expr == NULL) {
+                    er_free(&inner);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+            } else if (!cg_expr_is_direct_lvalue(e->as.unary.operand)) {
                 if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                     er_free(&inner);
                     return cg_fail(cg, e->token, "codegen: out of memory");
@@ -8101,7 +8153,7 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
     const ModuleBinding *mb = cg_find_module_binding(cg,
         e->as.identifier.data, e->as.identifier.length);
     if (mb) {
-        out->c_expr = strdup(mb->c_name);
+        out->c_expr = cg_module_binding_getter_call_dup(mb);
         out->type = cgtype_clone(mb->type);
         out->owns_ref = false;  /* borrow from static slot */
         return out->c_expr && out->type;
@@ -10073,7 +10125,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             callee_binding->type->user_spec != NULL) {
             ExprResult callee;
             er_init(&callee);
-            callee.c_expr = strdup(callee_binding->c_name);
+            callee.c_expr = cg_module_binding_getter_call_dup(callee_binding);
             callee.type = cgtype_clone(callee_binding->type);
             callee.owns_ref = false;
             if (callee.c_expr == NULL || callee.type == NULL) {
@@ -12683,6 +12735,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
 
             buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
                            mb->c_name, cty, expr.data);
+            buf_append_fmt(cg->cur_body, "    %s = true;\n", mb->c_inited_name);
 
             buf_free(&expr);
             er_free(&v);
@@ -12701,10 +12754,12 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 buf_append_fmt(cg->cur_body,
                     "    feng_assign((void**)&%s, %s);\n", mb->c_name, v.c_expr);
             }
+            buf_append_fmt(cg->cur_body, "    %s = true;\n", mb->c_inited_name);
         } else {
             char *cty = cg_ctype_dup(mb->type);
             buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
                            mb->c_name, cty, v.c_expr);
+            buf_append_fmt(cg->cur_body, "    %s = true;\n", mb->c_inited_name);
             free(cty);
         }
         er_free(&v);
@@ -17457,6 +17512,8 @@ static bool cg_pass_register_module_bindings(CG *cg, const FengProgram *prog) {
         } else {
             buf_append_fmt(&cg->statics, "static %s %s = 0;\n", cty, mb->c_name);
         }
+        buf_append_fmt(&cg->statics, "static bool %s = false;\n", mb->c_inited_name);
+        buf_append_fmt(&cg->fn_protos, "static %s %s(void);\n", cty, mb->c_getter_name);
         free(cty);
     }
     cg->cur_program = NULL;
@@ -17481,6 +17538,8 @@ static bool cg_pass_emit_imported_function_decls(CG *cg, const FengProgram *prog
     cg->cur_program = NULL;
     return true;
 }
+
+static bool cg_pass_emit_module_binding_getters(CG *cg, const FengProgram *prog);
 
 static bool cg_pass_emit_enum_decls(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
@@ -17510,8 +17569,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
         const FengDecl *d = prog->declarations[i];
         switch (d->kind) {
             case FENG_DECL_GLOBAL_BINDING:
-                /* Already registered + storage emitted in Pass 2b; the
-                 * initializer runs from the main wrapper. */
+                /* Already registered + storage emitted in Pass 2b; getter
+                 * bodies are emitted in a dedicated pass after free
+                 * functions are registered. */
                 continue;
             case FENG_DECL_ENUM:
                 continue;
@@ -17837,6 +17897,13 @@ static bool cg_emit_all_programs(CG *cg,
             return false;
         }
     }
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_emit_module_binding_getters(cg, programs[p])) {
+            if (!cg->failed) cg_fail(cg, programs[p]->module_token,
+                "codegen: internal: module binding getter emission failed without diagnostic");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -17955,25 +18022,69 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
     return true;
 }
 
-static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
-    Buf *b = &cg->fn_defs;
-    /* Emit module-binding initialisers into a side buffer first so that any
-     * string literals embedded in their expressions get interned BEFORE we
-     * write the string-literal init prelude. The captured body is then
-     * appended after the literal init below. */
-    Buf module_init_body;
-    buf_init(&module_init_body);
+static bool cg_emit_module_binding_getter(CG *cg, const ModuleBinding *mb) {
+    char *cty = cg_ctype_dup(mb->type);
     Buf *prev_body = cg->cur_body;
-    cg->cur_body = &module_init_body;
-    for (size_t i = 0; i < cg->module_binding_count; i++) {
-        if (!cg_emit_module_binding_init(cg, &cg->module_bindings[i])) {
-            buf_free(&module_init_body);
-            cg->cur_body = prev_body;
+    Scope *prev_scope = cg->cur_scope;
+    CGType *prev_return_type = cg->cur_return_type;
+    bool prev_fn_is_main = cg->cur_fn_is_main;
+
+    if (!cty) {
+        return cg_fail(cg, mb->binding->token, "codegen: out of memory");
+    }
+
+    buf_append_fmt(&cg->fn_defs, "static %s %s(void) {\n", cty, mb->c_getter_name);
+    free(cty);
+    buf_append_fmt(&cg->fn_defs, "    if (%s) return %s;\n", mb->c_inited_name, mb->c_name);
+
+    cg->cur_body = &cg->fn_defs;
+    if (!cg_emit_module_binding_init(cg, mb)) {
+        cg->cur_body = prev_body;
+        cg->cur_scope = prev_scope;
+        cg->cur_return_type = prev_return_type;
+        cg->cur_fn_is_main = prev_fn_is_main;
+        return false;
+    }
+
+    cg->cur_body = &cg->fn_defs;
+    buf_append_fmt(&cg->fn_defs, "    %s = true;\n", mb->c_inited_name);
+    buf_append_fmt(&cg->fn_defs, "    return %s;\n}\n\n", mb->c_name);
+
+    cg->cur_body = prev_body;
+    cg->cur_scope = prev_scope;
+    cg->cur_return_type = prev_return_type;
+    cg->cur_fn_is_main = prev_fn_is_main;
+    return true;
+}
+
+static bool cg_pass_emit_module_binding_getters(CG *cg, const FengProgram *prog) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        const ModuleBinding *mb;
+
+        if (d->kind != FENG_DECL_GLOBAL_BINDING) continue;
+        mb = cg_find_module_binding_by_binding(cg, &d->as.binding);
+        if (!mb) {
+            cg->cur_program = NULL;
+            return cg_fail(cg, d->token,
+                "codegen: internal: module binding getter emitted before registration");
+        }
+        if (!cg_emit_module_binding_getter(cg, mb)) {
+            cg->cur_program = NULL;
             return false;
         }
     }
-    cg->cur_body = prev_body;
+    cg->cur_program = NULL;
+    return true;
+}
 
+static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
+    Buf *b = &cg->fn_defs;
     buf_append_cstr(b,
         "int main(int argc, char **argv) {\n");
     /* Initialise string literal slots once. */
@@ -17984,11 +18095,6 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
         "    for (int _i = 0; _i < argc; _i++) {\n"
         "        _slots[_i] = feng_string_literal(argv[_i], strlen(argv[_i]));\n"
         "    }\n");
-    /* Now splice in the previously captured module-binding init code. */
-    if (module_init_body.length > 0) {
-        buf_append(b, module_init_body.data, module_init_body.length);
-    }
-    buf_free(&module_init_body);
     if (main_fn->return_type->kind == CG_TYPE_I32) {
         buf_append_fmt(b, "    int32_t _rc = %s(_args);\n", main_fn->c_name);
     } else {
@@ -19843,6 +19949,8 @@ static void cg_dispose(CG *cg) {
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         free(cg->module_bindings[i].feng_name);
         free(cg->module_bindings[i].c_name);
+        free(cg->module_bindings[i].c_getter_name);
+        free(cg->module_bindings[i].c_inited_name);
         cgtype_free(cg->module_bindings[i].type);
     }
     free(cg->module_bindings);
