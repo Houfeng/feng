@@ -1,6 +1,6 @@
 # Feng 语言 ABI 互操作规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的 ABI 互操作概要说明,聚焦 Feng 语言在 C ABI 路径下的 C 库来源声明、ABI 兼容资格、`@abi` 声明、`Foo*` 函数指针、`extern fn` 导入声明、导出函数与回调规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的 ABI 互操作概要说明,聚焦 Feng 语言在 C ABI 路径下的 C 库来源声明、ABI 兼容资格、`@abi` 声明、`Foo*` 函数指针、`extern fn` 导入声明、回调规则与未来公开导出 surface 规则。
 
 > **设计原则基础**: 本文档建立在 [Feng 语言设计原则](./feng-principles.md) 之上。
 > 尤其是: 注解只影响语义分析与代码生成,不改变语法; ABI 规则必须可在编译期判定; 互操作层不预设任何特定 C API 行为。
@@ -16,7 +16,7 @@
 - 指针类型 `T*` 与函数指针类型 `Foo*` 在 Feng 中都是不透明句柄: 不可直接解引用、不可运算、不可显式转换; `Foo*` 也不可直接调用。仅允许同类型指针参与 `==` / `!=`,结果按原生指针地址身份判定。
 - `string` 与 ABI 兼容数组在 ABI 边界上采用默认借用、优先 0 拷贝的规则; 具体 ABI 形状由 `extern fn` 签名显式表达,语言不预设未知 C API。
 - 编译器私有的 runtime contract helper 不属于本文定义的公共 C ABI 规则; 本文不展开这类内部入口。
-- 顶层 `@abi fn` 可作为 ABI 回调来源,`pu @abi fn` 可作为公开导出函数; Feng 异常不得穿越 ABI 边界传播。
+- 顶层 `@abi fn` 仍然是 Feng 自己实现的函数; 公开或非公开形态都可作为 ABI 回调来源。仅 `pu @abi fn` 在语义上保留为未来面向其他语言的 C ABI 导出 surface; Feng 异常不得穿越 ABI 边界传播。
 
 除非特别说明,本文中的 `extern fn` 均指带 `@cdecl(...)` / `@stdcall(...)` / `@fastcall(...)` 的 C ABI 导入声明; 其他非 C ABI 外部目标不在本文范围内。
 
@@ -38,7 +38,7 @@
 - C ABI 路径下,无函数体的 `extern fn` 声明必须且只能使用一个带参数的调用方式注解; 调用方式由注解名本身唯一确定。
 - 对带参数的 `extern fn` 导入声明,代码生成必须把调用方式差异带入主机 C 声明: `@cdecl` 使用默认 C 调用约定,`@stdcall` / `@fastcall` 在主机工具链提供独立调用约定关键字或属性时必须显式发射; 若当前目标 ABI 不区分这些约定,可退化为默认声明,但不得丢失编译期元信息。
 - C ABI 路径下,带类型参数的 `extern fn` 仅在每个参数位与返回位抹除类型参数后仍对应唯一且 ABI-stable 的 C surface 时才合法; 若某一位置会随具体类型实参改变 C surface,则编译器必须拒绝该声明。调用这类泛型 `extern fn` 时,类型实参既可显式给出,也可在能由实参 ABI surface 唯一确定时省略; 无法唯一确定时必须报错。当前这条按包裹 ABI surface 递归推导的省略规则仅服务于 `extern fn` 导入调用,不改变普通 Feng 函数调用的泛型推导范围。
-- 无参数形式的 `@cdecl`、`@stdcall` 和 `@fastcall` 仅适用于顶层 `@abi fn`; 当前未显式标注时,顶层 `@abi fn` 默认按 `cdecl` 处理。
+- 无参数形式的 `@cdecl`、`@stdcall` 和 `@fastcall` 仅适用于顶层 `@abi fn`; 它们描述的是该 Feng 函数进入 ABI 边界时的调用方式,不改变其“由 Feng 提供实现”的语义身份。当前未显式标注时,顶层 `@abi fn` 默认按 `cdecl` 处理。
 - 调用方式注解当前只对 `@abi("c")` 目标有定义。
 
 ```feng
@@ -150,8 +150,8 @@ callable-form 的 `spec` 在标注 `@abi` 后,用于定义 ABI 函数签名类�
 - `Foo*` 可直接用作 `extern fn` 的参数类型、返回类型以及 `@abi type` 的成员字段类型。
 - 当前版本中,`@abi fn` 仅适用于顶层 `fn`; 方法、lambda、闭包、绑定方法值都不是合法的 `@abi fn`。
 - 顶层 `@abi fn` 若要进入 ABI 边界,其全部参数与返回值必须 ABI 兼容; 其中无字段对象形式 `@abi type` 只能以 `T*` 形态出现。
-- 顶层非公开 `@abi fn` 可作为 ABI 回调函数来源; 顶层 `pu @abi fn` 会生成公开的 C ABI 导出符号。
-- `.fb` 包中的头文件与导出清单由公开 `@abi` 接口自动生成。
+- 顶层 `@abi fn` 仍然是 Feng 自己实现的函数; 公开或非公开形态都可作为 ABI 回调函数来源。仅顶层 `pu @abi fn` 在语义上保留为未来面向其他语言的 C ABI 导出 surface。
+- 公开 `@abi` 接口未来可作为头文件与导出清单的 surface 来源; 具体产物格式与生成流程由构建与包分发规范单独定义。
 - `@abi fn` 内部若可能抛出异常,必须在函数体内捕获并转换为 C 侧可理解的返回约定; 未捕获异常不得穿越 ABI 边界传播。
 
 ```feng

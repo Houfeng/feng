@@ -152,7 +152,7 @@ Feng 用 `mod` 声明文件所属模块，用 `use` 导入外部模块或二进�
 
 ## 5 C 互操作
 
-Feng 通过 `extern fn` 声明外部函数。当前公共规范定义的外部目标路径是 C ABI：通过 `@abi` 标记 ABI 兼容类型、函数签名与顶层函数，并通过调用方式注解指定库来源与调用约定。详细规则见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
+Feng 通过 `extern fn` 声明外部函数。当前公共规范定义的外部目标路径是 C ABI：通过 `@abi` 标记 ABI 兼容类型、函数签名与顶层函数，并通过调用方式注解指定 `extern fn` 导入的库来源与调用约定。顶层 `@abi fn` 仍是 Feng 自己实现的函数,可作为 C API 回调来源; 其中公开形态在语义上预留为未来的 C ABI 导出 surface。详细规则见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 
 ## 6 类型系统与对象模型
 
