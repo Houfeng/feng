@@ -9,5 +9,4 @@ pu type Math {
   }
 }
 
-// pu let math: Math = Math(); 这行会报错
-pu let math: Math = Math();
+pu let math = Math();

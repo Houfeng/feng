@@ -1591,6 +1591,123 @@ static void test_public_binding_lib_exports_slot_and_ensure_init_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_public_binding_infers_constructor_type_codegen(void) {
+    static const char *kSource =
+        "pu mod vendor.math;\n"
+        "pu type Math {\n"
+        "}\n"
+        "pu let math = Math();\n"
+        "pu fn current(): Math {\n"
+        "    return math;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "public_binding_inferred_type.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__vendor__math__Math * feng__vendor__math__math = NULL;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "void feng__vendor__math__math__ensure_init__from__void(void);") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_imported_public_binding_inferred_type_codegen_compiles(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.math;\n"
+        "pu type Math {\n"
+        "}\n"
+        "pu let math = Math();\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "use vendor.math as m;\n"
+        "fn project(): int {\n"
+        "    let first = m.math;\n"
+        "    return 1;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture,
+                                 "tests/imported_inferred_binding_vendor.ff",
+                                 kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_inferred_binding_consumer.ff");
+    programs[0] = program;
+    {
+        bool ok = feng_semantic_analyze_with_options(programs,
+                                                     1U,
+                                                     &options,
+                                                     &analysis,
+                                                     &errors,
+                                                     &error_count);
+        if (!ok) {
+            for (size_t i = 0; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path,
+                        errors[i].token.line,
+                        errors[i].token.column,
+                        errors[i].message);
+            }
+        }
+        ASSERT(ok);
+    }
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    {
+        bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                               NULL, &out, &cgerr);
+        if (!cg_ok) {
+            fprintf(stderr, "codegen error (imported inferred binding): %s\n",
+                    cgerr.message ? cgerr.message : "(unknown)");
+        }
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern struct Feng__vendor__math__Math * feng__vendor__math__math;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void feng__vendor__math__math__ensure_init__from__void(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__math__math__ensure_init__from__void();") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_enum_codegen_emits_stable_symbols(void) {
     static const char *kSource =
         "mod feng.codegen.enumvalue;\n"
@@ -3765,6 +3882,8 @@ int main(void) {
     test_imported_public_var_binding_read_write_codegen_compiles();
     test_imported_public_binding_address_of_codegen_compiles();
     test_public_binding_lib_exports_slot_and_ensure_init_codegen();
+    test_public_binding_infers_constructor_type_codegen();
+    test_imported_public_binding_inferred_type_codegen_compiles();
     test_enum_codegen_emits_stable_symbols();
     test_imported_enum_codegen_emits_visible_symbols();
     test_same_named_types_in_distinct_modules();

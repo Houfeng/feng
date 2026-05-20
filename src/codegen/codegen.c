@@ -2860,6 +2860,207 @@ static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *d
     return NULL;
 }
 
+static bool cg_resolve_global_binding_type(CG *cg,
+                                           const FengDecl *decl,
+                                           CGType **out_type) {
+    const FengBinding *binding;
+    const FengSemanticTypeFact *fact = NULL;
+
+    if (out_type == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_GLOBAL_BINDING) {
+        return false;
+    }
+
+    binding = &decl->as.binding;
+    if (binding->type != NULL) {
+        if (binding->type->kind == FENG_TYPE_REF_NAMED &&
+            binding->type->as.named.segment_count > 1U &&
+            binding->type->as.named.type_arg_count == 0U) {
+            const FengSlice *segments = binding->type->as.named.segments;
+            const size_t segment_count = binding->type->as.named.segment_count;
+            const FengSlice type_name = segments[segment_count - 1U];
+            const FengSemanticModule *owner_module =
+                cg_find_semantic_module_by_segments(cg, segments, segment_count - 1U);
+
+            for (size_t i = 0; i < cg->user_type_count; ++i) {
+                const UserType *ut = &cg->user_types[i];
+
+                if (ut->decl == NULL || ut->decl->kind != FENG_DECL_TYPE ||
+                    ut->owner_program == NULL || ut->is_generic_instance) {
+                    continue;
+                }
+                if (!cg_module_segments_equal(ut->owner_program->module_segments,
+                                              ut->owner_program->module_segment_count,
+                                              segments,
+                                              segment_count - 1U) ||
+                    !cg_slice_equals(ut->decl->as.type_decl.name, type_name)) {
+                    continue;
+                }
+                *out_type = cgtype_new(CG_TYPE_OBJECT);
+                if (*out_type == NULL) {
+                    return false;
+                }
+                (*out_type)->user = ut;
+                return true;
+            }
+
+            for (size_t i = 0; i < cg->user_spec_count; ++i) {
+                const UserSpec *us = &cg->user_specs[i];
+
+                if (us->decl == NULL || us->decl->kind != FENG_DECL_SPEC ||
+                    us->owner_program == NULL || us->is_generic_instance) {
+                    continue;
+                }
+                if (!cg_module_segments_equal(us->owner_program->module_segments,
+                                              us->owner_program->module_segment_count,
+                                              segments,
+                                              segment_count - 1U) ||
+                    !cg_slice_equals(us->decl->as.spec_decl.name, type_name)) {
+                    continue;
+                }
+                *out_type = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
+                                       ? CG_TYPE_CALLABLE
+                                       : CG_TYPE_SPEC);
+                if (*out_type == NULL) {
+                    return false;
+                }
+                (*out_type)->user_spec = us;
+                return true;
+            }
+
+            if (owner_module != NULL) {
+                for (size_t program_index = 0U;
+                     program_index < owner_module->program_count;
+                     ++program_index) {
+                    const FengProgram *program = owner_module->programs[program_index];
+
+                    for (size_t decl_index = 0U;
+                         decl_index < program->declaration_count;
+                         ++decl_index) {
+                        const FengDecl *enum_decl = program->declarations[decl_index];
+
+                        if (enum_decl->kind == FENG_DECL_ENUM &&
+                            cg_slice_equals(enum_decl->as.enum_decl.name, type_name)) {
+                            *out_type = cgtype_new_enum(enum_decl);
+                            return *out_type != NULL;
+                        }
+                    }
+                }
+            }
+        }
+        return cg_resolve_type(cg, binding->type, &decl->token, out_type);
+    }
+
+    if (cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, binding);
+    }
+    if (fact != NULL) {
+        switch (fact->kind) {
+            case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+                for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; ++i) {
+                    const BuiltinTypeMap *m = &k_builtin_types[i];
+
+                    if (strlen(m->name) == fact->builtin_name.length &&
+                        memcmp(m->name,
+                               fact->builtin_name.data,
+                               fact->builtin_name.length) == 0) {
+                        *out_type = cgtype_new(m->kind);
+                        return *out_type != NULL;
+                    }
+                }
+                return cg_fail(cg,
+                               decl->token,
+                               "codegen: unsupported builtin inferred type for global binding '%.*s'",
+                               (int)binding->name.length,
+                               binding->name.data);
+
+            case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+                return cg_resolve_type(cg, fact->type_ref, &decl->token, out_type);
+
+            case FENG_SEMANTIC_TYPE_FACT_DECL:
+                if (fact->type_decl == NULL) {
+                    return cg_fail(cg,
+                                   decl->token,
+                                   "codegen: inferred type for global binding '%.*s' is missing its declaration",
+                                   (int)binding->name.length,
+                                   binding->name.data);
+                }
+                if (fact->type_decl->kind == FENG_DECL_ENUM) {
+                    *out_type = cgtype_new_enum(fact->type_decl);
+                    return *out_type != NULL;
+                }
+                {
+                    const UserType *ut = cg_find_user_type_by_decl(cg, fact->type_decl);
+
+                    if (ut != NULL) {
+                        CGType *type = cgtype_new(CG_TYPE_OBJECT);
+
+                        if (type == NULL) {
+                            return false;
+                        }
+                        type->user = ut;
+                        *out_type = type;
+                        return true;
+                    }
+                }
+                {
+                    const UserSpec *us = cg_find_user_spec_by_decl(cg, fact->type_decl);
+
+                    if (us != NULL) {
+                        CGType *type = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
+                                                  ? CG_TYPE_CALLABLE
+                                                  : CG_TYPE_SPEC);
+
+                        if (type == NULL) {
+                            return false;
+                        }
+                        type->user_spec = us;
+                        *out_type = type;
+                        return true;
+                    }
+                }
+                return cg_fail(cg,
+                               decl->token,
+                               "codegen: unsupported declared inferred type for global binding '%.*s'",
+                               (int)binding->name.length,
+                               binding->name.data);
+
+            case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+                break;
+        }
+    }
+
+    if (binding->initializer == NULL) {
+        return cg_fail(cg,
+                       decl->token,
+                       "codegen: module-level binding requires an explicit type or initializer");
+    }
+
+    switch (binding->initializer->kind) {
+        case FENG_EXPR_BOOL:
+            *out_type = cgtype_new(CG_TYPE_BOOL);
+            return *out_type != NULL;
+        case FENG_EXPR_INTEGER:
+            *out_type = cgtype_new(CG_TYPE_I32);
+            return *out_type != NULL;
+        case FENG_EXPR_FLOAT:
+            *out_type = cgtype_new(CG_TYPE_F64);
+            return *out_type != NULL;
+        case FENG_EXPR_STRING:
+            *out_type = cgtype_new(CG_TYPE_STRING);
+            return *out_type != NULL;
+        default:
+            return cg_fail(cg,
+                           decl->token,
+                           "codegen: missing semantic type fact for inferred global binding '%.*s'; add an explicit type if this persists",
+                           (int)binding->name.length,
+                           binding->name.data);
+    }
+}
+
 static bool cg_resolve_coercion_target_user_spec(CG *cg,
                                                  const FengSpecCoercionSite *cs,
                                                  FengToken blame,
@@ -7032,32 +7233,8 @@ static bool cg_register_module_binding(CG *cg,
         mb->c_inited_name = NULL;
         return false;
     }
-    /* Type: explicit annotation required at module scope unless initializer
-     * present. We can't fully infer from a user-type literal here without
-     * doing expression emission first — which we cannot do until all types
-     * are registered. So we require an explicit type annotation OR a
-     * primitive/string literal initializer in 1A. */
-    if (decl->as.binding.type) {
-        if (!cg_resolve_type(cg, decl->as.binding.type, &decl->token, &mb->type)) {
-            return false;
-        }
-    } else {
-        const FengExpr *init = decl->as.binding.initializer;
-        if (!init) {
-            return cg_fail(cg, decl->token,
-                "codegen: module-level binding requires an explicit type or initializer");
-        }
-        switch (init->kind) {
-            case FENG_EXPR_BOOL:    mb->type = cgtype_new(CG_TYPE_BOOL); break;
-            case FENG_EXPR_INTEGER: mb->type = cgtype_new(CG_TYPE_I32); break;
-            case FENG_EXPR_FLOAT:   mb->type = cgtype_new(CG_TYPE_F64); break;
-            case FENG_EXPR_STRING:  mb->type = cgtype_new(CG_TYPE_STRING); break;
-            default:
-                return cg_fail(cg, decl->token,
-                    "codegen: module-level binding without explicit type can only be"
-                    " initialised by a literal in Phase 1A");
-        }
-        if (!mb->type) return false;
+    if (!cg_resolve_global_binding_type(cg, decl, &mb->type)) {
+        return false;
     }
     return true;
 }
@@ -7115,13 +7292,13 @@ static bool cg_emit_imported_binding_expr(CG *cg,
     char *ensure_init_name = NULL;
 
     if (cg == NULL || decl == NULL || out == NULL ||
-        decl->kind != FENG_DECL_GLOBAL_BINDING || decl->as.binding.type == NULL) {
+        decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return false;
     }
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
         return cg_fail(cg, decl->token, "codegen: out of memory");
     }
-    if (!cg_resolve_type(cg, decl->as.binding.type, &decl->token, &out->type)) {
+    if (!cg_resolve_global_binding_type(cg, decl, &out->type)) {
         free(slot_name);
         free(ensure_init_name);
         return false;
@@ -7143,7 +7320,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
     char *ensure_init_name = NULL;
 
     if (cg == NULL || decl == NULL || stmt == NULL ||
-        decl->kind != FENG_DECL_GLOBAL_BINDING || decl->as.binding.type == NULL) {
+        decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return false;
     }
     if (decl->as.binding.mutability != FENG_MUTABILITY_VAR) {
@@ -7155,7 +7332,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
         return cg_fail(cg, decl->token, "codegen: out of memory");
     }
-    if (!cg_resolve_type(cg, decl->as.binding.type, &decl->token, &binding_type)) {
+    if (!cg_resolve_global_binding_type(cg, decl, &binding_type)) {
         free(slot_name);
         free(ensure_init_name);
         return false;
@@ -14189,8 +14366,7 @@ static bool cg_emit_imported_binding_decl(CG *cg, const FengDecl *decl) {
     char *slot_name = NULL;
     char *ensure_init_name = NULL;
 
-    if (decl == NULL || decl->kind != FENG_DECL_GLOBAL_BINDING ||
-        decl->as.binding.type == NULL) {
+    if (decl == NULL || decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return cg_fail(cg,
                        decl != NULL ? decl->token : (FengToken){0},
                        "codegen: imported public binding surface is missing a type");
@@ -14198,7 +14374,7 @@ static bool cg_emit_imported_binding_decl(CG *cg, const FengDecl *decl) {
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
         return cg_fail(cg, decl->token, "codegen: out of memory");
     }
-    if (!cg_resolve_type(cg, decl->as.binding.type, &decl->token, &binding_type)) {
+    if (!cg_resolve_global_binding_type(cg, decl, &binding_type)) {
         free(slot_name);
         free(ensure_init_name);
         return false;
