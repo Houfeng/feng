@@ -323,6 +323,51 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
+static void test_extern_calling_convention_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.callconv;\n"
+        "@stdcall(\"user32\")\n"
+        "extern fn stdcall_value(value: int): int;\n"
+        "@fastcall(\"helper\")\n"
+        "extern fn fastcall_value(value: int): int;\n"
+        "fn run() {\n"
+        "    let value = stdcall_value(1);\n"
+        "    fastcall_value(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "callconv.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (extern callconv): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "#define FENG_EXTERN_CALLCONV_STDCALL") != NULL);
+    ASSERT(strstr(out.c_source, "#define FENG_EXTERN_CALLCONV_FASTCALL") != NULL);
+    ASSERT(strstr(out.c_source, "FENG_EXTERN_CALLCONV_STDCALL stdcall_value(") != NULL);
+    ASSERT(strstr(out.c_source, "FENG_EXTERN_CALLCONV_FASTCALL fastcall_value(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_address_of_scalar_and_array_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.addr;\n"
@@ -3216,6 +3261,7 @@ static void test_user_constructor_forms_codegen(void) {
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
+    test_extern_calling_convention_codegen();
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();

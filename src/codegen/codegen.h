@@ -3,8 +3,10 @@
  *
  * Scope (Phase 1A complete):
  *   - module declaration
- *   - extern fn with @cdecl(<lib>) — emits a plain `extern` declaration whose
- *     surface types follow the C ABI path and whose C symbol is the Feng
+ *   - extern fn with @cdecl(<lib>) / @stdcall(<lib>) / @fastcall(<lib>) —
+ *     emits an `extern` declaration whose surface types follow the C ABI path;
+ *     `@stdcall` / `@fastcall` carry host calling-convention markers when the
+ *     target toolchain distinguishes them, and the C symbol remains the Feng
  *     function name verbatim
  *   - extern fn with @runtime — reuses the runtime contract header's
  *     declaration and emits ordinary C calls (no ABI bridge / trampoline)

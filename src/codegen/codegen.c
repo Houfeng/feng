@@ -731,6 +731,7 @@ typedef struct ExternFn {
     CGType **param_types;
     size_t   param_count;
     CGType  *return_type;
+    FengAnnotationKind calling_convention;
     bool     uses_runtime_contract;
 } ExternFn;
 
@@ -3673,6 +3674,35 @@ static bool cg_annotations_contain_kind(const FengAnnotation *annotations,
     return false;
 }
 
+static bool cg_annotation_kind_is_calling_convention(FengAnnotationKind kind) {
+    return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL ||
+           kind == FENG_ANNOTATION_FASTCALL;
+}
+
+static FengAnnotationKind cg_find_calling_convention_kind(const FengAnnotation *annotations,
+                                                          size_t annotation_count) {
+    if (annotations == NULL) {
+        return FENG_ANNOTATION_NONE;
+    }
+    for (size_t i = 0; i < annotation_count; ++i) {
+        if (cg_annotation_kind_is_calling_convention(annotations[i].builtin_kind)) {
+            return annotations[i].builtin_kind;
+        }
+    }
+    return FENG_ANNOTATION_NONE;
+}
+
+static const char *cg_extern_calling_convention_macro(FengAnnotationKind kind) {
+    switch (kind) {
+        case FENG_ANNOTATION_STDCALL:
+            return "FENG_EXTERN_CALLCONV_STDCALL";
+        case FENG_ANNOTATION_FASTCALL:
+            return "FENG_EXTERN_CALLCONV_FASTCALL";
+        default:
+            return NULL;
+    }
+}
+
 static bool cg_slice_equals_cstr(FengSlice slice, const char *text) {
     size_t text_length = strlen(text);
 
@@ -5130,6 +5160,8 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
 
     memset(ef, 0, sizeof(*ef));
     ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
+    ef->calling_convention = cg_find_calling_convention_kind(decl->annotations,
+                                                             decl->annotation_count);
 
     if (ef->uses_runtime_contract && !cg_runtime_contract_contains_name(sig->name)) {
         return cg_fail(cg,
@@ -5237,6 +5269,13 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
 
     buf_append_cstr(h, "extern ");
     cg_emit_c_abi_surface_type(h, ef->return_type);
+    {
+        const char *callconv_macro = cg_extern_calling_convention_macro(ef->calling_convention);
+
+        if (callconv_macro != NULL) {
+            buf_append_fmt(h, " %s", callconv_macro);
+        }
+    }
     buf_append_fmt(h, " %s(", ef->name);
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
@@ -19592,7 +19631,15 @@ static char *cg_finalize(CG *cg) {
         "#include <stdint.h>\n"
         "#include <stdlib.h>\n"
         "#include <string.h>\n"
-        "#include \"runtime/feng_runtime.h\"\n\n");
+        "#include \"runtime/feng_runtime.h\"\n"
+        "\n"
+        "#if defined(_WIN32)\n"
+        "#define FENG_EXTERN_CALLCONV_STDCALL __stdcall\n"
+        "#define FENG_EXTERN_CALLCONV_FASTCALL __fastcall\n"
+        "#else\n"
+        "#define FENG_EXTERN_CALLCONV_STDCALL\n"
+        "#define FENG_EXTERN_CALLCONV_FASTCALL\n"
+        "#endif\n\n");
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
     buf_append_cstr(&out, "\n");
     if (cg->type_defs.length) buf_append(&out, cg->type_defs.data, cg->type_defs.length);
