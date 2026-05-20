@@ -1576,6 +1576,7 @@ static bool build_local_project_bundle(const char *program,
     FengFbLibraryBundleSpec spec = {0};
     FengCliProjectManifestDependency *direct_dependencies = NULL;
     size_t direct_dependency_count = 0U;
+    char *host_library_name = NULL;
     char *library_path = NULL;
     char *public_mod_root = NULL;
     char *fb_error = NULL;
@@ -1606,9 +1607,15 @@ static bool build_local_project_bundle(const char *program,
                           "failed to build local dependency project");
     }
 
-    library_path = dup_printf("%s/lib/lib%s.a", context.out_root, context.manifest.name);
+    host_library_name = feng_fb_host_static_library_file_name(context.manifest.name);
+    if (host_library_name == NULL) {
+        feng_cli_project_context_dispose(&context);
+        return set_errorf(error, manifest_path, 0U, "out of memory");
+    }
+    library_path = dup_printf("%s/lib/%s", context.out_root, host_library_name);
     public_mod_root = dup_printf("%s/mod", context.out_root);
     if (library_path == NULL || public_mod_root == NULL) {
+        free(host_library_name);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1641,6 +1648,7 @@ static bool build_local_project_bundle(const char *program,
                              fb_error != NULL ? fb_error : "failed to write local dependency bundle");
         free(fb_error);
         feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
+        free(host_library_name);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1650,6 +1658,7 @@ static bool build_local_project_bundle(const char *program,
     *out_bundle_path = dup_cstr(context.package_path);
     free(fb_error);
     feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
+    free(host_library_name);
     free(public_mod_root);
     free(library_path);
     feng_cli_project_context_dispose(&context);

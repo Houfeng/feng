@@ -83,6 +83,34 @@ static char *path_join2(const char *a, const char *b) {
     return out;
 }
 
+static char *path_join_host_static_library(const char *dir, const char *library_name) {
+    char *file_name;
+    char *path;
+
+    file_name = feng_fb_host_static_library_file_name(library_name);
+    if (file_name == NULL) {
+        return NULL;
+    }
+    path = path_join2(dir, file_name);
+    free(file_name);
+    return path;
+}
+
+static char *host_runtime_dynamic_library_file_name(const char *library_name) {
+    if (library_name == NULL || library_name[0] == '\0') {
+        return NULL;
+    }
+#if defined(__APPLE__)
+    return dup_printf("lib%s.dylib", library_name);
+#elif defined(_WIN32)
+    return dup_printf("%s.dll", library_name);
+#elif defined(__linux__)
+    return dup_printf("lib%s.so", library_name);
+#else
+    return NULL;
+#endif
+}
+
 /* Strip the trailing path component, returning a malloc'd directory copy.
  * If the path has no separator, returns ".". */
 static char *path_dirname_dup(const char *path) {
@@ -197,6 +225,11 @@ typedef struct BundleScanInfo {
     size_t use_capacity;
 } BundleScanInfo;
 
+typedef struct BundleExtlibMatch {
+    size_t bundle_index;
+    char *entry_path;
+} BundleExtlibMatch;
+
 static void free_string_array(char **items, size_t count) {
     size_t index;
 
@@ -207,6 +240,19 @@ static void free_string_array(char **items, size_t count) {
         free(items[index]);
     }
     free(items);
+}
+
+static void bundle_extlib_match_array_dispose(BundleExtlibMatch *matches,
+                                              size_t count) {
+    size_t index;
+
+    if (matches == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        free(matches[index].entry_path);
+    }
+    free(matches);
 }
 
 static bool string_array_contains_text(char *const *items,
@@ -349,7 +395,7 @@ static bool bundle_entry_is_host_library(const FengZipEntryInfo *entry,
     matches = path_length > prefix_length + 1U &&
               strncmp(entry->path, prefix, prefix_length) == 0 &&
               entry->path[prefix_length] == '/' &&
-              strcmp(entry->path + path_length - 2U, ".a") == 0;
+              feng_fb_is_host_static_library_path(entry->path);
     free(prefix);
     return matches;
 }
@@ -528,7 +574,7 @@ static bool scan_bundle_dependencies(const char *bundle_path,
     feng_zip_reader_dispose(&reader);
     if (out_info->library_entry_path == NULL) {
         return set_errorf(out_error_message,
-                          "bundle %s does not contain lib/%s/*.a",
+                          "bundle %s does not contain a host static library under lib/%s",
                           bundle_path,
                           host_target);
     }
@@ -790,6 +836,197 @@ done:
     return ok;
 }
 
+static bool collect_bundle_extlib_static_libraries(const char *const *bundle_paths,
+                                                   size_t bundle_count,
+                                                   const char *host_target,
+                                                   char *const *library_names,
+                                                   size_t library_count,
+                                                   char ***out_library_paths,
+                                                   size_t *out_library_count,
+                                                   char ***out_satisfied_names,
+                                                   size_t *out_satisfied_count,
+                                                   char **out_temp_dir,
+                                                   char **out_error_message) {
+    BundleExtlibMatch *matches = NULL;
+    char *entry_prefix = NULL;
+    char *template_path = NULL;
+    char **library_paths = NULL;
+    char **satisfied_names = NULL;
+    size_t prefix_length = 0U;
+    size_t bundle_index;
+    size_t lib_index;
+    size_t match_count = 0U;
+    size_t extracted_count = 0U;
+    bool ok = false;
+
+    *out_library_paths = NULL;
+    *out_library_count = 0U;
+    *out_satisfied_names = NULL;
+    *out_satisfied_count = 0U;
+    *out_temp_dir = NULL;
+    if (bundle_count == 0U || library_count == 0U) {
+        return true;
+    }
+    if (host_target == NULL || host_target[0] == '\0') {
+        return set_errorf(out_error_message,
+                          "host target is required to prepare bundle extlib static libraries");
+    }
+
+    matches = calloc(library_count, sizeof(*matches));
+    entry_prefix = dup_printf("extlib/%s/", host_target);
+    if (matches == NULL || entry_prefix == NULL) {
+        set_errorf(out_error_message, "out of memory");
+        goto done;
+    }
+    prefix_length = strlen(entry_prefix);
+
+    for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        FengZipReader reader = {0};
+        char *zip_error = NULL;
+        size_t entry_count;
+        size_t entry_index;
+
+        if (!feng_zip_reader_open(bundle_paths[bundle_index], &reader, &zip_error)) {
+            set_errorf(out_error_message,
+                       "failed to open bundle %s while resolving extlib static libraries: %s",
+                       bundle_paths[bundle_index],
+                       zip_error != NULL ? zip_error : "unknown error");
+            free(zip_error);
+            goto done;
+        }
+
+        entry_count = feng_zip_reader_entry_count(&reader);
+        for (entry_index = 0U; entry_index < entry_count; ++entry_index) {
+            FengZipEntryInfo info = {0};
+
+            zip_error = NULL;
+            if (!feng_zip_reader_entry_at(&reader, entry_index, &info, &zip_error)) {
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "failed to inspect bundle entry in %s while resolving extlib static libraries: %s",
+                           bundle_paths[bundle_index],
+                           zip_error != NULL ? zip_error : "unknown error");
+                free(zip_error);
+                goto done;
+            }
+            free(zip_error);
+
+            if (info.is_directory || strncmp(info.path, entry_prefix, prefix_length) != 0) {
+                continue;
+            }
+            for (lib_index = 0U; lib_index < library_count; ++lib_index) {
+                char *entry_copy;
+
+                if (!feng_fb_host_static_library_matches_name(info.path, library_names[lib_index])) {
+                    continue;
+                }
+                if (matches[lib_index].entry_path != NULL) {
+                    feng_zip_reader_dispose(&reader);
+                    set_errorf(out_error_message,
+                               "multiple --pkg bundles provide extlib static library for %s: %s and %s",
+                               library_names[lib_index],
+                               bundle_paths[matches[lib_index].bundle_index],
+                               bundle_paths[bundle_index]);
+                    goto done;
+                }
+                entry_copy = str_dup_cstr(info.path);
+                if (entry_copy == NULL) {
+                    feng_zip_reader_dispose(&reader);
+                    set_errorf(out_error_message, "out of memory");
+                    goto done;
+                }
+                matches[lib_index].bundle_index = bundle_index;
+                matches[lib_index].entry_path = entry_copy;
+                match_count += 1U;
+            }
+        }
+
+        feng_zip_reader_dispose(&reader);
+    }
+
+    if (match_count == 0U) {
+        ok = true;
+        goto done;
+    }
+
+    template_path = str_dup_cstr("/tmp/feng_bundle_extlib_link_XXXXXX");
+    library_paths = calloc(match_count, sizeof(*library_paths));
+    satisfied_names = calloc(match_count, sizeof(*satisfied_names));
+    if (template_path == NULL || library_paths == NULL || satisfied_names == NULL) {
+        set_errorf(out_error_message, "out of memory");
+        goto done;
+    }
+    if (mkdtemp(template_path) == NULL) {
+        set_errorf(out_error_message,
+                   "failed to create bundle extlib temp directory: %s",
+                   strerror(errno));
+        goto done;
+    }
+
+    for (lib_index = 0U; lib_index < library_count; ++lib_index) {
+        FengZipReader reader = {0};
+        char *zip_error = NULL;
+
+        if (matches[lib_index].entry_path == NULL) {
+            continue;
+        }
+        satisfied_names[extracted_count] = str_dup_cstr(library_names[lib_index]);
+        library_paths[extracted_count] = dup_printf("%s/%03zu_%s",
+                                                    template_path,
+                                                    extracted_count,
+                                                    path_basename(matches[lib_index].entry_path));
+        if (satisfied_names[extracted_count] == NULL || library_paths[extracted_count] == NULL) {
+            set_errorf(out_error_message, "out of memory");
+            goto done;
+        }
+        if (!feng_zip_reader_open(bundle_paths[matches[lib_index].bundle_index], &reader, &zip_error)) {
+            set_errorf(out_error_message,
+                       "failed to open bundle %s while extracting extlib static library %s: %s",
+                       bundle_paths[matches[lib_index].bundle_index],
+                       matches[lib_index].entry_path,
+                       zip_error != NULL ? zip_error : "unknown error");
+            free(zip_error);
+            goto done;
+        }
+        if (!feng_zip_reader_extract(&reader,
+                                     matches[lib_index].entry_path,
+                                     library_paths[extracted_count],
+                                     &zip_error)) {
+            feng_zip_reader_dispose(&reader);
+            set_errorf(out_error_message,
+                       "failed to extract %s from %s: %s",
+                       matches[lib_index].entry_path,
+                       bundle_paths[matches[lib_index].bundle_index],
+                       zip_error != NULL ? zip_error : "unknown error");
+            free(zip_error);
+            goto done;
+        }
+        feng_zip_reader_dispose(&reader);
+        extracted_count += 1U;
+    }
+
+    *out_library_paths = library_paths;
+    *out_library_count = extracted_count;
+    *out_satisfied_names = satisfied_names;
+    *out_satisfied_count = extracted_count;
+    *out_temp_dir = template_path;
+    library_paths = NULL;
+    satisfied_names = NULL;
+    template_path = NULL;
+    ok = true;
+
+done:
+    free(entry_prefix);
+    bundle_extlib_match_array_dispose(matches, library_count);
+    if (!ok) {
+        free_string_array(satisfied_names, extracted_count);
+        free_string_array(library_paths, extracted_count);
+        remove_tree(template_path);
+        free(template_path);
+    }
+    return ok;
+}
+
 static const char *host_runtime_dynamic_library_suffix(void) {
 #if defined(__APPLE__)
     return ".dylib";
@@ -805,6 +1042,8 @@ static const char *host_runtime_dynamic_library_suffix(void) {
 static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_paths,
                                                      size_t bundle_count,
                                                      const char *host_target,
+                                                     char *const *library_names,
+                                                     size_t library_count,
                                                      const char *binary_path,
                                                      char **out_error_message) {
     const char *suffix;
@@ -817,7 +1056,7 @@ static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_p
     size_t prefix_len;
     bool ok = false;
 
-    if (bundle_count == 0U) {
+    if (bundle_count == 0U || library_count == 0U) {
         return true;
     }
     if (host_target == NULL || host_target[0] == '\0') {
@@ -886,6 +1125,25 @@ static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_p
             }
             if (!path_has_suffix(info.path, suffix)) {
                 continue;
+            }
+            {
+                bool matched = false;
+                size_t lib_index;
+
+                for (lib_index = 0U; lib_index < library_count; ++lib_index) {
+                    char *expected = host_runtime_dynamic_library_file_name(library_names[lib_index]);
+
+                    if (expected != NULL && strcmp(path_basename(info.path), expected) == 0) {
+                        matched = true;
+                    }
+                    free(expected);
+                    if (matched) {
+                        break;
+                    }
+                }
+                if (!matched) {
+                    continue;
+                }
             }
 
             basename = path_basename(info.path);
@@ -1044,12 +1302,22 @@ static char *locate_runtime_lib(const char *program_path) {
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
-    /* Common layout: <root>/build/bin/feng -> <root>/build/lib/libfeng_runtime.a */
-    char *root = find_ancestor_with(exe_dir, "build/lib/libfeng_runtime.a");
+    char *runtime_rel = path_join_host_static_library("build/lib", "feng_runtime");
+
+    if (runtime_rel == NULL) {
+        free(exe_dir);
+        return NULL;
+    }
+    /* Common layout: <root>/build/bin/feng -> <root>/build/lib/<host-runtime-lib> */
+    char *root = find_ancestor_with(exe_dir, runtime_rel);
     free(exe_dir);
-    if (root == NULL) return NULL;
-    char *path = path_join2(root, "build/lib/libfeng_runtime.a");
+    if (root == NULL) {
+        free(runtime_rel);
+        return NULL;
+    }
+    char *path = path_join2(root, runtime_rel);
     free(root);
+    free(runtime_rel);
     return path;
 }
 
@@ -1080,7 +1348,7 @@ static char *locate_runtime_include(const char *program_path) {
     return path;
 }
 
-/* --- @cdecl link library mining ----------------------------------------- */
+/* --- extern calling-convention link library mining ----------------------- */
 
 /* Decode a single string-literal annotation argument. The lexer keeps the
  * surrounding quotes; library names never contain escape sequences in
@@ -1111,7 +1379,7 @@ static char *decode_string_literal(const FengExpr *expr) {
     return out;
 }
 
-/* Map a Feng @cdecl library name to a host link token. Returns:
+/* Map a Feng extern-calling-convention library name to a host link token. Returns:
  *   NULL — implicit on POSIX (libc / c), no flag needed.
  *   non-NULL — caller-owned malloc'd `name` (without "lib" prefix) to
  *              be appended after `-l`.
@@ -1135,6 +1403,11 @@ static bool string_array_contains(char *const *arr, size_t count, const char *ne
     return false;
 }
 
+static bool annotation_kind_is_link_calling_convention(FengAnnotationKind kind) {
+    return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL
+           || kind == FENG_ANNOTATION_FASTCALL;
+}
+
 /* Returns 0 on success, -1 on allocation failure. */
 static int collect_link_libs(const FengProgram *const *programs,
                              size_t program_count,
@@ -1153,7 +1426,7 @@ static int collect_link_libs(const FengProgram *const *programs,
             if (decl->kind != FENG_DECL_FUNCTION) continue;
             for (size_t ai = 0; ai < decl->annotation_count; ++ai) {
                 const FengAnnotation *ann = &decl->annotations[ai];
-                if (ann->builtin_kind != FENG_ANNOTATION_CDECL) continue;
+                if (!annotation_kind_is_link_calling_convention(ann->builtin_kind)) continue;
                 if (ann->arg_count < 1U) continue;
                 char *raw = decode_string_literal(ann->args[0]);
                 if (raw == NULL) continue;
@@ -1276,15 +1549,26 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *host_target = NULL;
     char *bundle_error = NULL;
     char *bundle_temp_dir = NULL;
+        char *bundle_extlib_temp_dir = NULL;
     char **bundle_libs = NULL;
+        char **bundle_extlib_static_libs = NULL;
+        char **bundle_extlib_satisfied_libs = NULL;
     size_t bundle_lib_count = 0U;
+        size_t bundle_extlib_static_lib_count = 0U;
+        size_t bundle_extlib_satisfied_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         runtime_lib = locate_runtime_lib(opts->program_path);
         if (runtime_lib == NULL) {
+            char *runtime_basename = feng_fb_host_static_library_file_name("feng_runtime");
+
             fprintf(stderr,
-                    "error: cannot locate libfeng_runtime.a.\n"
-                    "  set FENG_RUNTIME_LIB=<path-to-libfeng_runtime.a> or run from a\n"
-                    "  build tree where build/lib/libfeng_runtime.a exists.\n");
+                "error: cannot locate %s.\n"
+                "  set FENG_RUNTIME_LIB=<path-to-%s> or run from a\n"
+                "  build tree where build/lib/%s exists.\n",
+                runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
+                runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
+                runtime_basename != NULL ? runtime_basename : "the Feng runtime static library");
+            free(runtime_basename);
             free(include_dir);
             return 1;
         }
@@ -1324,6 +1608,34 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (opts->target == FENG_COMPILE_TARGET_BIN
         && collect_link_libs(opts->programs, opts->program_count, &libs, &lib_count) != 0) {
         fprintf(stderr, "error: out of memory collecting link libraries\n");
+        free_string_array(bundle_libs, bundle_lib_count);
+        remove_tree(bundle_temp_dir);
+        free(bundle_temp_dir);
+        free(host_target);
+        free(runtime_lib);
+        free(include_dir);
+        return 1;
+    }
+    if (opts->target == FENG_COMPILE_TARGET_BIN
+        && opts->bundle_count > 0U
+        && lib_count > 0U
+        && !collect_bundle_extlib_static_libraries(opts->bundle_paths,
+                                                   opts->bundle_count,
+                                                   host_target,
+                                                   libs,
+                                                   lib_count,
+                                                   &bundle_extlib_static_libs,
+                                                   &bundle_extlib_static_lib_count,
+                                                   &bundle_extlib_satisfied_libs,
+                                                   &bundle_extlib_satisfied_lib_count,
+                                                   &bundle_extlib_temp_dir,
+                                                   &bundle_error)) {
+        fprintf(stderr,
+                "error: failed to prepare package extlib static libraries: %s\n",
+                bundle_error != NULL ? bundle_error : "unknown error");
+        free(bundle_error);
+        for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
+        free(libs);
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
@@ -1384,11 +1696,20 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         for (size_t i = 0; ok && i < bundle_lib_count; ++i) {
             if (!argv_push(&av, bundle_libs[i])) { ok = false; }
         }
+        for (size_t i = 0; ok && i < bundle_extlib_static_lib_count; ++i) {
+            if (!argv_push(&av, bundle_extlib_static_libs[i])) { ok = false; }
+        }
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
         if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
         for (size_t i = 0; ok && i < lib_count; ++i) {
             size_t need = strlen(libs[i]) + 3U;
             char *flag = malloc(need);
+
+            if (string_array_contains_text(bundle_extlib_satisfied_libs,
+                                           bundle_extlib_satisfied_lib_count,
+                                           libs[i])) {
+                continue;
+            }
             if (flag == NULL) {
                 ok = false;
                 break;
@@ -1500,6 +1821,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (!extract_bundle_runtime_dynamic_libraries(opts->bundle_paths,
                                                       opts->bundle_count,
                                                       host_target,
+                                  libs,
+                                  lib_count,
                                                       opts->out_path,
                                                       &bundle_error)) {
             fprintf(stderr,
@@ -1511,6 +1834,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
+    free_string_array(bundle_extlib_satisfied_libs, bundle_extlib_satisfied_lib_count);
+    free_string_array(bundle_extlib_static_libs, bundle_extlib_static_lib_count);
+    remove_tree(bundle_extlib_temp_dir);
+    free(bundle_extlib_temp_dir);
     free_string_array(bundle_libs, bundle_lib_count);
     remove_tree(bundle_temp_dir);
     free(bundle_temp_dir);

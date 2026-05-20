@@ -203,7 +203,158 @@ static char *make_pkg_option(const char *package_path) {
     return out;
 }
 
-static void assert_zip_ok(int ok, char **zip_error) {
+static char *host_static_library_file_name(const char *stem) {
+    char *name = feng_fb_host_static_library_file_name(stem);
+
+    ASSERT(name != NULL);
+    return name;
+}
+
+static char *host_static_library_path(const char *dir, const char *stem) {
+    char *name = host_static_library_file_name(stem);
+    char *path = path_join(dir, name);
+
+    free(name);
+    return path;
+}
+
+static char *host_static_library_output_path(const char *out_dir, const char *stem) {
+    char *lib_dir = path_join(out_dir, "lib");
+    char *path = host_static_library_path(lib_dir, stem);
+
+    free(lib_dir);
+    return path;
+}
+
+static char *host_dynamic_library_file_name(const char *stem) {
+#if defined(_WIN32)
+    return dup_printf("%s.dll", stem);
+#elif defined(__APPLE__)
+    return dup_printf("lib%s.dylib", stem);
+#else
+    return dup_printf("lib%s.so", stem);
+#endif
+}
+
+static char *host_dynamic_library_path(const char *dir, const char *stem) {
+    char *name = host_dynamic_library_file_name(stem);
+    char *path = path_join(dir, name);
+
+    free(name);
+    return path;
+}
+
+static char *host_bundle_static_library_entry_path(const char *host_target,
+                                                   const char *stem) {
+    char *name = host_static_library_file_name(stem);
+    char *entry = dup_printf("lib/%s/%s", host_target, name);
+
+    free(name);
+    return entry;
+}
+
+static char *host_bundle_extlib_static_entry_path(const char *host_target,
+                                                  const char *stem) {
+    char *name = host_static_library_file_name(stem);
+    char *entry = dup_printf("extlib/%s/%s", host_target, name);
+
+    free(name);
+    return entry;
+}
+
+static char *host_bundle_extlib_dynamic_entry_path(const char *host_target,
+                                                   const char *stem) {
+    char *name = host_dynamic_library_file_name(stem);
+    char *entry = dup_printf("extlib/%s/%s", host_target, name);
+
+    free(name);
+    return entry;
+}
+
+static void write_bundle_with_file_or_die(const char *bundle_path,
+                                          const char *entry_path,
+                                          const char *source_path) {
+    FengZipWriter writer = {0};
+    char *error_message = NULL;
+
+    ASSERT(feng_zip_writer_open(bundle_path, &writer, &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_add_file(&writer,
+                                    entry_path,
+                                    source_path,
+                                    FENG_ZIP_COMPRESSION_STORE,
+                                    &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_finalize(&writer, &error_message));
+    free(error_message);
+    feng_zip_writer_dispose(&writer);
+}
+
+static void write_bundle_with_bytes_or_die(const char *bundle_path,
+                                           const char *entry_path,
+                                           const void *bytes,
+                                           size_t size) {
+    FengZipWriter writer = {0};
+    char *error_message = NULL;
+
+    ASSERT(feng_zip_writer_open(bundle_path, &writer, &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_add_bytes(&writer,
+                                     entry_path,
+                                     bytes,
+                                     size,
+                                     FENG_ZIP_COMPRESSION_STORE,
+                                     &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_finalize(&writer, &error_message));
+    free(error_message);
+    feng_zip_writer_dispose(&writer);
+}
+
+static void write_manifest_only_bundle_or_die(const char *bundle_path,
+                                              const char *manifest_text) {
+    FengZipWriter writer = {0};
+    char *error_message = NULL;
+
+    ASSERT(feng_zip_writer_open(bundle_path, &writer, &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_add_bytes(&writer,
+                                     "feng.fm",
+                                     manifest_text,
+                                     strlen(manifest_text),
+                                     FENG_ZIP_COMPRESSION_DEFLATE,
+                                     &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_finalize(&writer, &error_message));
+    free(error_message);
+    feng_zip_writer_dispose(&writer);
+}
+
+static void write_library_bundle_or_die(const char *bundle_path,
+                                        const char *package_name,
+                                        const char *package_version,
+                                        const char *library_path,
+                                        const char *public_mod_root) {
+    FengFbLibraryBundleSpec spec = {0};
+    char *error_message = NULL;
+
+    spec.package_path = bundle_path;
+    spec.package_name = package_name;
+    spec.package_version = package_version;
+    spec.library_path = library_path;
+    spec.public_mod_root = public_mod_root;
+
+    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
+    free(error_message);
+}
+
+static void assert_zip_ok(bool ok, char **zip_error) {
     if (!ok) {
         fprintf(stderr,
                 "zip operation failed: %s\n",
@@ -220,92 +371,67 @@ static void assert_zip_ok(int ok, char **zip_error) {
     }
 }
 
-static void write_bundle_with_file_or_die(const char *bundle_path,
-                                          const char *entry_path,
-                                          const char *source_path) {
-    FengZipWriter writer = {0};
-    char *zip_error = NULL;
-
-    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
-    assert_zip_ok(feng_zip_writer_add_file(&writer,
-                                           entry_path,
-                                           source_path,
-                                           FENG_ZIP_COMPRESSION_DEFLATE,
-                                           &zip_error),
-                  &zip_error);
-    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
-    feng_zip_writer_dispose(&writer);
-}
-
-static void write_bundle_with_bytes_or_die(const char *bundle_path,
-                                           const char *entry_path,
-                                           const void *data,
-                                           size_t data_size) {
-    FengZipWriter writer = {0};
-    char *zip_error = NULL;
-
-    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
-    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
-                                            entry_path,
-                                            data,
-                                            data_size,
-                                            FENG_ZIP_COMPRESSION_DEFLATE,
-                                            &zip_error),
-                  &zip_error);
-    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
-    feng_zip_writer_dispose(&writer);
-}
-
-static void write_manifest_only_bundle_or_die(const char *bundle_path, const char *manifest_text) {
-    FengZipWriter writer = {0};
-    char *zip_error = NULL;
-
-    assert_zip_ok(feng_zip_writer_open(bundle_path, &writer, &zip_error), &zip_error);
-    assert_zip_ok(feng_zip_writer_add_bytes(&writer,
-                                            "feng.fm",
-                                            manifest_text,
-                                            strlen(manifest_text),
-                                            FENG_ZIP_COMPRESSION_DEFLATE,
-                                            &zip_error),
-                  &zip_error);
-    assert_zip_ok(feng_zip_writer_finalize(&writer, &zip_error), &zip_error);
-    feng_zip_writer_dispose(&writer);
-}
-
-static void write_library_bundle_or_die(const char *bundle_path,
-                                        const char *package_name,
-                                        const char *package_version,
-                                        const char *library_path,
-                                        const char *public_mod_root) {
-    FengFbLibraryBundleSpec spec = {
-        .package_path = bundle_path,
-        .package_name = package_name,
-        .package_version = package_version,
-        .library_path = library_path,
-        .public_mod_root = public_mod_root,
-    };
+static int zip_contains_path_prefix(const FengZipReader *reader,
+                                    const char *prefix) {
+    size_t entry_count = feng_zip_reader_entry_count(reader);
+    size_t prefix_length = strlen(prefix);
+    size_t index;
+    FengZipEntryInfo info;
     char *error_message = NULL;
 
-    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
-    free(error_message);
-}
-
-static int zip_contains_path_prefix(const FengZipReader *reader, const char *prefix) {
-    size_t entry_count = feng_zip_reader_entry_count(reader);
-    size_t index;
-    size_t prefix_len = strlen(prefix);
-
     for (index = 0U; index < entry_count; ++index) {
-        FengZipEntryInfo info = {0};
-        char *zip_error = NULL;
-
-        ASSERT(feng_zip_reader_entry_at(reader, index, &info, &zip_error));
-        free(zip_error);
-        if (strncmp(info.path, prefix, prefix_len) == 0) {
+        ASSERT(feng_zip_reader_entry_at(reader, index, &info, &error_message));
+        free(error_message);
+        error_message = NULL;
+        if (strncmp(info.path, prefix, prefix_length) == 0) {
             return 1;
         }
     }
     return 0;
+}
+
+static void run_command_or_die(const char *command) {
+    int status = system(command);
+
+    ASSERT(status >= 0);
+    ASSERT(WIFEXITED(status));
+    ASSERT(WEXITSTATUS(status) == 0);
+}
+
+static void build_native_static_library_or_die(const char *source_path,
+                                               const char *library_path) {
+    const char *cc = getenv("CC");
+    const char *ar = getenv("AR");
+    char *object_path = dup_printf("%s.o", source_path);
+    char *compile_command;
+    char *archive_command;
+
+    ASSERT(object_path != NULL);
+    if (cc == NULL || cc[0] == '\0') {
+        cc = "cc";
+    }
+    if (ar == NULL || ar[0] == '\0') {
+        ar = "ar";
+    }
+
+    compile_command = dup_printf("%s -c \"%s\" -o \"%s\"",
+                                 cc,
+                                 source_path,
+                                 object_path);
+    archive_command = dup_printf("%s rcs \"%s\" \"%s\"",
+                                 ar,
+                                 library_path,
+                                 object_path);
+    ASSERT(compile_command != NULL);
+    ASSERT(archive_command != NULL);
+
+    run_command_or_die(compile_command);
+    run_command_or_die(archive_command);
+    ASSERT(unlink(object_path) == 0);
+
+    free(archive_command);
+    free(compile_command);
+    free(object_path);
 }
 
 static char *run_binary_capture_stdout_or_die(const char *binary_path);
@@ -323,7 +449,7 @@ static char *build_single_source_package_bundle(const char *workspace_dir,
     dep_src_dir = path_join(workspace_dir, "dep/src");
     dep_source_path = path_join(dep_src_dir, "dep.ff");
     dep_out_dir = path_join(workspace_dir, "dep/build");
-    dep_library_path = dup_printf("%s/lib/lib%s.a", dep_out_dir, package_name);
+    dep_library_path = host_static_library_output_path(dep_out_dir, package_name);
     dep_mod_root = path_join(dep_out_dir, "mod");
     bundle_path = dup_printf("%s/%s.fb", workspace_dir, package_name);
 
@@ -901,7 +1027,7 @@ static void test_direct_build_accepts_package_bundle(void) {
     main_source_path = path_join(main_src_dir, "main.ff");
     dep_out_dir = path_join(workspace_dir, "dep/build");
     main_out_dir = path_join(workspace_dir, "main/build");
-    dep_library_path = path_join(dep_out_dir, "lib/libdep.a");
+    dep_library_path = host_static_library_output_path(dep_out_dir, "dep");
     dep_mod_root = path_join(dep_out_dir, "mod");
     bundle_path = path_join(workspace_dir, "pkgdep.fb");
 
@@ -989,7 +1115,7 @@ static void test_direct_build_links_library_from_package_bundle(void) {
     main_source_path = path_join(main_src_dir, "main.ff");
     dep_out_dir = path_join(workspace_dir, "dep/build");
     main_out_dir = path_join(workspace_dir, "main/build");
-    dep_library_path = path_join(dep_out_dir, "lib/libpkgdep.a");
+    dep_library_path = host_static_library_output_path(dep_out_dir, "pkgdep");
     dep_mod_root = path_join(dep_out_dir, "mod");
     main_binary_path = path_join(main_out_dir, "bin/main");
     bundle_path = path_join(workspace_dir, "pkgdep.fb");
@@ -1098,8 +1224,8 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
     b_out_dir = path_join(workspace_dir, "pkgb/build");
     a_out_dir = path_join(workspace_dir, "pkga/build");
     main_out_dir = path_join(workspace_dir, "main/build");
-    b_library_path = path_join(b_out_dir, "lib/libpkgb.a");
-    a_library_path = path_join(a_out_dir, "lib/libpkga.a");
+    b_library_path = host_static_library_output_path(b_out_dir, "pkgb");
+    a_library_path = host_static_library_output_path(a_out_dir, "pkga");
     b_mod_root = path_join(b_out_dir, "mod");
     a_mod_root = path_join(a_out_dir, "mod");
     main_binary_path = path_join(main_out_dir, "bin/main");
@@ -1334,7 +1460,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     ASSERT(workspace_dir != NULL);
 
     library_dir = path_join(workspace_dir, "artifacts/lib");
-    library_path = path_join(library_dir, "libbundle_demo.a");
+    library_path = host_static_library_path(library_dir, "bundle_demo");
     mod_dir = path_join(workspace_dir, "public_mod");
     mod_nested_dir = path_join(mod_dir, "test/cli");
     mod_path = path_join(mod_nested_dir, "bundle_demo.ft");
@@ -1343,8 +1469,8 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     free(error_message);
     error_message = NULL;
     extlib_platform_dir = path_join(extlib_root, host_target);
-    extlib_static_path = path_join(extlib_platform_dir, "libhelper.a");
-    extlib_dynamic_path = path_join(extlib_platform_dir, "libhelper.dylib");
+    extlib_static_path = host_static_library_path(extlib_platform_dir, "helper");
+    extlib_dynamic_path = host_dynamic_library_path(extlib_platform_dir, "helper");
     asset_root = path_join(workspace_dir, "asset_runtime");
     asset_nested_dir = path_join(asset_root, "nested");
     asset_config_path = path_join(asset_root, "config.json");
@@ -1412,7 +1538,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     bytes = NULL;
 
     {
-        char *entry_path = dup_printf("lib/%s/libbundle_demo.a", host_target);
+        char *entry_path = host_bundle_static_library_entry_path(host_target, "bundle_demo");
         ASSERT(entry_path != NULL);
         ASSERT(feng_zip_reader_read(&reader,
                                     entry_path,
@@ -1426,7 +1552,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     }
 
     {
-        char *entry_path = dup_printf("extlib/%s/libhelper.a", host_target);
+        char *entry_path = host_bundle_extlib_static_entry_path(host_target, "helper");
         ASSERT(entry_path != NULL);
         ASSERT(feng_zip_reader_read(&reader,
                                     entry_path,
@@ -1440,7 +1566,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     }
 
     {
-        char *entry_path = dup_printf("extlib/%s/libhelper.dylib", host_target);
+        char *entry_path = host_bundle_extlib_dynamic_entry_path(host_target, "helper");
         ASSERT(entry_path != NULL);
         ASSERT(feng_zip_reader_read(&reader,
                                     entry_path,
@@ -1487,7 +1613,9 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     char *bundle_path;
     char *extlib_root;
     char *extlib_platform_dir;
+    char *extlib_c_source_path;
     char *extlib_dynamic_path;
+    char *extlib_unused_dynamic_path;
     char *extlib_static_path;
     char *consumer_src_dir;
     char *consumer_source_path;
@@ -1495,8 +1623,12 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     char *consumer_bin_dir;
     char *consumer_binary_path;
     char *released_dynamic_path;
+    char *released_unused_dynamic_path;
     char *released_static_path;
     char *released_bundle_lib_path;
+    char *dynamic_name;
+    char *unused_dynamic_name;
+    char *static_name;
     char *host_target = NULL;
     char *error_message = NULL;
     char *stdout_text;
@@ -1504,32 +1636,29 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     char *remove_error = NULL;
     FengFbLibraryBundleSpec spec = {0};
 
-#if defined(_WIN32)
-    const char *dynamic_name = "helper.dll";
-    const char *static_name = "helper.lib";
-#elif defined(__APPLE__)
-    const char *dynamic_name = "libhelper.dylib";
-    const char *static_name = "libhelper.a";
-#else
-    const char *dynamic_name = "libhelper.so";
-    const char *static_name = "libhelper.a";
-#endif
-
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
     ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
+    dynamic_name = host_dynamic_library_file_name("helper");
+    unused_dynamic_name = host_dynamic_library_file_name("unused");
+    static_name = host_static_library_file_name("helper");
+    ASSERT(dynamic_name != NULL);
+    ASSERT(unused_dynamic_name != NULL);
+    ASSERT(static_name != NULL);
 
     dep_src_dir = path_join(workspace_dir, "dep/src");
     dep_source_path = path_join(dep_src_dir, "dep.ff");
     dep_out_dir = path_join(workspace_dir, "dep/build");
-    dep_library_path = dup_printf("%s/lib/libpkgextlib.a", dep_out_dir);
+    dep_library_path = host_static_library_output_path(dep_out_dir, "pkgextlib");
     dep_mod_root = path_join(dep_out_dir, "mod");
     bundle_path = dup_printf("%s/pkgextlib.fb", workspace_dir);
     extlib_root = path_join(workspace_dir, "dep/extlib");
     extlib_platform_dir = path_join(extlib_root, host_target);
+    extlib_c_source_path = path_join(extlib_platform_dir, "helper.c");
     extlib_dynamic_path = path_join(extlib_platform_dir, dynamic_name);
+    extlib_unused_dynamic_path = path_join(extlib_platform_dir, unused_dynamic_name);
     extlib_static_path = path_join(extlib_platform_dir, static_name);
     consumer_src_dir = path_join(workspace_dir, "main/src");
     consumer_source_path = path_join(consumer_src_dir, "main.ff");
@@ -1537,15 +1666,15 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     consumer_bin_dir = path_join(consumer_out_dir, "bin");
     consumer_binary_path = dup_printf("%s/main", consumer_bin_dir);
     released_dynamic_path = dup_printf("%s/%s", consumer_bin_dir, dynamic_name);
+    released_unused_dynamic_path = dup_printf("%s/%s", consumer_bin_dir, unused_dynamic_name);
     released_static_path = dup_printf("%s/%s", consumer_bin_dir, static_name);
-    released_bundle_lib_path = dup_printf("%s/libpkgextlib.a", consumer_bin_dir);
+    released_bundle_lib_path = host_static_library_path(consumer_bin_dir, "pkgextlib");
 
     mkdir_p(dep_src_dir);
     write_text_file(dep_source_path,
                     "pu mod test.cli.pkgextlib;\n"
-                    "pu fn value(): int {\n"
-                    "  return 7;\n"
-                    "}\n");
+                    "@fastcall(\"helper\")\n"
+                    "pu extern fn helper_value(): int;\n");
     {
         char *out_opt = make_out_option(dep_out_dir);
         char *name_opt = dup_printf("--name=%s", "pkgextlib");
@@ -1563,8 +1692,13 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     ASSERT(path_exists(dep_mod_root));
 
     mkdir_p(extlib_platform_dir);
+    write_text_file(extlib_c_source_path,
+                    "int helper_value(void) {\n"
+                    "  return 7;\n"
+                    "}\n");
+    build_native_static_library_or_die(extlib_c_source_path, extlib_static_path);
     write_text_file(extlib_dynamic_path, "DYNAMIC\n");
-    write_text_file(extlib_static_path, "STATIC\n");
+    write_text_file(extlib_unused_dynamic_path, "UNUSED-DYNAMIC\n");
 
     spec.package_path = bundle_path;
     spec.package_name = "pkgextlib";
@@ -1584,7 +1718,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
                     "@cdecl(\"libc\")\n"
                     "extern fn puts(msg: string*): int;\n"
                     "fn main(args: string[]) {\n"
-                    "  if value() == 7 {\n"
+                    "  if helper_value() == 7 {\n"
                     "    puts(&\"ok\");\n"
                     "  }\n"
                     "}\n");
@@ -1606,6 +1740,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
 
     ASSERT(path_exists(consumer_binary_path));
     ASSERT(path_exists(released_dynamic_path));
+    ASSERT(!path_exists(released_unused_dynamic_path));
     ASSERT(!path_exists(released_static_path));
     ASSERT(!path_exists(released_bundle_lib_path));
     released_text = read_text_file(released_dynamic_path);
@@ -1618,8 +1753,12 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
     free(host_target);
+    free(static_name);
+    free(unused_dynamic_name);
+    free(dynamic_name);
     free(released_bundle_lib_path);
     free(released_static_path);
+    free(released_unused_dynamic_path);
     free(released_dynamic_path);
     free(consumer_binary_path);
     free(consumer_bin_dir);
@@ -1627,7 +1766,186 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     free(consumer_source_path);
     free(consumer_src_dir);
     free(extlib_static_path);
+    free(extlib_unused_dynamic_path);
     free(extlib_dynamic_path);
+    free(extlib_c_source_path);
+    free(extlib_platform_dir);
+    free(extlib_root);
+    free(bundle_path);
+    free(dep_mod_root);
+    free(dep_library_path);
+    free(dep_out_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+}
+
+static void test_direct_build_links_only_used_bundle_extlib_static_libraries(void) {
+    char template_path[] = "/tmp/feng_cli_direct_pkg_extlib_static_used_only_XXXXXX";
+    char *workspace_dir;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *dep_out_dir;
+    char *dep_library_path;
+    char *dep_mod_root;
+    char *bundle_path;
+    char *extlib_root;
+    char *extlib_platform_dir;
+    char *helper_c_source_path;
+    char *unused_c_source_path;
+    char *helper_static_path;
+    char *unused_static_path;
+    char *helper_static_name;
+    char *unused_static_name;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *consumer_out_dir;
+    char *consumer_binary_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *saved_cc = NULL;
+    char *host_target = NULL;
+    char *error_message = NULL;
+    char *stdout_text;
+    char *remove_error = NULL;
+    FengFbLibraryBundleSpec spec = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    free(error_message);
+    error_message = NULL;
+
+    helper_static_name = host_static_library_file_name("helper");
+    unused_static_name = host_static_library_file_name("unused");
+    ASSERT(helper_static_name != NULL);
+    ASSERT(unused_static_name != NULL);
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    dep_library_path = host_static_library_output_path(dep_out_dir, "pkgextlibstatic");
+    dep_mod_root = path_join(dep_out_dir, "mod");
+    bundle_path = dup_printf("%s/pkgextlibstatic.fb", workspace_dir);
+    extlib_root = path_join(workspace_dir, "dep/extlib");
+    extlib_platform_dir = path_join(extlib_root, host_target);
+    helper_c_source_path = path_join(extlib_platform_dir, "helper.c");
+    unused_c_source_path = path_join(extlib_platform_dir, "unused.c");
+    helper_static_path = path_join(extlib_platform_dir, helper_static_name);
+    unused_static_path = path_join(extlib_platform_dir, unused_static_name);
+    consumer_src_dir = path_join(workspace_dir, "main/src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    consumer_out_dir = path_join(workspace_dir, "main/build");
+    consumer_binary_path = path_join(consumer_out_dir, "bin/main");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(dep_src_dir);
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.pkgextlibstatic;\n"
+                    "@stdcall(\"helper\")\n"
+                    "pu extern fn helper_value(): int;\n");
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *name_opt = dup_printf("--name=%s", "pkgextlibstatic");
+        char *argv[] = {
+            dep_source_path,
+            "--target=lib",
+            out_opt,
+            name_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(name_opt);
+        free(out_opt);
+    }
+    ASSERT(path_exists(dep_library_path));
+    ASSERT(path_exists(dep_mod_root));
+
+    mkdir_p(extlib_platform_dir);
+    write_text_file(helper_c_source_path,
+                    "int helper_value(void) {\n"
+                    "  return 41;\n"
+                    "}\n");
+    write_text_file(unused_c_source_path,
+                    "int unused_value(void) {\n"
+                    "  return 0;\n"
+                    "}\n");
+    build_native_static_library_or_die(helper_c_source_path, helper_static_path);
+    build_native_static_library_or_die(unused_c_source_path, unused_static_path);
+
+    spec.package_path = bundle_path;
+    spec.package_name = "pkgextlibstatic";
+    spec.package_version = "0.1.0";
+    spec.library_path = dep_library_path;
+    spec.public_mod_root = dep_mod_root;
+    spec.extlib_root = extlib_root;
+    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
+    free(error_message);
+    error_message = NULL;
+
+    mkdir_p(consumer_src_dir);
+    write_text_file(consumer_source_path,
+                    "mod test.cli.pkgextlibstaticconsumer;\n"
+                    "use test.cli.pkgextlibstatic;\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern fn puts(msg: string*): int;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if helper_value() == 41 {\n"
+                    "    puts(&\"ok\");\n"
+                    "  } else {\n"
+                    "    puts(&\"bad\");\n"
+                    "  }\n"
+                    "}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    {
+        char *out_opt = make_out_option(consumer_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            consumer_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    ASSERT(path_exists(consumer_binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(strstr(cc_log_text, helper_static_name) != NULL);
+    ASSERT(strstr(cc_log_text, unused_static_name) == NULL);
+    stdout_text = run_binary_capture_stdout_or_die(consumer_binary_path);
+    ASSERT(strcmp(stdout_text, "ok\n") == 0);
+
+    free(stdout_text);
+    free(cc_log_text);
+    free(saved_cc);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(host_target);
+    free(unused_static_name);
+    free(helper_static_name);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(consumer_binary_path);
+    free(consumer_out_dir);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(unused_static_path);
+    free(helper_static_path);
+    free(unused_c_source_path);
+    free(helper_c_source_path);
     free(extlib_platform_dir);
     free(extlib_root);
     free(bundle_path);
@@ -6149,7 +6467,11 @@ static void test_project_build_lib_stages_assets_under_output_root(void) {
     asset_nested_path = path_join(asset_nested_dir, "data.txt");
     staged_asset_path = path_join(project_dir, "build/assets/runtime/config.txt");
     staged_nested_path = path_join(project_dir, "build/assets/runtime/nested/data.txt");
-    library_path = path_join(project_dir, "build/lib/libasset_lib.a");
+    {
+        char *build_dir = path_join(project_dir, "build");
+        library_path = host_static_library_output_path(build_dir, "asset_lib");
+        free(build_dir);
+    }
 
     mkdir_p(src_dir);
     mkdir_p(asset_nested_dir);
@@ -6247,12 +6569,16 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
     source_path = path_join(src_dir, "lib.ff");
     asset_source_dir = path_join(project_dir, "vendor_extlib");
     asset_platform_dir = path_join(asset_source_dir, host_target);
-    asset_source_path = path_join(asset_platform_dir, "libhelper.dylib");
+    asset_source_path = host_dynamic_library_path(asset_platform_dir, "helper");
     staged_extlib_dir = path_join(project_dir, "build/extlib");
     staged_platform_dir = path_join(staged_extlib_dir, host_target);
-    staged_asset_path = path_join(staged_platform_dir, "libhelper.dylib");
+    staged_asset_path = host_dynamic_library_path(staged_platform_dir, "helper");
     shadow_stage_dir = path_join(project_dir, "build/assets/extlib");
-    library_path = path_join(project_dir, "build/lib/libasset_extlib.a");
+    {
+        char *build_dir = path_join(project_dir, "build");
+        library_path = host_static_library_output_path(build_dir, "asset_extlib");
+        free(build_dir);
+    }
 
     mkdir_p(src_dir);
     mkdir_p(asset_platform_dir);
@@ -6666,7 +6992,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
     source_path = path_join(src_dir, "lib.ff");
     asset_source_dir = path_join(project_dir, "vendor_extlib");
     asset_platform_dir = path_join(asset_source_dir, host_target);
-    asset_source_path = path_join(asset_platform_dir, "libhelper.dylib");
+    asset_source_path = host_dynamic_library_path(asset_platform_dir, "helper");
     shadow_stage_dir = path_join(project_dir, "build/assets/extlib");
     bundle_path = path_join(project_dir, "build/asset_extlib_pack-0.1.0.fb");
 
@@ -6699,7 +7025,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
     ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
 
     {
-        char *entry_path = dup_printf("extlib/%s/libhelper.dylib", host_target);
+        char *entry_path = host_bundle_extlib_dynamic_entry_path(host_target, "helper");
         ASSERT(entry_path != NULL);
         ASSERT(feng_zip_reader_read(&reader,
                                     entry_path,
@@ -7890,6 +8216,7 @@ int main(void) {
     test_project_pack_bundle_can_be_consumed();
     test_bundle_writer_includes_extlib_and_assets_without_empty_dirs();
     test_direct_build_releases_bundle_extlib_dynamic_libraries_only();
+    test_direct_build_links_only_used_bundle_extlib_static_libraries();
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_enum();

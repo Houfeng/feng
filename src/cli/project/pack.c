@@ -154,6 +154,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     FengFbBundleDirectoryEntry *asset_entries = NULL;
     size_t asset_entry_count = 0U;
     char *library_path = NULL;
+    char *host_library_name = NULL;
     char *public_mod_root = NULL;
     char *extlib_root = NULL;
     char *error_message = NULL;
@@ -188,9 +189,15 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         goto done;
     }
 
-    library_path = dup_printf("%s/lib/lib%s.a",
+    host_library_name = feng_fb_host_static_library_file_name(context.manifest.name);
+    if (host_library_name == NULL) {
+        fprintf(stderr, "error: out of memory while preparing package paths\n");
+        rc = 1;
+        goto done;
+    }
+    library_path = dup_printf("%s/lib/%s",
                               context.out_root,
-                              context.manifest.name);
+                              host_library_name);
     if (library_path == NULL) {
         fprintf(stderr, "error: out of memory while preparing package paths\n");
         rc = 1;
@@ -259,6 +266,7 @@ done:
     feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
     free(error_message);
+    free(host_library_name);
     free(extlib_root);
     dispose_asset_entries(asset_entries, asset_entry_count);
     free(public_mod_root);

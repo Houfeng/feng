@@ -128,6 +128,80 @@ static bool name_has_suffix(const char *name, const char *suffix) {
     return name_len >= suffix_len && strcmp(name + name_len - suffix_len, suffix) == 0;
 }
 
+static bool host_static_library_uses_lib_prefix(void) {
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
+}
+
+const char *feng_fb_host_static_library_suffix(void) {
+#if defined(_WIN32)
+    return ".lib";
+#else
+    return ".a";
+#endif
+}
+
+char *feng_fb_host_static_library_file_name(const char *library_name) {
+    if (library_name == NULL || library_name[0] == '\0') {
+        return NULL;
+    }
+    if (host_static_library_uses_lib_prefix() && strncmp(library_name, "lib", 3U) != 0) {
+        return dup_printf("lib%s%s",
+                          library_name,
+                          feng_fb_host_static_library_suffix());
+    }
+    return dup_printf("%s%s",
+                      library_name,
+                      feng_fb_host_static_library_suffix());
+}
+
+bool feng_fb_is_host_static_library_path(const char *path) {
+    if (path == NULL) {
+        return false;
+    }
+    if (name_has_suffix(path, feng_fb_host_static_library_suffix())) {
+        return true;
+    }
+#if defined(_WIN32)
+    return name_has_suffix(path, ".a");
+#else
+    return false;
+#endif
+}
+
+bool feng_fb_host_static_library_matches_name(const char *path,
+                                              const char *library_name) {
+    const char *basename;
+    char *expected = NULL;
+    bool matches = false;
+
+    if (path == NULL || library_name == NULL || library_name[0] == '\0') {
+        return false;
+    }
+    basename = path_basename(path);
+    expected = feng_fb_host_static_library_file_name(library_name);
+    if (expected == NULL) {
+        return false;
+    }
+    matches = strcmp(basename, expected) == 0;
+    free(expected);
+#if defined(_WIN32)
+    if (!matches) {
+        char *legacy = dup_printf("lib%s.a", library_name);
+
+        if (legacy == NULL) {
+            return false;
+        }
+        matches = strcmp(basename, legacy) == 0;
+        free(legacy);
+    }
+#endif
+    return matches;
+}
+
 static bool include_mod_file(const char *name) {
     return name_has_suffix(name, ".ft");
 }

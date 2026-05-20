@@ -138,6 +138,131 @@ static bool clone_slice_as_slice(FengSlice source, FengSlice *out_slice) {
     return true;
 }
 
+static void free_synthetic_annotation_expr(FengExpr *expr) {
+    if (expr == NULL) {
+        return;
+    }
+    if (expr->kind == FENG_EXPR_STRING) {
+        free((void *)expr->as.string.data);
+    }
+    free(expr);
+}
+
+static void free_synthetic_annotations(FengAnnotation *annotations, size_t count) {
+    size_t index;
+    size_t arg_index;
+
+    if (annotations == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        for (arg_index = 0U; arg_index < annotations[index].arg_count; ++arg_index) {
+            free_synthetic_annotation_expr(annotations[index].args[arg_index]);
+        }
+        free(annotations[index].args);
+    }
+    free(annotations);
+}
+
+static const char *annotation_name_for_calling_convention(FengAnnotationKind kind) {
+    switch (kind) {
+        case FENG_ANNOTATION_CDECL:
+            return "cdecl";
+        case FENG_ANNOTATION_STDCALL:
+            return "stdcall";
+        case FENG_ANNOTATION_FASTCALL:
+            return "fastcall";
+        default:
+            return NULL;
+    }
+}
+
+static FengExpr *synthesize_string_literal_annotation_arg(const char *text) {
+    FengExpr *expr;
+    char *quoted;
+    size_t length;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    length = strlen(text);
+    if (length >= 2U && text[0] == '"' && text[length - 1U] == '"') {
+        quoted = (char *)malloc(length + 1U);
+        if (quoted == NULL) {
+            return NULL;
+        }
+        memcpy(quoted, text, length);
+        quoted[length] = '\0';
+    } else {
+        quoted = (char *)malloc(length + 3U);
+        if (quoted == NULL) {
+            return NULL;
+        }
+        quoted[0] = '"';
+        memcpy(quoted + 1U, text, length);
+        quoted[length + 1U] = '"';
+        quoted[length + 2U] = '\0';
+        length += 2U;
+    }
+
+    expr = (FengExpr *)calloc(1U, sizeof(*expr));
+    if (expr == NULL) {
+        free(quoted);
+        return NULL;
+    }
+    expr->kind = FENG_EXPR_STRING;
+    expr->as.string.data = quoted;
+    expr->as.string.length = length;
+    return expr;
+}
+
+static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *symbol_decl,
+                                                    FengAnnotation **out_annotations,
+                                                    size_t *out_count) {
+    FengAnnotation *annotations = NULL;
+    FengExpr **args = NULL;
+    FengExpr *arg_expr = NULL;
+    const char *annotation_name;
+
+    if (out_annotations == NULL || out_count == NULL) {
+        return false;
+    }
+    *out_annotations = NULL;
+    *out_count = 0U;
+
+    if (symbol_decl == NULL || symbol_decl->calling_convention == FENG_ANNOTATION_NONE) {
+        return true;
+    }
+
+    annotation_name = annotation_name_for_calling_convention(symbol_decl->calling_convention);
+    if (annotation_name == NULL || symbol_decl->abi_library == NULL ||
+        symbol_decl->abi_library[0] == '\0') {
+        return false;
+    }
+
+    annotations = (FengAnnotation *)calloc(1U, sizeof(*annotations));
+    args = (FengExpr **)calloc(1U, sizeof(*args));
+    arg_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_library);
+    if (annotations == NULL || args == NULL || arg_expr == NULL) {
+        free_synthetic_annotation_expr(arg_expr);
+        free(args);
+        free(annotations);
+        return false;
+    }
+
+    annotations[0].token = symbol_decl->token;
+    annotations[0].name.data = annotation_name;
+    annotations[0].name.length = strlen(annotation_name);
+    annotations[0].builtin_kind = symbol_decl->calling_convention;
+    annotations[0].args = args;
+    annotations[0].args[0] = arg_expr;
+    annotations[0].arg_count = 1U;
+
+    *out_annotations = annotations;
+    *out_count = 1U;
+    return true;
+}
+
 static void free_synthetic_type_ref(FengTypeRef *type_ref) {
     size_t index;
 
@@ -193,6 +318,7 @@ static void free_synthetic_type_member(FengTypeMember *member) {
     }
 
     free((void *)member->doc_comment.data);
+    free_synthetic_annotations(member->annotations, member->annotation_count);
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         free((void *)member->as.field.name.data);
@@ -215,6 +341,7 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
     }
 
     free((void *)decl->doc_comment.data);
+    free_synthetic_annotations(decl->annotations, decl->annotation_count);
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
@@ -592,6 +719,12 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
                 return NULL;
             }
             member->as.field.initializer = NULL;
+            if (!synthesize_decl_annotations_from_symbol(member_decl,
+                                                        &member->annotations,
+                                                        &member->annotation_count)) {
+                free_synthetic_type_member(member);
+                return NULL;
+            }
             return member;
 
         case FENG_SYMBOL_DECL_KIND_METHOD:
@@ -612,6 +745,12 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
         !synthesize_callable_signature(&member->as.callable, member_decl, member_name)) {
         free((void *)member_name.data);
         free(member);
+        return NULL;
+    }
+    if (!synthesize_decl_annotations_from_symbol(member_decl,
+                                                &member->annotations,
+                                                &member->annotation_count)) {
+        free_synthetic_type_member(member);
         return NULL;
     }
     return member;
@@ -861,6 +1000,11 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
             if (!synthesize_callable_signature(&synth_decl->decl.as.function_decl,
                                                symbol_decl,
                                                name)) {
+                break;
+            }
+            if (!synthesize_decl_annotations_from_symbol(symbol_decl,
+                                                        &synth_decl->decl.annotations,
+                                                        &synth_decl->decl.annotation_count)) {
                 break;
             }
             return true;

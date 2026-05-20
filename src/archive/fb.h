@@ -37,6 +37,15 @@ typedef struct FengFbLibraryBundleSpec {
     size_t asset_entry_count;
 } FengFbLibraryBundleSpec;
 
+const char *feng_fb_host_static_library_suffix(void);
+
+char *feng_fb_host_static_library_file_name(const char *library_name);
+
+bool feng_fb_is_host_static_library_path(const char *path);
+
+bool feng_fb_host_static_library_matches_name(const char *path,
+                                              const char *library_name);
+
 bool feng_fb_detect_host_target(char **out_host_target, char **out_error_message);
 
 bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,

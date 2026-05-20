@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "archive/fb.h"
 #include "cli/common.h"
 #include "cli/compile/driver.h"
 #include "cli/compile/options.h"
@@ -442,18 +443,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         }
     }
     if (artifact_name != NULL && opts.target == FENG_COMPILE_TARGET_LIB) {
-        char *lib_name = NULL;
-        if (strncmp(artifact_name, "lib", 3) == 0) {
-            lib_name = malloc(strlen(artifact_name) + 3U);
-            if (lib_name != NULL) {
-                snprintf(lib_name, strlen(artifact_name) + 3U, "%s.a", artifact_name);
-            }
-        } else {
-            lib_name = malloc(strlen(artifact_name) + 6U);
-            if (lib_name != NULL) {
-                snprintf(lib_name, strlen(artifact_name) + 6U, "lib%s.a", artifact_name);
-            }
-        }
+        char *lib_name = feng_fb_host_static_library_file_name(artifact_name);
+
         free(artifact_name);
         artifact_name = lib_name;
     }
@@ -480,7 +471,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     }
 
     /* Hand off to the host driver. Programs are passed so it can mine
-     * @cdecl annotations for additional link libraries. */
+     * extern calling-convention annotations for additional link libraries. */
     const FengProgram **prog_array = NULL;
     size_t prog_count = 0U;
     for (size_t m = 0; m < analysis->module_count; ++m) {

@@ -13,10 +13,11 @@
  *   1. Resolve the runtime include directory and static library, either
  *      via FENG_RUNTIME_INCLUDE / FENG_RUNTIME_LIB environment variables
  *      or by probing paths relative to the running `feng` executable.
- *   2. Mine `extern fn @cdecl("<lib>")` annotations across all programs
- *      to derive additional `-l<lib>` link flags. The reserved library
- *      name "libc" / "c" is skipped because it is implicit on POSIX
- *      hosts. Other names have a leading "lib" prefix stripped.
+ *   2. Mine `extern fn` calling-convention annotations (`@cdecl`,
+ *      `@stdcall`, `@fastcall`) across all programs to derive additional
+ *      `-l<lib>` link flags. The reserved library name "libc" / "c" is
+ *      skipped because it is implicit on POSIX hosts. Other names have a
+ *      leading "lib" prefix stripped.
  *   3. For `bin`, spawn ${CC:-cc} with a fixed compiler flag set, the
  *      generated C source, the runtime archive, `-lpthread`, and the
  *      derived link flags, producing the final executable at `out_path`.

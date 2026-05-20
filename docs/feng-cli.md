@@ -144,7 +144,7 @@ feng build [<path>] [--release]
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - `build` 负责解析依赖树并展平为 `--pkg <.fb路径>` 列表,再调用核心编译器。
 - `build` 读取 `feng.fm` 的 `[assets]` 配置：`target=bin` 时复制到可执行文件同级目标目录；`target=lib` 时普通目标目录先复制到 `build/assets/` staging，后续 `pack` 再写入 `.fb` 内对应目标目录；若目标目录精确为 `extlib`，则直接复制到 `build/extlib/`，不额外插入 `assets` 目录级层。
-- 当构建目标是 `target=bin` 时,核心编译器仅释放运行时确需加载的动态库到可执行文件同目录；对 feng 编译生成且已提供同平台静态库的 C 库,不要求释放对应动态库。
+- 当构建目标是 `target=bin` 时,核心编译器会先根据当前源码与导入包公开 `.ft` 中的 `extern fn` 元信息解析原生库名；若某个依赖包在 `.fb/extlib/<当前平台>/` 下携带了匹配该库名的主机静态库（Linux / macOS `lib<name>.a`,Windows `<name>.lib`）,则先提取并参与链接；若携带了匹配该库名的动态库（Linux `lib<name>.so`,macOS `lib<name>.dylib`,Windows `<name>.dll`）,则仅这些已命中的动态库会被释放到可执行文件同目录,其余未命中的 `extlib` 制品不参与。
 - 未指定 `--release` 时使用调试友好的构建模式; 指定 `--release` 时改用发布优化模式。
 
 ### 4.3 `feng run`

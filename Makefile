@@ -59,7 +59,14 @@ DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-function
 
 LIB_DIR := $(BUILD_DIR)/lib
-RUNTIME_LIB := $(LIB_DIR)/libfeng_runtime.a
+ifeq ($(OS),Windows_NT)
+STATIC_LIB_PREFIX :=
+STATIC_LIB_EXT := .lib
+else
+STATIC_LIB_PREFIX := lib
+STATIC_LIB_EXT := .a
+endif
+RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
 
