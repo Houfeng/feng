@@ -1,9 +1,9 @@
 [package]
-name: "std"
+name:    "std"
 version: "0.1.0"
-target: "lib"
-src: "src/"
-out: "build/"
+target:  "lib"
+src:     "src/"
+out:     "build/"
 
 [assets]
-lib: "lib/"
+extlib: "lib/" # 左侧目标目录，右侧相对于当前文件的路径

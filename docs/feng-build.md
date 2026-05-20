@@ -122,7 +122,7 @@ extern fn ssl_connect(fd: int): int;
 | `target` | 是 | — | 构建目标，取值 `bin`（可执行文件）或 `lib`（库；进一步打包为 `.fb` 分发包） |
 | `src` | 否 | `src/` | 源文件根目录，构建工具对此目录 glob 展开 `.ff` 文件 |
 | `out` | 否 | `build/` | 输出根目录；`target bin` 时输出 `<out>/<name>`，`target lib` 时输出 `<out>/<name>-<version>.fb` |
-| `assets` / `copy` | 否 | 空 | 资源复制配置（字段语义见 [feng-package.md](./feng-package.md)） |
+| `[assets]` | 否 | 空 | 资源复制配置（字段语义见 [feng-package.md](./feng-package.md)） |
 
 构建工具将 `target` 转换为编译器的 `--target` 参数，将 `out` 与项目名/版本拼装为编译器的 `--out` 参数。
 
@@ -153,10 +153,10 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 
 构建工具传入的是**已确定并展平的 `.fb` 路径列表**,不传包名、版本或搜索路径。编译器只认路径,并直接从这些 `.fb` 中读取所需公开 `.ft` 与正式库文件。
 
-构建工具还应按 `feng.fm` 的 `assets` / `copy` 配置处理资源文件:
+构建工具还应按 `feng.fm` 的 `[assets]` 配置处理资源文件:
 
-- `target=bin`: 将指定内容复制到可执行文件同目录。
-- `target=lib`: 将指定内容复制并打包到 `.fb` 内配置指定目录（相对 `.fb` 根目录）。
+- `target=bin`: 将 `[assets]` 中声明的资源复制到可执行文件同级目录下的目标目录。
+- `target=lib`: 将 `[assets]` 中声明的资源复制并打包到 `.fb` 内对应目标目录。
 
 ### 3.5 发布流程（打包为 .fb）
 
@@ -168,7 +168,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
 3. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
-5. 直接复用 `build/mod/**/*.ft`、正式库文件与 `assets` / `copy` 指定资源（写入 `.fb` 内配置指定目录）打包为 `.fb` ZIP 归档
+5. 直接复用 `build/mod/**/*.ft`、正式库文件与 `[assets]` 指定资源（写入 `.fb` 内对应目标目录）打包为 `.fb` ZIP 归档
 
 ## 4 交互协议总览
 
