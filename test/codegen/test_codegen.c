@@ -323,7 +323,7 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
-static void test_module_binding_lazy_getter_codegen(void) {
+static void test_module_binding_lazy_ensure_init_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.topbind;\n"
         "let first: int = compute();\n"
@@ -360,7 +360,7 @@ static void test_module_binding_lazy_getter_codegen(void) {
     bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN,
                                            NULL, &out, &cgerr);
     if (!cg_ok) {
-        fprintf(stderr, "codegen error (module binding lazy getter): %s\n",
+        fprintf(stderr, "codegen error (module binding lazy ensure_init): %s\n",
                 cgerr.message ? cgerr.message : "(unknown)");
         ASSERT(cg_ok);
     }
@@ -369,9 +369,13 @@ static void test_module_binding_lazy_getter_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "static bool _feng_g__feng__codegen__topbind__first__inited = false;") != NULL);
     ASSERT(strstr(out.c_source,
-                  "_feng_get_g__feng__codegen__topbind__first(void);") != NULL);
+                  "_feng_ensure_g__feng__codegen__topbind__first(void);") != NULL);
     ASSERT(strstr(out.c_source,
-                  "_feng_get_g__feng__codegen__topbind__second()") != NULL);
+                  "_feng_ensure_g__feng__codegen__topbind__second();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_ensure_g__feng__codegen__topbind__first();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_g__feng__codegen__topbind__first") != NULL);
     {
         const char *main_wrapper = strstr(out.c_source, "int main(int argc, char **argv) {");
 
@@ -419,9 +423,11 @@ static void test_address_of_module_binding_uses_storage_slot_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
+                  "_feng_ensure_g__feng__codegen__topbindaddr__value();") != NULL);
+    ASSERT(strstr(out.c_source,
                   "(&(_feng_g__feng__codegen__topbindaddr__value))") != NULL);
     ASSERT(strstr(out.c_source,
-                  "(&(_feng_get_g__feng__codegen__topbindaddr__value()))") == NULL);
+                  "(&(_feng_ensure_g__feng__codegen__topbindaddr__value()))") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -461,7 +467,9 @@ static void test_module_scalar_var_assignment_marks_initialized_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(count_substr(out.c_source,
-                        "_feng_g__feng__codegen__topbindassign__current__inited = true;") == 3U);
+                        "_feng_ensure_g__feng__codegen__topbindassign__current();") == 2U);
+    ASSERT(count_substr(out.c_source,
+                        "_feng_g__feng__codegen__topbindassign__current__inited = true;") == 1U);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -503,7 +511,9 @@ static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(count_substr(out.c_source,
-                        "_feng_g__feng__codegen__topbindobj__current__inited = true;") == 2U);
+                        "_feng_ensure_g__feng__codegen__topbindobj__current();") == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "_feng_g__feng__codegen__topbindobj__current__inited = true;") == 1U);
     ASSERT(strstr(out.c_source,
                   "feng_assign((void**)&_feng_g__feng__codegen__topbindobj__current, next);") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -515,7 +525,7 @@ static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
     feng_program_free(program);
 }
 
-static void test_module_binding_default_zero_getter_codegen(void) {
+static void test_module_binding_default_zero_ensure_init_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.topbindzero;\n"
         "type User {\n"
@@ -540,18 +550,18 @@ static void test_module_binding_default_zero_getter_codegen(void) {
     bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                            NULL, &out, &cgerr);
     if (!cg_ok) {
-        fprintf(stderr, "codegen error (module default-zero getter): %s\n",
+        fprintf(stderr, "codegen error (module default-zero ensure_init): %s\n",
                 cgerr.message ? cgerr.message : "(unknown)");
         ASSERT(cg_ok);
     }
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "_feng_get_g__feng__codegen__topbindzero__current(void)") != NULL);
+                  "_feng_ensure_g__feng__codegen__topbindzero__current(void)") != NULL);
     ASSERT(strstr(out.c_source,
                   "Feng__feng__codegen__topbindzero__User__default_zero()") != NULL);
     ASSERT(strstr(out.c_source,
-                  "_feng_get_g__feng__codegen__topbindzero__current()") != NULL);
+                  "_feng_ensure_g__feng__codegen__topbindzero__current()") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1392,9 +1402,13 @@ static void test_imported_public_let_binding_codegen_compiles(void) {
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern int32_t feng__vendor__values__count__get__from__void(void);") != NULL);
+                  "extern int32_t feng__vendor__values__count;") != NULL);
     ASSERT(strstr(out.c_source,
-                  "return feng__vendor__values__count__get__from__void();") != NULL);
+                  "extern void feng__vendor__values__count__ensure_init__from__void(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__values__count__ensure_init__from__void();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__values__count") != NULL);
 
     compile_generated_c_or_die(out.c_source);
 
@@ -1448,13 +1462,15 @@ static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern int32_t feng__vendor__state__count__get__from__void(void);") != NULL);
+                  "extern int32_t feng__vendor__state__count;") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern void feng__vendor__state__count__set__from__i32(int32_t") != NULL);
+                  "extern void feng__vendor__state__count__ensure_init__from__void(void);") != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng__vendor__state__count__get__from__void()") != NULL);
+                  "feng__vendor__state__count__ensure_init__from__void()") != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng__vendor__state__count__set__from__i32(") != NULL);
+                  "feng__vendor__state__count = next;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__state__count + before") != NULL);
 
     compile_generated_c_or_die(out.c_source);
 
@@ -3613,11 +3629,11 @@ static void test_user_constructor_forms_codegen(void) {
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
-    test_module_binding_lazy_getter_codegen();
+    test_module_binding_lazy_ensure_init_codegen();
     test_address_of_module_binding_uses_storage_slot_codegen();
     test_module_scalar_var_assignment_marks_initialized_codegen();
     test_module_managed_var_assignment_marks_initialized_codegen();
-    test_module_binding_default_zero_getter_codegen();
+    test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
