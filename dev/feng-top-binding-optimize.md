@@ -55,6 +55,8 @@ _feng_g__B__b1 = Feng__B__Foo__new(_feng_g__A__a1->x * 2);
 _feng_g__B__b2 = Feng__B__Foo__new(0);
 ```
 
+注：这一步生成的仍然是包内 `static` 存储槽。即使顶层 binding 是 `pu`，pre-lazy codegen 也没有为它单独生成跨包值导出表面；`pu` 只影响符号/可见性层，不改变这里的包内 eager 初始化形态。
+
 ### Lazy 后生成
 
 ```c
@@ -156,4 +158,22 @@ static struct Feng__A__Foo *_feng_get_g__A__a3(void) {
 | 新增 `cg_pass_emit_module_binding_getters` | 遍历所有 binding，调用上一项 |
 | `cg_emit_assign`（var 写入路径） | LHS 为模块 var 时，插入 `_inited = true` |
 | `cg_emit_main_wrapper`（L17968） | 删除 binding 初始化循环 |
+
+---
+
+## 跨包 Public Binding（基于 Lazy 版本补齐）
+
+跨包访问 public 顶层 binding 时，不能直接导出 provider 包内的 storage 槽；否则会绕过 provider 侧 lazy 初始化与 `var` 写入时的统一存储更新逻辑。
+
+lazy 版本补齐跨包值表面时，导出 ABI 约定如下：
+
+- `pu let name: T`：导出 public getter，命名为 `feng__<module>__<name>__get__from__void`
+- `pu var name: T`：在 public getter 之外，再导出 public setter，命名为 `feng__<module>__<name>__set__from__<T>`
+- provider 包内仍保留 `static storage + _inited + internal getter`；public getter / setter 只是包边界 wrapper
+- consumer 侧 imported binding codegen 仅生成 `extern` prototype，并把读取/写入 lower 为 getter / setter 调用
+
+当前以 codegen 回归作为实现标记，验收面收敛为：
+
+1. imported `pu let` 通过 `alias.member` 读取时，codegen 成功，并生成 getter prototype 与调用点
+2. imported `pu var` 通过 `alias.member` 读取和写入时，codegen 成功，并生成 getter / setter prototype 与调用点
 

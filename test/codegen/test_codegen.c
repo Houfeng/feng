@@ -1113,6 +1113,120 @@ static void test_imported_feng_function_prototypes_compile(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_imported_public_let_binding_codegen_compiles(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.values;\n"
+        "pu let count: int = 7;\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "use vendor.values as values;\n"
+        "fn project(): int {\n"
+        "    return values.count;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_binding_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_binding_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern int32_t feng__vendor__values__count__get__from__void(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "return feng__vendor__values__count__get__from__void();") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.state;\n"
+        "pu var count: int = 1;\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "use vendor.state as state;\n"
+        "fn project(next: int): int {\n"
+        "    let before: int = state.count;\n"
+        "    state.count = next;\n"
+        "    return state.count + before;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_var_binding_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_var_binding_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern int32_t feng__vendor__state__count__get__from__void(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void feng__vendor__state__count__set__from__i32(int32_t") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__state__count__get__from__void()") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__state__count__set__from__i32(") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_enum_codegen_emits_stable_symbols(void) {
     static const char *kSource =
         "mod feng.codegen.enumvalue;\n"
@@ -3278,6 +3392,8 @@ int main(void) {
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
     test_imported_feng_function_prototypes_compile();
+    test_imported_public_let_binding_codegen_compiles();
+    test_imported_public_var_binding_read_write_codegen_compiles();
     test_enum_codegen_emits_stable_symbols();
     test_imported_enum_codegen_emits_visible_symbols();
     test_same_named_types_in_distinct_modules();

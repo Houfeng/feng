@@ -19,8 +19,9 @@ fn test<T>(x: T): T {
  * The main function.
  */
 fn main(args: string[]) {
-  puts(&"hello, examples");
+  puts(&("hello, examples"));
+  puts(&test_top_binding);
   // lp.loop_example([""]);
   test(1);
-  let map = Map<string, int>();
+  // let map = Map<string, int>();
 }

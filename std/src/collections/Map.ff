@@ -250,3 +250,5 @@ pu type Map<K: Hashable<K>, V> {
     return (MapEntity<K, V>[])items;
   }
 }
+
+pu let test_top_binding = "test";
