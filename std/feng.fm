@@ -6,4 +6,4 @@ src:     "src/"
 out:     "build/"
 
 [assets]
-extlib: "lib/" # 左侧目标目录，右侧相对于当前文件的路径
+extlib: "lib/"

@@ -71,7 +71,12 @@ int feng_cli_project_build_main(const char *program, int argc, char **argv) {
         return 1;
     }
     rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
+    if (rc == 0 && !feng_cli_project_stage_assets(&context, &error)) {
+        feng_cli_project_print_error(stderr, &error);
+        rc = 1;
+    }
     feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&context);
+    feng_cli_project_error_dispose(&error);
     return rc;
 }

@@ -19,6 +19,12 @@ typedef struct FengCliProjectManifestDependency {
     bool is_local_path;
 } FengCliProjectManifestDependency;
 
+typedef struct FengCliProjectManifestAsset {
+    char *target_dir;
+    char *source_path;
+    unsigned int line;
+} FengCliProjectManifestAsset;
+
 typedef struct FengCliProjectManifest {
     char *name;
     char *version;
@@ -29,6 +35,8 @@ typedef struct FengCliProjectManifest {
     char *arch;
     char *abi;
     char *registry_url;
+    FengCliProjectManifestAsset *assets;
+    size_t asset_count;
     FengCliProjectManifestDependency *dependencies;
     size_t dependency_count;
 } FengCliProjectManifest;

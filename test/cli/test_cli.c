@@ -3926,6 +3926,111 @@ static void test_manifest_parses_dependencies_and_registry(void) {
     feng_cli_project_error_dispose(&error);
 }
 
+static void test_manifest_parses_and_writes_assets(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "\n"
+        "[assets]\n"
+        "extlib: \"lib/\"\n"
+        "fixtures: \"testdata/\"\n"
+        "\n"
+        "[dependencies]\n"
+        "base: \"1.2.3\"\n"
+        "\n"
+        "[registry]\n"
+        "url: \"https://packages.example.com/feng\"\n";
+    char output_path[] = "/tmp/feng_manifest_assets_XXXXXX";
+    int output_fd;
+    char *manifest_text;
+    char *write_error = NULL;
+    FengCliProjectManifest manifest = {0};
+    FengCliProjectError error = {0};
+
+    ASSERT(feng_cli_project_manifest_parse("/tmp/feng.fm", kManifest, &manifest, &error));
+    ASSERT(manifest.asset_count == 2U);
+    ASSERT(strcmp(manifest.assets[0].target_dir, "extlib") == 0);
+    ASSERT(strcmp(manifest.assets[0].source_path, "lib/") == 0);
+    ASSERT(strcmp(manifest.assets[1].target_dir, "fixtures") == 0);
+    ASSERT(strcmp(manifest.assets[1].source_path, "testdata/") == 0);
+
+    output_fd = mkstemp(output_path);
+    ASSERT(output_fd >= 0);
+    close(output_fd);
+    ASSERT(feng_cli_project_manifest_write(output_path, &manifest, &write_error));
+    ASSERT(write_error == NULL);
+
+    manifest_text = read_text_file(output_path);
+    ASSERT(strcmp(manifest_text,
+                  "[package]\n"
+                  "name: \"demo\"\n"
+                  "version: \"0.1.0\"\n"
+                  "target: \"bin\"\n"
+                  "src: \"src/\"\n"
+                  "out: \"build/\"\n"
+                  "\n"
+                  "[dependencies]\n"
+                  "base: \"1.2.3\"\n"
+                  "\n"
+                  "[assets]\n"
+                  "extlib: \"lib/\"\n"
+                  "fixtures: \"testdata/\"\n"
+                  "\n"
+                  "[registry]\n"
+                  "url: \"https://packages.example.com/feng\"\n") == 0);
+
+    unlink(output_path);
+    free(manifest_text);
+    free(write_error);
+    feng_cli_project_manifest_dispose(&manifest);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_manifest_rejects_empty_asset_value(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "\n"
+        "[assets]\n"
+        "extlib: \"\"\n";
+    FengCliProjectManifest manifest = {0};
+    FengCliProjectError error = {0};
+
+    ASSERT(!feng_cli_project_manifest_parse("/tmp/feng.fm", kManifest, &manifest, &error));
+    ASSERT(error.line == 7U);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "[assets].extlib") != NULL);
+
+    feng_cli_project_manifest_dispose(&manifest);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_manifest_rejects_duplicate_asset_key(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "\n"
+        "[assets]\n"
+        "extlib: \"lib/\"\n"
+        "extlib: \"other/\"\n";
+    FengCliProjectManifest manifest = {0};
+    FengCliProjectError error = {0};
+
+    ASSERT(!feng_cli_project_manifest_parse("/tmp/feng.fm", kManifest, &manifest, &error));
+    ASSERT(error.line == 8U);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "duplicate") != NULL);
+
+    feng_cli_project_manifest_dispose(&manifest);
+    feng_cli_project_error_dispose(&error);
+}
+
 static void test_manifest_rejects_duplicate_field(void) {
     static const char *kManifest =
         "[package]\n"
@@ -4069,6 +4174,31 @@ static void test_bundle_manifest_rejects_local_path_dependency(void) {
                                                    &error));
     ASSERT(error.message != NULL);
     ASSERT(strstr(error.message, "exact versions") != NULL);
+
+    feng_cli_project_manifest_dispose(&manifest);
+    feng_cli_project_error_dispose(&error);
+}
+
+static void test_bundle_manifest_rejects_assets(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"1.0.0\"\n"
+        "arch: \"macos-arm64\"\n"
+        "abi: \"feng\"\n"
+        "\n"
+        "[assets]\n"
+        "extlib: \"lib/\"\n";
+    FengCliProjectManifest manifest = {0};
+    FengCliProjectError error = {0};
+
+    ASSERT(!feng_cli_project_bundle_manifest_parse("/tmp/demo.fb:feng.fm",
+                                                   kManifest,
+                                                   &manifest,
+                                                   &error));
+    ASSERT(error.line == 7U);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "[assets]") != NULL);
 
     feng_cli_project_manifest_dispose(&manifest);
     feng_cli_project_error_dispose(&error);
@@ -5538,6 +5668,199 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
     free(dep_project_dir);
 }
 
+static void test_project_build_bin_copies_assets_and_refreshes_existing_output(void) {
+    char template_path[] = "/tmp/feng_cli_build_bin_assets_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *asset_source_dir;
+    char *asset_nested_dir;
+    char *asset_source_path;
+    char *asset_nested_path;
+    char *copied_asset_path;
+    char *copied_nested_path;
+    char *binary_path;
+    char *copied_text;
+    char *nested_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "app");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    asset_source_dir = path_join(project_dir, "runtime_assets");
+    asset_nested_dir = path_join(asset_source_dir, "nested");
+    asset_source_path = path_join(asset_source_dir, "config.txt");
+    asset_nested_path = path_join(asset_nested_dir, "data.txt");
+    copied_asset_path = path_join(project_dir, "build/bin/runtime/config.txt");
+    copied_nested_path = path_join(project_dir, "build/bin/runtime/nested/data.txt");
+    binary_path = path_join(project_dir, "build/bin/asset_app");
+
+    mkdir_p(src_dir);
+    mkdir_p(asset_nested_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"asset_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[assets]\n"
+                    "runtime: \"runtime_assets/\"\n");
+    write_text_file(source_path,
+                    "mod test.cli.assets.bin;\n"
+                    "fn main(args: string[]) {}\n");
+    write_text_file(asset_source_path, "alpha\n");
+    write_text_file(asset_nested_path, "nested-alpha\n");
+
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    ASSERT(path_exists(copied_asset_path));
+    ASSERT(path_exists(copied_nested_path));
+    copied_text = read_text_file(copied_asset_path);
+    nested_text = read_text_file(copied_nested_path);
+    ASSERT(strcmp(copied_text, "alpha\n") == 0);
+    ASSERT(strcmp(nested_text, "nested-alpha\n") == 0);
+    free(nested_text);
+    free(copied_text);
+
+    write_text_file(asset_source_path, "beta\n");
+    write_text_file(asset_nested_path, "nested-beta\n");
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    copied_text = read_text_file(copied_asset_path);
+    nested_text = read_text_file(copied_nested_path);
+    ASSERT(strcmp(copied_text, "beta\n") == 0);
+    ASSERT(strcmp(nested_text, "nested-beta\n") == 0);
+
+    free(nested_text);
+    free(copied_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(binary_path);
+    free(copied_nested_path);
+    free(copied_asset_path);
+    free(asset_nested_path);
+    free(asset_source_path);
+    free(asset_nested_dir);
+    free(asset_source_dir);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
+static void test_project_build_lib_stages_assets_under_output_root(void) {
+    char template_path[] = "/tmp/feng_cli_build_lib_assets_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *asset_source_dir;
+    char *asset_nested_dir;
+    char *asset_source_path;
+    char *asset_nested_path;
+    char *staged_asset_path;
+    char *staged_nested_path;
+    char *library_path;
+    char *staged_text;
+    char *nested_text;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    project_dir = path_join(workspace_dir, "libproj");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "lib.ff");
+    asset_source_dir = path_join(project_dir, "bundle_assets");
+    asset_nested_dir = path_join(asset_source_dir, "nested");
+    asset_source_path = path_join(asset_source_dir, "config.txt");
+    asset_nested_path = path_join(asset_nested_dir, "data.txt");
+    staged_asset_path = path_join(project_dir, "build/assets/runtime/config.txt");
+    staged_nested_path = path_join(project_dir, "build/assets/runtime/nested/data.txt");
+    library_path = path_join(project_dir, "build/lib/libasset_lib.a");
+
+    mkdir_p(src_dir);
+    mkdir_p(asset_nested_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"asset_lib\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[assets]\n"
+                    "runtime: \"bundle_assets/\"\n");
+    write_text_file(source_path,
+                    "pu mod test.cli.assets.lib;\n"
+                    "pu fn value(): int {\n"
+                    "  return 1;\n"
+                    "}\n");
+    write_text_file(asset_source_path, "alpha\n");
+    write_text_file(asset_nested_path, "nested-alpha\n");
+
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    ASSERT(path_exists(library_path));
+    ASSERT(path_exists(staged_asset_path));
+    ASSERT(path_exists(staged_nested_path));
+    staged_text = read_text_file(staged_asset_path);
+    nested_text = read_text_file(staged_nested_path);
+    ASSERT(strcmp(staged_text, "alpha\n") == 0);
+    ASSERT(strcmp(nested_text, "nested-alpha\n") == 0);
+    free(nested_text);
+    free(staged_text);
+
+    write_text_file(asset_source_path, "beta\n");
+    write_text_file(asset_nested_path, "nested-beta\n");
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+
+    staged_text = read_text_file(staged_asset_path);
+    nested_text = read_text_file(staged_nested_path);
+    ASSERT(strcmp(staged_text, "beta\n") == 0);
+    ASSERT(strcmp(nested_text, "nested-beta\n") == 0);
+
+    free(nested_text);
+    free(staged_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(library_path);
+    free(staged_nested_path);
+    free(staged_asset_path);
+    free(asset_nested_path);
+    free(asset_source_path);
+    free(asset_nested_dir);
+    free(asset_source_dir);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
 static void test_project_run_release_reuses_build_pipeline(void) {
     char template_path[] = "/tmp/feng_cli_run_release_flags_XXXXXX";
     char *workspace_dir;
@@ -6862,11 +7185,15 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
 int main(void) {
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
+    test_manifest_parses_and_writes_assets();
+    test_manifest_rejects_empty_asset_value();
+    test_manifest_rejects_duplicate_asset_key();
     test_manifest_rejects_duplicate_field();
     test_project_open_collects_sources();
     test_manifest_requires_target();
     test_bundle_manifest_allows_dependencies_without_target();
     test_bundle_manifest_rejects_local_path_dependency();
+    test_bundle_manifest_rejects_assets();
     test_deps_resolve_requires_registry_for_remote_dependency();
     test_deps_resolve_uses_global_registry_config();
     test_deps_resolve_installs_remote_transitive_dependencies();
@@ -6936,6 +7263,8 @@ int main(void) {
     test_direct_build_rejects_bad_package_bundle();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
+    test_project_build_bin_copies_assets_and_refreshes_existing_output();
+    test_project_build_lib_stages_assets_under_output_root();
     test_project_run_release_reuses_build_pipeline();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
     test_project_pack_rejects_release_flag();

@@ -17,6 +17,8 @@ typedef struct SourceList {
     size_t capacity;
 } SourceList;
 
+static bool remove_tree_inner(const char *path, char **out_error_message);
+
 static char *dup_n(const char *text, size_t length) {
     char *out = (char *)malloc(length + 1U);
     if (out == NULL) {
@@ -139,6 +141,45 @@ static char *path_dirname_dup(const char *path) {
     return dup_n(path, (size_t)(slash - path));
 }
 
+static bool mkdir_p_path(const char *path, FengCliProjectError *error) {
+    char *mutable_path;
+    size_t index;
+
+    mutable_path = dup_cstr(path);
+    if (mutable_path == NULL) {
+        set_error(error, path, 0U, "out of memory");
+        return false;
+    }
+    for (index = 1U; mutable_path[index] != '\0'; ++index) {
+        if (mutable_path[index] == '/') {
+            mutable_path[index] = '\0';
+            if (mkdir(mutable_path, 0775) != 0 && errno != EEXIST) {
+                set_error(error,
+                          path,
+                          0U,
+                          "failed to create directory %s: %s",
+                          mutable_path,
+                          strerror(errno));
+                free(mutable_path);
+                return false;
+            }
+            mutable_path[index] = '/';
+        }
+    }
+    if (mkdir(mutable_path, 0775) != 0 && errno != EEXIST) {
+        set_error(error,
+                  path,
+                  0U,
+                  "failed to create directory %s: %s",
+                  mutable_path,
+                  strerror(errno));
+        free(mutable_path);
+        return false;
+    }
+    free(mutable_path);
+    return true;
+}
+
 static bool path_has_basename(const char *path, const char *basename) {
     const char *slash = strrchr(path, '/');
     const char *name = slash != NULL ? slash + 1 : path;
@@ -188,6 +229,167 @@ static void source_list_dispose(SourceList *list) {
     list->items = NULL;
     list->count = 0U;
     list->capacity = 0U;
+}
+
+static bool collect_directory_entries(const char *root,
+                                      SourceList *list,
+                                      FengCliProjectError *error) {
+    DIR *dir = opendir(root);
+    struct dirent *entry;
+
+    if (dir == NULL) {
+        set_error(error, root, 0U, "failed to open directory: %s", strerror(errno));
+        return false;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        char *name;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        name = dup_cstr(entry->d_name);
+        if (name == NULL) {
+            closedir(dir);
+            set_error(error, root, 0U, "out of memory while scanning directory");
+            return false;
+        }
+        if (!source_list_push(list, name)) {
+            free(name);
+            closedir(dir);
+            set_error(error, root, 0U, "out of memory while scanning directory");
+            return false;
+        }
+    }
+
+    closedir(dir);
+    qsort(list->items, list->count, sizeof(*list->items), compare_cstr_ptr);
+    return true;
+}
+
+static bool copy_regular_file(const char *source_path,
+                              const char *dest_path,
+                              FengCliProjectError *error) {
+    FILE *source = NULL;
+    FILE *dest = NULL;
+    char *parent_dir = NULL;
+    char buffer[8192];
+    size_t read_size;
+
+    parent_dir = path_dirname_dup(dest_path);
+    if (parent_dir == NULL) {
+        set_error(error, dest_path, 0U, "out of memory");
+        return false;
+    }
+    if (!mkdir_p_path(parent_dir, error)) {
+        free(parent_dir);
+        return false;
+    }
+    free(parent_dir);
+
+    source = fopen(source_path, "rb");
+    if (source == NULL) {
+        set_error(error, source_path, 0U, "failed to open %s: %s", source_path, strerror(errno));
+        return false;
+    }
+    dest = fopen(dest_path, "wb");
+    if (dest == NULL) {
+        fclose(source);
+        set_error(error, dest_path, 0U, "failed to open %s: %s", dest_path, strerror(errno));
+        return false;
+    }
+
+    while ((read_size = fread(buffer, 1U, sizeof(buffer), source)) > 0U) {
+        if (fwrite(buffer, 1U, read_size, dest) != read_size) {
+            fclose(dest);
+            fclose(source);
+            set_error(error, dest_path, 0U, "failed to write %s: %s", dest_path, strerror(errno));
+            return false;
+        }
+    }
+    if (ferror(source)) {
+        fclose(dest);
+        fclose(source);
+        set_error(error, source_path, 0U, "failed to read %s", source_path);
+        return false;
+    }
+
+    fclose(dest);
+    fclose(source);
+    return true;
+}
+
+static bool copy_directory_recursive(const char *source_dir,
+                                     const char *dest_dir,
+                                     FengCliProjectError *error) {
+    SourceList entries = {0};
+    size_t index;
+
+    if (!mkdir_p_path(dest_dir, error)) {
+        return false;
+    }
+    if (!collect_directory_entries(source_dir, &entries, error)) {
+        source_list_dispose(&entries);
+        return false;
+    }
+
+    for (index = 0U; index < entries.count; ++index) {
+        char *source_child = path_join(source_dir, entries.items[index]);
+        char *dest_child = path_join(dest_dir, entries.items[index]);
+        struct stat st;
+
+        if (source_child == NULL || dest_child == NULL) {
+            free(source_child);
+            free(dest_child);
+            source_list_dispose(&entries);
+            set_error(error, dest_dir, 0U, "out of memory");
+            return false;
+        }
+        if (stat(source_child, &st) != 0) {
+            set_error(error,
+                      source_child,
+                      0U,
+                      "failed to stat %s: %s",
+                      source_child,
+                      strerror(errno));
+            free(dest_child);
+            free(source_child);
+            source_list_dispose(&entries);
+            return false;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (!copy_directory_recursive(source_child, dest_child, error)) {
+                free(dest_child);
+                free(source_child);
+                source_list_dispose(&entries);
+                return false;
+            }
+        } else if (S_ISREG(st.st_mode)) {
+            if (!copy_regular_file(source_child, dest_child, error)) {
+                free(dest_child);
+                free(source_child);
+                source_list_dispose(&entries);
+                return false;
+            }
+        } else {
+            set_error(error,
+                      source_child,
+                      0U,
+                      "unsupported asset entry type at %s",
+                      source_child);
+            free(dest_child);
+            free(source_child);
+            source_list_dispose(&entries);
+            return false;
+        }
+
+        free(dest_child);
+        free(source_child);
+    }
+
+    source_list_dispose(&entries);
+    return true;
 }
 
 static bool collect_sources_recursive(const char *root,
@@ -426,6 +628,150 @@ static bool fill_output_paths(FengCliProjectContext *context, FengCliProjectErro
         set_error(error, context->out_root, 0U, "out of memory");
         return false;
     }
+
+    context->asset_stage_root = path_join(context->out_root, "assets");
+    if (context->asset_stage_root == NULL) {
+        set_error(error, context->out_root, 0U, "out of memory");
+        return false;
+    }
+    return true;
+}
+
+static bool stage_single_asset(const FengCliProjectContext *context,
+                               const FengCliProjectManifestAsset *asset,
+                               const char *dest_root,
+                               FengCliProjectError *error) {
+    char *source_path = NULL;
+    char *resolved_source = NULL;
+    char *dest_path = NULL;
+    char *remove_error = NULL;
+    struct stat st;
+
+    if (path_is_absolute(asset->source_path)) {
+        set_error(error,
+                  context->manifest_path,
+                  asset->line,
+                  "manifest field `[assets].%s` must use a path relative to feng.fm",
+                  asset->target_dir);
+        goto fail;
+    }
+
+    source_path = resolve_project_path(context->project_root, asset->source_path);
+    if (source_path == NULL) {
+        set_error(error, context->manifest_path, asset->line, "out of memory");
+        goto fail;
+    }
+    resolved_source = realpath(source_path, NULL);
+    if (resolved_source == NULL) {
+        set_error(error,
+                  context->manifest_path,
+                  asset->line,
+                  "asset source directory for `[assets].%s` not found: %s",
+                  asset->target_dir,
+                  strerror(errno));
+        goto fail;
+    }
+    if (stat(resolved_source, &st) != 0) {
+        set_error(error,
+                  resolved_source,
+                  0U,
+                  "failed to stat %s: %s",
+                  resolved_source,
+                  strerror(errno));
+        goto fail;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        set_error(error,
+                  context->manifest_path,
+                  asset->line,
+                  "manifest field `[assets].%s` must reference a directory",
+                  asset->target_dir);
+        goto fail;
+    }
+
+    dest_path = path_join(dest_root, asset->target_dir);
+    if (dest_path == NULL) {
+        set_error(error, dest_root, 0U, "out of memory");
+        goto fail;
+    }
+    if (context->manifest.target == FENG_COMPILE_TARGET_BIN &&
+        strcmp(dest_path, context->binary_path) == 0) {
+        set_error(error,
+                  context->manifest_path,
+                  asset->line,
+                  "manifest field `[assets].%s` conflicts with generated binary output",
+                  asset->target_dir);
+        goto fail;
+    }
+    if (lstat(dest_path, &st) == 0) {
+        if (!remove_tree_inner(dest_path, &remove_error)) {
+            set_error(error,
+                      dest_path,
+                      0U,
+                      "%s",
+                      remove_error != NULL ? remove_error : "failed to refresh asset destination");
+            goto fail;
+        }
+        free(remove_error);
+        remove_error = NULL;
+    } else if (errno != ENOENT) {
+        set_error(error,
+                  dest_path,
+                  0U,
+                  "failed to stat %s: %s",
+                  dest_path,
+                  strerror(errno));
+        goto fail;
+    }
+
+    if (!copy_directory_recursive(resolved_source, dest_path, error)) {
+        goto fail;
+    }
+
+    free(dest_path);
+    free(resolved_source);
+    free(source_path);
+    return true;
+
+fail:
+    free(remove_error);
+    free(dest_path);
+    free(resolved_source);
+    free(source_path);
+    return false;
+}
+
+bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
+                                   FengCliProjectError *out_error) {
+    char *dest_root = NULL;
+    size_t index;
+
+    if (context == NULL) {
+        set_error(out_error, NULL, 0U, "invalid asset staging request");
+        return false;
+    }
+    if (context->manifest.asset_count == 0U) {
+        return true;
+    }
+
+    if (context->manifest.target == FENG_COMPILE_TARGET_BIN) {
+        dest_root = path_dirname_dup(context->binary_path);
+    } else {
+        dest_root = dup_cstr(context->asset_stage_root);
+    }
+    if (dest_root == NULL) {
+        set_error(out_error, context->out_root, 0U, "out of memory");
+        return false;
+    }
+
+    for (index = 0U; index < context->manifest.asset_count; ++index) {
+        if (!stage_single_asset(context, &context->manifest.assets[index], dest_root, out_error)) {
+            free(dest_root);
+            return false;
+        }
+    }
+
+    free(dest_root);
     return true;
 }
 
@@ -525,6 +871,7 @@ void feng_cli_project_context_dispose(FengCliProjectContext *context) {
     free(context->project_root);
     free(context->source_root);
     free(context->out_root);
+    free(context->asset_stage_root);
     free(context->binary_path);
     free(context->package_path);
     for (index = 0U; index < context->source_count; ++index) {
@@ -537,6 +884,7 @@ void feng_cli_project_context_dispose(FengCliProjectContext *context) {
     context->project_root = NULL;
     context->source_root = NULL;
     context->out_root = NULL;
+    context->asset_stage_root = NULL;
     context->binary_path = NULL;
     context->package_path = NULL;
     context->source_paths = NULL;

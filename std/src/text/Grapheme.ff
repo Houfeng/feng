@@ -3,12 +3,12 @@ pu mod std.text;
 /**
  * A view of a string as a sequence of graphemes.
  */
-pub type GraphemeView {
+pu type GraphemeView {
   pr let text: string;
-  pr Grapheme(text: string) {
+  pu fn GraphemeView(text: string) {
     self.text = text;
   }
-  pu length(): long {
+  pu fn length(): long {
     return 0;
   }
 }
@@ -22,7 +22,7 @@ pu fit string {
    * Returns a view of this string as a sequence of graphemes.
    * @return grapheme view of this string
    */
-  pu graphemes(): GraphemeView {
+  pu fn graphemes(): GraphemeView {
     return GraphemeView(self);
   }
 

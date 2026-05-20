@@ -108,6 +108,11 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     if (rc != 0) {
         goto done;
     }
+    if (!feng_cli_project_stage_assets(&context, &project_error)) {
+        feng_cli_project_print_error(stderr, &project_error);
+        rc = 1;
+        goto done;
+    }
 
     library_path = dup_printf("%s/lib/lib%s.a",
                               context.out_root,

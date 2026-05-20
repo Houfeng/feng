@@ -201,6 +201,52 @@ static bool push_dependency(FengCliProjectManifest *manifest,
     return true;
 }
 
+static bool push_asset(FengCliProjectManifest *manifest,
+                       const char *target_dir,
+                       const char *source_path,
+                       const char *path,
+                       unsigned int line,
+                       FengCliProjectError *error) {
+    FengCliProjectManifestAsset *resized;
+    FengCliProjectManifestAsset *asset;
+
+    if (source_path[0] == '\0') {
+        char *message = dup_printf("manifest field `[assets].%s` value must not be empty",
+                                   target_dir);
+        if (message == NULL) {
+            set_error(error, path, line, "out of memory");
+        } else {
+            set_error(error, path, line, message);
+            free(message);
+        }
+        return false;
+    }
+
+    resized = (FengCliProjectManifestAsset *)realloc(
+        manifest->assets,
+        (manifest->asset_count + 1U) * sizeof(*manifest->assets));
+    if (resized == NULL) {
+        set_error(error, path, line, "out of memory");
+        return false;
+    }
+    manifest->assets = resized;
+    asset = &manifest->assets[manifest->asset_count];
+    memset(asset, 0, sizeof(*asset));
+    asset->target_dir = dup_cstr(target_dir);
+    asset->source_path = dup_cstr(source_path);
+    if (asset->target_dir == NULL || asset->source_path == NULL) {
+        free(asset->target_dir);
+        free(asset->source_path);
+        asset->target_dir = NULL;
+        asset->source_path = NULL;
+        set_error(error, path, line, "out of memory");
+        return false;
+    }
+    asset->line = line;
+    manifest->asset_count += 1U;
+    return true;
+}
+
 static void set_error_from_fm(FengCliProjectError *out_error, const FengFmError *fm_error) {
     if (fm_error == NULL) {
         return;
@@ -240,19 +286,24 @@ static bool parse_manifest(const char *manifest_path,
         const FengFmSection *section = &document.sections[section_index];
 
         if (strcmp(section->name, "package") != 0 && strcmp(section->name, "dependencies") != 0 &&
-            strcmp(section->name, "registry") != 0) {
+            strcmp(section->name, "assets") != 0 && strcmp(section->name, "registry") != 0) {
             set_error(out_error,
                       manifest_path,
                       section->line,
                       "unsupported manifest section");
             goto fail;
         }
-        if (mode == MANIFEST_MODE_BUNDLE && strcmp(section->name, "registry") == 0) {
-            set_error(out_error,
-                      manifest_path,
-                      section->line,
-                      "bundle manifest must not contain [registry]");
-            goto fail;
+        if (mode == MANIFEST_MODE_BUNDLE) {
+            if (strcmp(section->name, "registry") == 0 || strcmp(section->name, "assets") == 0) {
+                char *message = dup_printf("bundle manifest must not contain [%s]", section->name);
+                if (message == NULL) {
+                    set_error(out_error, manifest_path, section->line, "out of memory");
+                } else {
+                    set_error(out_error, manifest_path, section->line, message);
+                    free(message);
+                }
+                goto fail;
+            }
         }
     }
 
@@ -267,6 +318,17 @@ static bool parse_manifest(const char *manifest_path,
                                  entry->line,
                                  mode == MANIFEST_MODE_PROJECT,
                                  out_error)) {
+                goto fail;
+            }
+            continue;
+        }
+        if (strcmp(entry->section, "assets") == 0) {
+            if (!push_asset(&manifest,
+                            entry->key,
+                            entry->value,
+                            manifest_path,
+                            entry->line,
+                            out_error)) {
                 goto fail;
             }
             continue;
@@ -537,6 +599,27 @@ bool feng_cli_project_manifest_write(const char *manifest_path,
         }
     }
 
+    if (manifest->asset_count > 0U) {
+        if (fputc('\n', stream) == EOF || fputs("[assets]\n", stream) == EOF) {
+            fclose(stream);
+            if (out_error_message != NULL) {
+                *out_error_message = dup_printf("failed to write %s", manifest_path);
+            }
+            return false;
+        }
+        for (index = 0U; index < manifest->asset_count; ++index) {
+            if (!write_manifest_field(stream,
+                                      manifest->assets[index].target_dir,
+                                      manifest->assets[index].source_path)) {
+                fclose(stream);
+                if (out_error_message != NULL) {
+                    *out_error_message = dup_printf("failed to write %s", manifest_path);
+                }
+                return false;
+            }
+        }
+    }
+
     if (manifest->registry_url != NULL) {
         if (fputc('\n', stream) == EOF || fputs("[registry]\n", stream) == EOF ||
             !write_manifest_field(stream, "url", manifest->registry_url)) {
@@ -570,6 +653,11 @@ void feng_cli_project_manifest_dispose(FengCliProjectManifest *manifest) {
     free(manifest->arch);
     free(manifest->abi);
     free(manifest->registry_url);
+    for (index = 0U; index < manifest->asset_count; ++index) {
+        free(manifest->assets[index].target_dir);
+        free(manifest->assets[index].source_path);
+    }
+    free(manifest->assets);
     for (index = 0U; index < manifest->dependency_count; ++index) {
         free(manifest->dependencies[index].name);
         free(manifest->dependencies[index].value);
@@ -583,6 +671,8 @@ void feng_cli_project_manifest_dispose(FengCliProjectManifest *manifest) {
     manifest->arch = NULL;
     manifest->abi = NULL;
     manifest->registry_url = NULL;
+    manifest->assets = NULL;
+    manifest->asset_count = 0U;
     manifest->dependencies = NULL;
     manifest->dependency_count = 0U;
 }

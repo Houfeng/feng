@@ -9,7 +9,7 @@ pu fit string {
    * Returns a view of this string as a sequence of runes.
    * @return rune view of this string
    */
-  pu runes(): RuneView {
+  pu fn runes(): RuneView {
     return RuneView(self);
   }
 
@@ -21,10 +21,10 @@ pu fit string {
  */
 pu type RuneView {
   pr let text: string;
-  pr Rune(text: string) {
+  pu fn RuneView(text: string) {
     self.text = text;
   }
-  pu length(): long {
+  pu fn length(): long {
     return 0;
   }
 }

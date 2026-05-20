@@ -15,20 +15,4 @@ pu fit string {
     return feng_string_utf8_length(self);
   }
 
-  /**
-   * Returns a view of this string as a sequence of runes.
-   * @return rune view of this string
-   */
-  pu runes(): RuneView {
-    return RuneView(self);
-  }
-
-  /**
-   * Returns a view of this string as a sequence of graphemes.
-   * @return grapheme view of this string
-   */
-  pu graphemes(): GraphemeView {
-    return GraphemeView(self);
-  }
-
 }

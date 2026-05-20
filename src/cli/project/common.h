@@ -13,6 +13,7 @@ typedef struct FengCliProjectContext {
     char *project_root;
     char *source_root;
     char *out_root;
+    char *asset_stage_root;
     char *binary_path;
     char *package_path;
     char **source_paths;
@@ -59,6 +60,9 @@ bool feng_cli_project_prepare_build(const char *program,
                                    bool release,
                                    FengCliProjectContext *out_context,
                                    FengCliDepsResolved *out_resolved,
+                                   FengCliProjectError *out_error);
+
+bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
                                    FengCliProjectError *out_error);
 
 int feng_cli_project_compile_prepared(const char *program,
