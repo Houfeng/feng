@@ -12225,6 +12225,18 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
     return *out_expr != NULL;
 }
 
+static bool cg_emit_initializer_for_declared_type(CG *cg,
+                                                  const FengExpr *initializer,
+                                                  const CGType *decl_type,
+                                                  ExprResult *out) {
+    if (decl_type != NULL && decl_type->kind == CG_TYPE_ARRAY &&
+        decl_type->element != NULL && initializer != NULL &&
+        initializer->kind == FENG_EXPR_ARRAY_LITERAL) {
+        return cg_emit_array_literal_typed(cg, initializer, decl_type->element, out);
+    }
+    return cg_emit_expr(cg, initializer, out);
+}
+
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     const FengBinding *b = &stmt->as.binding;
     /* Determine type: explicit annotation else inferred from initializer. */
@@ -12235,18 +12247,10 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     ExprResult init;
     bool has_init = b->initializer != NULL;
     if (has_init) {
-        /* If the binding declares an array type and the initializer is an
-         * array literal, narrow the literal's element type to the declared
-         * one so allocation slot size matches subsequent reads. */
-        bool ok;
-        if (decl_type != NULL && decl_type->kind == CG_TYPE_ARRAY &&
-            decl_type->element != NULL &&
-            b->initializer->kind == FENG_EXPR_ARRAY_LITERAL) {
-            ok = cg_emit_array_literal_typed(cg, b->initializer,
-                                             decl_type->element, &init);
-        } else {
-            ok = cg_emit_expr(cg, b->initializer, &init);
-        }
+        bool ok = cg_emit_initializer_for_declared_type(cg,
+                                                        b->initializer,
+                                                        decl_type,
+                                                        &init);
         if (!ok) {
             cgtype_free(decl_type); return false;
         }
@@ -18461,31 +18465,10 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
 
     buf_append_cstr(cg->cur_body, "    {\n");
     ExprResult r;
-    if (!cg_emit_expr(cg, init, &r)) {
+    if (!cg_emit_initializer_for_declared_type(cg, init, mb->type, &r)) {
         cg->cur_scope = NULL; scope_pop_free(fn_scope);
         cg->cur_body = NULL;
         return false;
-    }
-    /* Type compatibility: require kinds to match (and for OBJECT, same user
-     * type). Numeric narrowing/widening is not auto-applied at module scope
-     * to avoid silent surprises. */
-    bool compatible = (r.type->kind == mb->type->kind);
-    if (compatible && mb->type->kind == CG_TYPE_OBJECT) {
-        compatible = (r.type->user == mb->type->user);
-    }
-    if (compatible && mb->type->kind == CG_TYPE_ARRAY) {
-        compatible = (r.type->element && mb->type->element &&
-                      r.type->element->kind == mb->type->element->kind);
-    }
-    if (!compatible) {
-        er_free(&r);
-        cg_release_scope(cg, fn_scope);
-        buf_append_cstr(cg->cur_body, "    }\n");
-        cg->cur_scope = NULL; scope_pop_free(fn_scope);
-        cg->cur_body = NULL;
-        return cg_fail(cg, mb->binding->token,
-            "codegen: module binding '%s' initializer type does not match its declared type",
-            mb->feng_name);
     }
     if (cgtype_is_managed(mb->type)) {
         if (r.owns_ref) {

@@ -327,7 +327,7 @@ static void test_module_binding_lazy_ensure_init_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.topbind;\n"
         "let first: int = compute();\n"
-        "let second: int = (int)41;\n"
+        "let second: int = 41;\n"
         "fn compute(): int {\n"
         "    return second + 1;\n"
         "}\n"
@@ -1542,8 +1542,8 @@ static void test_imported_public_binding_address_of_codegen_compiles(void) {
 static void test_public_binding_lib_exports_slot_and_ensure_init_codegen(void) {
     static const char *kSource =
         "pu mod vendor.values;\n"
-        "pu let count: int = (int)7;\n"
-        "pu var total: int = (int)1;\n"
+        "pu let count: int = 3 + 4;\n"
+        "pu var total: int = 1;\n"
         "pu fn read(): int {\n"
         "    return count + total;\n"
         "}\n";
