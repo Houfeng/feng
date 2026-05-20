@@ -1476,6 +1476,168 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     free(library_dir);
 }
 
+static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void) {
+    char template_path[] = "/tmp/feng_cli_direct_pkg_extlib_release_XXXXXX";
+    char *workspace_dir;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *dep_out_dir;
+    char *dep_library_path;
+    char *dep_mod_root;
+    char *bundle_path;
+    char *extlib_root;
+    char *extlib_platform_dir;
+    char *extlib_dynamic_path;
+    char *extlib_static_path;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *consumer_out_dir;
+    char *consumer_bin_dir;
+    char *consumer_binary_path;
+    char *released_dynamic_path;
+    char *released_static_path;
+    char *released_bundle_lib_path;
+    char *host_target = NULL;
+    char *error_message = NULL;
+    char *stdout_text;
+    char *released_text;
+    char *remove_error = NULL;
+    FengFbLibraryBundleSpec spec = {0};
+
+#if defined(_WIN32)
+    const char *dynamic_name = "helper.dll";
+    const char *static_name = "helper.lib";
+#elif defined(__APPLE__)
+    const char *dynamic_name = "libhelper.dylib";
+    const char *static_name = "libhelper.a";
+#else
+    const char *dynamic_name = "libhelper.so";
+    const char *static_name = "libhelper.a";
+#endif
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    free(error_message);
+    error_message = NULL;
+
+    dep_src_dir = path_join(workspace_dir, "dep/src");
+    dep_source_path = path_join(dep_src_dir, "dep.ff");
+    dep_out_dir = path_join(workspace_dir, "dep/build");
+    dep_library_path = dup_printf("%s/lib/libpkgextlib.a", dep_out_dir);
+    dep_mod_root = path_join(dep_out_dir, "mod");
+    bundle_path = dup_printf("%s/pkgextlib.fb", workspace_dir);
+    extlib_root = path_join(workspace_dir, "dep/extlib");
+    extlib_platform_dir = path_join(extlib_root, host_target);
+    extlib_dynamic_path = path_join(extlib_platform_dir, dynamic_name);
+    extlib_static_path = path_join(extlib_platform_dir, static_name);
+    consumer_src_dir = path_join(workspace_dir, "main/src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    consumer_out_dir = path_join(workspace_dir, "main/build");
+    consumer_bin_dir = path_join(consumer_out_dir, "bin");
+    consumer_binary_path = dup_printf("%s/main", consumer_bin_dir);
+    released_dynamic_path = dup_printf("%s/%s", consumer_bin_dir, dynamic_name);
+    released_static_path = dup_printf("%s/%s", consumer_bin_dir, static_name);
+    released_bundle_lib_path = dup_printf("%s/libpkgextlib.a", consumer_bin_dir);
+
+    mkdir_p(dep_src_dir);
+    write_text_file(dep_source_path,
+                    "pu mod test.cli.pkgextlib;\n"
+                    "pu fn value(): int {\n"
+                    "  return 7;\n"
+                    "}\n");
+    {
+        char *out_opt = make_out_option(dep_out_dir);
+        char *name_opt = dup_printf("--name=%s", "pkgextlib");
+        char *argv[] = {
+            dep_source_path,
+            "--target=lib",
+            out_opt,
+            name_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        free(name_opt);
+        free(out_opt);
+    }
+    ASSERT(path_exists(dep_library_path));
+    ASSERT(path_exists(dep_mod_root));
+
+    mkdir_p(extlib_platform_dir);
+    write_text_file(extlib_dynamic_path, "DYNAMIC\n");
+    write_text_file(extlib_static_path, "STATIC\n");
+
+    spec.package_path = bundle_path;
+    spec.package_name = "pkgextlib";
+    spec.package_version = "0.1.0";
+    spec.library_path = dep_library_path;
+    spec.public_mod_root = dep_mod_root;
+    spec.extlib_root = extlib_root;
+    ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
+    free(error_message);
+    error_message = NULL;
+
+    mkdir_p(consumer_src_dir);
+    mkdir_p(consumer_bin_dir);
+    write_text_file(consumer_source_path,
+                    "mod test.cli.pkgextlibmain;\n"
+                    "use test.cli.pkgextlib;\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern fn puts(msg: string*): int;\n"
+                    "fn main(args: string[]) {\n"
+                    "  if value() == 7 {\n"
+                    "    puts(&\"ok\");\n"
+                    "  }\n"
+                    "}\n");
+    write_text_file(released_dynamic_path, "STALE\n");
+    {
+        char *out_opt = make_out_option(consumer_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            consumer_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            pkg_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+
+    ASSERT(path_exists(consumer_binary_path));
+    ASSERT(path_exists(released_dynamic_path));
+    ASSERT(!path_exists(released_static_path));
+    ASSERT(!path_exists(released_bundle_lib_path));
+    released_text = read_text_file(released_dynamic_path);
+    ASSERT(strcmp(released_text, "DYNAMIC\n") == 0);
+    stdout_text = run_binary_capture_stdout_or_die(consumer_binary_path);
+    ASSERT(strcmp(stdout_text, "ok\n") == 0);
+
+    free(stdout_text);
+    free(released_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(host_target);
+    free(released_bundle_lib_path);
+    free(released_static_path);
+    free(released_dynamic_path);
+    free(consumer_binary_path);
+    free(consumer_bin_dir);
+    free(consumer_out_dir);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(extlib_static_path);
+    free(extlib_dynamic_path);
+    free(extlib_platform_dir);
+    free(extlib_root);
+    free(bundle_path);
+    free(dep_mod_root);
+    free(dep_library_path);
+    free(dep_out_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+}
+
 static void test_direct_build_consumes_package_generic_function(void) {
     char template_path[] = "/tmp/feng_cli_pkg_generic_fn_XXXXXX";
     char *workspace_dir;
@@ -7727,6 +7889,7 @@ int main(void) {
     test_direct_build_sorts_package_libraries_by_dependency();
     test_project_pack_bundle_can_be_consumed();
     test_bundle_writer_includes_extlib_and_assets_without_empty_dirs();
+    test_direct_build_releases_bundle_extlib_dynamic_libraries_only();
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_enum();

@@ -143,6 +143,18 @@ static const char *path_basename(const char *path) {
     return slash != NULL ? slash + 1 : path;
 }
 
+static bool path_has_suffix(const char *path, const char *suffix) {
+    size_t path_len;
+    size_t suffix_len;
+
+    if (path == NULL || suffix == NULL) {
+        return false;
+    }
+    path_len = strlen(path);
+    suffix_len = strlen(suffix);
+    return path_len >= suffix_len && strcmp(path + path_len - suffix_len, suffix) == 0;
+}
+
 static bool set_errorf(char **out_error_message, const char *fmt, ...) {
     va_list args;
     va_list args_copy;
@@ -195,6 +207,19 @@ static void free_string_array(char **items, size_t count) {
         free(items[index]);
     }
     free(items);
+}
+
+static bool string_array_contains_text(char *const *items,
+                                       size_t count,
+                                       const char *text) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (strcmp(items[index], text) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void bundle_scan_info_dispose(BundleScanInfo *info) {
@@ -765,6 +790,178 @@ done:
     return ok;
 }
 
+static const char *host_runtime_dynamic_library_suffix(void) {
+#if defined(__APPLE__)
+    return ".dylib";
+#elif defined(_WIN32)
+    return ".dll";
+#elif defined(__linux__)
+    return ".so";
+#else
+    return NULL;
+#endif
+}
+
+static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_paths,
+                                                     size_t bundle_count,
+                                                     const char *host_target,
+                                                     const char *binary_path,
+                                                     char **out_error_message) {
+    const char *suffix;
+    char *binary_dir = NULL;
+    char *entry_prefix = NULL;
+    char **released_names = NULL;
+    size_t released_count = 0U;
+    size_t released_capacity = 0U;
+    size_t bundle_index;
+    size_t prefix_len;
+    bool ok = false;
+
+    if (bundle_count == 0U) {
+        return true;
+    }
+    if (host_target == NULL || host_target[0] == '\0') {
+        return set_errorf(out_error_message,
+                          "host target is required to release bundle extlib dynamic libraries");
+    }
+    if (binary_path == NULL || binary_path[0] == '\0') {
+        return set_errorf(out_error_message,
+                          "binary output path is required to release bundle extlib dynamic libraries");
+    }
+
+    suffix = host_runtime_dynamic_library_suffix();
+    if (suffix == NULL) {
+        return set_errorf(out_error_message,
+                          "unsupported host OS for bundle extlib dynamic library release");
+    }
+
+    binary_dir = path_dirname_dup(binary_path);
+    entry_prefix = dup_printf("extlib/%s/", host_target);
+    if (binary_dir == NULL || entry_prefix == NULL) {
+        set_errorf(out_error_message, "out of memory");
+        goto done;
+    }
+    prefix_len = strlen(entry_prefix);
+
+    for (bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        FengZipReader reader = {0};
+        char *zip_error = NULL;
+        size_t entry_index;
+        size_t entry_count;
+
+        if (!feng_zip_reader_open(bundle_paths[bundle_index], &reader, &zip_error)) {
+            set_errorf(out_error_message,
+                       "failed to open bundle %s while releasing extlib dynamic libraries: %s",
+                       bundle_paths[bundle_index],
+                       zip_error != NULL ? zip_error : "unknown error");
+            free(zip_error);
+            goto done;
+        }
+
+        entry_count = feng_zip_reader_entry_count(&reader);
+        for (entry_index = 0U; entry_index < entry_count; ++entry_index) {
+            FengZipEntryInfo info = {0};
+            const char *basename;
+            char *dest_path = NULL;
+            struct stat st;
+
+            zip_error = NULL;
+            if (!feng_zip_reader_entry_at(&reader, entry_index, &info, &zip_error)) {
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "failed to inspect bundle entry in %s while releasing extlib dynamic libraries: %s",
+                           bundle_paths[bundle_index],
+                           zip_error != NULL ? zip_error : "unknown error");
+                free(zip_error);
+                goto done;
+            }
+            free(zip_error);
+            zip_error = NULL;
+
+            if (info.is_directory) {
+                continue;
+            }
+            if (strncmp(info.path, entry_prefix, prefix_len) != 0) {
+                continue;
+            }
+            if (!path_has_suffix(info.path, suffix)) {
+                continue;
+            }
+
+            basename = path_basename(info.path);
+            if (basename == NULL || basename[0] == '\0') {
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "invalid extlib bundle entry path: %s",
+                           info.path);
+                goto done;
+            }
+            if (string_array_contains_text(released_names, released_count, basename)) {
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "runtime extlib filename collision across --pkg bundles: %s",
+                           basename);
+                goto done;
+            }
+            if (!string_array_push_unique(&released_names,
+                                          &released_count,
+                                          &released_capacity,
+                                          basename,
+                                          out_error_message)) {
+                feng_zip_reader_dispose(&reader);
+                goto done;
+            }
+
+            dest_path = path_join2(binary_dir, basename);
+            if (dest_path == NULL) {
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message, "out of memory");
+                goto done;
+            }
+            if (strcmp(dest_path, binary_path) == 0) {
+                free(dest_path);
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "runtime extlib output conflicts with binary path: %s",
+                           basename);
+                goto done;
+            }
+            if (stat(dest_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                free(dest_path);
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "runtime extlib output conflicts with existing directory: %s",
+                           basename);
+                goto done;
+            }
+
+            zip_error = NULL;
+            if (!feng_zip_reader_extract(&reader, info.path, dest_path, &zip_error)) {
+                free(dest_path);
+                feng_zip_reader_dispose(&reader);
+                set_errorf(out_error_message,
+                           "failed to extract runtime extlib %s from %s: %s",
+                           info.path,
+                           bundle_paths[bundle_index],
+                           zip_error != NULL ? zip_error : "unknown error");
+                free(zip_error);
+                goto done;
+            }
+            free(dest_path);
+        }
+
+        feng_zip_reader_dispose(&reader);
+    }
+
+    ok = true;
+
+done:
+    free_string_array(released_names, released_count);
+    free(entry_prefix);
+    free(binary_dir);
+    return ok;
+}
+
 /* --- runtime artefact discovery ----------------------------------------- */
 
 /* Resolve the running executable's absolute path. Returns a malloc'd
@@ -1144,6 +1341,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *object_path = NULL;
     ArgVec av = {0};
     bool ok = true;
+    bool host_tool_failed = false;
 
     size_t include_need = strlen(include_dir) + 3U;
     include_flag = malloc(include_need);
@@ -1206,6 +1404,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             rc = 1;
         } else {
             rc = spawn_and_wait(av.items);
+            host_tool_failed = rc != 0;
         }
         argv_free(&av);
     } else {
@@ -1235,6 +1434,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 rc = 1;
             } else {
                 rc = spawn_and_wait(av.items);
+                host_tool_failed = rc != 0;
             }
             argv_free(&av);
         }
@@ -1259,6 +1459,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 rc = 1;
             } else {
                 rc = spawn_and_wait(av.items);
+                host_tool_failed = rc != 0;
             }
             argv_free(&av);
             if (rc == 0) {
@@ -1272,6 +1473,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                     rc = 1;
                 } else {
                     rc = spawn_and_wait(av.items);
+                    host_tool_failed = rc != 0;
                 }
                 argv_free(&av);
             }
@@ -1285,9 +1487,25 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 rc = 1;
             } else {
                 rc = spawn_and_wait(av.items);
+                host_tool_failed = rc != 0;
             }
             argv_free(&av);
 #endif
+        }
+    }
+
+    if (rc == 0 && opts->target == FENG_COMPILE_TARGET_BIN && opts->bundle_count > 0U) {
+        free(bundle_error);
+        bundle_error = NULL;
+        if (!extract_bundle_runtime_dynamic_libraries(opts->bundle_paths,
+                                                      opts->bundle_count,
+                                                      host_target,
+                                                      opts->out_path,
+                                                      &bundle_error)) {
+            fprintf(stderr,
+                    "error: failed to release package extlib dynamic libraries: %s\n",
+                    bundle_error != NULL ? bundle_error : "unknown error");
+            rc = 1;
         }
     }
 
@@ -1303,6 +1521,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     free(include_flag);
 
     if (rc != 0) {
+        if (!host_tool_failed) {
+            free(object_path);
+            return rc;
+        }
         fprintf(stderr,
                 "error: host C compiler failed (exit=%d).\n"
                 "  generated C kept at: %s\n",
