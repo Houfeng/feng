@@ -93,16 +93,25 @@ static void dispose_asset_entries(FengFbBundleDirectoryEntry *asset_entries,
 
 static bool build_asset_entries(const FengCliProjectContext *context,
                                 FengFbBundleDirectoryEntry **out_entries,
+                                size_t *out_entry_count,
                                 char **out_error_message) {
     FengFbBundleDirectoryEntry *entries;
     size_t index;
+    size_t entry_index = 0U;
+    size_t bundle_asset_count = 0U;
 
     *out_entries = NULL;
-    if (context->manifest.asset_count == 0U) {
+    *out_entry_count = 0U;
+    for (index = 0U; index < context->manifest.asset_count; ++index) {
+        if (!feng_cli_project_asset_targets_extlib(&context->manifest.assets[index])) {
+            bundle_asset_count++;
+        }
+    }
+    if (bundle_asset_count == 0U) {
         return true;
     }
 
-    entries = (FengFbBundleDirectoryEntry *)calloc(context->manifest.asset_count, sizeof(*entries));
+    entries = (FengFbBundleDirectoryEntry *)calloc(bundle_asset_count, sizeof(*entries));
     if (entries == NULL) {
         if (out_error_message != NULL) {
             *out_error_message = dup_printf("out of memory");
@@ -111,20 +120,25 @@ static bool build_asset_entries(const FengCliProjectContext *context,
     }
 
     for (index = 0U; index < context->manifest.asset_count; ++index) {
-        entries[index].entry_path = context->manifest.assets[index].target_dir;
-        entries[index].source_root = dup_printf("%s/%s",
-                                                context->asset_stage_root,
-                                                context->manifest.assets[index].target_dir);
-        if (entries[index].source_root == NULL) {
-            dispose_asset_entries(entries, context->manifest.asset_count);
+        if (feng_cli_project_asset_targets_extlib(&context->manifest.assets[index])) {
+            continue;
+        }
+        entries[entry_index].entry_path = context->manifest.assets[index].target_dir;
+        entries[entry_index].source_root = dup_printf("%s/%s",
+                                                      context->asset_stage_root,
+                                                      context->manifest.assets[index].target_dir);
+        if (entries[entry_index].source_root == NULL) {
+            dispose_asset_entries(entries, bundle_asset_count);
             if (out_error_message != NULL) {
                 *out_error_message = dup_printf("out of memory");
             }
             return false;
         }
+        entry_index++;
     }
 
     *out_entries = entries;
+    *out_entry_count = bundle_asset_count;
     return true;
 }
 
@@ -138,6 +152,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     size_t direct_dependency_count = 0U;
     FengFbLibraryBundleSpec spec = {0};
     FengFbBundleDirectoryEntry *asset_entries = NULL;
+    size_t asset_entry_count = 0U;
     char *library_path = NULL;
     char *public_mod_root = NULL;
     char *extlib_root = NULL;
@@ -188,7 +203,10 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         goto done;
     }
     if (context.manifest.asset_count > 0U) {
-        if (!build_asset_entries(&context, &asset_entries, &error_message)) {
+        if (!build_asset_entries(&context,
+                                 &asset_entries,
+                                 &asset_entry_count,
+                                 &error_message)) {
             fprintf(stderr,
                     "error: %s\n",
                     error_message != NULL ? error_message : "failed to prepare asset bundle entries");
@@ -225,7 +243,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     spec.public_mod_root = public_mod_root;
     spec.extlib_root = extlib_root;
     spec.asset_entries = asset_entries;
-    spec.asset_entry_count = context.manifest.asset_count;
+    spec.asset_entry_count = asset_entry_count;
 
     if (!feng_fb_write_library_bundle(&spec, &error_message)) {
         fprintf(stderr,
@@ -242,7 +260,7 @@ done:
     feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
     free(error_message);
     free(extlib_root);
-    dispose_asset_entries(asset_entries, context.manifest.asset_count);
+    dispose_asset_entries(asset_entries, asset_entry_count);
     free(public_mod_root);
     free(library_path);
     feng_cli_project_context_dispose(&context);

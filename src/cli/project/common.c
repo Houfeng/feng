@@ -601,6 +601,10 @@ static char *resolve_project_path(const char *project_root, const char *raw_path
     return joined;
 }
 
+bool feng_cli_project_asset_targets_extlib(const FengCliProjectManifestAsset *asset) {
+    return asset != NULL && strcmp(asset->target_dir, "extlib") == 0;
+}
+
 static bool fill_output_paths(FengCliProjectContext *context, FengCliProjectError *error) {
     char *bin_dir;
     char *package_name;
@@ -743,7 +747,6 @@ fail:
 
 bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
                                    FengCliProjectError *out_error) {
-    char *dest_root = NULL;
     size_t index;
 
     if (context == NULL) {
@@ -754,24 +757,27 @@ bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
         return true;
     }
 
-    if (context->manifest.target == FENG_COMPILE_TARGET_BIN) {
-        dest_root = path_dirname_dup(context->binary_path);
-    } else {
-        dest_root = dup_cstr(context->asset_stage_root);
-    }
-    if (dest_root == NULL) {
-        set_error(out_error, context->out_root, 0U, "out of memory");
-        return false;
-    }
-
     for (index = 0U; index < context->manifest.asset_count; ++index) {
-        if (!stage_single_asset(context, &context->manifest.assets[index], dest_root, out_error)) {
+        const FengCliProjectManifestAsset *asset = &context->manifest.assets[index];
+        char *dest_root;
+
+        if (context->manifest.target == FENG_COMPILE_TARGET_BIN) {
+            dest_root = path_dirname_dup(context->binary_path);
+        } else if (feng_cli_project_asset_targets_extlib(asset)) {
+            dest_root = dup_cstr(context->out_root);
+        } else {
+            dest_root = dup_cstr(context->asset_stage_root);
+        }
+        if (dest_root == NULL) {
+            set_error(out_error, context->out_root, 0U, "out of memory");
+            return false;
+        }
+        if (!stage_single_asset(context, asset, dest_root, out_error)) {
             free(dest_root);
             return false;
         }
+        free(dest_root);
     }
-
-    free(dest_root);
     return true;
 }
 

@@ -62,6 +62,8 @@ bool feng_cli_project_prepare_build(const char *program,
                                    FengCliDepsResolved *out_resolved,
                                    FengCliProjectError *out_error);
 
+bool feng_cli_project_asset_targets_extlib(const FengCliProjectManifestAsset *asset);
+
 bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
                                    FengCliProjectError *out_error);
 

@@ -159,7 +159,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 - 复制时递归保留源目录中的相对层级。
 - 若目标目录已存在,按构建产物覆盖语义刷新为最新内容,与现有可执行文件/库产物覆盖行为保持一致。
 - `target=bin`: 将 `[assets]` 中声明的资源复制到可执行文件同级目录下的目标目录。
-- `target=lib`: 将 `[assets]` 中声明的资源复制到输出目录下的打包 staging,供后续 `.fb` 写包复用。
+- `target=lib`: 普通 `[assets]` 目标目录复制到输出目录下的 `build/assets/` staging; 若目标目录精确为 `extlib`,则直接复制到 `build/extlib/`,供后续 `pack` 复用 `.fb` 顶层 `extlib/` 能力目录。
 
 ### 3.5 发布流程（打包为 .fb）
 
@@ -171,7 +171,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
 3. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
-5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树与 `build/assets/` 中的 `[assets]` staging 目录打包为 `.fb` ZIP 归档
+5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树（包含 `[assets].extlib` 直接 staging 的内容）与 `build/assets/` 中其余 `[assets]` staging 目录打包为 `.fb` ZIP 归档
 
 ## 4 交互协议总览
 
