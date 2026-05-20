@@ -4,3 +4,6 @@ version: "0.1.0"
 target: "lib"
 src: "src/"
 out: "build/"
+
+[assets]
+lib: "lib/"
