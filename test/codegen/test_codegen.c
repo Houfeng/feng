@@ -323,6 +323,244 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
+static void test_module_binding_lazy_getter_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.topbind;\n"
+        "let first: int = compute();\n"
+        "let second: int = (int)41;\n"
+        "fn compute(): int {\n"
+        "    return second + 1;\n"
+        "}\n"
+        "fn helper(): int {\n"
+        "    return first;\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "    let result: int = helper();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "topbind.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (module binding lazy getter): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static bool _feng_g__feng__codegen__topbind__first__inited = false;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_get_g__feng__codegen__topbind__first(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_get_g__feng__codegen__topbind__second()") != NULL);
+    {
+        const char *main_wrapper = strstr(out.c_source, "int main(int argc, char **argv) {");
+
+        ASSERT(main_wrapper != NULL);
+        ASSERT(strstr(main_wrapper, "_feng_g__feng__codegen__topbind__first =") == NULL);
+        ASSERT(strstr(main_wrapper, "_feng_g__feng__codegen__topbind__second =") == NULL);
+    }
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_address_of_module_binding_uses_storage_slot_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.topbindaddr;\n"
+        "@cdecl(\"c\")\n"
+        "extern fn c_use_int_ptr(p: int*): void;\n"
+        "let value: int = (int)7;\n"
+        "fn run_case() {\n"
+        "    c_use_int_ptr(&value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "topbindaddr.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (module binding address-of): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(&(_feng_g__feng__codegen__topbindaddr__value))") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(&(_feng_get_g__feng__codegen__topbindaddr__value()))") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_module_scalar_var_assignment_marks_initialized_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.topbindassign;\n"
+        "var current: int = (int)1;\n"
+        "fn run_case() {\n"
+        "    current = (int)7;\n"
+        "    current += 1;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "topbindassign.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (module scalar var assignment): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "_feng_g__feng__codegen__topbindassign__current__inited = true;") == 3U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.topbindobj;\n"
+        "type Box {\n"
+        "    let value: int;\n"
+        "}\n"
+        "var current: Box = Box { value: (int)1 };\n"
+        "fn reset(next: Box) {\n"
+        "    current = next;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "topbindobj.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (module managed var assignment): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "_feng_g__feng__codegen__topbindobj__current__inited = true;") == 2U);
+    ASSERT(strstr(out.c_source,
+                  "feng_assign((void**)&_feng_g__feng__codegen__topbindobj__current, next);") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_module_binding_default_zero_getter_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.topbindzero;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "}\n"
+        "let current: User;\n"
+        "fn read_id(): int {\n"
+        "    return current.id;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "topbindzero.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (module default-zero getter): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_get_g__feng__codegen__topbindzero__current(void)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__topbindzero__User__default_zero()") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_feng_get_g__feng__codegen__topbindzero__current()") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_extern_calling_convention_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.callconv;\n"
@@ -3261,6 +3499,11 @@ static void test_user_constructor_forms_codegen(void) {
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
+    test_module_binding_lazy_getter_codegen();
+    test_address_of_module_binding_uses_storage_slot_codegen();
+    test_module_scalar_var_assignment_marks_initialized_codegen();
+    test_module_managed_var_assignment_marks_initialized_codegen();
+    test_module_binding_default_zero_getter_codegen();
     test_extern_calling_convention_codegen();
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
