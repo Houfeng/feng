@@ -14,4 +14,6 @@ Supported operations:
 - UTF-8 grapheme boundary map: u8_grapheme_breaks
 
 Build:
-- make
+- `make` builds the static library and stages it into `../../std/lib` by default.
+- `make OUTPUT_DIR=<path>` overrides the staging directory.
+- `make install` is an alias of the staging step.

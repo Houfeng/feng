@@ -3,7 +3,10 @@ AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra
 CPPFLAGS ?= -I./src -I./src/lib
 
-TARGET = libfeng_u8_text.a
+TARGET ?= libfeng_u8_text.a
+OUTPUT_DIR ?= ../../std/lib
+OUTPUT_NAME ?= $(TARGET)
+OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 
 SRCS = src/lib/unistr/u8-mbtouc-aux.c \
                       src/lib/unistr/u8-mbtoucr.c \
@@ -20,15 +23,18 @@ SRCS = src/lib/unistr/u8-mbtouc-aux.c \
 
 OBJS = $(SRCS:.c=.o)
 
-all: $(TARGET)
+all: $(OUTPUT_TARGET)
 
 $(TARGET): $(OBJS)
 	$(AR) rcs $@ $^
 
+$(OUTPUT_TARGET): $(TARGET) ; @mkdir -p "$(OUTPUT_DIR)" && cp "$(TARGET)" "$(OUTPUT_TARGET)"
+
+install: $(OUTPUT_TARGET)
+
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-clean:
-	rm -f $(OBJS) $(TARGET)
+clean: ; rm -f $(OBJS) $(TARGET) $(OUTPUT_TARGET)
 
-.PHONY: all clean
+.PHONY: all clean install
