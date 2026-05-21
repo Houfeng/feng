@@ -370,51 +370,51 @@ extern fn feng_user_debug(value: User): void;
 
 ### 11.1 Phase 0：规范与术语收敛
 
-- [ ] 在开发文档中确认 `extern fn` 的总定义不再限定为 C-only。
-- [ ] 同步公共权威文档：把 `extern fn` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern fn` 语义。
-- [ ] 为 `@runtime` 明确首版适用位置、互斥规则、非公开定位，以及“签名语义与普通 Feng 函数一致”的原则。
-- [ ] 明确顶层 intrinsic 迁入 `src/runtime/contract/` 子层；runtime 语义继续停留在 `src/runtime/` contract surface。
+- [x] 在开发文档中确认 `extern fn` 的总定义不再限定为 C-only。
+- [x] 同步公共权威文档：把 `extern fn` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern fn` 语义。
+- [x] 为 `@runtime` 明确首版适用位置、互斥规则、非公开定位，以及“签名语义与普通 Feng 函数一致”的原则。
+- [x] 明确顶层 intrinsic 迁入 `src/runtime/contract/` 子层；runtime 语义继续停留在 `src/runtime/` contract surface。
 
 ### 11.2 Phase 0.5：前置解耦当前 `extern fn` 的 C-only 检查
 
-- [ ] 把当前“所有 `extern fn` 都必须恰好使用一个 `@cdecl` / `@stdcall` / `@fastcall`”的检查，收敛到 C ABI 路径本身，而不是继续绑定在裸 `extern fn` 上。
-- [ ] 把当前 `extern fn` 参数 / 返回值统一走 C ABI 兼容检查的逻辑，收敛到 C ABI 路径本身，避免未来 `@runtime extern fn` 误触发 “not C ABI-stable” 诊断。
-- [ ] 补充前置回归：C ABI 导入保持现状；非 C ABI 的 `extern fn` 形态在进入 `@runtime` 阶段前不再先被 C ABI 规则拦截。
+- [x] 把当前“所有 `extern fn` 都必须恰好使用一个 `@cdecl` / `@stdcall` / `@fastcall`”的检查，收敛到 C ABI 路径本身，而不是继续绑定在裸 `extern fn` 上。
+- [x] 把当前 `extern fn` 参数 / 返回值统一走 C ABI 兼容检查的逻辑，收敛到 C ABI 路径本身，避免未来 `@runtime extern fn` 误触发 “not C ABI-stable” 诊断。
+- [x] 补充前置回归：C ABI 导入保持现状；非 C ABI 的 `extern fn` 形态在进入 `@runtime` 阶段前不再先被 C ABI 规则拦截。
 
 ### 11.3 Phase 1：词法 / 语法入口
 
-- [ ] 新增内建注解 `@runtime`。
-- [ ] parser 允许其标注在无函数体的顶层 `extern fn` 上。
+- [x] 新增内建注解 `@runtime`。
+- [x] parser 允许其标注在无函数体的顶层 `extern fn` 上。
 - [ ] parser 拒绝明显非法组合（如标注在非 `extern fn` 场景）。
 
 ### 11.4 Phase 2：目标分流与普通函数语义复用
 
-- [ ] 实现 `@runtime` 与 C ABI 目标注解互斥检查。
-- [ ] 确保 `@runtime` 在参数 / 返回值、重载决议与调用语义上直接复用普通 Feng 函数规则，不新增独立签名检查。
-- [ ] 不为 `@runtime` 维护独立类型白名单 / 黑名单，也不额外引入标准库 / 普通库身份特判或公开导出过滤逻辑，保持实现简洁。
-- [ ] 诊断策略上尽量复用普通 Feng 函数已有报错；只对目标注解冲突等 `@runtime` 自身声明错误新增诊断。
+- [x] 实现 `@runtime` 与 C ABI 目标注解互斥检查。
+- [x] 确保 `@runtime` 在参数 / 返回值、重载决议与调用语义上直接复用普通 Feng 函数规则，不新增独立签名检查。
+- [x] 不为 `@runtime` 维护独立类型白名单 / 黑名单，也不额外引入标准库 / 普通库身份特判或公开导出过滤逻辑，保持实现简洁。
+- [x] 诊断策略上尽量复用普通 Feng 函数已有报错；只对目标注解冲突等 `@runtime` 自身声明错误新增诊断。
 
 ### 11.5 Phase 3：发码与链接
 
-- [ ] 为 `@runtime extern fn` 新增独立 lowering 分支；首版直接 emit 对应 C 原型与普通 C 调用，不引入额外 bridge / trampoline。
-- [ ] 收敛 runtime contract 头文件白名单边界；必要时从现有 runtime 头中拆出更窄的 contract 头，仅用于枚举 `@runtime` 可声明入口。
-- [ ] 明确 runtime contract 符号的链接来源与 build 集成方式。
+- [x] 为 `@runtime extern fn` 新增独立 lowering 分支；首版直接 emit 对应 C 原型与普通 C 调用，不引入额外 bridge / trampoline。
+- [x] 收敛 runtime contract 头文件白名单边界；必要时从现有 runtime 头中拆出更窄的 contract 头，仅用于枚举 `@runtime` 可声明入口。
+- [x] 明确 runtime contract 符号的链接来源与 build 集成方式。
 
 ### 11.6 Phase 4：intrinsic 并入 runtime 子层
 
-- [ ] 把现存 `feng_intrinsic` helper 移入 `src/runtime/contract/`，并迁移到 `@runtime extern fn` 路径。
-- [ ] 删除顶层 `src/intrinsic/`、独立 `libfeng_intrinsic.a`、`FENG_INTRINSIC_LIB` 与 `@cdecl("feng_intrinsic")` 相关保留逻辑。
-- [ ] 同步清理 build、文档与测试中对顶层 intrinsic 层的长期假设。
+- [x] 把现存 `feng_intrinsic` helper 移入 `src/runtime/contract/`，并迁移到 `@runtime extern fn` 路径。
+- [x] 删除顶层 `src/intrinsic/`、独立 `libfeng_intrinsic.a`、`FENG_INTRINSIC_LIB` 与 `@cdecl("feng_intrinsic")` 相关保留逻辑。
+- [x] 同步清理 build、文档与测试中对顶层 intrinsic 层的长期假设。
 
 ### 11.7 Phase 5：标准库迁移试点
 
-- [ ] 选择 1 到 2 个确实依赖 runtime object contract 的标准库能力做迁移验证。
-- [ ] 验证迁移后是否比 ABI surface 方案更自然、成本更低且不损害边界清晰度。
+- [x] 选择 1 到 2 个确实依赖 runtime object contract 的标准库能力做迁移验证。
+- [x] 验证迁移后是否比 ABI surface 方案更自然、成本更低且不损害边界清晰度。
 
 ### 11.8 Phase 6：测试与回归
 
-- [ ] 新增 lexer / parser / semantic / codegen 正反例测试。
-- [ ] 新增标准库或 smoke 场景，覆盖至少一个 `string` 和一个数组场景。
+- [x] 新增 lexer / parser / semantic / codegen 正反例测试。
+- [x] 新增标准库或 smoke 场景，覆盖至少一个 `string` 和一个数组场景。
 - [ ] 全量回归 `make test`。
 
 ---
