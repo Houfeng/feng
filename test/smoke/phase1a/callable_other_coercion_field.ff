@@ -18,7 +18,7 @@ fn use_mapper(input: MapperA): int {
     let local: MapperA = input;
     let holder: Holder = Holder{mapper: local};
     let fromField: MapperA = holder.mapper;
-    let remapped: MapperB = fromField;
+    let remapped: MapperB = (MapperB)fromField;
     return remapped(41);
 }
 

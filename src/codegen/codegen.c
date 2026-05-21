@@ -11560,6 +11560,39 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     CGType *target = NULL;
     if (!cg_resolve_type(cg, e->as.cast.type, &e->token, &target)) return false;
+    if (target->kind == CG_TYPE_CALLABLE) {
+        ExprResult inner;
+        const UserSpec *target_spec = target->user_spec;
+
+        if (!cg_emit_expr(cg, e->as.cast.value, &inner)) {
+            cgtype_free(target);
+            return false;
+        }
+        if (target_spec != NULL && inner.type != NULL && inner.type->kind == CG_TYPE_CALLABLE &&
+            inner.type->user_spec == target_spec) {
+            cgtype_free(target);
+            *out = inner;
+            return true;
+        }
+        if (target_spec != NULL && inner.type != NULL && inner.type->kind == CG_TYPE_CALLABLE &&
+            inner.type->user_spec != NULL) {
+            bool ok = cg_emit_callable_other_rewrap(cg,
+                                                    e,
+                                                    &inner,
+                                                    inner.type->user_spec,
+                                                    target_spec,
+                                                    out);
+
+            er_free(&inner);
+            cgtype_free(target);
+            return ok;
+        }
+        er_free(&inner);
+        cgtype_free(target);
+        return cg_fail(cg,
+                       e->token,
+                       "codegen: callable-form cast operand must be a callable-form spec value");
+    }
     if (target->kind == CG_TYPE_ARRAY) {
         ExprResult inner;
 

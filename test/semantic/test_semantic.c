@@ -10566,6 +10566,88 @@ static void test_spec_coercion_callable_lambda(void) {
     feng_program_free(program);
 }
 
+static void test_callable_spec_value_rejects_different_spec_implicit_match(void) {
+    const char *src =
+        "pu mod demo.callable.nominal;\n"
+        "spec A(x: int): int;\n"
+        "spec B(x: int): int;\n"
+        "fn double(x: int): int { return x + x; }\n"
+        "fn caller(): int {\n"
+        "    let a: A = double;\n"
+        "    let b: B = a;\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("callable_spec_implicit_nominal_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "callable_spec_implicit_nominal_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "does not match expected function type 'B'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_callable_spec_value_explicit_cast_accepts_equal_signature(void) {
+    const char *src =
+        "pu mod demo.callable.nominal;\n"
+        "spec A(x: int): int;\n"
+        "spec B(x: int): int;\n"
+        "fn double(x: int): int { return x + x; }\n"
+        "fn caller(): int {\n"
+        "    let a: A = double;\n"
+        "    let b: B = (B)a;\n"
+        "    return b(2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("callable_spec_explicit_cast_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_callable_spec_top_level_fn_still_matches_multiple_specs(void) {
+    const char *src =
+        "pu mod demo.callable.nominal;\n"
+        "spec A(x: int): int;\n"
+        "spec B(x: int): int;\n"
+        "fn double(x: int): int { return x + x; }\n"
+        "fn caller(): int {\n"
+        "    let a: A = double;\n"
+        "    let b: B = double;\n"
+        "    return a(1) + b(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("callable_spec_top_level_multi_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* --- Phase S2-a: SpecDefaultBinding sidecar tests (§9.3) ------------- */
 
 /* Locate the FengBinding* of the first `let`/`var` statement in fn body. */
@@ -12579,6 +12661,9 @@ int main(void) {
     test_spec_coercion_object_scalar_return_uses_box_owner();
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
+    test_callable_spec_value_rejects_different_spec_implicit_match();
+    test_callable_spec_value_explicit_cast_accepts_equal_signature();
+    test_callable_spec_top_level_fn_still_matches_multiple_specs();
     test_spec_default_local_binding_object_form();
     test_spec_default_local_binding_callable_form();
     test_spec_default_type_field_no_initializer();

@@ -3055,6 +3055,21 @@ static bool function_type_refs_have_equal_signature(const ResolveContext *contex
                                                     const FengTypeRef *src_ref,
                                                     const FengTypeRef *dst_ref);
 
+static const FengDecl *resolve_callable_spec_type_ref_decl(const ResolveContext *context,
+                                                           const FengTypeRef *type_ref) {
+    const FengDecl *decl;
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    decl = resolve_type_ref_decl(context, type_ref);
+    if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
+        decl->as.spec_decl.form != FENG_SPEC_FORM_CALLABLE) {
+        return NULL;
+    }
+    return decl;
+}
+
 static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                                                 InferredExprType expr_type,
                                                 const FengTypeRef *type_ref) {
@@ -3105,6 +3120,10 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
             if (expr_type.type_ref != NULL &&
                 type_refs_semantically_equal(context, expr_type.type_ref, type_ref)) {
                 return true;
+            }
+            if (resolve_callable_spec_type_ref_decl(context, expr_type.type_ref) != NULL &&
+                resolve_callable_spec_type_ref_decl(context, type_ref) != NULL) {
+                return false;
             }
             if (function_type_refs_have_equal_signature(context,
                                                         expr_type.type_ref,
@@ -3302,10 +3321,8 @@ static bool function_type_decl_return_matches_inferred_type(const ResolveContext
     return inferred_expr_type_matches_type_ref(context, return_type, expected_return_type);
 }
 
-/* Callable-form specs are assignment-compatible when their fully-substituted
- * signatures match exactly (same parameter count, parameter types, and return
- * type). This keeps callable coercion nominally strict on signature while
- * allowing value-to-value surface remapping (e.g. MapperA -> MapperB). */
+/* Callable-form signature equality helper. Callers decide whether an exact
+ * signature match enables implicit coercion or only explicit casts. */
 static bool function_type_refs_have_equal_signature(const ResolveContext *context,
                                                     const FengTypeRef *src_ref,
                                                     const FengTypeRef *dst_ref) {
@@ -4647,9 +4664,19 @@ static bool cast_expr_types_are_valid(const ResolveContext *context,
                                       InferredExprType value_type,
                                       const FengTypeRef *target_type) {
     const char *target_builtin = type_ref_builtin_canonical_name(target_type);
+    const FengDecl *source_callable_spec = NULL;
+    const FengDecl *target_callable_spec = NULL;
 
     if (inferred_expr_type_matches_type_ref(context, value_type, target_type)) {
         return true;
+    }
+    if (value_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        source_callable_spec = resolve_callable_spec_type_ref_decl(context, value_type.type_ref);
+        target_callable_spec = resolve_callable_spec_type_ref_decl(context, target_type);
+        if (source_callable_spec != NULL && target_callable_spec != NULL &&
+            function_type_refs_have_equal_signature(context, value_type.type_ref, target_type)) {
+            return true;
+        }
     }
     if (inferred_expr_type_is_enum(context, value_type) && target_builtin != NULL &&
         strcmp(target_builtin, "i32") == 0) {

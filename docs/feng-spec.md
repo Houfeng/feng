@@ -106,6 +106,10 @@ type Box: Choice {}
 - 可调用形状使用 `spec Name(args): ReturnType;` 形式定义。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
+- callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的顶层函数、方法值与 lambda 进入 callable-form `spec` 位置时继续按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”做结构匹配; 一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
+- 不同 callable-form `spec` 即使签名完全一致也不得隐式互相匹配; 仅当两个 callable-form `spec` 在实例化后的参数类型与返回类型完全一致时,才允许显式转换。
+- callable-form `spec` 的显式转换资格必须在编译期确定; 运行时不得重新比较签名、搜索候选或决定转换是否成立。
+- callable-form `spec` 的显式转换一旦合法,编译器必须直接按目标 callable-form `spec` 视角发码; 运行时不得再做动态适配或回退。
 - union-form `spec` 只描述值进入时的 member 选择与收窄边界,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标; union-form 的专门规则见 [feng-union-type.md](./feng-union-type.md)。
 - 对象形状 `spec` 的显式转换只允许向上建立视角: 具体 `type` 可显式转换到当前可见契约闭包中已证明满足的 object-form `spec`; object-form `spec` 也可显式转换到其当前可见父 `spec` 视角。
 - 对象形状 `spec` 的显式转换资格必须在编译期确定; 运行时不得重新搜索满足关系,也不得依据对象真实具体类型临时决定转换是否成立。
@@ -127,6 +131,10 @@ type Box: Choice {}
 - [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi`、`@union` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
+- [必须] 未绑定到 callable-form `spec` 的顶层函数、方法值与 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
+- [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
+- [必须] 不同 callable-form `spec` 之间的显式转换仅在实例化后的签名完全一致时允许,且资格必须在编译期确定。
+- [禁止] 不同 callable-form `spec` 仅因签名结构相同而发生隐式匹配。
 - [必须] 对象形状 `spec` 的显式转换只允许两类向上转换: 具体 `type` 到其已满足的 object-form `spec`,以及子 object-form `spec` 到其父 object-form `spec`。
 - [必须] 对象形状 `spec` 的显式转换资格必须仅依据当前可见契约关系在编译期确定。
 - [必须] 对象形状 `spec` 的显式转换一旦成立,编译器必须直接构造静态已知的目标 `spec` 视角; 运行时不得再做候选搜索、试探或回退。
@@ -144,6 +152,8 @@ type Box: Choice {}
 - 编译器必须在 object-form `spec` 的父子闭包成员收集中对“同名且签名完全一致”的方法按“子 `spec` 优先”去重,避免把继承覆盖关系误判为多重重载歧义。
 - 编译器必须检查并拒绝 `spec` 列表中的重复项。
 - 编译器必须检查并拒绝在对象形状 `spec` 上使用 `@abi`、`@union` 或调用方式注解。
+- 编译器必须区分“未绑定可调用值 → callable-form `spec`”的结构匹配与“callable-form `spec` → callable-form `spec`”的名义匹配。
+- 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的显式转换是否属于允许的向上转换,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
 - 编译器必须按 [Feng 语言 ABI 互操作规范](./feng-interop.md) 校验可调用形状的 `@abi spec` 的参数类型与返回类型是否满足 ABI 函数签名兼容规则。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
@@ -157,6 +167,7 @@ type Box: Choice {}
 - 每次对 `spec` 类型执行默认初始化时,都会创建该 `spec` 默认 witness 的新实例,不复用共享单例。
 - `spec` 值上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
+- callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索或动态适配; 运行时只执行编译期已确定的目标 callable-form `spec` 视角构造。
 - 对象形状 `spec` 的显式转换不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。
 - 运行时实现不强制绑定单一机制; 只要求满足高性能、0 开销或极低开销、ABI 稳定。
 

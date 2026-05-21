@@ -12,7 +12,7 @@ fn add1(x: int): int {
 
 fn use_mapper(input: MapperA): int {
     let local: MapperA = input;
-    let remapped: MapperB = local;
+    let remapped: MapperB = (MapperB)local;
     return remapped(41);
 }
 
