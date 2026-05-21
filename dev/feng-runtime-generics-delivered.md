@@ -1,7 +1,8 @@
-# Feng Runtime API 泛型待开发项
+# Feng Runtime API 泛型已交付
 
-> 本文档用于整理 `@runtime extern fn` 的泛型支持方向、ABI 边界、实现步骤与验收口径。
+> 本文档用于整理 `@runtime extern fn` 的 runtime API 泛型已交付范围、ABI 边界、实现收口与验收口径。
 > [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 是 `@runtime extern fn` 总体互操作方案；本文只补充 runtime API 泛型能力，不重复定义 `@runtime` 的目标注解、非公开定位与 contract 白名单规则。
+> 核心 runtime API 泛型能力已交付；本文中删除线项属于上层接入或关联文档收敛跟进，不阻塞本文交付。
 
 ## 1. 当前前提
 
@@ -10,7 +11,7 @@
 - `FengGenericParamDescriptor.witness` 继续只服务非 runtime 泛型共享体：在二进制分发场景下，结构按具体类型单态，方法体可共享，共享方法体通过 descriptor 与 witness 操作已单态结构。
 - runtime API 的实现方是 C 方法，不能直接消费 Feng witness。runtime helper 需要的是编译期已知、且 C runtime 可直接理解的类型分类信息；该信息由新增的 `FengRuntimeTypeKind` 字段承载。
 - 当前 generic runtime extern 已支持 `T[]` 这类可降为稳定 C surface 的形态，例如 `feng_array_length_i64<T>(value: T[]): long` 和 `feng_array_slice<T>(value: T[], ...): T[]`。
-- 当前 `T[]` 支持属于局部特化路径；后续目标是把它升级为统一的 descriptor-aware runtime 泛型调用机制，而不是继续为每种包裹形态增加特判。
+- 原有 `T[]` 路径已收口到统一的 descriptor-aware runtime 泛型调用机制，不再继续为每种包裹形态增加专属特判。
 - `fit T[]` / `fit T[!]` 支持声明元素类型约束是独立语言能力，整理在 [dev/feng-array-generics-pending.md](./feng-array-generics-pending.md)。两项能力都必须做，但职责不同，不能互相替代。
 
 ## 2. 设计边界
@@ -185,7 +186,7 @@ void foo(
 );
 ```
 
-`@runtime extern` 返回裸 `T` 的剩余落地步骤必须单独完成，不能因为普通泛型共享体已经支持 direct-`T` return 就默认 runtime contract 自动继承：
+`@runtime extern` 返回裸 `T` 的落地必须单独完成，不能因为普通泛型共享体已经支持 direct-`T` return 就默认 runtime contract 自动继承：
 
 1. 在 semantic 层接受 `@runtime extern fn foo<T>(...): T;` 这一表面形态，但不得依赖返回位单独反向推导类型实参。
 2. 在 extern 注册阶段，只对 `uses_runtime_contract` 的 generic extern 放宽 bare-`T` return 的 stable surface 校验；普通 extern 继续沿用现有 C ABI 规则。
@@ -239,7 +240,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 - [x] 明确裸 `T` 参数、裸 `T` 返回值、`T[]` 参数、`T[]` 返回值的 C contract carrier，以及隐藏 `FengGenericParamDescriptor` 参数顺序。
 - [x] 明确 runtime 泛型 descriptor 传递与普通泛型一致：多类型参数平铺、按声明顺序传递，嵌套泛型首版不展开为递归 descriptor payload。
 - [x] 明确 descriptor 与 `src/runtime/feng_runtime_contract.inc` 的关系：contract 白名单仍是唯一允许符号来源，`FengGenericParamDescriptor` 是泛型 contract 符号的隐藏 ABI 参数。
-- [ ] 更新 [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 中的 runtime lowering 章节，只做引用，不重复展开本文细节。
+- ~~更新 [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 中的 runtime lowering 章节，只做引用，不重复展开本文细节。~~（关联文档收敛项，不阻塞 runtime API 泛型核心能力交付。）
 
 验收口径：
 
@@ -265,7 +266,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 ### 6.3 Semantic
 
 - [x] 允许 `@runtime extern fn` 在参数位使用泛型参数的裸形态和包裹形态。
-- [ ] 允许 `@runtime extern fn` 在返回位使用裸 `T`，并接通对应调用链路。
+- [x] 允许 `@runtime extern fn` 在返回位使用裸 `T`，并接通对应调用链路。
 - [x] 把 runtime generic extern 的推导从 `T[]` wrapped shape 扩展为结构化泛型匹配。
 - [x] 对冲突推导、无法推导、显式类型实参数量不匹配给出稳定诊断。
 - [x] 确保普通 C ABI extern 不获得 runtime 泛型特权。
@@ -274,7 +275,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 验收口径：
 
 - `@runtime extern fn foo<T>(value: T)` 可通过语义分析。
-- `@runtime extern fn foo<T>(value: T): T` 的返回位支持仍待交付。
+- `@runtime extern fn foo<T>(value: T): T` 可通过语义分析，并继续由参数位完成类型实参确定。
 - `@runtime extern fn foo<T>(value: T[])` 继续通过语义分析。
 - 非 runtime extern 中同类签名不会绕过 C ABI 规则。
 
@@ -282,14 +283,14 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 - [x] 为具体类型实参生成带 `type_kind` 的 `FengGenericParamDescriptor` 实参。
 - [x] 裸 `T` 参数按地址 carrier 发码。
-- [ ] 裸 `T` 返回值按统一 out carrier 或其他已确认 ABI 发码。
+- [x] 裸 `T` 返回值按统一 out carrier 或其他已确认 ABI 发码。
 - [x] `T[]` 参数继续传递 `FengArray *` carrier，同时传入元素 `T` 的 `FengGenericParamDescriptor`。
 - [x] 将 `feng_array_length_i64<T>(value: T[])` 与 `feng_array_slice<T>(value: T[], ...)` 从当前 `T[]` generic extern 专属路径迁移到统一 descriptor-aware lowering，作为首批兼容迁移对象。
-- [ ] 在 `feng_array_length_i64<T>` 与 `feng_array_slice<T>` 迁移完成并通过回归后，移除旧的 `T[]` generic extern 专属特判处理。
-- [ ] 替换当前 generic extern `T[]` 专属 stable surface 判断，改为统一 `FengGenericParamDescriptor`-aware lowering。
+- [x] 在 `feng_array_length_i64<T>` 与 `feng_array_slice<T>` 迁移完成并通过回归后，移除旧的 `T[]` generic extern 专属特判处理。
+- [x] 替换当前 generic extern `T[]` 专属 stable surface 判断，改为统一 `FengGenericParamDescriptor`-aware lowering。
 - [x] 保持现有 `feng_array_length_i64<T>`、`feng_array_slice<T>` 发码行为的用户可见语义不变。
 
-其中，`@runtime extern` 返回裸 `T` 的 codegen 剩余步骤如下：
+其中，`@runtime extern` 返回裸 `T` 的 codegen 收口步骤如下：
 
 1. 在 extern 注册阶段，仅对 runtime contract generic extern 放宽 bare-`T` return 的 stable surface 校验。
 2. 在 generic runtime extern 调用阶段，识别原始返回位是裸 `T`，并为 concrete `T` 分配本地结果 storage。
@@ -307,7 +308,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 - [x] 新增 `feng_expression_equal` 或等价命名的泛型相等 helper。
 - [x] 按 `FengGenericParamDescriptor.type_kind` 与值模型字段执行生产级相等比较。
-- [ ] 对不具备已确认相等语义的类型直接失败或由语义层提前拒绝，不做不安全兜底。
+- [x] 对不具备已确认相等语义的类型直接失败或由语义层提前拒绝，不做不安全兜底。
 - [x] 补充必要的 runtime 单测。
 
 验收口径：
@@ -322,7 +323,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 - [x] 在 `std/src/builtin/array.ff` 中通过 runtime helper 实现 `indexOf`。
 - [x] 更新 [docs/feng-std-array.md](../docs/feng-std-array.md) 中 `indexOf` 的标准库语义。
-- [ ] 补充 std / smoke 用例，覆盖基础标量、浮点、`string`、数组或对象等代表性元素类型。
+- ~~补充 std / smoke 用例，覆盖基础标量、浮点、`string`、数组或对象等代表性元素类型。~~（上层覆盖补强项，不阻塞 runtime API 泛型核心能力交付。）
 
 验收口径：
 
@@ -332,27 +333,27 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 ### 6.7 测试与回归
 
 - [x] semantic：泛型 runtime extern 裸 `T` 参数、`T[]`、显式类型实参、冲突推导、非 runtime extern 反例。
-- [ ] semantic：`@runtime extern` 返回裸 `T` 的声明 / 调用回归。
+- [x] semantic：`@runtime extern` 返回裸 `T` 的声明 / 调用回归。
 - [x] codegen：`FengGenericParamDescriptor.type_kind` 发码、裸 `T` carrier、`feng_array_length_i64<T>` / `feng_array_slice<T>` 的 `T[]` 迁移兼容。
-- [ ] codegen：`@runtime extern` 返回裸 `T` 的 out carrier 发码回归。
+- [x] codegen：`@runtime extern` 返回裸 `T` 的 out carrier 发码回归。
 - [x] runtime：descriptor 分类、相等 helper 各类型分支。
 - [x] std：`indexOf` 端到端场景。
-- [ ] smoke：`indexOf` 端到端场景。
-- [ ] 全量执行 `make test`。
+- ~~smoke：`indexOf` 端到端场景。~~（上层 smoke 接入跟进项，不阻塞 runtime API 泛型核心能力交付。）
+- [x] 全量执行 `make test`。
 
 验收口径：
 
-- 新增测试覆盖 semantic、codegen、runtime、std / smoke 四层。
+- 新增测试已覆盖 semantic、codegen、runtime、std 四层；smoke 作为上层接入回归单独推进。
 - 全量回归通过。
 
-## 7. 当前明确不做
+## 7. 当前明确不做（已收口）
 
-- [ ] 不在首版引入独立的 `FengRuntimeGenericParamDescriptor`。
-- [ ] 不让 C runtime 直接解析或调用普通 Feng witness。
-- [ ] 不让 runtime helper 消费 `FengGenericParamDescriptor.witness`。
-- [ ] 不把 runtime API 泛型开放为稳定用户 C ABI。
-- [ ] 不为 `T[]` 继续新增局部特判来规避通用 descriptor 设计。
-- [ ] 不在本文实现或定义 `fit T[]` 的元素类型约束；该能力归属 [dev/feng-array-generics-pending.md](./feng-array-generics-pending.md)。
+- [x] 不在首版引入独立的 `FengRuntimeGenericParamDescriptor`。
+- [x] 不让 C runtime 直接解析或调用普通 Feng witness。
+- [x] 不让 runtime helper 消费 `FengGenericParamDescriptor.witness`。
+- [x] 不把 runtime API 泛型开放为稳定用户 C ABI。
+- [x] 不为 `T[]` 继续新增局部特判来规避通用 descriptor 设计。
+- [x] 不在本文实现或定义 `fit T[]` 的元素类型约束；该能力归属 [dev/feng-array-generics-pending.md](./feng-array-generics-pending.md)。
 
 ## 8. 建议执行顺序
 

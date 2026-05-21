@@ -9,7 +9,7 @@
 - 当前文档和实现只支持无约束元素类型参数；尚不能表达 `T` 必须满足某个 `spec` 约束面。
 - 普通 Feng 泛型已经支持 `T: Spec` 形式的约束声明，并通过语义检查与 witness 支持共享方法体；该约束面当前包括 object-form `spec` 与 callable-form `spec`。
 - 数组 `fit` 目标引入的 `T` 属于 Feng 层语言泛型问题，继续走普通泛型约束 / witness 体系。
-- 该能力与 `@runtime extern fn` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [dev/feng-runtime-generics-pending.md](./feng-runtime-generics-pending.md)。
+- 该能力与 `@runtime extern fn` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)。
 
 ## 2. 目标
 
