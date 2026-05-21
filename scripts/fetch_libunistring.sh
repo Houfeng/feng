@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 # ==============================================================================
 # 🎯 物理路径自适应定位
@@ -49,7 +49,8 @@ EXTRACTED_SRC="${TMP_DIR}/libunistring-1.4.2"
 echo "⚙️  [3/4] 正在运行正规配置以生成标准头文件..."
 cd "${EXTRACTED_SRC}"
 # 禁止一切不需要的模块，只做纯净的本地配置生成
-./configure --disable-shared --disable-rpath --without-libiconv-prefix > /dev/null
+env PATH="${PATH}" HOME="${HOME}" LC_ALL=C LANG=C CC=cc \
+       ./configure --disable-shared --disable-rpath --without-libiconv-prefix > /dev/null
 
 # 本仓库当前只保留 UTF-8 rune / grapheme 统计与遍历所需的最小子集。
 GENERATED_HEADERS=(
@@ -59,7 +60,7 @@ GENERATED_HEADERS=(
        unictype.h
 )
 
-make -C "lib" \
+env PATH="${PATH}" HOME="${HOME}" LC_ALL=C LANG=C CC=cc make -C "lib" \
        "${GENERATED_HEADERS[@]}" \
        unistring/stdint.h \
        unistring/woe32dll.h > /dev/null
@@ -136,7 +137,10 @@ Supported operations:
 - UTF-8 grapheme boundary map: u8_grapheme_breaks
 
 Build:
-- make
+- `make` builds the static library and stages it into `../../std/lib` by default.
+- `make OUTPUT_DIR=<path>` overrides the staging directory.
+- `make install` is an alias of the staging step.
+- default staged library name: `libfeng_std_unistring.a`
 EOF
 
 # 2. 内部配置、完整内部头与最小源码闭包
@@ -200,7 +204,10 @@ AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra
 CPPFLAGS ?= -I./src -I./src/lib
 
-TARGET = libfeng_u8_text.a
+TARGET ?= libfeng_std_unistring.a
+OUTPUT_DIR ?= ../../std/lib
+OUTPUT_NAME ?= $(TARGET)
+OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 
 SRCS = src/lib/unistr/u8-mbtouc-aux.c \
                       src/lib/unistr/u8-mbtoucr.c \
@@ -217,18 +224,21 @@ SRCS = src/lib/unistr/u8-mbtouc-aux.c \
 
 OBJS = $(SRCS:.c=.o)
 
-all: $(TARGET)
+all: $(OUTPUT_TARGET)
 
 $(TARGET): $(OBJS)
 	$(AR) rcs $@ $^
 
+$(OUTPUT_TARGET): $(TARGET) ; @mkdir -p "$(OUTPUT_DIR)" && cp "$(TARGET)" "$(OUTPUT_TARGET)"
+
+install: $(OUTPUT_TARGET)
+
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-clean:
-	rm -f $(OBJS) $(TARGET)
+clean: ; rm -f $(OBJS) $(TARGET) $(OUTPUT_TARGET)
 
-.PHONY: all clean
+.PHONY: all clean install
 EOF
 
 cp "COPYING" "${TARGET_DIR}/"
@@ -243,5 +253,5 @@ rm -rf "${TMP_ROOT}"
 echo "========================================================"
 echo "🎉 提取完美收工！"
 echo "👉 已导出 UTF-8 rune / grapheme 最小头文件与源码闭包"
-echo "👉 可进入目录执行: cd third_party/libunistring && make"
+echo "👉 可执行: ${PROJECT_ROOT}/scripts/build_libunistring.sh"
 echo "========================================================"

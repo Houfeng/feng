@@ -167,6 +167,7 @@ Build:
 - `make` builds the static library and stages it into `../../std/lib` by default.
 - `make OUTPUT_DIR=<path>` overrides the staging directory.
 - `make install` is an alias of the staging step.
+- default staged library name: `libfeng_std_pcre2.a`
 EOF
 
 cat > "${TARGET_DIR}/Makefile" <<'EOF'
@@ -175,7 +176,7 @@ AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra
 CPPFLAGS ?= -I./include -I./src -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8
 
-TARGET ?= libfeng_regex_pcre2.a
+TARGET ?= libfeng_std_pcre2.a
 OUTPUT_DIR ?= ../../std/lib
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)

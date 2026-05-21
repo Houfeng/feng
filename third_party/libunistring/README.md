@@ -17,3 +17,4 @@ Build:
 - `make` builds the static library and stages it into `../../std/lib` by default.
 - `make OUTPUT_DIR=<path>` overrides the staging directory.
 - `make install` is an alias of the staging step.
+- default staged library name: `libfeng_std_unistring.a`

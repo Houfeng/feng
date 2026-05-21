@@ -23,4 +23,4 @@
 
 - `libunistring` 与 `PCRE2` 的同步脚本都只允许把 Feng 当前实际消费的最小源码闭包落到 `third_party/`，不保留测试、工具链文件、16/32-bit 变体或其他无关目录。
 - `PCRE2` 当前先固定为 **8-bit 静态库 + Unicode/UTF 支持**；同步时生成并保留 `config.h`、`pcre2.h` 与 `pcre2_chartables.c`，但不携带 POSIX wrapper、shared library 产物和 SLJIT JIT 依赖树。
-- `PCRE2` 的构建产物统一写入 `std/lib/libfeng_regex_pcre2.a`，避免在标准库侧直接依赖上游默认库名。
+- `libunistring` 的构建产物统一写入 `std/lib/libfeng_std_unistring.a`，`PCRE2` 的构建产物统一写入 `std/lib/libfeng_std_pcre2.a`，避免在标准库侧直接依赖上游默认库名。

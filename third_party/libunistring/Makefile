@@ -3,7 +3,7 @@ AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra
 CPPFLAGS ?= -I./src -I./src/lib
 
-TARGET ?= libfeng_u8_text.a
+TARGET ?= libfeng_std_unistring.a
 OUTPUT_DIR ?= ../../std/lib
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
