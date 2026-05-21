@@ -11563,29 +11563,38 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     if (target->kind == CG_TYPE_CALLABLE) {
         ExprResult inner;
         const UserSpec *target_spec = target->user_spec;
+        const UserSpec *source_spec = NULL;
 
         if (!cg_emit_expr(cg, e->as.cast.value, &inner)) {
             cgtype_free(target);
             return false;
         }
-        if (target_spec != NULL && inner.type != NULL && inner.type->kind == CG_TYPE_CALLABLE &&
-            inner.type->user_spec == target_spec) {
-            cgtype_free(target);
-            *out = inner;
-            return true;
-        }
-        if (target_spec != NULL && inner.type != NULL && inner.type->kind == CG_TYPE_CALLABLE &&
-            inner.type->user_spec != NULL) {
-            bool ok = cg_emit_callable_other_rewrap(cg,
-                                                    e,
-                                                    &inner,
-                                                    inner.type->user_spec,
-                                                    target_spec,
-                                                    out);
+        if (target_spec != NULL && inner.type != NULL && inner.type->kind == CG_TYPE_CALLABLE) {
+            source_spec = inner.type->user_spec;
+            if (source_spec != NULL &&
+                (source_spec == target_spec ||
+                 cg_callable_specs_signature_compatible(source_spec, target_spec))) {
+                if (source_spec != target_spec) {
+                    Buf cast_expr;
 
-            er_free(&inner);
-            cgtype_free(target);
-            return ok;
+                    buf_init(&cast_expr);
+                    buf_append_fmt(&cast_expr,
+                                   "((struct %s *)(%s))",
+                                   target_spec->c_closure_struct_name,
+                                   inner.c_expr);
+                    free(inner.c_expr);
+                    inner.c_expr = cast_expr.data;
+                    if (inner.c_expr == NULL) {
+                        er_free(&inner);
+                        cgtype_free(target);
+                        return cg_fail(cg, e->token, "codegen: out of memory");
+                    }
+                }
+                cgtype_free(inner.type);
+                inner.type = target;
+                *out = inner;
+                return true;
+            }
         }
         er_free(&inner);
         cgtype_free(target);

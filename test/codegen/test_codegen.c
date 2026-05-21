@@ -3210,9 +3210,8 @@ static void test_callable_spec_other_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengCallableRewrap__") != NULL);
+    ASSERT(strstr(out.c_source, "FengCallableRewrap__") == NULL);
     ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs8__MapperB") != NULL);
-    ASSERT(strstr(out.c_source, "feng_assign((void **)&") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -3265,7 +3264,7 @@ static void test_callable_spec_other_field_read_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengCallableRewrap__") != NULL);
+    ASSERT(strstr(out.c_source, "FengCallableRewrap__") == NULL);
     ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs9__MapperB") != NULL);
     compile_generated_c_or_die(out.c_source);
 

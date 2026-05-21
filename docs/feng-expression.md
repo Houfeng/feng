@@ -155,6 +155,7 @@ Feng 采用与 C 相同风格的显式转换语法:
 - `bool` 不参与数值显式转换,不能将数值直接转换为 `bool`,也不能将 `bool` 转换为数值类型。
 - 数组的显式转换资格与限制统一见 [Feng 内建类型规范](./feng-builtin-type.md) 中的数组规则; 本章不重复展开数组转换细则。
 - 对象形状 `spec` 的显式转换资格与限制统一见 [Feng 语言 `spec` 规范](./feng-spec.md); 本章不重复展开 `type -> spec` 与 `spec -> 父 spec` 的细则。
+- callable-form `spec` 的显式转换资格与零转发要求统一见 [Feng 语言 `spec` 规范](./feng-spec.md); 对实例化后签名完全一致的 callable-form `spec`,显式转换只改变静态视角,不得构造新的 wrapper/closure 或增加额外调用转发。
 - `string`、数组、`type`、`@abi type` 与数值类型之间不支持数值转换。
 
 ```feng
