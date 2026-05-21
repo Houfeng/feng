@@ -1,7 +1,7 @@
 # Feng Runtime API 泛型待开发项
 
 > 本文档用于整理 `@runtime extern fn` 的泛型支持方向、ABI 边界、实现步骤与验收口径。
-> [dev/feng-runtime-interop-pending.md](./feng-runtime-interop-pending.md) 是 `@runtime extern fn` 总体互操作方案；本文只补充 runtime API 泛型能力，不重复定义 `@runtime` 的目标注解、非公开定位与 contract 白名单规则。
+> [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 是 `@runtime extern fn` 总体互操作方案；本文只补充 runtime API 泛型能力，不重复定义 `@runtime` 的目标注解、非公开定位与 contract 白名单规则。
 
 ## 1. 当前前提
 
@@ -239,7 +239,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 - [x] 明确裸 `T` 参数、裸 `T` 返回值、`T[]` 参数、`T[]` 返回值的 C contract carrier，以及隐藏 `FengGenericParamDescriptor` 参数顺序。
 - [x] 明确 runtime 泛型 descriptor 传递与普通泛型一致：多类型参数平铺、按声明顺序传递，嵌套泛型首版不展开为递归 descriptor payload。
 - [x] 明确 descriptor 与 `src/runtime/feng_runtime_contract.inc` 的关系：contract 白名单仍是唯一允许符号来源，`FengGenericParamDescriptor` 是泛型 contract 符号的隐藏 ABI 参数。
-- [ ] 更新 [dev/feng-runtime-interop-pending.md](./feng-runtime-interop-pending.md) 中的 runtime lowering 章节，只做引用，不重复展开本文细节。
+- [ ] 更新 [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 中的 runtime lowering 章节，只做引用，不重复展开本文细节。
 
 验收口径：
 

@@ -22,5 +22,5 @@ Global:
   -h, --help      Display this message.
   -v, --version   Display version information.
 
-Protocol:  
+Protocol:
   feng lsp [--stdio]

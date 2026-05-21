@@ -346,11 +346,11 @@ Compile:
                   [--release]
                   [--keep-ir]
 
-Global options:
+Global:
   -h, --help      Display this message.
   -v, --version   Display version information.
 
-Editor:
+Protocol:
   feng lsp [--stdio]
 ```
 

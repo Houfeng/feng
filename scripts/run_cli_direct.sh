@@ -98,8 +98,8 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing wrapped --keep-ir line"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^Global options:$' "$WORK/help.err"; then
-        echo "FAIL[help] missing Global options section"
+    if ! grep -q '^Global:$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Global section"
         failures=$((failures + 1))
     fi
     if ! grep -q '^  -h, --help      Display this message\.$' "$WORK/help.err"; then
@@ -110,8 +110,8 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing --version description line"
         failures=$((failures + 1))
     fi
-    if ! grep -Eq '^Editor:[[:space:]]*$' "$WORK/help.err"; then
-        echo "FAIL[help] missing Editor section"
+    if ! grep -Eq '^Protocol:[[:space:]]*$' "$WORK/help.err"; then
+        echo "FAIL[help] missing Protocol section"
         failures=$((failures + 1))
     fi
     if ! grep -q '^  feng lsp \[--stdio\]$' "$WORK/help.err"; then
@@ -121,8 +121,8 @@ if expect_ok "help" "$FENG" --help; then
 
     project_line=$(grep -n '^Project:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
     compile_line=$(grep -n '^Compile:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
-    global_line=$(grep -n '^Global options:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
-    editor_line=$(grep -n '^Editor:[[:space:]]*$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    global_line=$(grep -n '^Global:$' "$WORK/help.err" | head -n1 | cut -d: -f1)
+    editor_line=$(grep -n '^Protocol:[[:space:]]*$' "$WORK/help.err" | head -n1 | cut -d: -f1)
     if [[ -z "$project_line" || -z "$compile_line" || -z "$global_line" || -z "$editor_line" ]] \
         || (( project_line >= compile_line )) \
         || (( compile_line >= global_line )) \
