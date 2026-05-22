@@ -72,6 +72,7 @@ use app.api.user;
 
 - `as` 别名仅在当前文件内生效,不改变被导入模块的真实模块名。
 - 使用别名后,该导入目标的公开 `type`、公开 `enum`、顶层 `fn` 与模块级 `let` / `var` 都通过 `别名.成员名` 访问,不再以短名直接注入当前作用域。
+- 在类型引用位置允许使用完整模块路径访问公开 `type` / `enum`,例如 `my.app.user.User`; 完整模块路径本身即确定目标模块,不要求额外编写 `use my.app.user;`。该规则适用于类型标注、函数参数与返回类型、数组元素类型、对象构造目标类型等所有要求类型名的语境。
 - 同一文件内的 `use` 别名必须唯一,不能与其他 `use` 别名重名。
 - 若未使用 `as`,则目标模块的公开 `type`、公开 `enum`、顶层 `fn` 与模块级 `let` / `var` 以短名直接进入当前模块作用域。
 
@@ -82,6 +83,8 @@ use my.utils.math as math;
 let item = user.get_current();
 let total = math.add(1, 2);
 let limit = math.default_limit;
+
+let current: my.app.user.User;
 ```
 
 ## 5 模块级初始化顺序

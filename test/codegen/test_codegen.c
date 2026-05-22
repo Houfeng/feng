@@ -1361,6 +1361,113 @@ static void test_imported_feng_function_prototypes_compile(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_imported_alias_qualified_type_annotations_codegen_compile(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.api;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "use vendor.api as api;\n"
+        "fn keep(user: api.User): api.User {\n"
+        "    return user;\n"
+        "}\n"
+        "fn count(users: api.User[]): int {\n"
+        "    return 0;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_alias_type_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_alias_type_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_imported_full_path_type_annotations_codegen_compile_without_use(void) {
+    static const char *kImportedSource =
+        "pu mod vendor.api;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "mod demo.main;\n"
+        "fn keep(user: vendor.api.User): vendor.api.User {\n"
+        "    return user;\n"
+        "}\n"
+        "fn count(users: vendor.api.User[]): int {\n"
+        "    return 0;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture, "tests/imported_full_path_type_vendor.ff", kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_full_path_type_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_imported_public_let_binding_codegen_compiles(void) {
     static const char *kImportedSource =
         "pu mod vendor.values;\n"
@@ -3877,6 +3984,8 @@ int main(void) {
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
     test_imported_feng_function_prototypes_compile();
+    test_imported_alias_qualified_type_annotations_codegen_compile();
+    test_imported_full_path_type_annotations_codegen_compile_without_use();
     test_imported_public_let_binding_codegen_compiles();
     test_imported_public_var_binding_read_write_codegen_compiles();
     test_imported_public_binding_address_of_codegen_compiles();

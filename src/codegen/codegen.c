@@ -2371,6 +2371,91 @@ static const FengSemanticModule *cg_find_semantic_module_by_segments(const CG *c
     return NULL;
 }
 
+static const FengSemanticModule *cg_find_alias_target_module(const CG *cg,
+                                                             FengSlice alias) {
+    if (cg == NULL || cg->cur_program == NULL) {
+        return NULL;
+    }
+
+    for (size_t use_index = 0U; use_index < cg->cur_program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &cg->cur_program->uses[use_index];
+
+        if (!use_decl->has_alias || !cg_slice_equals(use_decl->alias, alias)) {
+            continue;
+        }
+
+        return cg_find_semantic_module_by_segments(cg,
+                                                   use_decl->segments,
+                                                   use_decl->segment_count);
+    }
+
+    return NULL;
+}
+
+static bool cg_decl_visible_from_full_path(const CG *cg,
+                                           const FengProgram *owner_program,
+                                           FengVisibility visibility) {
+    if (cg == NULL || cg->cur_program == NULL || owner_program == NULL) {
+        return true;
+    }
+    if (owner_program == cg->cur_program ||
+        cg_module_segments_equal(owner_program->module_segments,
+                                 owner_program->module_segment_count,
+                                 cg->cur_program->module_segments,
+                                 cg->cur_program->module_segment_count)) {
+        return true;
+    }
+    return owner_program->module_visibility == FENG_VISIBILITY_PUBLIC &&
+           visibility == FENG_VISIBILITY_PUBLIC;
+}
+
+static bool cg_named_type_ref_targets_owner_program(const CG *cg,
+                                                    const FengTypeRef *ref,
+                                                    const FengProgram *owner_program,
+                                                    FengVisibility visibility,
+                                                    FengSlice decl_name) {
+    const FengSlice *segments;
+    size_t segment_count;
+
+    if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        owner_program == NULL) {
+        return false;
+    }
+
+    segments = ref->as.named.segments;
+    segment_count = ref->as.named.segment_count;
+    if (segment_count == 0U ||
+        !cg_slice_equals(segments[segment_count - 1U], decl_name)) {
+        return false;
+    }
+
+    if (segment_count == 1U) {
+        return cg_decl_visible_from_program(cg, owner_program, visibility);
+    }
+
+    if (segment_count == 2U) {
+        const FengSemanticModule *alias_target =
+            cg_find_alias_target_module(cg, segments[0]);
+
+        if (alias_target != NULL &&
+            cg_module_segments_equal(alias_target->segments,
+                                     alias_target->segment_count,
+                                     owner_program->module_segments,
+                                     owner_program->module_segment_count)) {
+            return cg_decl_visible_from_program(cg, owner_program, visibility);
+        }
+    }
+
+    if (!cg_module_segments_equal(segments,
+                                  segment_count - 1U,
+                                  owner_program->module_segments,
+                                  owner_program->module_segment_count)) {
+        return false;
+    }
+
+    return cg_decl_visible_from_full_path(cg, owner_program, visibility);
+}
+
 static const FengProgram *cg_find_decl_owner_program(const CG *cg, const FengDecl *decl) {
     size_t module_index;
 
@@ -2563,7 +2648,6 @@ static const FengDecl *cg_resolve_imported_module_binding_decl(const CG *cg,
                 }
             }
             return NULL;
-
         default:
             return NULL;
     }
@@ -2860,6 +2944,107 @@ static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *d
     return NULL;
 }
 
+static const UserType *cg_find_user_type_by_ref(const CG *cg,
+                                                const FengTypeRef *ref) {
+    const UserType *visible = NULL;
+
+    if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < cg->user_type_count; ++i) {
+        const UserType *ut = &cg->user_types[i];
+
+        if (ut->is_generic_instance || ut->decl == NULL ||
+            ut->decl->kind != FENG_DECL_TYPE || ut->owner_program == NULL ||
+            !cg_named_type_ref_targets_owner_program(cg,
+                                                     ref,
+                                                     ut->owner_program,
+                                                     ut->decl->visibility,
+                                                     ut->decl->as.type_decl.name)) {
+            continue;
+        }
+        if (cg->cur_program != NULL && ut->owner_program == cg->cur_program) {
+            return ut;
+        }
+        if (visible == NULL) {
+            visible = ut;
+        }
+    }
+
+    return visible;
+}
+
+static const UserSpec *cg_find_user_spec_by_ref(const CG *cg,
+                                                const FengTypeRef *ref) {
+    const UserSpec *visible = NULL;
+
+    if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < cg->user_spec_count; ++i) {
+        const UserSpec *us = &cg->user_specs[i];
+
+        if (us->is_generic_instance || us->decl == NULL ||
+            us->decl->kind != FENG_DECL_SPEC || us->owner_program == NULL ||
+            !cg_named_type_ref_targets_owner_program(cg,
+                                                     ref,
+                                                     us->owner_program,
+                                                     us->decl->visibility,
+                                                     us->decl->as.spec_decl.name)) {
+            continue;
+        }
+        if (cg->cur_program != NULL && us->owner_program == cg->cur_program) {
+            return us;
+        }
+        if (visible == NULL) {
+            visible = us;
+        }
+    }
+
+    return visible;
+}
+
+static const FengDecl *cg_find_enum_decl_by_ref(const CG *cg,
+                                                const FengTypeRef *ref) {
+    const FengDecl *visible = NULL;
+
+    if (cg == NULL || cg->analysis == NULL || ref == NULL ||
+        ref->kind != FENG_TYPE_REF_NAMED) {
+        return NULL;
+    }
+
+    for (size_t module_index = 0U; module_index < cg->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &cg->analysis->modules[module_index];
+
+        for (size_t program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_ENUM ||
+                    !cg_named_type_ref_targets_owner_program(cg,
+                                                             ref,
+                                                             program,
+                                                             decl->visibility,
+                                                             decl->as.enum_decl.name)) {
+                    continue;
+                }
+                if (cg->cur_program != NULL && program == cg->cur_program) {
+                    return decl;
+                }
+                if (visible == NULL) {
+                    visible = decl;
+                }
+            }
+        }
+    }
+
+    return visible;
+}
+
 static bool cg_resolve_global_binding_type(CG *cg,
                                            const FengDecl *decl,
                                            CGType **out_type) {
@@ -2876,81 +3061,6 @@ static bool cg_resolve_global_binding_type(CG *cg,
 
     binding = &decl->as.binding;
     if (binding->type != NULL) {
-        if (binding->type->kind == FENG_TYPE_REF_NAMED &&
-            binding->type->as.named.segment_count > 1U &&
-            binding->type->as.named.type_arg_count == 0U) {
-            const FengSlice *segments = binding->type->as.named.segments;
-            const size_t segment_count = binding->type->as.named.segment_count;
-            const FengSlice type_name = segments[segment_count - 1U];
-            const FengSemanticModule *owner_module =
-                cg_find_semantic_module_by_segments(cg, segments, segment_count - 1U);
-
-            for (size_t i = 0; i < cg->user_type_count; ++i) {
-                const UserType *ut = &cg->user_types[i];
-
-                if (ut->decl == NULL || ut->decl->kind != FENG_DECL_TYPE ||
-                    ut->owner_program == NULL || ut->is_generic_instance) {
-                    continue;
-                }
-                if (!cg_module_segments_equal(ut->owner_program->module_segments,
-                                              ut->owner_program->module_segment_count,
-                                              segments,
-                                              segment_count - 1U) ||
-                    !cg_slice_equals(ut->decl->as.type_decl.name, type_name)) {
-                    continue;
-                }
-                *out_type = cgtype_new(CG_TYPE_OBJECT);
-                if (*out_type == NULL) {
-                    return false;
-                }
-                (*out_type)->user = ut;
-                return true;
-            }
-
-            for (size_t i = 0; i < cg->user_spec_count; ++i) {
-                const UserSpec *us = &cg->user_specs[i];
-
-                if (us->decl == NULL || us->decl->kind != FENG_DECL_SPEC ||
-                    us->owner_program == NULL || us->is_generic_instance) {
-                    continue;
-                }
-                if (!cg_module_segments_equal(us->owner_program->module_segments,
-                                              us->owner_program->module_segment_count,
-                                              segments,
-                                              segment_count - 1U) ||
-                    !cg_slice_equals(us->decl->as.spec_decl.name, type_name)) {
-                    continue;
-                }
-                *out_type = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
-                                       ? CG_TYPE_CALLABLE
-                                       : CG_TYPE_SPEC);
-                if (*out_type == NULL) {
-                    return false;
-                }
-                (*out_type)->user_spec = us;
-                return true;
-            }
-
-            if (owner_module != NULL) {
-                for (size_t program_index = 0U;
-                     program_index < owner_module->program_count;
-                     ++program_index) {
-                    const FengProgram *program = owner_module->programs[program_index];
-
-                    for (size_t decl_index = 0U;
-                         decl_index < program->declaration_count;
-                         ++decl_index) {
-                        const FengDecl *enum_decl = program->declarations[decl_index];
-
-                        if (enum_decl->kind == FENG_DECL_ENUM &&
-                            cg_slice_equals(enum_decl->as.enum_decl.name, type_name)) {
-                            *out_type = cgtype_new_enum(enum_decl);
-                            return *out_type != NULL;
-                        }
-                    }
-                }
-            }
-        }
         return cg_resolve_type(cg, binding->type, &decl->token, out_type);
     }
 
@@ -3846,22 +3956,30 @@ static bool cg_append_type_ref_symbol(Buf *out, const FengTypeRef *ref) {
 
 static const GenericTypeDecl *cg_find_generic_type_decl(CG *cg,
                                                         const FengTypeRef *ref) {
-    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
-        ref->as.named.segment_count != 1U) {
+    const GenericTypeDecl *visible = NULL;
+
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
         return NULL;
     }
-    const FengSlice name = ref->as.named.segments[0];
-    const GenericTypeDecl *visible = NULL;
+
     for (size_t i = 0; i < cg->generic_type_decl_count; ++i) {
         const GenericTypeDecl *entry = &cg->generic_type_decls[i];
         const FengDecl *decl = entry->decl;
-        if (decl == NULL || decl->kind != FENG_DECL_TYPE) continue;
-        if (!cg_module_segments_equal(&decl->as.type_decl.name, 1U, &name, 1U)) continue;
+
+        if (decl == NULL || decl->kind != FENG_DECL_TYPE ||
+            entry->owner_program == NULL ||
+            !cg_named_type_ref_targets_owner_program(cg,
+                                                     ref,
+                                                     entry->owner_program,
+                                                     decl->visibility,
+                                                     decl->as.type_decl.name)) {
+            continue;
+        }
         if (cg->cur_program != NULL && entry->owner_program == cg->cur_program) {
             return entry;
         }
-        if (!cg->cur_program || cg_program_can_see(cg->cur_program, entry->owner_program)) {
-            if (visible == NULL) visible = entry;
+        if (visible == NULL) {
+            visible = entry;
         }
     }
     return visible;
@@ -3879,22 +3997,30 @@ static const GenericTypeDecl *cg_find_generic_type_decl_by_decl(CG *cg,
 
 static const GenericSpecDecl *cg_find_generic_spec_decl(CG *cg,
                                                         const FengTypeRef *ref) {
-    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
-        ref->as.named.segment_count != 1U) {
+    const GenericSpecDecl *visible = NULL;
+
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
         return NULL;
     }
-    const FengSlice name = ref->as.named.segments[0];
-    const GenericSpecDecl *visible = NULL;
+
     for (size_t i = 0; i < cg->generic_spec_decl_count; ++i) {
         const GenericSpecDecl *entry = &cg->generic_spec_decls[i];
         const FengDecl *decl = entry->decl;
-        if (decl == NULL || decl->kind != FENG_DECL_SPEC) continue;
-        if (!cg_module_segments_equal(&decl->as.spec_decl.name, 1U, &name, 1U)) continue;
+
+        if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
+            entry->owner_program == NULL ||
+            !cg_named_type_ref_targets_owner_program(cg,
+                                                     ref,
+                                                     entry->owner_program,
+                                                     decl->visibility,
+                                                     decl->as.spec_decl.name)) {
+            continue;
+        }
         if (cg->cur_program != NULL && entry->owner_program == cg->cur_program) {
             return entry;
         }
-        if (!cg->cur_program || cg_program_can_see(cg->cur_program, entry->owner_program)) {
-            if (visible == NULL) visible = entry;
+        if (visible == NULL) {
+            visible = entry;
         }
     }
     return visible;
@@ -4759,11 +4885,9 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         return *out_type != NULL;
     }
     if (ref->kind == FENG_TYPE_REF_NAMED) {
-        if (ref->as.named.segment_count != 1) {
-            return cg_fail(cg, ref->token,
-                "codegen: qualified type names not supported in Phase 1A");
-        }
-        const FengSlice *seg = &ref->as.named.segments[0];
+        const size_t segment_count = ref->as.named.segment_count;
+        const FengSlice *seg = &ref->as.named.segments[segment_count - 1U];
+
         if (ref->as.named.type_arg_count > 0U) {
             const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
             bool uses_active_context = false;
@@ -4811,7 +4935,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         }
         /* G6: when inside a generic function body, check type parameter names
          * first so they shadow any same-named types in scope. */
-        if (ref->as.named.type_arg_count == 0) {
+        if (ref->as.named.type_arg_count == 0 && segment_count == 1U) {
             for (size_t i = 0; i < cg->generic_fn_type_param_count; i++) {
                 const char *tp;
                 if (!cg->in_generic_fn) break;
@@ -4837,15 +4961,22 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 }
             }
         }
-        for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; i++) {
-            const BuiltinTypeMap *m = &k_builtin_types[i];
-            if (strlen(m->name) == seg->length &&
-                memcmp(m->name, seg->data, seg->length) == 0) {
-                *out_type = cgtype_new(m->kind);
-                return *out_type != NULL;
+
+        if (segment_count == 1U) {
+            for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; i++) {
+                const BuiltinTypeMap *m = &k_builtin_types[i];
+
+                if (strlen(m->name) == seg->length &&
+                    memcmp(m->name, seg->data, seg->length) == 0) {
+                    *out_type = cgtype_new(m->kind);
+                    return *out_type != NULL;
+                }
             }
         }
-        const UserType *ut = cg_find_user_type(cg, seg->data, seg->length);
+
+        const UserType *ut = segment_count == 1U
+            ? cg_find_user_type(cg, seg->data, seg->length)
+            : cg_find_user_type_by_ref(cg, ref);
         if (ut) {
             CGType *t = cgtype_new(CG_TYPE_OBJECT);
             if (!t) return false;
@@ -4853,7 +4984,10 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
             *out_type = t;
             return true;
         }
-        const UserSpec *us = cg_find_user_spec(cg, seg->data, seg->length);
+
+        const UserSpec *us = segment_count == 1U
+            ? cg_find_user_spec(cg, seg->data, seg->length)
+            : cg_find_user_spec_by_ref(cg, ref);
         if (us) {
             CGType *t = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
                                    ? CG_TYPE_CALLABLE
@@ -4863,8 +4997,11 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
             *out_type = t;
             return true;
         }
+
         {
-            const FengDecl *enum_decl = cg_find_visible_enum_decl(cg, seg->data, seg->length);
+            const FengDecl *enum_decl = segment_count == 1U
+                ? cg_find_visible_enum_decl(cg, seg->data, seg->length)
+                : cg_find_enum_decl_by_ref(cg, ref);
 
             if (enum_decl != NULL) {
                 *out_type = cgtype_new_enum(enum_decl);
@@ -6540,12 +6677,12 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
         return cg_register_builtin_fit_shell(cg, decl, target_ref);
     }
 
-    if (target_ref->kind != FENG_TYPE_REF_NAMED ||
-        target_ref->as.named.segment_count != 1) {
+    if (target_ref->kind != FENG_TYPE_REF_NAMED) {
         return cg_fail(cg, decl->token,
-            "codegen: only single-segment named or array fit targets are supported");
+            "codegen: only named or array fit targets are supported");
     }
-    if (cg_is_builtin_named_fit_target(target_ref->as.named.segments[0])) {
+    if (target_ref->as.named.segment_count == 1U &&
+        cg_is_builtin_named_fit_target(target_ref->as.named.segments[0])) {
         return cg_register_builtin_fit_shell(cg, decl, target_ref);
     }
     if (target_ref->as.named.type_arg_count > 0U) {
@@ -6579,8 +6716,11 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
         return true;
     }
 
-    const FengSlice *seg = &target_ref->as.named.segments[0];
-    const UserType *target = cg_find_user_type(cg, seg->data, seg->length);
+    const FengSlice *seg =
+        &target_ref->as.named.segments[target_ref->as.named.segment_count - 1U];
+    const UserType *target = target_ref->as.named.segment_count == 1U
+        ? cg_find_user_type(cg, seg->data, seg->length)
+        : cg_find_user_type_by_ref(cg, target_ref);
     if (!target) {
         CGType *resolved_target = NULL;
 
@@ -11014,6 +11154,105 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr && out->type;
 }
 
+static size_t cg_expr_path_segment_count(const FengExpr *expr) {
+    if (expr == NULL) {
+        return 0U;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return 1U;
+        case FENG_EXPR_MEMBER: {
+            size_t object_count = cg_expr_path_segment_count(expr->as.member.object);
+
+            return object_count == 0U ? 0U : object_count + 1U;
+        }
+        default:
+            return 0U;
+    }
+}
+
+static bool cg_expr_collect_path_segments(const FengExpr *expr,
+                                          FengSlice *segments,
+                                          size_t segment_count,
+                                          size_t *next_index) {
+    if (expr == NULL || segments == NULL || next_index == NULL ||
+        *next_index >= segment_count) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            segments[(*next_index)++] = expr->as.identifier;
+            return true;
+        case FENG_EXPR_MEMBER:
+            if (!cg_expr_collect_path_segments(expr->as.member.object,
+                                               segments,
+                                               segment_count,
+                                               next_index) ||
+                *next_index >= segment_count) {
+                return false;
+            }
+            segments[(*next_index)++] = expr->as.member.member;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static FengSlice *cg_expr_path_segments_alloc(const FengExpr *expr, size_t *out_count) {
+    size_t count = cg_expr_path_segment_count(expr);
+    FengSlice *segments;
+    size_t next_index = 0U;
+
+    if (out_count != NULL) {
+        *out_count = 0U;
+    }
+    if (count == 0U) {
+        return NULL;
+    }
+
+    segments = (FengSlice *)calloc(count, sizeof(*segments));
+    if (segments == NULL) {
+        return NULL;
+    }
+    if (!cg_expr_collect_path_segments(expr, segments, count, &next_index) ||
+        next_index != count) {
+        free(segments);
+        return NULL;
+    }
+
+    if (out_count != NULL) {
+        *out_count = count;
+    }
+    return segments;
+}
+
+static const UserType *cg_find_user_type_by_expr_path(CG *cg, const FengExpr *expr) {
+    size_t segment_count = 0U;
+    FengSlice *segments = cg_expr_path_segments_alloc(expr, &segment_count);
+    const UserType *user_type = NULL;
+
+    if (segments == NULL || segment_count == 0U) {
+        free(segments);
+        return NULL;
+    }
+
+    if (segment_count == 1U) {
+        user_type = cg_find_user_type(cg, segments[0].data, segments[0].length);
+    } else {
+        FengTypeRef ref;
+
+        memset(&ref, 0, sizeof(ref));
+        ref.token = expr->token;
+        ref.kind = FENG_TYPE_REF_NAMED;
+        ref.as.named.segments = segments;
+        ref.as.named.segment_count = segment_count;
+        user_type = cg_find_user_type_by_ref(cg, &ref);
+    }
+
+    free(segments);
+    return user_type;
+}
+
 static bool cg_resolve_object_literal_target_user_type(CG *cg,
                                                        const FengExpr *target,
                                                        const UserType **out) {
@@ -11023,22 +11262,34 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
             "codegen: missing object literal target");
     }
 
-    if (target->kind == FENG_EXPR_IDENTIFIER) {
-        const FengSlice tn = target->as.identifier;
-        const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
+    if (target->kind == FENG_EXPR_IDENTIFIER || target->kind == FENG_EXPR_MEMBER) {
+        size_t segment_count = 0U;
+        FengSlice *segments = cg_expr_path_segments_alloc(target, &segment_count);
+        FengSlice tn = segment_count > 0U
+            ? segments[segment_count - 1U]
+            : (FengSlice){target->token.lexeme, target->token.length};
+        const UserType *ut = cg_find_user_type_by_expr_path(cg, target);
+
         if (!ut) {
+            free(segments);
             return cg_fail(cg, target->token,
                 "codegen: unknown type '%.*s' in object literal",
                 (int)tn.length, tn.data);
         }
+        free(segments);
         if (out != NULL) *out = ut;
         return true;
     }
 
     if (target->kind == FENG_EXPR_CALL && target->as.call.callee != NULL &&
-        target->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
+        (target->as.call.callee->kind == FENG_EXPR_IDENTIFIER ||
+         target->as.call.callee->kind == FENG_EXPR_MEMBER)) {
         const FengExpr *callee = target->as.call.callee;
-        const FengSlice tn = callee->as.identifier;
+        size_t segment_count = 0U;
+        FengSlice *segments = cg_expr_path_segments_alloc(callee, &segment_count);
+        FengSlice tn = segment_count > 0U
+            ? segments[segment_count - 1U]
+            : (FengSlice){callee->token.lexeme, callee->token.length};
         const FengResolvedCallable *rc = &target->as.call.resolved_callable;
 
         if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
@@ -11051,21 +11302,25 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
                 target->as.call.explicit_type_args,
                 target->as.call.explicit_type_arg_count);
             if (ut == NULL) {
+                free(segments);
                 return cg_fail(cg, target->token,
                     "codegen: generic type object literal instance for '%.*s' was not registered",
                     (int)tn.length, tn.data);
             }
+            free(segments);
             if (out != NULL) *out = ut;
             return true;
         }
 
         {
-            const UserType *ut = cg_find_user_type(cg, tn.data, tn.length);
+            const UserType *ut = cg_find_user_type_by_expr_path(cg, callee);
             if (!ut) {
+                free(segments);
                 return cg_fail(cg, target->token,
                     "codegen: unknown type '%.*s' in object literal",
                     (int)tn.length, tn.data);
             }
+            free(segments);
             if (out != NULL) *out = ut;
             return true;
         }

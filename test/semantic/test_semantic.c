@@ -6216,6 +6216,92 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_external_full_path_type_refs_do_not_require_use(void) {
+    const char *external_source =
+        "pu mod vendor.api;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "fn id(user: vendor.api.User): vendor.api.User {\n"
+        "    return user;\n"
+        "}\n"
+        "fn count(users: vendor.api.User[]): int {\n"
+        "    return 0;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_full_path_user.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_full_path_main.f", main_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_alias_type_ref_still_requires_use_alias(void) {
+    const char *external_source =
+        "pu mod vendor.api;\n"
+        "pu type User {\n"
+        "    pu let name: string;\n"
+        "}\n";
+    const char *main_source =
+        "mod demo.main;\n"
+        "fn bad(user: api.User): int {\n"
+        "    return 0;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_alias_requires_use.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_alias_requires_use_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(errors != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_external_imported_declared_specs_enable_spec_coercion(void) {
     const char *external_source =
         "pu mod vendor.api;\n"
@@ -12918,6 +13004,8 @@ int main(void) {
     test_external_imported_function_argument_type_mismatch();
     test_external_imported_function_argument_type_match();
     test_external_imported_field_type_participates_in_typecheck();
+    test_external_full_path_type_refs_do_not_require_use();
+    test_external_alias_type_ref_still_requires_use_alias();
     test_external_imported_declared_specs_enable_spec_coercion();
     test_external_imported_enum_item_participates_in_typecheck();
     test_external_imported_enum_conflicts_with_local_type_name();

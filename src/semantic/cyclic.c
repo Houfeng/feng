@@ -36,6 +36,7 @@
 
 typedef struct CycNode {
     const FengSemanticModule *module;
+    const FengProgram        *owner_program;
     const FengDecl           *decl;          /* FENG_DECL_TYPE */
     /* Out-edges into Edges[] (range [edge_begin, edge_end)). */
     size_t edge_begin;
@@ -108,16 +109,90 @@ static bool cyc_edges_reserve(CycGraph *g, size_t additional) {
     return true;
 }
 
-static size_t cyc_node_index_of(const CycGraph *g, const FengDecl *decl) {
-    /* Linear scan: typical projects have a handful of types per module. If
-     * this ever becomes hot we can switch to a pointer-keyed hash table. */
-    size_t i;
-    for (i = 0U; i < g->node_count; ++i) {
-        if (g->nodes[i].decl == decl) {
-            return i;
+static bool cyc_slice_equals(FengSlice a, FengSlice b) {
+    return a.length == b.length &&
+           (a.length == 0U || memcmp(a.data, b.data, a.length) == 0);
+}
+
+static bool cyc_path_equals(const FengSlice *a, size_t an,
+                            const FengSlice *b, size_t bn) {
+    if (an != bn) return false;
+    for (size_t i = 0U; i < an; ++i) {
+        if (!cyc_slice_equals(a[i], b[i])) {
+            return false;
         }
     }
-    return SIZE_MAX;
+    return true;
+}
+
+static const FengSemanticModule *cyc_find_module_by_segments(
+    const FengSemanticAnalysis *analysis,
+    const FengSlice *segments,
+    size_t segment_count) {
+    if (analysis == NULL) {
+        return NULL;
+    }
+    for (size_t module_index = 0U; module_index < analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+
+        if (cyc_path_equals(module->segments,
+                            module->segment_count,
+                            segments,
+                            segment_count)) {
+            return module;
+        }
+    }
+    return NULL;
+}
+
+static const FengSemanticModule *cyc_find_alias_target_module(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *owner_program,
+    FengSlice alias) {
+    if (analysis == NULL || owner_program == NULL) {
+        return NULL;
+    }
+    for (size_t use_index = 0U; use_index < owner_program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &owner_program->uses[use_index];
+
+        if (!use_decl->has_alias || !cyc_slice_equals(use_decl->alias, alias)) {
+            continue;
+        }
+        return cyc_find_module_by_segments(analysis,
+                                           use_decl->segments,
+                                           use_decl->segment_count);
+    }
+    return NULL;
+}
+
+static bool cyc_module_visible_by_full_path(const FengProgram *owner_program,
+                                            const FengSemanticModule *target) {
+    if (owner_program == NULL || target == NULL) {
+        return false;
+    }
+    if (cyc_path_equals(owner_program->module_segments,
+                        owner_program->module_segment_count,
+                        target->segments,
+                        target->segment_count)) {
+        return true;
+    }
+    return target->visibility == FENG_VISIBILITY_PUBLIC;
+}
+
+static bool cyc_decl_visible_from_program(const FengProgram *owner_program,
+                                          const FengSemanticModule *target_module,
+                                          const FengDecl *decl) {
+    if (owner_program == NULL || target_module == NULL || decl == NULL) {
+        return false;
+    }
+    if (cyc_path_equals(owner_program->module_segments,
+                        owner_program->module_segment_count,
+                        target_module->segments,
+                        target_module->segment_count)) {
+        return true;
+    }
+    return target_module->visibility == FENG_VISIBILITY_PUBLIC &&
+           decl->visibility == FENG_VISIBILITY_PUBLIC;
 }
 
 /* --- Type lookup ------------------------------------------------------- */
@@ -131,43 +206,71 @@ static const FengTypeRef *cyc_unwrap_array(const FengTypeRef *ref) {
 
 /* Resolve `ref` (after array unwrapping) to a user-type node index, or
  * SIZE_MAX if it does not refer to a known user type. Resolution honours
- * the `use` aliases visible to the program that owns `decl_module`'s decls
- * — but for the simple Phase 1A surface, type names live either in the same
- * module or arrive through `use`. We approximate by scanning all modules for
- * a type whose name matches the (single-segment) reference; ambiguity is
- * already rejected by the regular semantic pass, so the first match is the
- * intended target. */
+ * the `use` aliases visible to the program that owns the referencing type.
+ * Full module paths resolve directly to public modules/types and do not
+ * require `use`. Ambiguity is already rejected by the regular semantic pass,
+ * so the first visible match is the intended target. */
 static size_t cyc_resolve_named(const CycGraph *g,
                                 const FengSemanticAnalysis *analysis,
+                                const FengProgram *owner_program,
                                 const FengTypeRef *ref) {
+    const FengSlice *segments;
+    size_t segment_count;
+    FengSlice name;
+
     if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
         return SIZE_MAX;
     }
-    /* Qualified names are not supported on the Phase 1A surface; if they
-     * ever appear here, treat them as opaque (no edge). */
-    if (ref->as.named.segment_count != 1U) {
+    segments = ref->as.named.segments;
+    segment_count = ref->as.named.segment_count;
+    if (segment_count == 0U) {
         return SIZE_MAX;
     }
-    const FengSlice *seg = &ref->as.named.segments[0];
 
-    size_t mi;
-    for (mi = 0U; mi < analysis->module_count; ++mi) {
-        const FengSemanticModule *mod = &analysis->modules[mi];
-        size_t pi;
-        for (pi = 0U; pi < mod->program_count; ++pi) {
-            const FengProgram *prog = mod->programs[pi];
-            size_t di;
-            for (di = 0U; di < prog->declaration_count; ++di) {
-                const FengDecl *d = prog->declarations[di];
-                if (d->kind != FENG_DECL_TYPE) {
-                    continue;
-                }
-                const FengSlice *n = &d->as.type_decl.name;
-                if (n->length == seg->length &&
-                    memcmp(n->data, seg->data, seg->length) == 0) {
-                    return cyc_node_index_of(g, d);
+    name = segments[segment_count - 1U];
+    if (segment_count == 1U) {
+        for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+            const CycNode *node = &g->nodes[node_index];
+
+            if (cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+                cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+                return node_index;
+            }
+        }
+        return SIZE_MAX;
+    }
+
+    if (segment_count == 2U) {
+        const FengSemanticModule *alias_target =
+            cyc_find_alias_target_module(analysis, owner_program, segments[0]);
+
+        if (alias_target != NULL) {
+            for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+                const CycNode *node = &g->nodes[node_index];
+
+                if (node->module == alias_target &&
+                    cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+                    cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+                    return node_index;
                 }
             }
+            return SIZE_MAX;
+        }
+    }
+
+    const FengSemanticModule *target_module =
+        cyc_find_module_by_segments(analysis, segments, segment_count - 1U);
+    if (target_module == NULL ||
+        !cyc_module_visible_by_full_path(owner_program, target_module)) {
+        return SIZE_MAX;
+    }
+    for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+        const CycNode *node = &g->nodes[node_index];
+
+        if (node->module == target_module &&
+            cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+            cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+            return node_index;
         }
     }
     return SIZE_MAX;
@@ -197,6 +300,7 @@ static bool cyc_collect_nodes(CycGraph *g, const FengSemanticAnalysis *analysis)
                 }
                 CycNode *n = &g->nodes[g->node_count++];
                 n->module = mod;
+                n->owner_program = prog;
                 n->decl = d;
                 n->edge_begin = 0U;
                 n->edge_end = 0U;
@@ -225,7 +329,7 @@ static bool cyc_collect_edges(CycGraph *g, const FengSemanticAnalysis *analysis)
                 continue;
             }
             const FengTypeRef *fref = cyc_unwrap_array(m->as.field.type);
-            size_t target = cyc_resolve_named(g, analysis, fref);
+            size_t target = cyc_resolve_named(g, analysis, node->owner_program, fref);
             if (target == SIZE_MAX) {
                 continue;
             }

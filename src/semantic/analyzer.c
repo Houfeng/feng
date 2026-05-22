@@ -1069,6 +1069,834 @@ static bool add_external_module(FengSemanticAnalysis *analysis,
     return true;
 }
 
+static bool program_has_use_alias(const FengProgram *program, FengSlice alias) {
+    if (program == NULL) {
+        return false;
+    }
+    for (size_t use_index = 0U; use_index < program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+
+        if (use_decl->has_alias && slice_equals(use_decl->alias, alias)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t expr_path_segment_count(const FengExpr *expr) {
+    if (expr == NULL) {
+        return 0U;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return 1U;
+        case FENG_EXPR_MEMBER: {
+            size_t object_count = expr_path_segment_count(expr->as.member.object);
+
+            return object_count == 0U ? 0U : object_count + 1U;
+        }
+        default:
+            return 0U;
+    }
+}
+
+static bool expr_collect_path_segments(const FengExpr *expr,
+                                       FengSlice *segments,
+                                       size_t segment_count,
+                                       size_t *next_index) {
+    if (expr == NULL || segments == NULL || next_index == NULL ||
+        *next_index >= segment_count) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            segments[(*next_index)++] = expr->as.identifier;
+            return true;
+        case FENG_EXPR_MEMBER:
+            if (!expr_collect_path_segments(expr->as.member.object,
+                                            segments,
+                                            segment_count,
+                                            next_index) ||
+                *next_index >= segment_count) {
+                return false;
+            }
+            segments[(*next_index)++] = expr->as.member.member;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static FengSlice *expr_path_segments_alloc(const FengExpr *expr, size_t *out_count) {
+    size_t count = expr_path_segment_count(expr);
+    FengSlice *segments;
+    size_t next_index = 0U;
+
+    if (out_count != NULL) {
+        *out_count = 0U;
+    }
+    if (count == 0U) {
+        return NULL;
+    }
+
+    segments = (FengSlice *)calloc(count, sizeof(*segments));
+    if (segments == NULL) {
+        return NULL;
+    }
+    if (!expr_collect_path_segments(expr, segments, count, &next_index) ||
+        next_index != count) {
+        free(segments);
+        return NULL;
+    }
+
+    if (out_count != NULL) {
+        *out_count = count;
+    }
+    return segments;
+}
+
+static bool inject_external_module_by_path(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengSlice *segments,
+    size_t segment_count) {
+    const FengSemanticModule *ext;
+
+    if (analysis == NULL || imported_query == NULL || imported_query->get_module == NULL ||
+        segments == NULL || segment_count == 0U) {
+        return true;
+    }
+    if (find_module_index_by_path(analysis, segments, segment_count) < analysis->module_count) {
+        return true;
+    }
+
+    ext = imported_query->get_module(imported_query->user, segments, segment_count);
+    if (ext == NULL) {
+        return true;
+    }
+
+    return add_external_module(analysis, ext);
+}
+
+static bool inject_external_modules_from_type_ref(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengTypeRef *type_ref);
+
+static bool inject_external_modules_from_expr(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengExpr *expr);
+
+static bool inject_external_modules_from_block(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengBlock *block);
+
+static bool inject_external_modules_from_type_params(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengTypeParam *type_params,
+    size_t type_param_count) {
+    for (size_t i = 0U; i < type_param_count; ++i) {
+        if (!inject_external_modules_from_type_ref(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   type_params[i].constraint)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool inject_external_modules_from_callable(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengCallableSignature *callable) {
+    if (callable == NULL) {
+        return true;
+    }
+    if (!inject_external_modules_from_type_params(analysis,
+                                                  imported_query,
+                                                  program,
+                                                  callable->type_params,
+                                                  callable->type_param_count)) {
+        return false;
+    }
+    for (size_t param_index = 0U; param_index < callable->param_count; ++param_index) {
+        if (!inject_external_modules_from_type_ref(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   callable->params[param_index].type)) {
+            return false;
+        }
+    }
+    return inject_external_modules_from_type_ref(analysis,
+                                                imported_query,
+                                                program,
+                                                callable->return_type) &&
+           inject_external_modules_from_block(analysis,
+                                             imported_query,
+                                             program,
+                                             callable->body);
+}
+
+static bool inject_external_modules_from_type_ref(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengTypeRef *type_ref) {
+    if (type_ref == NULL) {
+        return true;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (type_ref->as.named.segment_count > 1U &&
+                !(type_ref->as.named.segment_count == 2U &&
+                  program_has_use_alias(program, type_ref->as.named.segments[0])) &&
+                !inject_external_module_by_path(analysis,
+                                                imported_query,
+                                                type_ref->as.named.segments,
+                                                type_ref->as.named.segment_count - 1U)) {
+                return false;
+            }
+            for (size_t arg_index = 0U;
+                 arg_index < type_ref->as.named.type_arg_count;
+                 ++arg_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           type_ref->as.named.type_args[arg_index])) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return inject_external_modules_from_type_ref(analysis,
+                                                        imported_query,
+                                                        program,
+                                                        type_ref->as.inner);
+    }
+
+    return true;
+}
+
+static bool inject_external_modules_from_binding(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengBinding *binding) {
+    if (binding == NULL) {
+        return true;
+    }
+    return inject_external_modules_from_type_ref(analysis,
+                                                imported_query,
+                                                program,
+                                                binding->type) &&
+           inject_external_modules_from_expr(analysis,
+                                             imported_query,
+                                             program,
+                                             binding->initializer);
+}
+
+static bool inject_external_modules_from_match_labels(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengMatchLabel *labels,
+    size_t label_count) {
+    for (size_t label_index = 0U; label_index < label_count; ++label_index) {
+        const FengMatchLabel *label = &labels[label_index];
+
+        if (!inject_external_modules_from_expr(analysis, imported_query, program, label->value) ||
+            !inject_external_modules_from_expr(analysis, imported_query, program, label->range_low) ||
+            !inject_external_modules_from_expr(analysis, imported_query, program, label->range_high)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool inject_external_modules_from_expr(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengExpr *expr) {
+    if (expr == NULL) {
+        return true;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (size_t item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+                if (!inject_external_modules_from_expr(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       expr->as.array_literal.items[item_index])) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.object_literal.target)) {
+                return false;
+            }
+            for (size_t field_index = 0U;
+                 field_index < expr->as.object_literal.field_count;
+                 ++field_index) {
+                if (!inject_external_modules_from_expr(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       expr->as.object_literal.fields[field_index].value)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_GENERIC_TARGET:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.generic_target.target)) {
+                return false;
+            }
+            for (size_t arg_index = 0U;
+                 arg_index < expr->as.generic_target.type_arg_count;
+                 ++arg_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           expr->as.generic_target.type_args[arg_index])) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_CALL:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.call.callee)) {
+                return false;
+            }
+            for (size_t arg_index = 0U; arg_index < expr->as.call.arg_count; ++arg_index) {
+                if (!inject_external_modules_from_expr(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       expr->as.call.args[arg_index])) {
+                    return false;
+                }
+            }
+            for (size_t type_arg_index = 0U;
+                 type_arg_index < expr->as.call.explicit_type_arg_count;
+                 ++type_arg_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           expr->as.call.explicit_type_args[type_arg_index])) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_MEMBER:
+            {
+                size_t path_segment_count = 0U;
+                FengSlice *path_segments = expr_path_segments_alloc(expr, &path_segment_count);
+                bool ok = true;
+
+                if (path_segments != NULL && path_segment_count > 1U &&
+                    !(path_segment_count == 2U && program_has_use_alias(program, path_segments[0]))) {
+                    ok = inject_external_module_by_path(analysis,
+                                                        imported_query,
+                                                        path_segments,
+                                                        path_segment_count - 1U);
+                }
+                free(path_segments);
+                return ok && inject_external_modules_from_expr(analysis,
+                                                               imported_query,
+                                                               program,
+                                                               expr->as.member.object);
+            }
+
+        case FENG_EXPR_INDEX:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.index.object) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.index.index);
+
+        case FENG_EXPR_UNARY:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.unary.operand);
+
+        case FENG_EXPR_BINARY:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.binary.left) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.binary.right);
+
+        case FENG_EXPR_LAMBDA:
+            for (size_t param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           expr->as.lambda.params[param_index].type)) {
+                    return false;
+                }
+            }
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.lambda.body) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.lambda.body_block);
+
+        case FENG_EXPR_CAST:
+            return inject_external_modules_from_type_ref(analysis,
+                                                        imported_query,
+                                                        program,
+                                                        expr->as.cast.type) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.cast.value);
+
+        case FENG_EXPR_IF:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.if_expr.condition) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.if_expr.then_block) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.if_expr.else_block);
+
+        case FENG_EXPR_MATCH:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.match_expr.target)) {
+                return false;
+            }
+            for (size_t branch_index = 0U;
+                 branch_index < expr->as.match_expr.branch_count;
+                 ++branch_index) {
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[branch_index];
+
+                if (!inject_external_modules_from_match_labels(analysis,
+                                                               imported_query,
+                                                               program,
+                                                               branch->labels,
+                                                               branch->label_count) ||
+                    !inject_external_modules_from_block(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       branch->body)) {
+                    return false;
+                }
+            }
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.match_expr.else_block);
+
+        case FENG_EXPR_ARRAY_NEW:
+            return inject_external_modules_from_type_ref(analysis,
+                                                        imported_query,
+                                                        program,
+                                                        expr->as.array_new.element_type) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     expr->as.array_new.size);
+    }
+
+    return true;
+}
+
+static bool inject_external_modules_from_stmt(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengStmt *stmt) {
+    if (stmt == NULL) {
+        return true;
+    }
+
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.block);
+        case FENG_STMT_BINDING:
+            return inject_external_modules_from_binding(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       &stmt->as.binding);
+        case FENG_STMT_ASSIGN:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.assign.target) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.assign.value);
+        case FENG_STMT_EXPR:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.expr);
+        case FENG_STMT_IF:
+            for (size_t clause_index = 0U;
+                 clause_index < stmt->as.if_stmt.clause_count;
+                 ++clause_index) {
+                if (!inject_external_modules_from_expr(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       stmt->as.if_stmt.clauses[clause_index].condition) ||
+                    !inject_external_modules_from_block(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       stmt->as.if_stmt.clauses[clause_index].block)) {
+                    return false;
+                }
+            }
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.if_stmt.else_block);
+        case FENG_STMT_MATCH:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   stmt->as.match_stmt.target)) {
+                return false;
+            }
+            for (size_t branch_index = 0U;
+                 branch_index < stmt->as.match_stmt.branch_count;
+                 ++branch_index) {
+                const FengMatchBranch *branch = &stmt->as.match_stmt.branches[branch_index];
+
+                if (!inject_external_modules_from_match_labels(analysis,
+                                                               imported_query,
+                                                               program,
+                                                               branch->labels,
+                                                               branch->label_count) ||
+                    !inject_external_modules_from_block(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       branch->body)) {
+                    return false;
+                }
+            }
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.match_stmt.else_block);
+        case FENG_STMT_WHILE:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.while_stmt.condition) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.while_stmt.body);
+        case FENG_STMT_FOR:
+            return inject_external_modules_from_stmt(analysis,
+                                                    imported_query,
+                                                    program,
+                                                    stmt->as.for_stmt.init) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.for_stmt.condition) &&
+                   inject_external_modules_from_stmt(analysis,
+                                                    imported_query,
+                                                    program,
+                                                    stmt->as.for_stmt.update) &&
+                   inject_external_modules_from_binding(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       &stmt->as.for_stmt.iter_binding) &&
+                   inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.for_stmt.iter_expr) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.for_stmt.body);
+        case FENG_STMT_TRY:
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.try_stmt.try_block) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.try_stmt.catch_block) &&
+                   inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.try_stmt.finally_block);
+        case FENG_STMT_RETURN:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.return_value);
+        case FENG_STMT_THROW:
+            return inject_external_modules_from_expr(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.throw_value);
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+
+    return true;
+}
+
+static bool inject_external_modules_from_block(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengBlock *block) {
+    if (block == NULL) {
+        return true;
+    }
+    for (size_t stmt_index = 0U; stmt_index < block->statement_count; ++stmt_index) {
+        if (!inject_external_modules_from_stmt(analysis,
+                                               imported_query,
+                                               program,
+                                               block->statements[stmt_index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool inject_external_modules_from_decl(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengDecl *decl) {
+    if (decl == NULL) {
+        return true;
+    }
+
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return inject_external_modules_from_binding(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       &decl->as.binding);
+        case FENG_DECL_TYPE:
+            if (!inject_external_modules_from_type_params(analysis,
+                                                          imported_query,
+                                                          program,
+                                                          decl->as.type_decl.type_params,
+                                                          decl->as.type_decl.type_param_count)) {
+                return false;
+            }
+            for (size_t spec_index = 0U;
+                 spec_index < decl->as.type_decl.declared_spec_count;
+                 ++spec_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           decl->as.type_decl.declared_specs[spec_index])) {
+                    return false;
+                }
+            }
+            for (size_t member_index = 0U;
+                 member_index < decl->as.type_decl.member_count;
+                 ++member_index) {
+                const FengTypeMember *member = decl->as.type_decl.members[member_index];
+
+                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (!inject_external_modules_from_type_ref(analysis,
+                                                               imported_query,
+                                                               program,
+                                                               member->as.field.type) ||
+                        !inject_external_modules_from_expr(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           member->as.field.initializer)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!inject_external_modules_from_callable(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           &member->as.callable)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_DECL_ENUM:
+            return true;
+        case FENG_DECL_SPEC:
+            if (!inject_external_modules_from_type_params(analysis,
+                                                          imported_query,
+                                                          program,
+                                                          decl->as.spec_decl.type_params,
+                                                          decl->as.spec_decl.type_param_count)) {
+                return false;
+            }
+            for (size_t spec_index = 0U;
+                 spec_index < decl->as.spec_decl.parent_spec_count;
+                 ++spec_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           decl->as.spec_decl.parent_specs[spec_index])) {
+                    return false;
+                }
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                for (size_t param_index = 0U;
+                     param_index < decl->as.spec_decl.as.callable.param_count;
+                     ++param_index) {
+                    if (!inject_external_modules_from_type_ref(
+                            analysis,
+                            imported_query,
+                            program,
+                            decl->as.spec_decl.as.callable.params[param_index].type)) {
+                        return false;
+                    }
+                }
+                return inject_external_modules_from_type_ref(
+                    analysis,
+                    imported_query,
+                    program,
+                    decl->as.spec_decl.as.callable.return_type);
+            }
+            for (size_t member_index = 0U;
+                 member_index < decl->as.spec_decl.as.object.member_count;
+                 ++member_index) {
+                const FengTypeMember *member =
+                    decl->as.spec_decl.as.object.members[member_index];
+
+                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (!inject_external_modules_from_type_ref(analysis,
+                                                               imported_query,
+                                                               program,
+                                                               member->as.field.type)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!inject_external_modules_from_callable(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           &member->as.callable)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_DECL_FIT:
+            if (!inject_external_modules_from_type_ref(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       decl->as.fit_decl.target)) {
+                return false;
+            }
+            for (size_t spec_index = 0U; spec_index < decl->as.fit_decl.spec_count; ++spec_index) {
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           decl->as.fit_decl.specs[spec_index])) {
+                    return false;
+                }
+            }
+            for (size_t member_index = 0U;
+                 member_index < decl->as.fit_decl.member_count;
+                 ++member_index) {
+                if (!inject_external_modules_from_callable(
+                        analysis,
+                        imported_query,
+                        program,
+                        &decl->as.fit_decl.members[member_index]->as.callable)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_DECL_FUNCTION:
+            return inject_external_modules_from_callable(analysis,
+                                                         imported_query,
+                                                         program,
+                                                         &decl->as.function_decl);
+    }
+
+    return true;
+}
+
+static bool inject_external_modules_from_full_path_type_refs(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *const *programs,
+    size_t program_count) {
+    if (analysis == NULL || imported_query == NULL || imported_query->get_module == NULL) {
+        return true;
+    }
+
+    for (size_t program_index = 0U; program_index < program_count; ++program_index) {
+        const FengProgram *program = programs[program_index];
+
+        for (size_t decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            if (!inject_external_modules_from_decl(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   program->declarations[decl_index])) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static const FengSemanticModule *find_decl_provider_module(const FengSemanticAnalysis *analysis,
                                                            const FengDecl *decl) {
     size_t module_index;
@@ -1251,6 +2079,17 @@ static bool module_is_use_visible_from(const ResolveContext *ctx,
         }
     }
     return false;
+}
+
+static bool module_is_full_path_visible_from(const ResolveContext *ctx,
+                                             const FengSemanticModule *target) {
+    if (ctx == NULL || target == NULL) {
+        return false;
+    }
+    if (ctx->module == target) {
+        return true;
+    }
+    return target->visibility == FENG_VISIBILITY_PUBLIC;
 }
 
 static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries,
@@ -2763,7 +3602,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
         size_t module_index = find_module_index_by_path(context->analysis, segments, segment_count - 1U);
 
         if (module_index < context->analysis->module_count &&
-            module_is_use_visible_from(context, &context->analysis->modules[module_index])) {
+            module_is_full_path_visible_from(context, &context->analysis->modules[module_index])) {
             return find_module_public_type_decl(&context->analysis->modules[module_index], name);
         }
     }
@@ -8578,6 +9417,29 @@ static ResolvedTypeTarget resolve_type_target_expr(const ResolveContext *context
                         find_module_public_type_decl(alias->target_module, target_expr->as.member.member);
                     result.provider_module = result.type_decl != NULL ? alias->target_module : NULL;
                 }
+            }
+
+            if (result.type_decl == NULL) {
+                size_t path_segment_count = 0U;
+                FengSlice *path_segments = expr_path_segments_alloc(target_expr, &path_segment_count);
+
+                if (path_segments != NULL && path_segment_count > 1U) {
+                    size_t module_index = find_module_index_by_path(context->analysis,
+                                                                    path_segments,
+                                                                    path_segment_count - 1U);
+
+                    if (module_index < context->analysis->module_count &&
+                        module_is_full_path_visible_from(context,
+                                                         &context->analysis->modules[module_index])) {
+                        result.type_decl = find_module_public_type_decl(
+                            &context->analysis->modules[module_index],
+                            path_segments[path_segment_count - 1U]);
+                        result.provider_module = result.type_decl != NULL
+                            ? &context->analysis->modules[module_index]
+                            : NULL;
+                    }
+                }
+                free(path_segments);
             }
             return result;
 
@@ -17312,6 +18174,13 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                     ok = add_external_module(analysis, ext);
                 }
             }
+        }
+
+        if (ok) {
+            ok = inject_external_modules_from_full_path_type_refs(analysis,
+                                                                  imported_query,
+                                                                  programs,
+                                                                  program_count);
         }
     }
 
