@@ -3415,10 +3415,9 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
 static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
                                                       const FengExpr *left,
                                                       const FengExpr *right);
-static bool lambda_expr_parameters_match_args(ResolveContext *context,
-                                              const FengExpr *expr,
-                                              FengExpr *const *args,
-                                              size_t arg_count);
+static bool report_lambda_requires_callable_spec_target(ResolveContext *context,
+                                                        const FengExpr *expr,
+                                                        const char *position);
 static char *format_expr_target_name(const FengExpr *expr);
 static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext *context,
                                                                  const FengExpr *object_expr);
@@ -5694,8 +5693,19 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
     }
 
     context->current_callable_saw_return = true;
+    if (stmt->as.return_value != NULL && stmt->as.return_value->kind == FENG_EXPR_LAMBDA) {
+        return report_lambda_requires_callable_spec_target(context,
+                                                           stmt->as.return_value,
+                                                           "a return statement");
+    }
     return_type = stmt->as.return_value != NULL ? infer_expr_type(context, stmt->as.return_value)
                                                 : inferred_expr_type_builtin("void");
+    if (stmt->as.return_value != NULL &&
+        return_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+        return report_lambda_requires_callable_spec_target(context,
+                                                           stmt->as.return_value,
+                                                           "a return statement");
+    }
     if (!inferred_expr_type_is_known(return_type)) {
         return true;
     }
@@ -6731,6 +6741,13 @@ static bool callable_parameters_match_args(ResolveContext *context,
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type = callable->params[arg_index].type;
 
+        if (args[arg_index] != NULL &&
+            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            resolve_function_type_decl(context, param_type) == NULL) {
+            ok = false;
+            break;
+        }
+
         /* G4-12: a type-parameter position accepts any argument type. */
         if (param_type_is_type_param_ref(callable, param_type)) {
             continue;
@@ -6802,6 +6819,13 @@ static bool callable_parameters_match_args_for_owner_instance(
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type = callable->params[arg_index].type;
 
+        if (args[arg_index] != NULL &&
+            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            resolve_function_type_decl(context, param_type) == NULL) {
+            ok = false;
+            break;
+        }
+
         if (param_type_is_type_param_ref(callable, param_type)) {
             continue;
         }
@@ -6814,6 +6838,12 @@ static bool callable_parameters_match_args_for_owner_instance(
                                                           fit_decl,
                                                           owner_type,
                                                           param_type);
+        if (args[arg_index] != NULL &&
+            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            resolve_function_type_decl(context, param_type) == NULL) {
+            ok = false;
+            break;
+        }
         if (allow_wrapped_inference &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
@@ -7304,9 +7334,15 @@ static bool function_type_parameters_match_args(ResolveContext *context,
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        if (!expr_matches_expected_type_ref(context,
-                                            args[arg_index],
-                                            type_decl->as.spec_decl.as.callable.params[arg_index].type)) {
+        const FengTypeRef *param_type =
+            type_decl->as.spec_decl.as.callable.params[arg_index].type;
+
+        if (args[arg_index] != NULL &&
+            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            resolve_function_type_decl(context, param_type) == NULL) {
+            return false;
+        }
+        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
             return false;
         }
     }
@@ -7336,6 +7372,11 @@ static bool function_type_parameters_match_args_for_instance(
             owner_type,
             type_decl->as.spec_decl.as.callable.params[arg_index].type);
 
+        if (args[arg_index] != NULL &&
+            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            resolve_function_type_decl(context, param_type) == NULL) {
+            return false;
+        }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
             return false;
         }
@@ -7935,6 +7976,10 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                                              size_t param_count,
                                              FengSpecObjectSubjectStorageKind preferred_storage);
 
+static void record_callable_spec_coercion_site(ResolveContext *context,
+                                               const FengExpr *expr,
+                                               const FengTypeRef *expected_type_ref);
+
 static void record_spec_member_access(ResolveContext *context,
                                       const FengExpr *expr,
                                       const FengDecl *spec_decl,
@@ -7957,6 +8002,14 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     const FengDecl *callee_constraint_decl =
         resolve_callable_constraint_type_decl(context, callee_type);
     char *target_name = NULL;
+
+    if (callee != NULL &&
+        (callee->kind == FENG_EXPR_LAMBDA ||
+         callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA)) {
+        return report_lambda_requires_callable_spec_target(context,
+                                                           callee,
+                                                           "a call expression");
+    }
 
     if (callee_type_decl != NULL && decl_is_function_type(callee_type_decl)) {
         if (function_type_parameters_match_args_for_instance(context,
@@ -8020,36 +8073,6 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                 callee_constraint_decl->as.spec_decl.as.callable.params,
                 callee_constraint_decl->as.spec_decl.as.callable.param_count,
                 FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
-            return true;
-        }
-
-        target_name = format_expr_target_name(callee);
-        if (!resolver_append_error(
-                context,
-                callee->token,
-                format_message("call target '%s' has no function type overload accepting %zu argument(s)",
-                               target_name != NULL ? target_name : "<expression>",
-                               arg_count))) {
-            free(target_name);
-            return false;
-        }
-
-        free(target_name);
-        return true;
-    }
-
-    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
-        if (lambda_expr_parameters_match_args(context, callee_type.lambda_expr, args, arg_count)) {
-            if (!validate_borrowed_data_pointer_call_arguments(context,
-                                                               callee,
-                                                               args,
-                                                               arg_count,
-                                                               callee_type.lambda_expr->as.lambda.params,
-                                                               callee_type.lambda_expr->as.lambda.param_count,
-                                                               false)) {
-                return false;
-            }
-            note_callable_value_expr_exception_escape(context, callee);
             return true;
         }
 
@@ -8281,38 +8304,6 @@ static InferredExprType infer_lambda_body_type(ResolveContext *context, const Fe
     return ok ? body_type : inferred_expr_type_unknown();
 }
 
-static bool lambda_expr_parameters_match_args(ResolveContext *context,
-                                              const FengExpr *expr,
-                                              FengExpr *const *args,
-                                              size_t arg_count) {
-    size_t param_index;
-
-    if (expr == NULL || expr->kind != FENG_EXPR_LAMBDA || expr->as.lambda.param_count != arg_count) {
-        return false;
-    }
-
-    for (param_index = 0U; param_index < arg_count; ++param_index) {
-        if (!expr_matches_expected_type_ref(context,
-                                            args[param_index],
-                                            expr->as.lambda.params[param_index].type)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static InferredExprType infer_lambda_call_expr_type(ResolveContext *context,
-                                                    const FengExpr *callee,
-                                                    FengExpr *const *args,
-                                                    size_t arg_count) {
-    if (!lambda_expr_parameters_match_args(context, callee, args, arg_count)) {
-        return inferred_expr_type_unknown();
-    }
-
-    return infer_lambda_body_type(context, callee);
-}
-
 static InferredExprType infer_call_expr_type(ResolveContext *context, const FengExpr *expr) {
     const FengExpr *callee;
     ResolvedTypeTarget target;
@@ -8491,25 +8482,8 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
         }
     }
 
-    if (callee->kind == FENG_EXPR_LAMBDA) {
-        InferredExprType lambda_result = infer_lambda_call_expr_type(context,
-                                                                     callee,
-                                                                     expr->as.call.args,
-                                                                     expr->as.call.arg_count);
-
-        if (inferred_expr_type_is_known(lambda_result)) {
-            return lambda_result;
-        }
-    }
-
     callee_type = infer_expr_type(context, callee);
     callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
-    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
-        return infer_lambda_call_expr_type(context,
-                                           callee_type.lambda_expr,
-                                           expr->as.call.args,
-                                           expr->as.call.arg_count);
-    }
     if (callee_type_decl != NULL &&
         function_type_parameters_match_args_for_instance(context,
                                                          callee_type_decl,
@@ -10750,6 +10724,30 @@ static bool expr_requires_explicit_function_type_context(ResolveContext *context
     }
 }
 
+static bool expr_is_lambda_value_without_target(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType expr_type;
+
+    if (expr == NULL) {
+        return false;
+    }
+    if (expr->kind == FENG_EXPR_LAMBDA) {
+        return true;
+    }
+
+    expr_type = infer_expr_type(context, expr);
+    return expr_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA;
+}
+
+static bool report_lambda_requires_callable_spec_target(ResolveContext *context,
+                                                        const FengExpr *expr,
+                                                        const char *position) {
+    return resolver_append_error(
+        context,
+        expr != NULL ? expr->token : context->program->module_token,
+        format_message("lambda expression in %s requires an explicit callable-form spec target type",
+                       position != NULL ? position : "this position"));
+}
+
 static bool expr_is_callable_value_reference(ResolveContext *context, const FengExpr *expr) {
     if (expr == NULL) {
         return false;
@@ -10947,11 +10945,10 @@ static void record_object_spec_coercion_site_if_applicable(
                                    expr->token);
 }
 
-/* Records object-form coercion sites for each argument of a call against the
- * resolved callee parameter list. Per-argument application of
- * record_object_spec_coercion_site_if_applicable handles the predicate
- * (target is object-form spec, src is concrete type, satisfaction relation
- * exists); arguments that don't match the predicate are silently skipped. */
+/* Records spec coercion sites for each argument of a call against the resolved
+ * callee parameter list. Callable-form targets use the callable coercion
+ * sidecar; object-form targets use the object-spec coercion sidecar. Arguments
+ * that don't match either predicate are silently skipped. */
 static void record_object_arg_coercion_sites(ResolveContext *context,
                                              FengExpr *const *args,
                                              size_t arg_count,
@@ -10964,6 +10961,10 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
         return;
     }
     for (i = 0U; i < arg_count; ++i) {
+        if (resolve_function_type_decl(context, params[i].type) != NULL) {
+            record_callable_spec_coercion_site(context, args[i], params[i].type);
+            continue;
+        }
         record_object_spec_coercion_site_if_applicable(context,
                                                         args[i],
                                                         params[i].type,
@@ -10990,6 +10991,10 @@ static void record_object_arg_coercion_sites_for_owner_instance(
             owner_type_decl,
             owner_type,
             params[i].type);
+        if (resolve_function_type_decl(context, param_type) != NULL) {
+            record_callable_spec_coercion_site(context, args[i], param_type);
+            continue;
+        }
         record_object_spec_coercion_site_if_applicable(context,
                                                        args[i],
                                                        param_type,
@@ -12831,6 +12836,10 @@ static bool validate_expr_against_expected_inferred_type(ResolveContext *context
 
 static bool validate_untyped_callable_value_expr(ResolveContext *context, const FengExpr *expr) {
     char *expr_name;
+
+    if (expr_is_lambda_value_without_target(context, expr)) {
+        return report_lambda_requires_callable_spec_target(context, expr, "an untyped value context");
+    }
 
     if (!expr_requires_explicit_function_type_context(context, expr)) {
         return true;
@@ -14782,6 +14791,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
         case FENG_STMT_EXPR:
             return resolve_expr(context, stmt->as.expr, allow_self) &&
+                   validate_untyped_callable_value_expr(context, stmt->as.expr) &&
                    validate_untyped_address_of_expr(context, stmt->as.expr);
 
         case FENG_STMT_IF:

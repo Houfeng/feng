@@ -1533,8 +1533,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
         "@abi\n"
         "spec Callback(x: int): int;\n"
         "fn run(base: int) {\n"
-        "    let add = (x: int) -> x + base;\n"
-        "    let cb: Callback = add;\n"
+        "    let cb: Callback = (x: int) -> x + base;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_callback_captured_lambda_error.f", source);
     const FengProgram *programs[] = {program};
@@ -1545,7 +1544,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_callback_captured_lambda_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
+    ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -1936,12 +1935,13 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
 static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec Callback(x: int): int;\n"
         "fn helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
         "fn run(): int {\n"
-        "    let wrap = (x: int) -> helper();\n"
+        "    let wrap: Callback = (x: int) -> helper();\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_unused_lambda_throwing_call_ok.f", source);
@@ -1962,12 +1962,13 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
 static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec Callback(x: int): int;\n"
         "fn helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
         "fn run(): int {\n"
-        "    let wrap = (x: int) -> helper();\n"
+        "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_throwing_call_error.f", source);
@@ -1979,7 +1980,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fixed_fn_invoked_lambda_throwing_call_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
+    ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -2017,6 +2018,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
 static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec Callback(x: int): int;\n"
         "fn helper(): int {\n"
         "    try {\n"
         "        throw \"boom\";\n"
@@ -2026,7 +2028,7 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
         "}\n"
         "@abi\n"
         "fn run(): int {\n"
-        "    let wrap = (x: int) -> helper();\n"
+        "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_catching_call_ok.f", source);
@@ -2451,7 +2453,7 @@ static void test_imported_function_auto_infers_return_type_across_modules(void) 
     feng_program_free(base_program);
 }
 
-static void test_omitted_return_function_can_infer_lambda_signature(void) {
+static void test_omitted_return_function_rejects_lambda_signature_inference(void) {
     const char *source =
         "mod demo.main;\n"
         "spec IntToInt(x: int): int;\n"
@@ -2462,7 +2464,34 @@ static void test_omitted_return_function_can_infer_lambda_signature(void) {
         "    let callable: IntToInt = make();\n"
         "    return callable(4);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("auto_return_lambda_signature_ok.f", source);
+    FengProgram *program = parse_program_or_die("auto_return_lambda_signature_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "auto_return_lambda_signature_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "explicit callable-form spec target type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_explicit_callable_return_accepts_lambda(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec IntAdder(x: int, y: int): int;\n"
+        "fn make(): IntAdder {\n"
+        "    return (x: int, y: int) -> x + y;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let add: IntAdder = make();\n"
+        "    return add(1, 2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("explicit_callable_return_lambda_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -2601,29 +2630,29 @@ static void test_match_expression_rejects_inconsistent_result_types(void) {
     feng_program_free(program);
 }
 
-static void test_untyped_lambda_binding_is_callable(void) {
+static void test_untyped_lambda_binding_is_rejected(void) {
     const char *source =
         "mod demo.main;\n"
-        "fn run(): int {\n"
+        "fn run() {\n"
         "    let callable = (x: int) -> x * 2;\n"
-        "    return callable(2);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("untyped_lambda_binding_call_ok.f", source);
+    FengProgram *program = parse_program_or_die("untyped_lambda_binding_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "untyped_lambda_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "explicit callable-form spec target type") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_untyped_lambda_binding_matches_named_function_type(void) {
+static void test_untyped_lambda_binding_cannot_later_match_named_function_type(void) {
     const char *source =
         "mod demo.main;\n"
         "spec IntToInt(x: int): int;\n"
@@ -2632,18 +2661,19 @@ static void test_untyped_lambda_binding_matches_named_function_type(void) {
         "    let typed: IntToInt = callable;\n"
         "    return typed(3);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("untyped_lambda_binding_function_type_ok.f", source);
+    FengProgram *program = parse_program_or_die("untyped_lambda_binding_function_type_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "untyped_lambda_binding_function_type_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "explicit callable-form spec target type") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -5117,8 +5147,9 @@ static void test_unary_address_of_rejects_local_lambda_pointer_target(void) {
         "mod demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
+        "spec LocalCmp(a: int, b: int): int;\n"
         "fn run() {\n"
-        "    let local = (a: int, b: int) -> a - b;\n"
+        "    let local: LocalCmp = (a: int, b: int) -> a - b;\n"
         "    let cb: Cmp* = &local;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_lambda_error.f", source);
@@ -5130,7 +5161,7 @@ static void test_unary_address_of_rejects_local_lambda_pointer_target(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "unary_address_of_lambda_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
+    ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message,
                   "cannot form expected ABI function pointer type 'Cmp*'") != NULL);
 
@@ -6627,10 +6658,11 @@ static void test_self_is_capturable_inside_method_lambda(void) {
      * (or constructor) body may capture the enclosing object's `self`. */
     const char *source =
         "mod demo.main;\n"
+        "spec Thunk(): int;\n"
         "type User {\n"
         "    var id: int;\n"
         "    fn read(): int {\n"
-        "        let thunk = () -> self.id;\n"
+        "        let thunk: Thunk = () -> self.id;\n"
         "        return 0;\n"
         "    }\n"
         "}\n";
@@ -9334,8 +9366,9 @@ static void test_constructor_with_explicit_void_return_ok(void) {
 static void test_lambda_block_body_returns_value(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec IntFn(a: int): int;\n"
         "fn run(): int {\n"
-        "    let f = (a: int) {\n"
+        "    let f: IntFn = (a: int) {\n"
         "        let b = a + 1;\n"
         "        return b;\n"
         "    };\n"
@@ -9358,9 +9391,10 @@ static void test_lambda_block_body_returns_value(void) {
 static void test_lambda_block_body_records_local_capture(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec Reader(): int;\n"
         "fn run(): int {\n"
         "    let x = 1;\n"
-        "    let f = () {\n"
+        "    let f: Reader = () {\n"
         "        return x;\n"
         "    };\n"
         "    return f();\n"
@@ -9377,9 +9411,9 @@ static void test_lambda_block_body_records_local_capture(void) {
     ASSERT(error_count == 0U);
 
     /* Drill into AST: program -> fn run -> body -> stmts[1] (let f = lambda) */
-    ASSERT(program->declaration_count >= 1U);
+    ASSERT(program->declaration_count >= 2U);
     {
-        const FengDecl *decl = program->declarations[0];
+        const FengDecl *decl = program->declarations[1];
         const FengCallableSignature *sig = &decl->as.function_decl;
 
         ASSERT(sig->body != NULL);
@@ -9403,10 +9437,11 @@ static void test_lambda_block_body_records_local_capture(void) {
 static void test_lambda_in_method_records_self_capture(void) {
     const char *source =
         "mod demo.main;\n"
+        "spec Reader(): int;\n"
         "type User {\n"
         "    var id: int;\n"
         "    fn read(): int {\n"
-        "        let f = () -> self.id;\n"
+        "        let f: Reader = () -> self.id;\n"
         "        return f();\n"
         "    }\n"
         "}\n";
@@ -9420,7 +9455,7 @@ static void test_lambda_in_method_records_self_capture(void) {
     ASSERT(error_count == 0U);
 
     {
-        const FengDecl *type_decl = program->declarations[0];
+        const FengDecl *type_decl = program->declarations[1];
         const FengTypeMember *method = type_decl->as.type_decl.members[1];
         const FengStmt *binding_stmt = method->as.callable.body->statements[0];
         const FengExpr *lambda_expr = binding_stmt->as.binding.initializer;
@@ -10685,6 +10720,54 @@ static void test_spec_coercion_callable_lambda(void) {
     ASSERT(init != NULL && init->kind == FENG_EXPR_LAMBDA);
 
     const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(analysis, init);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+    ASSERT(site->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA);
+    ASSERT(site->target_spec_decl == find_spec_decl_by_name(analysis, "Cb"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_spec_coercion_callable_lambda_argument(void) {
+    const char *src =
+        "pu mod demo.coerce.arg;\n"
+        "spec Cb(x: int): int;\n"
+        "fn apply(cb: Cb): int {\n"
+        "    return cb(4);\n"
+        "}\n"
+        "fn caller(): int {\n"
+        "    return apply((x: int) -> x + 1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("coerce_callable_lambda_arg.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *caller;
+    const FengStmt *return_stmt;
+    const FengExpr *call_expr;
+    const FengExpr *arg;
+    const FengSpecCoercionSite *site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    caller = find_function_decl_in_program(program, "caller");
+    ASSERT(caller != NULL);
+    ASSERT(caller->as.function_decl.body != NULL);
+    ASSERT(caller->as.function_decl.body->statement_count == 1U);
+    return_stmt = caller->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    call_expr = return_stmt->as.return_value;
+    ASSERT(call_expr != NULL && call_expr->kind == FENG_EXPR_CALL);
+    ASSERT(call_expr->as.call.arg_count == 1U);
+    arg = call_expr->as.call.args[0];
+    ASSERT(arg != NULL && arg->kind == FENG_EXPR_LAMBDA);
+
+    site = feng_semantic_lookup_spec_coercion_site(analysis, arg);
     ASSERT(site != NULL);
     ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
     ASSERT(site->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA);
@@ -12790,6 +12873,7 @@ int main(void) {
     test_spec_coercion_object_scalar_return_uses_box_owner();
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
+    test_spec_coercion_callable_lambda_argument();
     test_callable_spec_value_rejects_different_spec_implicit_match();
     test_callable_spec_value_explicit_cast_accepts_equal_signature();
     test_callable_spec_top_level_fn_still_matches_multiple_specs();
@@ -12898,14 +12982,15 @@ int main(void) {
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();
     test_imported_function_auto_infers_return_type_across_modules();
-    test_omitted_return_function_can_infer_lambda_signature();
+    test_omitted_return_function_rejects_lambda_signature_inference();
+    test_explicit_callable_return_accepts_lambda();
     test_omitted_return_function_value_matches_named_function_type();
     test_explicit_non_void_return_rejects_empty_return();
     test_match_expression_rejects_non_constant_label();
     test_match_expression_rejects_incomparable_label_type();
     test_match_expression_rejects_inconsistent_result_types();
-    test_untyped_lambda_binding_is_callable();
-    test_untyped_lambda_binding_matches_named_function_type();
+    test_untyped_lambda_binding_is_rejected();
+    test_untyped_lambda_binding_cannot_later_match_named_function_type();
     test_module_visibility_conflict();
     test_valid_function_overload_by_parameter_type();
     test_top_level_function_call_selects_overload_by_literal_type();
