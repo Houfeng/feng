@@ -1,6 +1,5 @@
 
 **明确遗留点**
-- 限定名类型引用还不支持。语义和 codegen 都默认只接受单段类型名，超过一段就按 Phase 1A 不支持处理，cyclic.c 和 codegen.c。
 - 指针 pointee 类型只支持一小部分下层类型。当前只放行基础数值、string、pointer、callable，以及 ABI object；其他 pointee 会直接报不支持，codegen.c 和 codegen.c。
 - 类型字段默认初始化器未支持，codegen.c。
 - 裸 lambda 作为普通表达式值仍未支持。现在只有 callable coercion 路径会专门处理 lambda，codegen.c；通用表达式分派缺少对应分支，会落到兜底报错，codegen.c。

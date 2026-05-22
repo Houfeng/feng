@@ -330,6 +330,12 @@ static const char *cg_runtime_type_kind_name(const CGType *t) {
     }
 }
 
+static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_type);
+
+static bool cg_array_data_pointer_type_is_lowerable(const CGType *array_type);
+
+static void cg_emit_array_data_pointer_c_type(Buf *b, const CGType *array_type);
+
 static bool cg_pointer_inner_is_lowerable(const CGType *t) {
     if (t == NULL) {
         return false;
@@ -350,6 +356,8 @@ static bool cg_pointer_inner_is_lowerable(const CGType *t) {
         case CG_TYPE_POINTER:
         case CG_TYPE_CALLABLE:
             return true;
+        case CG_TYPE_ARRAY:
+            return cg_array_data_pointer_type_is_lowerable(t);
         case CG_TYPE_OBJECT:
             return cg_user_type_is_abi(t->user);
         default:
@@ -568,6 +576,10 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
     if (t && t->kind == CG_TYPE_POINTER) {
         if (t->element == NULL) {
             buf_append_cstr(b, "void *");
+            return;
+        }
+        if (t->element->kind == CG_TYPE_ARRAY) {
+            cg_emit_array_data_pointer_c_type(b, t->element);
             return;
         }
         if (t->element->kind == CG_TYPE_POINTER) {
@@ -5029,7 +5041,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         if (!cg_pointer_inner_is_lowerable(inner)) {
             cgtype_free(inner);
             return cg_fail(cg, ref->token,
-                "codegen: pointer pointee type is not supported in this step");
+                "codegen: this pointee type does not support ABI pointer lowering");
         }
         CGType *t = cgtype_new(CG_TYPE_POINTER);
         if (!t) {
@@ -8104,10 +8116,30 @@ static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_typ
     }
     if (cg_type_kind_is_scalar_builtin(element_type->kind) ||
         element_type->kind == CG_TYPE_POINTER ||
-        element_type->kind == CG_TYPE_CALLABLE) {
+        element_type->kind == CG_TYPE_CALLABLE ||
+        (element_type->kind == CG_TYPE_OBJECT && cg_user_type_is_abi(element_type->user))) {
         return true;
     }
     return false;
+}
+
+static bool cg_array_data_pointer_type_is_lowerable(const CGType *array_type) {
+    return array_type != NULL && array_type->kind == CG_TYPE_ARRAY &&
+           cg_array_data_pointer_element_is_lowerable(array_type->element);
+}
+
+static void cg_emit_array_data_pointer_c_type(Buf *b, const CGType *array_type) {
+    CGType data_pointer;
+
+    if (!cg_array_data_pointer_type_is_lowerable(array_type)) {
+        buf_append_cstr(b, "void *");
+        return;
+    }
+
+    memset(&data_pointer, 0, sizeof(data_pointer));
+    data_pointer.kind = CG_TYPE_POINTER;
+    data_pointer.element = array_type->element;
+    cg_emit_c_type(b, &data_pointer);
 }
 
 static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -8199,7 +8231,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
                 !cg_array_data_pointer_element_is_lowerable(inner.type->element)) {
                 er_free(&inner);
                 return cg_fail(cg, e->token,
-                    "codegen: unary '&' does not yet support this ABI array element type");
+                    "codegen: this ABI-compatible array element type does not support data-pointer lowering");
             }
             if (inner.owns_ref && cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                 er_free(&inner);
@@ -8303,7 +8335,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
 
         er_free(&inner);
         return cg_fail(cg, e->token,
-            "codegen: unary '&' currently supports string, ABI scalar, and ABI array operands only");
+            "codegen: this operand type does not support ABI pointer formation; only string, ABI scalar, fielded @abi value, and ABI-compatible array operands are allowed here");
     }
     const char *op = NULL;
     bool require_bool = false;
