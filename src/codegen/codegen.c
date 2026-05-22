@@ -14331,6 +14331,125 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+static bool cg_emit_match_stmt_branch(CG *cg, const FengBlock *block, FengToken token) {
+    Scope *branch_scope = scope_push(cg->cur_scope);
+    if (!branch_scope) return cg_fail(cg, token, "codegen: out of memory");
+    cg->cur_scope = branch_scope;
+
+    bool ok = cg_emit_block(cg, block);
+    if (ok) cg_release_scope(cg, branch_scope);
+    cg->cur_scope = branch_scope->parent;
+    scope_pop_free(branch_scope);
+    return ok;
+}
+
+static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
+    buf_append_cstr(cg->cur_body, "    {\n");
+    Scope *match_scope = scope_push(cg->cur_scope);
+    if (!match_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = match_scope;
+
+    ExprResult target;
+    if (!cg_emit_expr(cg, stmt->as.match_stmt.target, &target)) {
+        cg->cur_scope = match_scope->parent;
+        scope_pop_free(match_scope);
+        return false;
+    }
+
+    CGTypeKind target_kind = target.type->kind;
+    if (target_kind != CG_TYPE_BOOL &&
+        target_kind != CG_TYPE_STRING &&
+        !cgtype_is_integer(target_kind)) {
+        er_free(&target);
+        cg->cur_scope = match_scope->parent;
+        scope_pop_free(match_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: if-match target must be integer, bool, or string");
+    }
+
+    char *target_tmp = cg_materialize_to_local(cg, &target, "_mt");
+    if (!target_tmp) {
+        er_free(&target);
+        cg->cur_scope = match_scope->parent;
+        scope_pop_free(match_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    er_free(&target);
+
+    bool first_branch = true;
+    bool ok = true;
+    for (size_t branch_index = 0;
+         branch_index < stmt->as.match_stmt.branch_count;
+         ++branch_index) {
+        const FengMatchBranch *branch = &stmt->as.match_stmt.branches[branch_index];
+
+        if (branch->label_count == 0) {
+            ok = cg_fail(cg, branch->token,
+                "codegen: if-match branch has no labels");
+            break;
+        }
+
+        Buf condition;
+        buf_init(&condition);
+        for (size_t label_index = 0; label_index < branch->label_count; ++label_index) {
+            if (label_index != 0) buf_append_cstr(&condition, " || ");
+            if (!cg_emit_match_label_cond(cg,
+                                          target_tmp,
+                                          target_kind,
+                                          &branch->labels[label_index],
+                                          &condition)) {
+                ok = false;
+                break;
+            }
+        }
+
+        if (!ok) {
+            buf_free(&condition);
+            break;
+        }
+
+        if (first_branch) {
+            buf_append_fmt(cg->cur_body, "    if (%s) {\n", condition.data);
+            first_branch = false;
+        } else {
+            buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", condition.data);
+        }
+        buf_free(&condition);
+
+        if (!cg_emit_match_stmt_branch(cg, branch->body, branch->token)) {
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok && stmt->as.match_stmt.else_block != NULL) {
+        if (first_branch) {
+            buf_append_cstr(cg->cur_body, "    {\n");
+        } else {
+            buf_append_cstr(cg->cur_body, "    } else {\n");
+        }
+        if (!cg_emit_match_stmt_branch(cg,
+                                       stmt->as.match_stmt.else_block,
+                                       stmt->token)) {
+            ok = false;
+        }
+        first_branch = false;
+    }
+
+    if (ok) {
+        if (!first_branch) {
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+        cg_release_scope(cg, match_scope);
+        buf_append_cstr(cg->cur_body, "    }\n");
+    }
+
+    free(target_tmp);
+    cg->cur_scope = match_scope->parent;
+    scope_pop_free(match_scope);
+    return ok;
+}
+
 static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     /* Emit as `for (;;)` so we can re-evaluate the condition each iter
      * inside a scope that releases temporaries from condition eval. */
@@ -14991,6 +15110,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_EXPR:     return cg_emit_expr_stmt(cg, stmt);
         case FENG_STMT_RETURN:   return cg_emit_return(cg, stmt);
         case FENG_STMT_IF:       return cg_emit_if(cg, stmt);
+        case FENG_STMT_MATCH:    return cg_emit_match_stmt(cg, stmt);
         case FENG_STMT_WHILE:    return cg_emit_while(cg, stmt);
         case FENG_STMT_FOR:      return cg_emit_for(cg, stmt);
         case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);

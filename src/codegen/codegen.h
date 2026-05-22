@@ -19,7 +19,7 @@
  *   - free fn / type-method overload sets (selected per call site via
  *     FengResolvedCallable.function_decl / .member)
  *   - statements: block, binding (let/var), assignment (identifier or member),
- *                 expression, return, if/else, while, break, continue,
+ *                 expression, return, if/else, if-match, while, break, continue,
  *                 throw, try/catch/finally
  *   - expressions: int/bool/string/float literals, identifier, binary,
  *                  unary, call (free fn / extern fn / method / default ctor),
@@ -30,7 +30,6 @@
  *
  * Out of scope (deferred to Phase 1B):
  *   - lambda / closure literals
- *   - match statement (statement-form; expression-form is supported)
  *   - for / for-in
  *   - spec / fit dispatch (specs are accepted as metadata only)
  *   - cyclic GC, finaliser resurrection

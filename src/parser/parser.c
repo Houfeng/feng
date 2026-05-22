@@ -2975,7 +2975,7 @@ static FengStmt *parse_if_statement(Parser *parser) {
     FengExpr *first_condition;
 
     /* Parse the head expression first; it may be either a boolean condition
-     * (cond-if statement) or the match target (match statement). */
+     * or the target of the internal if-match statement form. */
     first_condition = parse_expression(parser);
     if (first_condition == NULL) {
         return NULL;
