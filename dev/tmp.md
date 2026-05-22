@@ -1,6 +1,5 @@
 
 **明确遗留点**
-- 类型字段默认初始化器未支持，codegen.c。
 - 裸 lambda 作为普通表达式值仍未支持。现在只有 callable coercion 路径会专门处理 lambda，codegen.c；通用表达式分派缺少对应分支，会落到兜底报错，codegen.c。
 - 空数组字面量仍未支持，codegen.c。
 - try/catch/finally 内的 return 未支持，codegen.c。
