@@ -1,0 +1,20 @@
+mod feng.smoke.type_field_callable_lambda;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+spec Reader(): int;
+
+type Box {
+    var n: int;
+    let read: Reader = () -> self.n;
+}
+
+fn main(args: string[]) {
+    let box = Box{n: 7};
+    if box.read() == 7 {
+        puts(&"member-lambda-ok");
+    } else {
+        puts(&"member-lambda-fail");
+    }
+}

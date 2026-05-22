@@ -10883,6 +10883,44 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 "codegen: method call on non-object value");
         }
         const UserType *ut = recv.type->user;
+        if (rc->kind == FENG_RESOLVED_CALLABLE_NONE) {
+            const UserField *callable_field = cg_user_type_field(
+                ut,
+                ma->as.member.member.data,
+                ma->as.member.member.length);
+
+            if (callable_field != NULL &&
+                callable_field->type != NULL &&
+                callable_field->type->kind == CG_TYPE_CALLABLE &&
+                callable_field->type->user_spec != NULL) {
+                ExprResult callee;
+                const UserSpec *callable_spec = callable_field->type->user_spec;
+                Buf field_expr;
+
+                if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+                    cg_materialize_to_local(cg, &recv, "_t");
+                }
+                er_init(&callee);
+                buf_init(&field_expr);
+                buf_append_fmt(&field_expr,
+                               "(%s)->%s",
+                               recv.c_expr,
+                               callable_field->c_name);
+                callee.c_expr = field_expr.data;
+                callee.type = cgtype_clone(callable_field->type);
+                callee.owns_ref = false;
+                er_free(&recv);
+                if (callee.c_expr == NULL || callee.type == NULL) {
+                    er_free(&callee);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+                return cg_emit_callable_value_call(cg,
+                                                   e,
+                                                   &callee,
+                                                   callable_spec,
+                                                   out);
+            }
+        }
         if (rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD) {
             const UserFit *uf = NULL;
 
@@ -13001,13 +13039,88 @@ static bool cg_emit_user_field_default_value(CG *cg,
     return true;
 }
 
+static bool cg_user_type_member_initializers_capture_self(const UserType *ut,
+                                                          bool *out_captures_self) {
+    if (out_captures_self == NULL) {
+        return false;
+    }
+    *out_captures_self = false;
+    if (ut == NULL) {
+        return true;
+    }
+
+    for (size_t i = 0; i < ut->field_count; ++i) {
+        const UserField *uf = &ut->fields[i];
+        const FengTypeMember *member = uf->member;
+        char **captured_names = NULL;
+        size_t captured_name_count = 0U;
+        size_t captured_name_capacity = 0U;
+        bool captures_self = false;
+
+        if (member == NULL || member->as.field.initializer == NULL) {
+            continue;
+        }
+        if (!cg_collect_capture_requirements_in_expr(member->as.field.initializer,
+                                                     &captured_names,
+                                                     &captured_name_count,
+                                                     &captured_name_capacity,
+                                                     &captures_self)) {
+            for (size_t j = 0U; j < captured_name_count; ++j) free(captured_names[j]);
+            free(captured_names);
+            return false;
+        }
+        for (size_t j = 0U; j < captured_name_count; ++j) free(captured_names[j]);
+        free(captured_names);
+        if (captures_self) {
+            *out_captures_self = true;
+            return true;
+        }
+    }
+    return true;
+}
+
 /* Emit the member declaration-initialization phase for a freshly allocated object. */
 static bool cg_emit_user_type_member_initializers(CG *cg,
                                                   const UserType *ut,
                                                   const char *object_expr,
                                                   FengToken blame) {
+    Scope *saved_scope = NULL;
+    Scope *initializer_scope = NULL;
+    bool captures_self = false;
+    bool ok = false;
+
     if (cg == NULL || ut == NULL || object_expr == NULL) {
         return false;
+    }
+
+    if (!cg_user_type_member_initializers_capture_self(ut, &captures_self)) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    if (captures_self) {
+        FengSlice self_name = {"self", 4U};
+        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
+
+        saved_scope = cg->cur_scope;
+        initializer_scope = scope_push(saved_scope);
+        if (initializer_scope == NULL || self_t == NULL) {
+            cgtype_free(self_t);
+            if (initializer_scope != NULL) scope_pop_free(initializer_scope);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        self_t->user = (UserType *)ut;
+        cg->cur_scope = initializer_scope;
+        if (!cg_scope_bind_capture_cell(cg,
+                                        initializer_scope,
+                                        self_name,
+                                        self_t,
+                                        blame,
+                                        object_expr,
+                                        true,
+                                        false)) {
+            cgtype_free(self_t);
+            goto cleanup;
+        }
+        cgtype_free(self_t);
     }
 
     for (size_t i = 0; i < ut->field_count; ++i) {
@@ -13024,7 +13137,7 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
                                                        uf->type,
                                                        &init);
             if (!ok) {
-                return false;
+                goto cleanup;
             }
             ok = cg_emit_user_field_value_store(cg,
                                                 object_expr,
@@ -13034,16 +13147,24 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
                                                 false);
             er_free(&init);
             if (!ok) {
-                return false;
+                goto cleanup;
             }
         } else if (!cg_emit_user_field_default_value(cg,
                                                      object_expr,
                                                      uf,
                                                      member != NULL ? member->token : blame)) {
-            return false;
+            goto cleanup;
         }
     }
-    return true;
+    ok = true;
+
+cleanup:
+    if (initializer_scope != NULL) {
+        if (ok) cg_release_scope(cg, initializer_scope);
+        cg->cur_scope = saved_scope;
+        scope_pop_free(initializer_scope);
+    }
+    return ok;
 }
 
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
