@@ -58,7 +58,7 @@
 
 ### 3.2 硬约束
 
-本方案必须满足以下运行时成本约束：
+本方案必须满足严格的 **0 增量运行时开销** 约束。这里的“0 增量”不是只指对象布局或 runtime API 不新增，而是指所有当前已经支持的泛型类型与调用场景，在所有情况下生成后的运行时代价只能持平或减少，不能增加。
 
 1. 允许增加编译期代码与静态 descriptor。
 2. 不允许新增堆分配。
@@ -67,6 +67,11 @@
 5. 不允许为了 aggregate 泛型支持增加 generic boxing。
 6. 不允许修改 aggregate walker 的热点分支结构。
 7. 新 aggregate 类型接入后，其运行时成本必须等价于“直接使用该类型本来就需要承担的成本”，而不是额外叠加“泛型支持成本”。
+8. 对当前已支持的泛型实参类型与调用场景，generated C 不得新增额外函数调用、条件分支、retain/release、assign/take/default-init、临时值生命周期管理、descriptor 转发、wrapper/thunk 调用或 runtime helper 调用。
+9. 对当前已支持的 `trivial` 类型，仍必须走原有直接值路径；不得因为统一抽象而绕入 aggregate descriptor 查询或 aggregate 生命周期 API。
+10. 对当前已支持的 `managed-pointer` 类型，仍必须走原有单指针路径；不得绕入 aggregate API，也不得增加额外 retain/release。
+11. 对当前已支持的 object-form `spec` aggregate，生成的 aggregate 生命周期调用序列必须与现状等价或更少；不得新增 wrapper、boxing、额外 indirection 或额外 cleanup 槽。
+12. 对当前已有 generic descriptor forwarding 场景，不得新增运行时判断、descriptor 复制、descriptor 适配器分配或额外转发层。
 
 ### 3.3 非目标
 
@@ -83,6 +88,8 @@ runtime 当前已经具备处理任意 aggregate-with-managed-slots 的抽象。
 
 - 统一提取 aggregate 的 carrier 形状、descriptor 符号、managed-slot flatten 规则、默认初始化事实；
 - 让 generic descriptor 构造、字段 flatten、数组元素处理、结果槽清理等路径共享同一份 aggregate 事实来源。
+
+这层收敛只能改变编译器内部如何取得类型事实，不得改变当前已支持场景的 generated C 运行时操作数量。若某个实现方案需要在生成代码中增加新的判断、调用或临时对象，即使 runtime descriptor 结构没有变化，也视为违反本方案。
 
 ### 4.2 新 aggregate 类型的接入责任必须一次性收敛
 
@@ -123,7 +130,7 @@ future tuple / union value 的接入，不应表现为：
 6. 默认初始化是 zero-bytes 还是 init-fn。
 7. 对应的 runtime `type_kind` 是什么。
 
-这层抽象必须是编译期静态查询，不得产生 runtime callback。
+这层抽象必须是编译期静态查询，不得产生 runtime callback，也不得在 generated C 中引入新的运行时查询步骤。对当前已经支持的类型，切换到该 contract 后生成代码的关键调用序列必须保持等价或更少。
 
 ### 5.2 用统一 contract 替换当前 scattered helper
 
@@ -208,8 +215,20 @@ future tuple / union value 的接入，不应表现为：
 1. `feng_aggregate.c` 不因 future aggregate 类型新增任何 kind-specific 热点分支。
 2. `FengGenericParamDescriptor` 与 aggregate 生命周期 ABI 不因本方案而新增实例级成本。
 3. codegen 中不再通过 scattered spec-only helper 决定 aggregate flatten 与 generic descriptor 生成。
+4. `src/runtime/feng_runtime.h` 的 descriptor 结构定义保持不变；除注释外，不应出现 runtime ABI 结构性修改。
+5. `src/runtime/feng_expression.c` 不因本轮 aggregate introspection 收敛新增 helper 分支；runtime-generic helper 语义扩展必须作为 future aggregate 语义接入的独立事项处理。
 
-### 8.2 回归验证
+### 8.2 运行时零增量验证
+
+对所有当前已经支持的泛型类型与调用场景，必须验证 generated C 的关键运行时路径持平或减少：
+
+1. `trivial` 泛型实参：不新增 aggregate descriptor、aggregate API 调用、额外临时值 cleanup 或 runtime helper 调用。
+2. `managed-pointer` 泛型实参：不新增额外 retain/release、wrapper/thunk、条件分支或 aggregate API 调用。
+3. object-form `spec` aggregate 泛型实参：`feng_aggregate_retain/release/assign/take/default_init` 的调用序列保持等价或减少，不新增 boxing、wrapper 或额外 cleanup 槽。
+4. generic descriptor forwarding：不新增运行时 descriptor 复制、适配器分配或额外间接层。
+5. 数组元素、字段、if/match result slot 等邻接路径：切换到统一 contract 后，不得比当前 spec-only 路径多出运行时分派或生命周期操作。
+
+### 8.3 回归验证
 
 现有 spec aggregate 相关能力必须保持不回退，至少覆盖：
 
@@ -218,7 +237,7 @@ future tuple / union value 的接入，不应表现为：
 3. aggregate field。
 4. if/match aggregate result。
 
-### 8.3 新能力验证
+### 8.4 新能力验证
 
 当 tuple / value aggregate 能力落地时，至少补两类测试：
 
@@ -238,9 +257,9 @@ future tuple / union value 的接入，不应表现为：
 3. `dev/feng-generics-aggregate-optimize.md`
     方案文档需要同步记录影响面、实施顺序和验收口径。
 4. `src/runtime/feng_runtime.h`
-    预期不需要改动 descriptor 结构定义；最多是注释或断言层面的轻微同步。若本轮严格按本文方案执行，应避免结构性变更。
+    预期不需要改动 descriptor 结构定义；本轮仅允许注释层面的同步。若出现任何结构字段、枚举语义或 ABI 声明改动，应暂停并重新确认是否偏离 0 增量运行时开销目标。
 5. `src/runtime/feng_expression.c`
-    预期不属于本轮主改动面。只有在本轮同时扩展 future aggregate 的 runtime-generic helper 语义时才需要改；按当前收敛口径，应保持不动或极小改动。
+    预期不属于本轮改动面，按当前收敛口径应为 0 行。只有 future aggregate 真实进入 runtime-generic helper 语义时，才允许另行设计并修改该文件。
 6. `src/runtime/feng_aggregate.c`
     预期不改。该文件应继续作为“不得增加 kind-specific 分支”的验证基线。
 
@@ -254,10 +273,10 @@ future tuple / union value 的接入，不应表现为：
     主要用于补或改 focused regression，确保现有 spec aggregate 路径不回退。
 3. `dev/feng-generics-aggregate-optimize.md`：约 40 到 100 行。
     主要用于补实施影响、TODO 和验收说明。
-4. `src/runtime/feng_runtime.h`：0 到 10 行。
-    目标是保持 descriptor 结构定义不变；若出现超过这个量级的修改，应重新审查是否偏离方案边界。
-5. `src/runtime/feng_expression.c`：0 到 20 行。
-    仅在本轮误把 runtime-generic helper 语义一起纳入时才会出现改动；按当前方案应尽量为 0。
+4. `src/runtime/feng_runtime.h`：0 行代码改动，最多允许注释同步。
+    目标是保持 descriptor 结构定义与 runtime ABI 不变；若出现代码级改动，应重新审查是否偏离方案边界。
+5. `src/runtime/feng_expression.c`：0 行。
+    本轮不扩展 runtime-generic helper 语义；若需要修改该文件，说明任务范围已经超出 aggregate introspection 收敛。
 6. `src/runtime/feng_aggregate.c`：0 行。
 
 按上述口径，**本轮总改动量预计约 300 到 560 行，绝大部分集中在 `src/codegen/codegen.c`**。
@@ -282,6 +301,8 @@ future tuple / union value 的接入，不应表现为：
     优先保留并扩展 `test/codegen/test_codegen.c` 中现有 spec aggregate 锚点，确认 generic spec arg、aggregate return、aggregate field、if/match aggregate result 不回退。
 8. 做回归与结构检查。
     检查 `src/runtime/feng_runtime.h` 的 descriptor 结构是否保持稳定、`src/runtime/feng_aggregate.c` 是否完全未被污染，并确认 codegen 不再依赖 scattered spec-only helper。
+9. 做 generated C 成本检查。
+    对当前已支持的 trivial、managed-pointer、object-form spec aggregate、descriptor forwarding 代表用例，比较关键 generated C 调用序列，确认没有新增函数调用、分支、retain/release、aggregate API 调用、wrapper 或额外 cleanup 槽。
 
 ### 10.2 后续联动 TODO
 
@@ -308,3 +329,4 @@ future tuple / union value 的接入，不应表现为：
 2. 对修改封闭。
 3. 不增加运行时实例成本。
 4. 不增加 runtime 热路径复杂度。
+5. 对所有当前已支持的泛型类型与场景，generated C 运行时操作数量持平或减少。
