@@ -4130,6 +4130,67 @@ static const char *kUserConstructorFormsSrc =
     "    return a.id + b.id + c.id + d.id + e.id;\n"
     "}\n";
 
+static void test_empty_array_literal_codegen_uses_target_contexts(void) {
+    static const char *kSource =
+        "mod feng.codegen.emptyarray;\n"
+        "type InitializedHolder {\n"
+        "    let values: int[] = [];\n"
+        "}\n"
+        "type LiteralHolder {\n"
+        "    var values: int[];\n"
+        "}\n"
+        "fn take(values: int[]): int {\n"
+        "    return 1;\n"
+        "}\n"
+        "fn generic_take<T>(values: T[]): int {\n"
+        "    return 1;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let local: int[] = [];\n"
+        "    let initialized = InitializedHolder();\n"
+        "    let literal = LiteralHolder { values: [] };\n"
+        "    return take([]) + take(local) + take(initialized.values) +\n"
+        "        take(literal.values) + generic_take<int>([]);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/empty_array_literal_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (empty array literal target contexts): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "feng_array_new(NULL, sizeof(int32_t), false, (size_t)0)") >= 4U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_user_constructor_forms_codegen(void) {
     FengProgram *program = parse_or_die(kUserConstructorFormsSrc, "ctor1.ff");
     const FengProgram *programs[1] = {program};
@@ -4370,6 +4431,7 @@ int main(void) {
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
     test_type_field_initializers_codegen();
     test_type_field_callable_lambda_initializer_codegen();
+    test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;

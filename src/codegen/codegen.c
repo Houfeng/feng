@@ -971,6 +971,10 @@ static bool cg_emit_initializer_for_declared_type(CG *cg,
                                                   const FengExpr *initializer,
                                                   const CGType *decl_type,
                                                   ExprResult *out);
+static bool cg_emit_expr_for_expected_type(CG *cg,
+                                           const FengExpr *expr,
+                                           const CGType *expected_type,
+                                           ExprResult *out);
 static void er_free(ExprResult *r);
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out);
@@ -7885,7 +7889,7 @@ static bool cg_emit_constructor_invoke(CG *cg,
 
     for (size_t i = 0; i < arg_count; ++i) {
         ExprResult ar;
-        if (!cg_emit_expr(cg, args[i], &ar)) {
+        if (!cg_emit_expr_for_expected_type(cg, args[i], ctor->param_types[i], &ar)) {
             ok = false;
             break;
         }
@@ -9445,12 +9449,12 @@ static bool cg_emit_registered_call(CG *cg,
     buf_init(&args_buf);
     for (size_t i = 0; i < e->as.call.arg_count; i++) {
         ExprResult ar;
+        CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
 
-        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+        if (!cg_emit_expr_for_expected_type(cg, e->as.call.args[i], expected_ty, &ar)) {
             ok = false;
             break;
         }
-        CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
         const UserType *expected_abi_user =
             (ext != NULL && !ext->uses_runtime_contract) ? cg_abi_value_user_type(expected_ty)
                                                          : NULL;
@@ -9703,7 +9707,10 @@ static bool cg_emit_callable_value_call(CG *cg,
     buf_init(&args_buf);
     for (size_t i = 0; i < e->as.call.arg_count; ++i) {
         ExprResult ar;
-        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            e->as.call.args[i],
+                                            spec->callable_param_types[i],
+                                            &ar)) {
             buf_free(&args_buf);
             return false;
         }
@@ -9768,7 +9775,10 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         char *cty = NULL;
         Buf addr; buf_init(&addr);
 
-        if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            e->as.call.args[i],
+                                            constraint->callable_param_types[i],
+                                            &ar)) {
             ok = false;
             break;
         }
@@ -9994,7 +10004,10 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     }
 
     for (size_t i = 0; i < arg_count; ++i) {
-        if (!cg_emit_expr(cg, e->as.call.args[i], &args[i])) {
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            e->as.call.args[i],
+                                            um->param_types[i],
+                                            &args[i])) {
             ok = false;
             goto cleanup;
         }
@@ -10591,7 +10604,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             bool ok = true;
             for (size_t i = 0; i < e->as.call.arg_count; i++) {
                 ExprResult ar;
-                if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
+                if (!cg_emit_expr_for_expected_type(cg,
+                                                    e->as.call.args[i],
+                                                    sm->param_types[i],
+                                                    &ar)) { ok = false; break; }
                 if (cgtype_is_managed(ar.type) && ar.owns_ref) {
                     cg_materialize_to_local(cg, &ar, "_t");
                 } else if (cgtype_is_aggregate(ar.type)) {
@@ -10689,7 +10705,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             bool ok = true;
             for (size_t i = 0; i < e->as.call.arg_count; i++) {
                 ExprResult ar;
-                if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) { ok = false; break; }
+                if (!cg_emit_expr_for_expected_type(cg,
+                                                    e->as.call.args[i],
+                                                    sm->param_types[i],
+                                                    &ar)) { ok = false; break; }
                 if (cgtype_is_managed(ar.type) && ar.owns_ref) {
                     cg_materialize_to_local(cg, &ar, "_t");
                 } else if (cgtype_is_aggregate(ar.type)) {
@@ -10752,7 +10771,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             for (size_t i = 0; i < e->as.call.arg_count; i++) {
                 ExprResult ar;
                 char *arg_expr = NULL;
-                if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+                if (!cg_emit_expr_for_expected_type(cg,
+                                                    e->as.call.args[i],
+                                                    um->param_types[i],
+                                                    &ar)) {
                     buf_free(&args_buf); er_free(&recv); return false;
                 }
                 if (um->param_types[i] != NULL && um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
@@ -10975,7 +10997,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         Buf args_buf; buf_init(&args_buf);
         for (size_t i = 0; i < e->as.call.arg_count; i++) {
             ExprResult ar;
-            if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                e->as.call.args[i],
+                                                um->param_types[i],
+                                                &ar)) {
                 buf_free(&args_buf); er_free(&recv); return false;
             }
             if (cgtype_is_managed(ar.type) && ar.owns_ref) {
@@ -11652,10 +11677,10 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         assigned[idx] = true;
         ExprResult v;
-        if (!cg_emit_expr(cg, fi->value, &v)) {
+        const UserField *uf = &ut->fields[idx];
+        if (!cg_emit_expr_for_expected_type(cg, fi->value, uf->type, &v)) {
             free(assigned); free(tmp); return false;
         }
-        const UserField *uf = &ut->fields[idx];
         if (!cg_emit_user_field_value_store(cg, tmp, uf, &v, fi->token, true)) {
             er_free(&v);
             free(assigned); free(tmp);
@@ -11717,9 +11742,62 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
                                         ExprResult *out) {
     er_init(out);
     if (e->as.array_literal.count == 0) {
-        return cg_fail(cg, e->token,
-            "codegen: empty array literal needs an explicit element type"
-            " (not yet supported in this iteration)");
+        if (expected_elem == NULL) {
+            return cg_fail(cg, e->token,
+                "codegen: empty array literal needs an explicit element type");
+        }
+
+        CGType *elem = cgtype_clone(expected_elem);
+        char *arr_tmp = cg_fresh_temp(cg, "_arr");
+        char *elem_cty = cg_ctype_dup(elem);
+        char *desc_expr = cg_array_element_descriptor(elem);
+        if (elem == NULL || arr_tmp == NULL || elem_cty == NULL || desc_expr == NULL) {
+            cgtype_free(elem);
+            free(arr_tmp); free(elem_cty); free(desc_expr);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+
+        bool elem_managed = cgtype_is_managed(elem);
+        bool elem_aggregate = cgtype_is_aggregate(elem);
+        const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+        if (elem_aggregate && agg_desc == NULL) {
+            cgtype_free(elem);
+            free(arr_tmp); free(elem_cty); free(desc_expr);
+            return cg_fail(cg, e->token,
+                "codegen: missing aggregate descriptor for spec array element");
+        }
+
+        if (elem_aggregate) {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                arr_tmp, agg_desc, elem_cty);
+        } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
+            const char *desc = cg_generic_param_desc_name(cg, elem->generic_param_index);
+            if (desc == NULL) {
+                cgtype_free(elem);
+                free(arr_tmp); free(elem_cty); free(desc_expr);
+                return cg_fail(cg, e->token,
+                    "codegen: generic empty array literal requires an active generic descriptor");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "%s->kind, %s->aggregate, NULL, %s->size, (size_t)0);\n",
+                arr_tmp, desc, desc, desc);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false");
+        }
+        free(elem_cty); free(desc_expr);
+
+        out->c_expr = strdup(arr_tmp);
+        free(arr_tmp);
+        out->type = cgtype_new(CG_TYPE_ARRAY);
+        if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
+        out->type->element = elem;
+        out->owns_ref = true;
+        return true;
     }
     /* Evaluate every element and ensure the inferred element type is
      * uniform. We materialize +1 owners up-front so they are released
@@ -12911,16 +12989,23 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
     return *out_expr != NULL;
 }
 
+static bool cg_emit_expr_for_expected_type(CG *cg,
+                                           const FengExpr *expr,
+                                           const CGType *expected_type,
+                                           ExprResult *out) {
+    if (expected_type != NULL && expected_type->kind == CG_TYPE_ARRAY &&
+        expected_type->element != NULL && expr != NULL &&
+        expr->kind == FENG_EXPR_ARRAY_LITERAL) {
+        return cg_emit_array_literal_typed(cg, expr, expected_type->element, out);
+    }
+    return cg_emit_expr(cg, expr, out);
+}
+
 static bool cg_emit_initializer_for_declared_type(CG *cg,
                                                   const FengExpr *initializer,
                                                   const CGType *decl_type,
                                                   ExprResult *out) {
-    if (decl_type != NULL && decl_type->kind == CG_TYPE_ARRAY &&
-        decl_type->element != NULL && initializer != NULL &&
-        initializer->kind == FENG_EXPR_ARRAY_LITERAL) {
-        return cg_emit_array_literal_typed(cg, initializer, decl_type->element, out);
-    }
-    return cg_emit_expr(cg, initializer, out);
+    return cg_emit_expr_for_expected_type(cg, initializer, decl_type, out);
 }
 
 /* Emit a write into an object field, either as first construction-time
@@ -16270,7 +16355,10 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             char *arg_expr = NULL;
 
             er_init(&ar);
-            if (!cg_emit_expr(cg, e->as.call.args[i], &ar)) {
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                e->as.call.args[i],
+                                                param_types[i],
+                                                &ar)) {
                 buf_free(&args_buf);
                 goto cleanup;
             }
@@ -16417,18 +16505,9 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     size_t tp_count  = gfn->type_param_count;
     size_t arg_count = e->as.call.arg_count;
 
-    /* ---- Step 1: emit all argument expressions ---- */
+    /* ---- Step 1: prepare explicit type arguments, then emit arguments. ---- */
     ExprResult *args = calloc(arg_count + 1, sizeof *args);
     if (!args) return cg_fail(cg, e->token, "codegen: out of memory");
-    for (size_t i = 0; i < arg_count; i++) {
-        if (!cg_emit_expr(cg, e->as.call.args[i], &args[i])) {
-            for (size_t j = 0; j < i; j++) er_free(&args[j]);
-            free(args);
-            return false;
-        }
-    }
-
-    /* ---- Step 2: determine concrete type for each type parameter ---- */
     CGType **type_args = calloc(tp_count + 1, sizeof *type_args);
     if (!type_args) {
         for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
@@ -16437,16 +16516,62 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     }
     bool ok = true;
 
-    if (e->as.call.has_explicit_type_args &&
-        e->as.call.explicit_type_arg_count == tp_count) {
-        /* Use explicit type arguments, e.g. identity<int>(42). */
-        for (size_t i = 0; i < tp_count; i++) {
+    if (e->as.call.has_explicit_type_args) {
+        if (e->as.call.explicit_type_arg_count != tp_count) {
+            cg_fail(cg, e->token,
+                "codegen: generic function '%s' expects %zu type argument(s), got %zu",
+                gfn->feng_name,
+                tp_count,
+                e->as.call.explicit_type_arg_count);
+            ok = false;
+        }
+        for (size_t i = 0; ok && i < tp_count; i++) {
             if (!cg_resolve_type(cg, e->as.call.explicit_type_args[i],
                                  &e->token, &type_args[i])) {
                 ok = false; break;
             }
         }
-    } else {
+    }
+    if (!ok) goto bail;
+
+    for (size_t i = 0; i < arg_count; i++) {
+        CGType *expected_arg_type = NULL;
+
+        if (e->as.call.has_explicit_type_args &&
+            i < sig->param_count && sig->params[i].type != NULL) {
+            CGType *pattern = NULL;
+
+            if (!cg_resolve_callable_type_template(cg,
+                                                   sig,
+                                                   sig->params[i].type,
+                                                   &sig->params[i].token,
+                                                   &pattern)) {
+                ok = false;
+            } else {
+                expected_arg_type = cg_instantiate_callable_type_from_args(pattern,
+                                                                          type_args,
+                                                                          tp_count);
+                cgtype_free(pattern);
+                if (expected_arg_type == NULL) {
+                    cg_fail(cg, sig->params[i].token,
+                        "codegen: cannot determine concrete parameter type for generic function '%s'",
+                        gfn->feng_name);
+                    ok = false;
+                }
+            }
+        }
+        if (ok && !cg_emit_expr_for_expected_type(cg,
+                                                  e->as.call.args[i],
+                                                  expected_arg_type,
+                                                  &args[i])) {
+            ok = false;
+        }
+        cgtype_free(expected_arg_type);
+        if (!ok) goto bail;
+    }
+
+    /* ---- Step 2: determine inferred type arguments when not explicit. ---- */
+    if (!e->as.call.has_explicit_type_args) {
         /* Infer type arguments from actual argument types. */
         for (size_t i = 0; i < tp_count && ok; i++) {
             type_args[i] = cg_infer_type_arg(gfn, i, args, arg_count);
