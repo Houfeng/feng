@@ -34,6 +34,8 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "%*s[--name=<artifact>] \n", compile_indent, "");
     fprintf(stderr, "%*s[--release] \n", compile_indent, "");
     fprintf(stderr, "%*s[--keep-ir]\n", compile_indent, "");
+    fprintf(stderr, "%*s[--pkg=<.fb路径>|--pkg <.fb路径>]... \n", compile_indent, "");
+    fprintf(stderr, "%*s[--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...\n", compile_indent, "");
     fprintf(stderr, "\n");
     fprintf(stderr, "Global:\n");
     fprintf(stderr, "  -h, --help      Display this message.\n");

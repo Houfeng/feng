@@ -19,8 +19,9 @@
  *      skipped because it is implicit on POSIX hosts. Other names have a
  *      leading "lib" prefix stripped.
  *   3. For `bin`, spawn ${CC:-cc} with a fixed compiler flag set, the
- *      generated C source, the runtime archive, `-lpthread`, and the
- *      derived link flags, producing the final executable at `out_path`.
+ *      generated C source, the runtime archive, `-lpthread`, the
+ *      derived link flags, and any explicit `--lib` inputs from direct
+ *      mode, producing the final executable at `out_path`.
  *   4. For `lib`, compile the generated C to an object file and archive it
  *      into a static library at `out_path`.
  *
@@ -43,6 +44,8 @@ typedef struct FengCliDriverOptions {
     size_t program_count;
     const char *const *bundle_paths;
     size_t bundle_count;
+    const char *const *link_libs;
+    size_t link_lib_count;
     bool release;
     bool keep_intermediate;
 } FengCliDriverOptions;

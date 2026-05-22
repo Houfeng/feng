@@ -1396,6 +1396,37 @@ static char *map_library_name(const char *raw) {
     return str_dup_cstr(name);
 }
 
+static bool cli_link_library_is_path(const char *raw) {
+    if (raw == NULL || raw[0] == '\0') return false;
+    return strchr(raw, '/') != NULL
+           || strchr(raw, '\\') != NULL
+           || path_has_suffix(raw, ".a")
+           || path_has_suffix(raw, ".so")
+           || path_has_suffix(raw, ".dylib")
+           || path_has_suffix(raw, ".dll")
+           || path_has_suffix(raw, ".lib");
+}
+
+static char *map_cli_link_library(const char *raw) {
+    const char *name = raw;
+    char *flag;
+    size_t need;
+
+    if (raw == NULL || raw[0] == '\0') return NULL;
+    if (cli_link_library_is_path(raw)) {
+        return str_dup_cstr(raw);
+    }
+    if (strncmp(name, "lib", 3) == 0) {
+        name += 3;
+    }
+    if (name[0] == '\0') return NULL;
+    need = strlen(name) + 3U;
+    flag = malloc(need);
+    if (flag == NULL) return NULL;
+    snprintf(flag, need, "-l%s", name);
+    return flag;
+}
+
 static bool string_array_contains(char *const *arr, size_t count, const char *needle) {
     for (size_t i = 0; i < count; ++i) {
         if (strcmp(arr[i], needle) == 0) return true;
@@ -1715,6 +1746,16 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 break;
             }
             snprintf(flag, need, "-l%s", libs[i]);
+            ok = argv_push(&av, flag);
+            free(flag);
+        }
+        for (size_t i = 0; ok && i < opts->link_lib_count; ++i) {
+            char *flag = map_cli_link_library(opts->link_libs[i]);
+
+            if (flag == NULL) {
+                ok = false;
+                break;
+            }
             ok = argv_push(&av, flag);
             free(flag);
         }

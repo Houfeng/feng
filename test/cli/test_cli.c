@@ -203,6 +203,16 @@ static char *make_pkg_option(const char *package_path) {
     return out;
 }
 
+static char *make_lib_option(const char *library_name_or_path) {
+    size_t len = strlen(library_name_or_path);
+    char *out = (char *)malloc(len + 7U);
+
+    ASSERT(out != NULL);
+    memcpy(out, "--lib=", 6U);
+    memcpy(out + 6U, library_name_or_path, len + 1U);
+    return out;
+}
+
 static char *host_static_library_file_name(const char *stem) {
     char *name = feng_fb_host_static_library_file_name(stem);
 
@@ -1954,6 +1964,163 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
     free(dep_out_dir);
     free(dep_source_path);
     free(dep_src_dir);
+}
+
+static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
+    char template_path[] = "/tmp/feng_cli_direct_cli_lib_name_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *out_dir;
+    char *binary_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *out_opt;
+    char *lib_opt;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "build");
+    binary_path = path_join(out_dir, "bin/main");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(src_dir);
+    write_text_file(source_path,
+                    "mod test.cli.directclilibname;\n"
+                    "fn main(args: string[]) {}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    out_opt = make_out_option(out_dir);
+    lib_opt = make_lib_option("m");
+    {
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            lib_opt,
+        };
+        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+    }
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(strstr(cc_log_text, "-lm") != NULL);
+
+    free(saved_cc);
+    free(lib_opt);
+    free(out_opt);
+    free(cc_log_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(binary_path);
+    free(out_dir);
+    free(source_path);
+    free(src_dir);
+}
+
+static void test_direct_build_passes_cli_library_path_verbatim(void) {
+    char template_path[] = "/tmp/feng_cli_direct_cli_lib_path_XXXXXX";
+    char *workspace_dir;
+    char *native_dir;
+    char *native_source_path;
+    char *native_library_path;
+    char *src_dir;
+    char *source_path;
+    char *out_dir;
+    char *binary_path;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *cc_log_text;
+    char *out_opt;
+    char *saved_cc = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    native_dir = path_join(workspace_dir, "native");
+    native_source_path = path_join(native_dir, "helper.c");
+    native_library_path = host_static_library_path(native_dir, "helper");
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "build");
+    binary_path = path_join(out_dir, "bin/main");
+    cc_log_path = path_join(workspace_dir, "cc.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+
+    mkdir_p(native_dir);
+    mkdir_p(src_dir);
+    write_text_file(native_source_path,
+                    "int helper_unused(void) {\n"
+                    "  return 1;\n"
+                    "}\n");
+    build_native_static_library_or_die(native_source_path, native_library_path);
+    write_text_file(source_path,
+                    "mod test.cli.directclilibpath;\n"
+                    "fn main(args: string[]) {}\n");
+
+    if (getenv("CC") != NULL) {
+        saved_cc = dup_cstr(getenv("CC"));
+    }
+    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+
+    out_opt = make_out_option(out_dir);
+    {
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_opt,
+            "--name=main",
+            "--lib",
+            native_library_path,
+        };
+        ASSERT(feng_cli_direct_main("feng", 6, argv) == 0);
+    }
+
+    if (saved_cc != NULL) {
+        ASSERT(setenv("CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("CC") == 0);
+    }
+
+    ASSERT(path_exists(binary_path));
+    cc_log_text = read_text_file(cc_log_path);
+    ASSERT(strstr(cc_log_text, native_library_path) != NULL);
+
+    free(saved_cc);
+    free(out_opt);
+    free(cc_log_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(binary_path);
+    free(out_dir);
+    free(source_path);
+    free(src_dir);
+    free(native_library_path);
+    free(native_source_path);
+    free(native_dir);
 }
 
 static void test_direct_build_consumes_package_generic_function(void) {
@@ -8217,6 +8384,8 @@ int main(void) {
     test_bundle_writer_includes_extlib_and_assets_without_empty_dirs();
     test_direct_build_releases_bundle_extlib_dynamic_libraries_only();
     test_direct_build_links_only_used_bundle_extlib_static_libraries();
+    test_direct_build_maps_cli_library_name_to_link_flag();
+    test_direct_build_passes_cli_library_path_verbatim();
     test_direct_build_consumes_package_generic_function();
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_enum();

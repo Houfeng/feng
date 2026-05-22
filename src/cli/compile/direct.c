@@ -514,6 +514,8 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         .program_count = prog_count,
         .bundle_paths = (const char *const *)bundle_paths,
         .bundle_count = bundle_count,
+        .link_libs = (const char *const *)opts.link_libs,
+        .link_lib_count = (size_t)opts.link_lib_count,
         .release = opts.release,
         .keep_intermediate = opts.keep_intermediate,
     };

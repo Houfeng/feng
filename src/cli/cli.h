@@ -28,7 +28,7 @@ int feng_cli_lsp_main(const char *program, int argc, char **argv);
 
 int feng_cli_legacy_compile_main(const char *program, int argc, char **argv);
 
-/* P4 direct compile mode entry: `feng <files...> --target=bin --out=<dir>`. */
+/* P4 direct compile mode entry: `feng <files...> --target=<bin|lib> --out=<dir>`. */
 int feng_cli_direct_main(const char *program, int argc, char **argv);
 
 #endif /* FENG_CLI_CLI_H */

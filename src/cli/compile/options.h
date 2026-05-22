@@ -29,8 +29,8 @@ bool feng_cli_legacy_compile_parse(const char *program,
  * feng_cli_direct_options_dispose.
  */
 typedef struct FengCliDirectOptions {
-    FengCompileTarget target;     /* P4: only BIN supported. */
-    const char *out_dir;          /* required: <out>/ir/c, <out>/bin */
+    FengCompileTarget target;     /* Direct mode supports BIN and LIB outputs. */
+    const char *out_dir;          /* required: <out>/ir/c plus <out>/bin or <out>/lib */
     bool release;                 /* Selects release-vs-debug build mode. */
     bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
@@ -38,6 +38,8 @@ typedef struct FengCliDirectOptions {
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
     int package_path_count;
     const char **package_paths;   /* heap-allocated array of borrowed argv ptrs */
+    int link_lib_count;
+    const char **link_libs;       /* heap-allocated array of borrowed argv ptrs */
 } FengCliDirectOptions;
 
 bool feng_cli_direct_options_parse(const char *program,

@@ -47,11 +47,13 @@ bool feng_cli_legacy_compile_parse(const char *program,
 /* --- P4 direct mode option parser ----------------------------------------
  *
  * Accepted forms:
- *   feng <file> [<file>...] --target=bin --out=<dir> [--name=<artifact>] [--release] [--keep-ir]
+ *   feng <file> [<file>...] --target=<bin|lib> --out=<dir>
+ *        [--name=<artifact>] [--release] [--keep-ir]
+ *        [--pkg=<.fb路径>|--pkg <.fb路径>]...
+ *        [--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...
  *
  * Flags may appear before, between, or after file arguments. `--target`
- * defaults to bin; `--target=lib` is accepted at parse time so a richer
- * downstream diagnostic can explain why it is not yet supported.
+ * defaults to bin.
  */
 bool feng_cli_direct_options_parse(const char *program,
                                    int argc,
@@ -59,8 +61,10 @@ bool feng_cli_direct_options_parse(const char *program,
                                    FengCliDirectOptions *out) {
     const char **inputs;
     const char **package_paths;
+    const char **link_libs;
     int input_count = 0;
     int package_path_count = 0;
+    int link_lib_count = 0;
     int index;
 
     out->target = FENG_COMPILE_TARGET_BIN;
@@ -72,6 +76,8 @@ bool feng_cli_direct_options_parse(const char *program,
     out->inputs = NULL;
     out->package_path_count = 0;
     out->package_paths = NULL;
+    out->link_lib_count = 0;
+    out->link_libs = NULL;
 
     if (argc <= 0) {
         feng_cli_print_usage(program);
@@ -80,8 +86,10 @@ bool feng_cli_direct_options_parse(const char *program,
 
     inputs = calloc((size_t)argc, sizeof(*inputs));
     package_paths = calloc((size_t)argc, sizeof(*package_paths));
-    if (inputs == NULL || package_paths == NULL) {
+    link_libs = calloc((size_t)argc, sizeof(*link_libs));
+    if (inputs == NULL || package_paths == NULL || link_libs == NULL) {
         fprintf(stderr, "out of memory parsing direct compile options\n");
+        free(link_libs);
         free(package_paths);
         free(inputs);
         return false;
@@ -94,6 +102,7 @@ bool feng_cli_direct_options_parse(const char *program,
             continue;
         }
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            free(link_libs);
             free(package_paths);
             free(inputs);
             feng_cli_print_usage(program);
@@ -101,6 +110,7 @@ bool feng_cli_direct_options_parse(const char *program,
         }
         if (strncmp(arg, "--target", 8) == 0) {
             if (!feng_cli_parse_target_option(arg, &out->target)) {
+                free(link_libs);
                 free(package_paths);
                 free(inputs);
                 feng_cli_print_usage(program);
@@ -112,6 +122,7 @@ bool feng_cli_direct_options_parse(const char *program,
             out->out_dir = arg + 6;
             if (out->out_dir[0] == '\0') {
                 fprintf(stderr, "--out requires a non-empty directory path\n");
+                free(link_libs);
                 free(package_paths);
                 free(inputs);
                 return false;
@@ -130,6 +141,7 @@ bool feng_cli_direct_options_parse(const char *program,
             out->artifact_name = arg + 7;
             if (out->artifact_name[0] == '\0') {
                 fprintf(stderr, "--name requires a non-empty value\n");
+                free(link_libs);
                 free(package_paths);
                 free(inputs);
                 return false;
@@ -140,6 +152,7 @@ bool feng_cli_direct_options_parse(const char *program,
             const char *package_path = arg + 6;
             if (package_path[0] == '\0') {
                 fprintf(stderr, "--pkg requires a non-empty .fb path\n");
+                free(link_libs);
                 free(package_paths);
                 free(inputs);
                 return false;
@@ -152,6 +165,7 @@ bool feng_cli_direct_options_parse(const char *program,
 
             if (index + 1 >= argc || argv[index + 1][0] == '\0') {
                 fprintf(stderr, "--pkg requires a non-empty .fb path\n");
+                free(link_libs);
                 free(package_paths);
                 free(inputs);
                 return false;
@@ -160,7 +174,35 @@ bool feng_cli_direct_options_parse(const char *program,
             package_paths[package_path_count++] = package_path;
             continue;
         }
+        if (strncmp(arg, "--lib=", 6) == 0) {
+            const char *link_lib = arg + 6;
+
+            if (link_lib[0] == '\0') {
+                fprintf(stderr, "--lib requires a non-empty library path or name\n");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                return false;
+            }
+            link_libs[link_lib_count++] = link_lib;
+            continue;
+        }
+        if (strcmp(arg, "--lib") == 0) {
+            const char *link_lib;
+
+            if (index + 1 >= argc || argv[index + 1][0] == '\0') {
+                fprintf(stderr, "--lib requires a non-empty library path or name\n");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                return false;
+            }
+            link_lib = argv[++index];
+            link_libs[link_lib_count++] = link_lib;
+            continue;
+        }
         fprintf(stderr, "unknown option: %s\n", arg);
+        free(link_libs);
         free(package_paths);
         free(inputs);
         feng_cli_print_usage(program);
@@ -169,6 +211,7 @@ bool feng_cli_direct_options_parse(const char *program,
 
     if (input_count == 0) {
         fprintf(stderr, "no input files\n");
+        free(link_libs);
         free(package_paths);
         free(inputs);
         feng_cli_print_usage(program);
@@ -176,6 +219,7 @@ bool feng_cli_direct_options_parse(const char *program,
     }
     if (out->out_dir == NULL) {
         fprintf(stderr, "--out=<dir> is required for direct compile mode\n");
+        free(link_libs);
         free(package_paths);
         free(inputs);
         feng_cli_print_usage(program);
@@ -186,6 +230,8 @@ bool feng_cli_direct_options_parse(const char *program,
     out->inputs = inputs;
     out->package_path_count = package_path_count;
     out->package_paths = package_paths;
+    out->link_lib_count = link_lib_count;
+    out->link_libs = link_libs;
     return true;
 }
 
@@ -197,4 +243,7 @@ void feng_cli_direct_options_dispose(FengCliDirectOptions *opts) {
     free((void *)opts->package_paths);
     opts->package_paths = NULL;
     opts->package_path_count = 0;
+    free((void *)opts->link_libs);
+    opts->link_libs = NULL;
+    opts->link_lib_count = 0;
 }
