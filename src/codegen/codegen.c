@@ -124,6 +124,45 @@ typedef struct CGType {
     size_t generic_param_index;
 } CGType;
 
+typedef enum CGValueKind {
+    CG_VK_TRIVIAL = 0,
+    CG_VK_MANAGED_POINTER,
+    CG_VK_AGGREGATE
+} CGValueKind;
+
+typedef enum CGAggregateDefaultInitKind {
+    CG_AGGREGATE_DEFAULT_INIT_NONE = 0,
+    CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES,
+    CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
+} CGAggregateDefaultInitKind;
+
+typedef void (*CGAggregateSlotRowEmitter)(Buf *out,
+                                          const char *field_base_offsetof_expr,
+                                          const CGType *type);
+typedef void (*CGAggregateCleanupPushEmitter)(Buf *out,
+                                              const char *cname,
+                                              const CGType *type);
+typedef void (*CGAggregateCleanupZeroEmitter)(Buf *out,
+                                              const char *cname,
+                                              const CGType *type);
+
+/* Static codegen facts for value-model aggregates. These facts describe the
+ * generated descriptor and flattened managed-slot surface used by runtime
+ * aggregate APIs without adding any runtime query path. */
+typedef struct CGAggregateFacts {
+    CGValueKind value_kind;
+    const char *descriptor_name;
+    const char *value_struct_name;
+    const char *runtime_type_kind_name;
+    size_t pointer_slot_count;
+    CGAggregateDefaultInitKind default_init_kind;
+    CGAggregateSlotRowEmitter emit_pointer_slot_rows;
+    CGAggregateCleanupPushEmitter emit_cleanup_push;
+    CGAggregateCleanupZeroEmitter emit_cleanup_zero;
+} CGAggregateFacts;
+
+static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out);
+
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
     if (t) t->kind = k;
@@ -164,31 +203,26 @@ static CGType *cgtype_new_enum(const FengDecl *enum_decl) {
  *   CG_VK_TRIVIAL          — bit-copyable, no participation in ARC.
  *   CG_VK_MANAGED_POINTER  — single managed pointer (string / array / object).
  *   CG_VK_AGGREGATE        — by-value compound carrying one or more
- *                            FENG_SLOT_POINTER slots inside (e.g., the fat
- *                            spec value layout). No type currently classifies
- *                            here; the case is reserved for the value-model
- *                            fat-spec implementation (Step 4b) and is the
- *                            single dispatch point §7.2 mandates.
+ *                            FENG_SLOT_POINTER slots inside (currently the
+ *                            object-form fat spec value layout; future
+ *                            aggregate kinds classify through
+ *                            cg_aggregate_facts).
  *
  * `cgtype_is_managed` is preserved as a thin wrapper around this classifier
  * so the many ARC-emit call sites continue to read naturally; new code that
  * needs to branch by kind should call cgtype_value_kind directly. */
-typedef enum CGValueKind {
-    CG_VK_TRIVIAL = 0,
-    CG_VK_MANAGED_POINTER,
-    CG_VK_AGGREGATE
-} CGValueKind;
-
 static CGValueKind cgtype_value_kind(const CGType *t) {
     if (!t) return CG_VK_TRIVIAL;
+    CGAggregateFacts aggregate_facts;
+    if (cg_aggregate_facts(t, &aggregate_facts)) {
+        return aggregate_facts.value_kind;
+    }
     switch (t->kind) {
         case CG_TYPE_STRING:
         case CG_TYPE_ARRAY:
         case CG_TYPE_OBJECT:
         case CG_TYPE_CALLABLE:
             return CG_VK_MANAGED_POINTER;
-        case CG_TYPE_SPEC:
-            return CG_VK_AGGREGATE;
         case CG_TYPE_GENERIC_PARAM:
             /* Erased type: ARC dispatch happens at the generic call-site via
              * the FengGenericParamDescriptor; the placeholder itself is not
@@ -308,6 +342,10 @@ static const char *cg_runtime_type_kind_name(const CGType *t) {
     if (t->enum_decl != NULL) {
         return "FENG_RUNTIME_TYPE_ENUM";
     }
+    CGAggregateFacts aggregate_facts;
+    if (cg_aggregate_facts(t, &aggregate_facts)) {
+        return aggregate_facts.runtime_type_kind_name;
+    }
     switch (t->kind) {
         case CG_TYPE_BOOL: return "FENG_RUNTIME_TYPE_BOOL";
         case CG_TYPE_I8: return "FENG_RUNTIME_TYPE_I8";
@@ -324,7 +362,6 @@ static const char *cg_runtime_type_kind_name(const CGType *t) {
         case CG_TYPE_ARRAY: return "FENG_RUNTIME_TYPE_ARRAY";
         case CG_TYPE_OBJECT: return "FENG_RUNTIME_TYPE_OBJECT";
         case CG_TYPE_POINTER: return "FENG_RUNTIME_TYPE_POINTER";
-        case CG_TYPE_SPEC: return "FENG_RUNTIME_TYPE_SPEC";
         case CG_TYPE_CALLABLE: return "FENG_RUNTIME_TYPE_CALLABLE";
         default: return NULL;
     }
@@ -615,8 +652,9 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
         return;
     }
-    if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
-        buf_append_fmt(b, "struct %s", t->user_spec->c_value_struct_name);
+    CGAggregateFacts aggregate_facts;
+    if (t && cg_aggregate_facts(t, &aggregate_facts) && aggregate_facts.value_struct_name) {
+        buf_append_fmt(b, "struct %s", aggregate_facts.value_struct_name);
         return;
     }
     if (t && t->kind == CG_TYPE_CALLABLE && t->user_spec) {
@@ -994,8 +1032,17 @@ static bool cg_types_equal(const CGType *a, const CGType *b);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
-static void cg_emit_cleanup_push_for_aggregate_local(CG *cg, const char *cname);
-static const char *cg_aggregate_field_desc_name(const CGType *t);
+static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
+                                                     const char *cname,
+                                                     const CGType *type);
+static void cg_emit_cleanup_pops_for_aggregate_local(Buf *out, const CGType *type);
+static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
+                                                     const char *cname,
+                                                     const CGType *type);
+static const char *cg_aggregate_desc_name(const CGType *t);
+static bool cg_append_aggregate_default_init_call(Buf *out,
+                                                  const CGType *type,
+                                                  const char *lvalue_expr);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
@@ -2133,7 +2180,7 @@ static bool cg_emit_capture_cell_init_from_expr(CG *cg,
         if (owns_ref) {
             buf_append_fmt(cg->cur_body, "    %s->value = %s;\n", cell_expr, value_expr);
         } else {
-            const char *desc = cg_aggregate_field_desc_name(value_type);
+            const char *desc = cg_aggregate_desc_name(value_type);
             if (desc == NULL) {
                 return cg_fail(cg, blame,
                     "codegen: missing aggregate descriptor for capture cell");
@@ -2167,15 +2214,21 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
                                               const CGType *value_type,
                                               FengToken blame) {
     if (cgtype_is_aggregate(value_type)) {
-        const char *desc = cg_aggregate_field_desc_name(value_type);
-        if (desc == NULL) {
-            return cg_fail(cg, blame,
-                "codegen: missing aggregate descriptor for capture cell default-init");
+        Buf lvalue;
+        bool ok;
+        buf_init(&lvalue);
+        buf_append_fmt(&lvalue, "%s->value", cell_expr);
+        if (lvalue.data == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body,
-                       "    feng_aggregate_default_init(&%s->value, &%s);\n",
-                       cell_expr,
-                       desc);
+        buf_append_cstr(cg->cur_body, "    ");
+        ok = cg_append_aggregate_default_init_call(cg->cur_body, value_type, lvalue.data);
+        buf_free(&lvalue);
+        if (!ok) {
+            return cg_fail(cg, blame,
+                "codegen: missing aggregate default-init rule for capture cell");
+        }
+        buf_append_cstr(cg->cur_body, ";\n");
         return true;
     }
     {
@@ -7336,13 +7389,20 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         /* Trivial: feng_object_new already zeroed. */
         if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL) continue;
         if (cgtype_is_aggregate(sm->type)) {
-            const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
-            if (agg_desc == NULL) {
+            Buf lvalue;
+            bool ok;
+            buf_init(&lvalue);
+            buf_append_fmt(&lvalue, "_o->%s", sm->c_field_name);
+            if (lvalue.data == NULL) {
                 return;
             }
-            buf_append_fmt(td,
-                "    feng_aggregate_default_init(&_o->%s, &%s);\n",
-                sm->c_field_name, agg_desc);
+            buf_append_cstr(td, "    ");
+            ok = cg_append_aggregate_default_init_call(td, sm->type, lvalue.data);
+            buf_free(&lvalue);
+            if (!ok) {
+                return;
+            }
+            buf_append_cstr(td, ";\n");
             continue;
         }
         char *expr = NULL;
@@ -7381,7 +7441,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                         "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
                         s->c_default_subject_struct_name, sm->c_field_name);
                 } else if (cgtype_is_aggregate(sm->type)) {
-                    const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
+                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
                     if (agg_desc == NULL) {
                         return;
                     }
@@ -7776,7 +7836,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     } else if (cgtype_is_aggregate(r->type) && r->owns_ref) {
         /* Step 4b — fat spec value carries one +1 reference on `subject`. */
         scope_add(cg->cur_scope, tmp, tmp, cgtype_clone(r->type), false);
-        cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+        cg_emit_cleanup_push_for_aggregate_local(cg, tmp, r->type);
     }
     /* Free r->c_expr; r->type is preserved so caller-side decisions that
      * branch on the source type (e.g., extern STRING wrapping) keep
@@ -7810,7 +7870,7 @@ static bool cg_emit_return_expr_result(CG *cg,
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r->type)) {
-        const char *desc = cg_aggregate_field_desc_name(r->type);
+        const char *desc = cg_aggregate_desc_name(r->type);
         if (!desc) {
             er_free(r);
             return cg_fail(cg, blame,
@@ -9796,7 +9856,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
             cg_emit_cleanup_push_for_managed_local(cg, tmp);
             ar.owns_ref = false;
         } else if (cgtype_is_aggregate(ar.type) && ar.owns_ref) {
-            cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+            cg_emit_cleanup_push_for_aggregate_local(cg, tmp, ar.type);
             ar.owns_ref = false;
         }
         buf_append_fmt(&addr, "&%s", tmp);
@@ -10076,7 +10136,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
                     cg_emit_cleanup_push_for_managed_local(cg, tmp);
                     args[i].owns_ref = false;
                 } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp, args[i].type);
                     args[i].owns_ref = false;
                 }
                 Buf ab;
@@ -10382,7 +10442,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                     cg_emit_cleanup_push_for_managed_local(cg, tmp);
                     args[i].owns_ref = false;
                 } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp);
+                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp, args[i].type);
                     args[i].owns_ref = false;
                 }
                 Buf arg;
@@ -10475,7 +10535,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         if (!ret_is_erased && cgtype_is_managed(return_type)) {
             cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
         } else if (!ret_is_erased && cgtype_is_aggregate(return_type)) {
-            cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname);
+            cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname, return_type);
         }
         return_type = NULL;
     } else {
@@ -11759,7 +11819,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
 
         bool elem_managed = cgtype_is_managed(elem);
         bool elem_aggregate = cgtype_is_aggregate(elem);
-        const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+        const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
         if (elem_aggregate && agg_desc == NULL) {
             cgtype_free(elem);
             free(arr_tmp); free(elem_cty); free(desc_expr);
@@ -11870,7 +11930,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
     }
     bool elem_managed = cgtype_is_managed(elem);
     bool elem_aggregate = cgtype_is_aggregate(elem);
-    const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+    const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
     if (elem_aggregate && agg_desc == NULL) {
         free(arr_tmp); free(slots_tmp); free(elem_cty); free(desc_expr);
         cgtype_free(elem);
@@ -11966,7 +12026,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
 
     bool elem_managed   = cgtype_is_managed(elem);
     bool elem_aggregate = cgtype_is_aggregate(elem);
-    const char *agg_desc = elem_aggregate ? cg_aggregate_field_desc_name(elem) : NULL;
+    const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
     if (elem_aggregate && agg_desc == NULL) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
         cgtype_free(elem);
@@ -12258,7 +12318,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
                         ifv_name, r.c_expr, ifv_name, ifv_name);
                 }
             } else if (aggregate) {
-                const char *agg_desc = cg_aggregate_field_desc_name(result_type);
+                const char *agg_desc = cg_aggregate_desc_name(result_type);
                 if (agg_desc == NULL) {
                     er_free(&r);
                     cg->cur_scope = bsc->parent;
@@ -12347,7 +12407,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     bool managed = cgtype_is_managed(result_type);
     bool aggregate = cgtype_is_aggregate(result_type);
-    const char *agg_desc = aggregate ? cg_aggregate_field_desc_name(result_type) : NULL;
+    const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
@@ -12392,10 +12452,14 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
     } else if (aggregate) {
-        buf_append_fmt(cg->cur_body,
-            "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
-            cty, ifv, ifv, agg_desc);
-        cg_emit_cleanup_push_for_aggregate_local(cg, ifv);
+        buf_append_fmt(cg->cur_body, "    %s %s; ", cty, ifv);
+        if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, ifv)) {
+            free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
+            return cg_fail(cg, e->token,
+                "codegen: missing aggregate default-init rule for if-expression result");
+        }
+        buf_append_cstr(cg->cur_body, ";\n");
+        cg_emit_cleanup_push_for_aggregate_local(cg, ifv, result_type);
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
@@ -12502,7 +12566,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!result_type) return false;
     bool managed = cgtype_is_managed(result_type);
     bool aggregate = cgtype_is_aggregate(result_type);
-    const char *agg_desc = aggregate ? cg_aggregate_field_desc_name(result_type) : NULL;
+    const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
@@ -12553,10 +12617,14 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
     } else if (aggregate) {
-        buf_append_fmt(cg->cur_body,
-            "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
-            cty, ifv, ifv, agg_desc);
-        cg_emit_cleanup_push_for_aggregate_local(cg, ifv);
+        buf_append_fmt(cg->cur_body, "    %s %s; ", cty, ifv);
+        if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, ifv)) {
+            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            return cg_fail(cg, e->token,
+                "codegen: missing aggregate default-init rule for match expression result");
+        }
+        buf_append_cstr(cg->cur_body, ";\n");
+        cg_emit_cleanup_push_for_aggregate_local(cg, ifv, result_type);
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
             free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
@@ -12782,25 +12850,24 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
                            l->c_name, l->c_name);
         } else if (cgtype_is_aggregate(l->type)) {
-            /* Step 4b-β — drop the 4b-α subject-shortcut and route through
-             * the value-model aggregate API. The cleanup chain still holds
-             * `&local.subject` because the only managed slot of an
-             * object-form spec value is subject (single FENG_SLOT_POINTER).
-             * Pop first so a panic raised inside the release walk does not
-             * re-enter the same slot, then walk every managed slot via the
-             * descriptor, then zero `subject` to keep the post-release
-             * invariant aligned with the managed-local path. */
-            const char *desc = cg_aggregate_field_desc_name(l->type);
+            /* Pop every cleanup node registered for the aggregate's managed
+             * slots before releasing through the descriptor. If release
+             * panics, the throwing cleanup walk must not re-enter the same
+             * slots. */
+            const char *desc = cg_aggregate_desc_name(l->type);
             if (!desc) {
-                /* unreachable today: AGGREGATE means object-form spec. */
                 buf_append_fmt(cg->cur_body,
                     "    feng_panic(\"codegen: missing aggregate descriptor for %s\");\n",
                     l->c_name);
                 continue;
             }
+            buf_append_cstr(cg->cur_body, "    ");
+            cg_emit_cleanup_pops_for_aggregate_local(cg->cur_body, l->type);
             buf_append_fmt(cg->cur_body,
-                "    feng_cleanup_pop(); feng_aggregate_release(&%s, &%s); %s.subject = NULL;\n",
-                l->c_name, desc, l->c_name);
+                "feng_aggregate_release(&%s, &%s); ",
+                l->c_name, desc);
+            cg_emit_cleanup_zero_for_aggregate_local(cg->cur_body, l->c_name, l->type);
+            buf_append_cstr(cg->cur_body, "\n");
         }
     }
 }
@@ -12823,14 +12890,35 @@ static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
                    cname, cname, cname);
 }
 
-/* Step 4b — register the managed subject slot of a fat spec local on the
- * cleanup chain. The fat-spec ABI (codegen.h §value-model) places `subject`
- * at offset 0, but we still address it explicitly so a future ABI change
- * (extra header word) breaks loudly here. */
-static void cg_emit_cleanup_push_for_aggregate_local(CG *cg, const char *cname) {
-    buf_append_fmt(cg->cur_body,
-                   "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s.subject);\n",
-                   cname, cname, cname);
+/* Register every managed pointer slot of an aggregate local on the cleanup
+ * chain. The exact slot addresses are owned by the aggregate facts provider. */
+static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
+                                                     const char *cname,
+                                                     const CGType *type) {
+    CGAggregateFacts facts;
+    if (cg_aggregate_facts(type, &facts) && facts.emit_cleanup_push != NULL) {
+        facts.emit_cleanup_push(cg->cur_body, cname, type);
+    }
+}
+
+/* Emit one feng_cleanup_pop per cleanup node previously registered for the
+ * aggregate local. */
+static void cg_emit_cleanup_pops_for_aggregate_local(Buf *out, const CGType *type) {
+    CGAggregateFacts facts;
+    size_t count = cg_aggregate_facts(type, &facts) ? facts.pointer_slot_count : 0U;
+    for (size_t i = 0; i < count; ++i) {
+        buf_append_cstr(out, "feng_cleanup_pop(); ");
+    }
+}
+
+/* Emit post-release zeroing for aggregate cleanup slots. */
+static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
+                                                     const char *cname,
+                                                     const CGType *type) {
+    CGAggregateFacts facts;
+    if (cg_aggregate_facts(type, &facts) && facts.emit_cleanup_zero != NULL) {
+        facts.emit_cleanup_zero(out, cname, type);
+    }
 }
 
 /* ---------- default-zero emission ----------
@@ -12945,7 +13033,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 /* Step 4b-γ §9.6 — aggregate-element arrays must encode the
                  * AGGREGATE element kind even at length 0 so the cycle
                  * collector tags the array correctly when later resized. */
-                const char *agg_desc = cg_aggregate_field_desc_name(type->element);
+                const char *agg_desc = cg_aggregate_desc_name(type->element);
                 if (agg_desc == NULL) {
                     free(desc); free(elem_cty); buf_free(&b);
                     return cg_fail(cg, blame ? *blame : (FengToken){0},
@@ -13044,7 +13132,7 @@ static bool cg_emit_user_field_value_store(CG *cg,
     }
 
     if (cgtype_is_aggregate(uf->type)) {
-        const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+        const char *agg_desc = cg_aggregate_desc_name(uf->type);
 
         if (agg_desc == NULL) {
             return cg_fail(cg,
@@ -13089,17 +13177,24 @@ static bool cg_emit_user_field_default_value(CG *cg,
     }
 
     if (cgtype_is_aggregate(uf->type)) {
-        const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+        Buf lvalue;
+        bool ok;
 
-        if (agg_desc == NULL) {
+        buf_init(&lvalue);
+        buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
+        if (lvalue.data == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_cstr(cg->cur_body, "    ");
+        ok = cg_append_aggregate_default_init_call(cg->cur_body, uf->type, lvalue.data);
+        buf_free(&lvalue);
+        if (!ok) {
             return cg_fail(cg,
                            blame,
-                           "codegen: missing aggregate descriptor for default field '%s'",
+                           "codegen: missing aggregate default-init rule for field '%s'",
                            uf->feng_name);
         }
-        buf_append_fmt(cg->cur_body,
-            "    feng_aggregate_default_init(&%s->%s, &%s);\n",
-            object_expr, uf->c_name, agg_desc);
+        buf_append_cstr(cg->cur_body, ";\n");
         return true;
     }
 
@@ -13327,7 +13422,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             if (init.owns_ref) {
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
             } else {
-                const char *desc = cg_aggregate_field_desc_name(decl_type);
+                const char *desc = cg_aggregate_desc_name(decl_type);
                 if (!desc) {
                     er_free(&init);
                     free(cty); free(cname); cgtype_free(decl_type);
@@ -13350,19 +13445,21 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
          * types the resulting reference is owned by this slot and joins the
          * cleanup chain just like an explicit initializer. */
         if (cgtype_is_aggregate(decl_type)) {
-            /* Step 4b-β — spec default zero. The aggregate descriptor's
-             * default_init function allocates a fresh subject and binds the
-             * default witness; the resulting struct already carries a +1
-             * reference on subject. */
-            const char *desc = cg_aggregate_field_desc_name(decl_type);
-            if (!desc) {
+            /* Aggregate default-zero is owned by the aggregate facts provider.
+             * For object-form specs this routes through the descriptor's
+             * default_init function and produces an owned subject slot. */
+            Buf init_call;
+            buf_init(&init_call);
+            if (!cg_append_aggregate_default_init_call(&init_call, decl_type, cname)) {
+                buf_free(&init_call);
                 free(cname); free(cty); cgtype_free(decl_type);
                 return cg_fail(cg, b->token,
-                    "codegen: missing aggregate descriptor for spec default-init");
+                    "codegen: missing aggregate default-init rule");
             }
-            buf_append_fmt(cg->cur_body,
-                "    %s %s; feng_aggregate_default_init(&%s, &%s);\n",
-                cty, cname, cname, desc);
+            buf_append_fmt(cg->cur_body, "    %s %s; ", cty, cname);
+            buf_append_cstr(cg->cur_body, init_call.data);
+            buf_append_cstr(cg->cur_body, ";\n");
+            buf_free(&init_call);
         } else {
             char *def_expr = NULL;
             if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
@@ -13385,7 +13482,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     if (cgtype_is_managed(decl_type)) {
         cg_emit_cleanup_push_for_managed_local(cg, cname);
     } else if (cgtype_is_aggregate(decl_type)) {
-        cg_emit_cleanup_push_for_aggregate_local(cg, cname);
+        cg_emit_cleanup_push_for_aggregate_local(cg, cname, decl_type);
     }
     free(cname);
     return true;
@@ -13588,7 +13685,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
              * and the new subject's managed slots get the right retain.
              * For owns_ref temps we still let aggregate cleanup at scope
              * exit drain the source's +1, mirroring local-binding semantics. */
-            const char *agg_desc = cg_aggregate_field_desc_name(recv.type->element);
+            const char *agg_desc = cg_aggregate_desc_name(recv.type->element);
             if (agg_desc == NULL) {
                 free(elem_cty); free(idx_tmp);
                 er_free(&v); er_free(&ix); er_free(&recv);
@@ -13782,7 +13879,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         field_addr, v.c_expr);
                 }
             } else if (cgtype_is_aggregate(field_type)) {
-                const char *agg_desc = cg_aggregate_field_desc_name(field_type);
+                const char *agg_desc = cg_aggregate_desc_name(field_type);
                 if (agg_desc == NULL) {
                     er_free(&v); free(field_addr); free(field_cty);
                     cgtype_free(field_type); er_free(&recv);
@@ -14356,7 +14453,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
          *     §13.3.γ-2). _ret itself is null-initialised before take so
          *     take's "release dst slots first" precondition holds.
          */
-        const char *desc = cg_aggregate_field_desc_name(r.type);
+        const char *desc = cg_aggregate_desc_name(r.type);
         if (!desc) {
             er_free(&r);
             return cg_fail(cg, stmt->token,
@@ -14870,7 +14967,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
             "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_retain(%s);\n",
             elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname);
     } else if (cgtype_is_aggregate(element_type)) {
-        const char *desc = cg_aggregate_field_desc_name(element_type);
+        const char *desc = cg_aggregate_desc_name(element_type);
         if (!desc) {
             free(elem_cty); free(iter_cname); free(cont_label_owned);
             body_scope->continue_label = NULL;
@@ -14914,7 +15011,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
     if (cgtype_is_managed(element_type)) {
         cg_emit_cleanup_push_for_managed_local(cg, iter_cname);
     } else if (cgtype_is_aggregate(element_type)) {
-        cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname);
+        cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname, element_type);
     }
     free(iter_cname);
 
@@ -15626,10 +15723,17 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
 
     switch (cgtype_value_kind(t)) {
         case CG_VK_TRIVIAL: {
-            const char *cty = cgtype_to_c(t->kind);
+            char *cty = cg_ctype_dup(t);
+            if (!cty) {
+                free(owned_witness_expr);
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "codegen: out of memory while emitting generic descriptor");
+            }
             buf_append_fmt(&b,
                 "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_TRIVIAL, .type_kind = %s, .aggregate = NULL, .witness = %s}",
                 cty, runtime_type_kind, witness_expr);
+            free(cty);
             break;
         }
         case CG_VK_MANAGED_POINTER:
@@ -15638,9 +15742,12 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 runtime_type_kind, witness_expr);
             break;
         case CG_VK_AGGREGATE: {
-            const char *desc = cg_aggregate_field_desc_name(t);
+            CGAggregateFacts facts;
             char *cty = cg_ctype_dup(t);
-            if (!desc || !cty) {
+            if (!cg_aggregate_facts(t, &facts) ||
+                facts.value_kind != CG_VK_AGGREGATE ||
+                facts.descriptor_name == NULL ||
+                !cty) {
                 free(cty);
                 free(owned_witness_expr);
                 buf_free(&b);
@@ -15649,7 +15756,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             }
             buf_append_fmt(&b,
                 "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = %s, .aggregate = &%s, .witness = %s}",
-                cty, runtime_type_kind, desc, witness_expr);
+                cty, runtime_type_kind, facts.descriptor_name, witness_expr);
             free(cty);
             break;
         }
@@ -15741,7 +15848,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r.type)) {
-        const char *desc = cg_aggregate_field_desc_name(r.type);
+        const char *desc = cg_aggregate_desc_name(r.type);
         char *tmp;
         char *cty;
 
@@ -16449,7 +16556,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             if (cgtype_is_managed(out->type)) {
                 cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
             } else if (cgtype_is_aggregate(out->type)) {
-                cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname);
+                cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname, out->type);
             }
             ok = true;
             free(ret_cname);
@@ -18507,7 +18614,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                         "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
                         t->c_struct_name, uf->c_name);
                 } else if (cgtype_is_aggregate(sm->type)) {
-                    const char *agg_desc = cg_aggregate_field_desc_name(sm->type);
+                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
                     if (agg_desc == NULL) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return cg_fail(cg, blame,
@@ -19780,25 +19887,106 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
  *                      managed `subject` pointer at slot offset 0.
  */
 
-/* For aggregate field types, returns the user-facing
- * FengAggregateValueDescriptor symbol name. Today only object-form spec
- * values are aggregate; new aggregate kinds (tuple, value-struct) must
- * extend this dispatch. */
-static const char *cg_aggregate_field_desc_name(const CGType *t) {
-    if (!t || t->kind != CG_TYPE_SPEC || t->user_spec == NULL) {
-        return NULL;
-    }
-    return t->user_spec->c_aggregate_desc_name;
+/* Compile-time aggregate introspection contract. This is intentionally a
+ * codegen-only query: it must not emit generated-C runtime calls, allocate
+ * per-value metadata, or modify the runtime descriptor ABI. New aggregate
+ * kinds (tuple, value-struct, union value) join generic/field/array paths by
+ * providing these static facts here plus their descriptor emission, not by
+ * adding runtime dispatch. */
+static void cg_spec_aggregate_emit_pointer_slot_rows(Buf *out,
+                                                     const char *field_base_offsetof_expr,
+                                                     const CGType *type) {
+    buf_append_fmt(out,
+        "    { %s + offsetof(struct %s, subject), NULL },\n",
+        field_base_offsetof_expr,
+        type->user_spec->c_value_struct_name);
 }
 
-/* Returns the number of FENG_SLOT_POINTER slots produced by flattening the
- * aggregate type. Mirrors aggregate_for_each_pointer_slot semantics; for
- * spec values this is always 1 (the subject pointer). */
-static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
-    if (!t || t->kind != CG_TYPE_SPEC || t->user_spec == NULL) {
-        return 0U;
+static void cg_spec_aggregate_emit_cleanup_push(Buf *out,
+                                                const char *cname,
+                                                const CGType *type) {
+    (void)type;
+    buf_append_fmt(out,
+                   "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s.subject);\n",
+                   cname, cname, cname);
+}
+
+static void cg_spec_aggregate_emit_cleanup_zero(Buf *out,
+                                                const char *cname,
+                                                const CGType *type) {
+    (void)type;
+    buf_append_fmt(out, "%s.subject = NULL;", cname);
+}
+
+static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
+    CGAggregateFacts facts = {0};
+    if (!t) {
+        return false;
     }
-    return 1U;
+    switch (t->kind) {
+        case CG_TYPE_SPEC:
+            if (t->user_spec == NULL) {
+                return false;
+            }
+            facts.value_kind = CG_VK_AGGREGATE;
+            facts.descriptor_name = t->user_spec->c_aggregate_desc_name;
+            facts.value_struct_name = t->user_spec->c_value_struct_name;
+            facts.runtime_type_kind_name = "FENG_RUNTIME_TYPE_SPEC";
+            facts.pointer_slot_count = 1U;
+            facts.default_init_kind = CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR;
+            if (facts.value_struct_name != NULL) {
+                facts.emit_pointer_slot_rows = cg_spec_aggregate_emit_pointer_slot_rows;
+            }
+            facts.emit_cleanup_push = cg_spec_aggregate_emit_cleanup_push;
+            facts.emit_cleanup_zero = cg_spec_aggregate_emit_cleanup_zero;
+            break;
+        default:
+            return false;
+    }
+    if (out != NULL) {
+        *out = facts;
+    }
+    return true;
+}
+
+/* Returns the static FengAggregateValueDescriptor symbol for an aggregate
+ * value type, or NULL if the type has no aggregate facts. */
+static const char *cg_aggregate_desc_name(const CGType *t) {
+    CGAggregateFacts facts;
+    return cg_aggregate_facts(t, &facts) ? facts.descriptor_name : NULL;
+}
+
+/* Returns the flattened pointer-slot count used by object descriptors that
+ * embed an aggregate field. */
+static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
+    CGAggregateFacts facts;
+    return cg_aggregate_facts(t, &facts) ? facts.pointer_slot_count : 0U;
+}
+
+/* Appends the aggregate default-initialization call/expression for one
+ * lvalue. The chosen strategy is owned by the aggregate facts provider. */
+static bool cg_append_aggregate_default_init_call(Buf *out,
+                                                  const CGType *type,
+                                                  const char *lvalue_expr) {
+    CGAggregateFacts facts;
+    if (out == NULL || lvalue_expr == NULL || !cg_aggregate_facts(type, &facts)) {
+        return false;
+    }
+    switch (facts.default_init_kind) {
+        case CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES:
+            buf_append_fmt(out, "memset(&%s, 0, sizeof %s)", lvalue_expr, lvalue_expr);
+            return true;
+        case CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR:
+            if (facts.descriptor_name == NULL) {
+                return false;
+            }
+            buf_append_fmt(out, "feng_aggregate_default_init(&%s, &%s)",
+                           lvalue_expr, facts.descriptor_name);
+            return true;
+        case CG_AGGREGATE_DEFAULT_INIT_NONE:
+        default:
+            return false;
+    }
 }
 
 /* Walks the aggregate type's pointer slots and emits one
@@ -19812,12 +20000,9 @@ static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
 static void cg_emit_aggregate_pointer_slot_rows(Buf *td,
                                                 const char *field_base_offsetof_expr,
                                                 const CGType *t) {
-    /* Spec: single subject pointer at offset 0 of the value struct. */
-    if (t && t->kind == CG_TYPE_SPEC && t->user_spec) {
-        buf_append_fmt(td,
-            "    { %s + offsetof(struct %s, subject), NULL },\n",
-            field_base_offsetof_expr,
-            t->user_spec->c_value_struct_name);
+    CGAggregateFacts facts;
+    if (cg_aggregate_facts(t, &facts) && facts.emit_pointer_slot_rows != NULL) {
+        facts.emit_pointer_slot_rows(td, field_base_offsetof_expr, t);
     }
 }
 
@@ -19900,7 +20085,7 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
             buf_append_fmt(td, "    feng_release(_o->%s);\n", field_c_name);
             return true;
         case CG_VK_AGGREGATE: {
-            const char *desc = cg_aggregate_field_desc_name(ft);
+            const char *desc = cg_aggregate_desc_name(ft);
             if (desc == NULL) {
                 return cg_fail(cg, err_token,
                     "codegen: aggregate field has no descriptor symbol (unknown aggregate kind)");
@@ -20162,7 +20347,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     bool em = ft->element ? cgtype_is_managed(ft->element) : false;
                     bool ea = ft->element ? cgtype_is_aggregate(ft->element) : false;
                     if (ea) {
-                        const char *agg_desc = cg_aggregate_field_desc_name(ft->element);
+                        const char *agg_desc = cg_aggregate_desc_name(ft->element);
                         if (agg_desc != NULL) {
                             buf_append_fmt(td,
                                 "    _o->%s = feng_array_new_kinded("

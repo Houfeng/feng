@@ -1,18 +1,18 @@
 # Generic Aggregate 泛型实参优化方案
 
-> 状态：草案
+> 状态：已实现
 > 日期：2026-05-22
 > 关联规范：[docs/feng-type.md](../docs/feng-type.md)、[docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-expression.md](../docs/feng-expression.md)
 > 关联设计：[dev/feng-value-model-delivered.md](./feng-value-model-delivered.md)、[dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)、[docs/feng-union-type.md](../docs/feng-union-type.md)
 
 ## 1. 背景
 
-当前 codegen 对“aggregate 类型作为泛型实参”的支持尚未完全收敛为通用机制。
+本方案用于把 codegen 对“aggregate 类型作为泛型实参”的支持收敛为通用机制。
 
 现状可以拆成两层：
 
 - runtime 与值模型层已经按通用 aggregate 抽象设计完成：值统一落入 `trivial`、`managed-pointer`、`aggregate-with-managed-slots` 三分类；aggregate 生命周期统一走 `FengAggregateValueDescriptor` + `FengManagedSlotDescriptor` + 五类 aggregate API。
-- codegen 层对 aggregate 的事实提取仍存在 spec-only 硬编码：当前 aggregate 主要由 object-form `spec` 打通；未来新增 tuple、值语义 struct、union value 等 aggregate 类型时，若不先收敛 codegen 抽象，仍需要额外改动泛型实参路径。
+- codegen 层原先对 aggregate 的事实提取存在 spec-only 硬编码：当前 aggregate 主要由 object-form `spec` 打通；未来新增 tuple、值语义 struct、union value 等 aggregate 类型时，若不先收敛 codegen 抽象，仍需要额外改动泛型实参路径。
 
 这与值模型设计目标不一致。值模型文档已经明确：新增按值聚合类型时，应只新增类型级描述符，不修改 runtime walker 与公共 helper。
 
@@ -28,12 +28,14 @@
 
 基于上述结构，现有 descriptor 结构定义本身无需扩展；当前优化重点应放在 codegen aggregate introspection，而不是改动 runtime descriptor 形状。
 
-### 2.2 仍然写死的部分
+### 2.2 本轮修复前写死的部分
 
-1. `cgtype_value_kind(...)` 当前只把 `CG_TYPE_SPEC` 判定为 aggregate；新增 aggregate 类型后，这里必须扩展。
-2. `cg_generic_descriptor_expr(...)` 在 aggregate 分支上依赖 `cg_aggregate_field_desc_name(...)`；一旦拿不到 aggregate descriptor，就直接报 `missing flatten rule`。
-3. `cg_aggregate_field_desc_name(...)`、`cg_aggregate_pointer_slot_count(...)`、`cg_emit_aggregate_pointer_slot_rows(...)` 当前都只认 object-form `spec`。
+1. `cgtype_value_kind(...)` 只把 `CG_TYPE_SPEC` 判定为 aggregate；新增 aggregate 类型后，这里必须扩展。
+2. `cg_generic_descriptor_expr(...)` 在 aggregate 分支上依赖 spec-only descriptor helper；一旦拿不到 aggregate descriptor，就直接报 `missing flatten rule`。
+3. `cg_aggregate_field_desc_name(...)`、`cg_aggregate_pointer_slot_count(...)`、`cg_emit_aggregate_pointer_slot_rows(...)` 只认 object-form `spec`。
 4. codegen 中已有大量站点直接调用上述 helper；如果未来只修泛型实参路径，不统一这些 helper，仍会在字段、数组元素、结果槽、清理逻辑等相邻路径再次失败。
+
+本轮实现已将这些入口收敛到 `CGAggregateFacts` / `cg_aggregate_facts(...)`：值分类、carrier C 类型、runtime `type_kind`、descriptor 名称、managed-slot flatten、default-init kind、cleanup 注册与 cleanup zero 均从同一份 codegen facts 读取。
 
 ### 2.3 现有报错的准确含义
 
@@ -122,13 +124,14 @@ future tuple / union value 的接入，不应表现为：
 
 这层抽象至少要回答：
 
-1. 当前类型是否为 aggregate。
+1. 当前类型的 codegen value-kind 是 `trivial`、`managed-pointer` 还是 `aggregate-with-managed-slots`。
 2. aggregate carrier 对应的 C 类型是什么。
 3. aggregate 的 `FengAggregateValueDescriptor` 符号名是什么。
 4. aggregate flatten 后有多少个 managed pointer slot。
 5. 如何枚举这些 slot，并产出对象字段 flatten 所需的偏移表达。
-6. 默认初始化是 zero-bytes 还是 init-fn。
-7. 对应的 runtime `type_kind` 是什么。
+6. 如何为 aggregate local 注册 cleanup slots，并在释放后清零对应 slots。
+7. 默认初始化是 zero-bytes 还是 init-fn。
+8. 对应的 runtime `type_kind` 是什么。
 
 这层抽象必须是编译期静态查询，不得产生 runtime callback，也不得在 generated C 中引入新的运行时查询步骤。对当前已经支持的类型，切换到该 contract 后生成代码的关键调用序列必须保持等价或更少。
 
@@ -141,6 +144,7 @@ future tuple / union value 的接入，不应表现为：
 3. aggregate field release / assign / default-init 路径。
 4. aggregate result slot 与 cleanup 注册路径。
 5. aggregate array element lowering 路径。
+6. `cgtype_value_kind(...)`、`cg_emit_c_type(...)`、`cg_runtime_type_kind_name(...)` 这类泛型 descriptor 前置分类路径。
 
 替换完成后，generic path 与字段/数组/结果槽路径必须共享同一份 aggregate 事实来源，避免一处支持 tuple、另一处仍只认 spec。
 
@@ -184,9 +188,11 @@ future tuple / union value 的接入，不应表现为：
 3. 静态 `FengAggregateValueDescriptor`。
 4. 默认初始化策略描述。
 5. codegen aggregate introspection 所需的 owner metadata。
-6. 如有 runtime-generic helper 需求，再补对应 semantic `type_kind` 与 helper 语义。
+6. codegen value-kind 与 runtime `type_kind` 事实。
+7. 对象字段 flatten 与 aggregate local cleanup 所需的 slot 枚举 / cleanup emitter。
+8. 如有 runtime-generic helper 需求，再补对应 helper 语义。
 
-满足 1-5 后，generic 实参支持应自动成立；禁止再修改 generic descriptor builder，给该类型额外开分支。
+满足 1-7 后，generic 实参支持应自动成立；禁止再修改 generic descriptor builder，给该类型额外开分支。若该类型需要进入 runtime-generic helper，再按第 8 点独立补齐语义，不应反向污染 generic descriptor 构造主路径。
 
 ## 7. 风险与错误方向
 
@@ -281,27 +287,27 @@ future tuple / union value 的接入，不应表现为：
 
 按上述口径，**本轮总改动量预计约 300 到 560 行，绝大部分集中在 `src/codegen/codegen.c`**。
 
-## 10. 分步 TODO
+## 10. 实施状态与后续 TODO
 
-### 10.1 本轮实施 TODO
+### 10.1 本轮实施结果
 
-1. 固化不变边界。
+1. 已固化不变边界。
     明确 `FengGenericParamDescriptor`、`FengManagedSlotDescriptor`、`FengAggregateValueDescriptor` 的结构定义不扩展；`feng_aggregate.c` 不新增 kind-specific 分支；本轮不把 future aggregate 的 runtime-generic helper 语义一并纳入。
-2. 建立 codegen 内部统一 aggregate introspection contract。
-    在 `src/codegen/codegen.c` 中新增统一查询入口，收敛 aggregate 的值分类、carrier C 形状、descriptor 符号、managed-slot flatten、默认初始化来源、runtime `type_kind` 等事实。
-3. 先接管 generic descriptor 构造路径。
-    用新的 introspection contract 重写 `cg_generic_descriptor_expr(...)` 的 aggregate 分支，使其不再直接依赖 spec-only helper，并保持当前 spec aggregate 行为完全兼容。
-4. 再接管字段与结果槽相关路径。
-    统一替换字段 flatten、field release、aggregate result slot、cleanup 注册等路径里对 `cg_aggregate_field_desc_name(...)`、`cg_aggregate_pointer_slot_count(...)`、`cg_emit_aggregate_pointer_slot_rows(...)` 的直接依赖。
-5. 接管数组与元素路径。
-    把数组元素 lowering、aggregate 元素 descriptor 选择等站点一起切到新的 contract，避免 generic path 支持而数组 path 仍然只认 spec。
-6. 清理旧 helper 与重复分派。
-    在新的 contract 足够覆盖现有站点后，收敛或删除旧的 spec-only aggregate helper，避免形成两套事实来源并长期漂移。
-7. 补 focused regression。
-    优先保留并扩展 `test/codegen/test_codegen.c` 中现有 spec aggregate 锚点，确认 generic spec arg、aggregate return、aggregate field、if/match aggregate result 不回退。
-8. 做回归与结构检查。
+2. 已建立 codegen 内部统一 aggregate introspection contract。
+    在 `src/codegen/codegen.c` 中新增统一查询入口，收敛 aggregate 的值分类、carrier C 形状、descriptor 符号、managed-slot flatten、default-init kind、cleanup 注册、cleanup zero、runtime `type_kind` 等事实。
+3. 已接管 generic descriptor 构造路径。
+    `cg_generic_descriptor_expr(...)` 的 aggregate 分支已读取 `CGAggregateFacts`；trivial 分支也改为使用统一 C carrier 输出，避免 future trivial aggregate 需要改泛型 descriptor builder。
+4. 已接管字段与结果槽相关路径。
+    字段 flatten、field release、aggregate result slot、cleanup 注册等路径已切到统一 contract。
+5. 已接管数组与元素路径。
+    数组元素 lowering、aggregate 元素 descriptor 选择等站点已切到新的 contract，避免 generic path 支持而数组 path 仍然只认 spec。
+6. 已清理旧 helper 与重复分派。
+    旧的 spec-only descriptor helper 已收敛为 `cg_aggregate_desc_name(...)` / `cg_aggregate_facts(...)`，不再形成两套事实来源。
+7. 已补 focused regression。
+    `test/codegen/test_codegen.c` 已新增 generic aggregate facts shape 用例，覆盖 trivial、managed-pointer、object-form spec aggregate 三类 descriptor 形状。
+8. 已做回归与结构检查。
     检查 `src/runtime/feng_runtime.h` 的 descriptor 结构是否保持稳定、`src/runtime/feng_aggregate.c` 是否完全未被污染，并确认 codegen 不再依赖 scattered spec-only helper。
-9. 做 generated C 成本检查。
+9. 已做 generated C 成本检查。
     对当前已支持的 trivial、managed-pointer、object-form spec aggregate、descriptor forwarding 代表用例，比较关键 generated C 调用序列，确认没有新增函数调用、分支、retain/release、aggregate API 调用、wrapper 或额外 cleanup 槽。
 
 ### 10.2 后续联动 TODO

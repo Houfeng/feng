@@ -2928,6 +2928,63 @@ static void test_generic_runtime_type_kind_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericAggregateFactsShapeSrc =
+    "mod feng.codegen.gfaggshape;\n"
+    "spec Named {\n"
+    "    fn name(): string;\n"
+    "}\n"
+    "type User: Named {\n"
+    "    fn name(): string {\n"
+    "        return \"user\";\n"
+    "    }\n"
+    "}\n"
+    "fn identity<T>(value: T): T {\n"
+    "    return value;\n"
+    "}\n"
+    "fn use_it(value: int, text: string): int {\n"
+    "    let n = identity(value);\n"
+    "    let s = identity(text);\n"
+    "    let named: Named = User();\n"
+    "    let agg = identity(named);\n"
+    "    return n;\n"
+    "}\n";
+
+static void test_generic_aggregate_facts_shape_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericAggregateFactsShapeSrc, "gfaggshape.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic aggregate facts shape): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".size = sizeof(void *), .kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_STRING, .aggregate = NULL") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".size = sizeof(struct FengSpecValue__feng__codegen__gfaggshape__Named), .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = FENG_RUNTIME_TYPE_SPEC, .aggregate = &FengSpecAgg__feng__codegen__gfaggshape__Named") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_fit_enum_generic_constraint_codegen(void) {
     static const char *kSource =
         "mod feng.codegen.fit_enum_generic;\n"
@@ -4418,6 +4475,7 @@ int main(void) {
     test_callable_spec_other_field_read_coercion_codegen();
     test_generic_constraint_witness_codegen();
     test_generic_runtime_type_kind_codegen();
+    test_generic_aggregate_facts_shape_codegen();
     test_fit_enum_generic_constraint_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();
