@@ -8,4 +8,3 @@
 
 **疑似残留**
 - options.c 的注释说直编模式接受 lib 只是为了后续给出“尚不支持”的诊断，但我没找到实际拒绝路径；相反，直编流程看起来已经会生成 lib 输出目录和库名，direct.c 和 direct.c。这更像注释残留，不像真实缺口。
-- codegen.c 只处理 spec 的 field/method 成员；如果规范允许 spec 出现 constructor/finalizer，那这里也是缺口。语法层的成员种类确实包含它们，parser.h，但我这次没有继续追到“规范是否允许 spec 使用这些成员”。
