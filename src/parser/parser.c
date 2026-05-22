@@ -1320,16 +1320,21 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         FengCallableSignature callable;
         FengSlice name;
         FengToken member_name_token = parser_current_token(parser);
+        FengTypeMemberKind member_kind = FENG_TYPE_MEMBER_METHOD;
+        bool is_finalizer = false;
         size_t param_index;
+
+        if (parser_match(parser, FENG_TOKEN_TILDE)) {
+            is_finalizer = true;
+            member_name_token = parser_previous_token(parser);
+        }
 
         if (!parser_expect_identifier_like(parser,
                                            &name,
                                            false,
-                                           "expected a method name after 'fn'")) {
-            return NULL;
-        }
-        if (slice_equals(name, spec_name)) {
-            (void)parser_error_current(parser, "spec cannot declare a constructor");
+                                           is_finalizer
+                                               ? "expected a finalizer name after 'fn ~'"
+                                               : "expected a method name after 'fn'")) {
             return NULL;
         }
         callable = parse_callable_signature(
@@ -1352,14 +1357,19 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
                 return NULL;
             }
         }
-        if (callable.return_type == NULL) {
+        if (is_finalizer) {
+            member_kind = FENG_TYPE_MEMBER_FINALIZER;
+        } else if (slice_equals(name, spec_name)) {
+            member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+        }
+        if (member_kind == FENG_TYPE_MEMBER_METHOD && callable.return_type == NULL) {
             (void)parser_error_current(parser, "spec method signatures must declare a return type");
             free_parameters(callable.params, callable.param_count);
             free_block(callable.body);
             return NULL;
         }
         member = new_type_member(parser,
-                     FENG_TYPE_MEMBER_METHOD,
+                     member_kind,
                      callable.token,
                      doc_comment);
         if (member == NULL) {

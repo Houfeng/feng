@@ -7902,6 +7902,50 @@ static void test_spec_type_satisfaction_succeeds(void) {
     feng_program_free(program);
 }
 
+static void test_object_form_spec_rejects_constructor_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Shape {\n"
+        "    fn Shape();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_spec_constructor_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_spec_constructor_error.f") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "object-form spec 'Shape' cannot declare a constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_object_form_spec_rejects_finalizer_member(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Shape {\n"
+        "    fn ~Shape();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("object_spec_finalizer_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_spec_finalizer_error.f") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "object-form spec 'Shape' cannot declare a finalizer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_spec_parent_specs_must_be_spec(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13192,6 +13236,8 @@ int main(void) {
     test_object_literal_rejects_inaccessible_private_field();
     test_object_literal_allows_private_field_inside_same_module();
     test_spec_type_satisfaction_succeeds();
+    test_object_form_spec_rejects_constructor_member();
+    test_object_form_spec_rejects_finalizer_member();
     test_spec_parent_specs_must_be_spec();
     test_spec_parent_specs_rejects_duplicate();
     test_spec_parent_specs_rejects_cycle();

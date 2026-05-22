@@ -15252,6 +15252,52 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
     return true;
 }
 
+/* Validate that an object-form spec only declares contract members: fields and
+ * method signatures. Constructor and finalizer declarations are syntactically
+ * representable, but semantically belong only to concrete type definitions. */
+static bool validate_object_spec_member_kinds(ResolveContext *context, const FengDecl *spec_decl) {
+    size_t i;
+
+    if (context == NULL || spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return true;
+    }
+
+    for (i = 0U; i < spec_decl->as.spec_decl.as.object.member_count; ++i) {
+        const FengTypeMember *member = spec_decl->as.spec_decl.as.object.members[i];
+
+        if (member == NULL) {
+            continue;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            if (!resolver_append_error(
+                    context,
+                    member->token,
+                    format_message(
+                        "object-form spec '%.*s' cannot declare a constructor",
+                        (int)spec_decl->as.spec_decl.name.length,
+                        spec_decl->as.spec_decl.name.data))) {
+                return false;
+            }
+            return false;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
+            if (!resolver_append_error(
+                    context,
+                    member->token,
+                    format_message(
+                        "object-form spec '%.*s' cannot declare a finalizer",
+                        (int)spec_decl->as.spec_decl.name.length,
+                        spec_decl->as.spec_decl.name.data))) {
+                return false;
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static const FengTypeMember *type_find_field(const FengDecl *type_decl, FengSlice name) {
     size_t i;
 
@@ -17205,6 +17251,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 }
             }
             if (ok && !validate_spec_parent_spec_list(context, decl)) {
+                ok = false;
+            }
+            if (ok && !validate_object_spec_member_kinds(context, decl)) {
                 ok = false;
             }
             if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {

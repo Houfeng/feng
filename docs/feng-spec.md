@@ -102,6 +102,7 @@ type Box: Choice {}
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 - `spec` 中的成员与行为签名默认公开,且不允许显式添加 `pu` 或 `pr`。
 - 对象形状中的行为签名使用 `fn` 关键字,在 `spec` 中可不写函数体。
+- object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; 不允许声明构造器或终结器。
 - `spec` 中任何位置的参数均不可使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数; 参数可变性属于实现侧内部约束,不属于 `spec` 契约形状的一部分。
 - `spec` 中的成员类型规则与 `type` 的成员类型引用规则一致: 成员类型必须引用已声明的具名类型,不能在成员类型位置内联匿名类型定义。
 - 可调用形状使用 `spec Name(args): ReturnType;` 形式定义。
@@ -131,6 +132,7 @@ type Box: Choice {}
 - [禁止] 同一声明头中的 `spec` 列表重复列出同一个 `spec`。
 - [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
+- [禁止] object-form `spec` 声明构造器或终结器; 该限制属于语义规则,由语义分析阶段诊断。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi`、`@union` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的顶层函数、方法值与 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
 - [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
@@ -153,6 +155,7 @@ type Box: Choice {}
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
 - 编译器必须在 object-form `spec` 的父子闭包成员收集中对“同名且签名完全一致”的方法按“子 `spec` 优先”去重,避免把继承覆盖关系误判为多重重载歧义。
 - 编译器必须检查并拒绝 `spec` 列表中的重复项。
+- 编译器必须在语义分析阶段检查并拒绝 object-form `spec` 中的构造器与终结器声明。
 - 编译器必须检查并拒绝在对象形状 `spec` 上使用 `@abi`、`@union` 或调用方式注解。
 - 编译器必须区分“未绑定可调用值 → callable-form `spec`”的结构匹配与“callable-form `spec` → callable-form `spec`”的名义匹配。
 - 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
