@@ -1763,9 +1763,18 @@ static FengDecl *parse_declaration(Parser *parser) {
         return NULL;
     }
 
-    if (is_extern && parser_starts_callable_signature(parser)) {
+    if (is_extern) {
+        if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+            return parse_function_declaration(parser,
+                                              doc_comment,
+                                              visibility,
+                                              true,
+                                              annotations,
+                                              annotation_count);
+        }
         free_annotations(annotations, annotation_count);
-        (void)parser_error_current(parser, "extern function declarations must start with 'extern fn'");
+        (void)parser_error_current(parser,
+                                   "'extern' can only be applied to top-level 'fn' declarations");
         return NULL;
     }
 
@@ -1817,7 +1826,7 @@ static FengDecl *parse_declaration(Parser *parser) {
         return parse_function_declaration(parser,
                                           doc_comment,
                                           visibility,
-                                          is_extern,
+                                          false,
                                           annotations,
                                           annotation_count);
     }

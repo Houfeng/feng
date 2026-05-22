@@ -34,7 +34,7 @@ static void test_top_level_declarations(void) {
         "@cdecl(point_lib)\n"
         "extern fn point_distance(p1: Point, p2: Point): float;\n"
         "@union\n"
-        "extern type Point {\n"
+        "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
@@ -58,7 +58,7 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[1]->annotations[0].builtin_kind == FENG_ANNOTATION_CDECL);
 
     ASSERT(program->declarations[2]->kind == FENG_DECL_TYPE);
-    ASSERT(program->declarations[2]->is_extern);
+    ASSERT(!program->declarations[2]->is_extern);
     ASSERT(program->declarations[2]->annotation_count == 1U);
     ASSERT(program->declarations[2]->annotations[0].builtin_kind == FENG_ANNOTATION_UNION);
     ASSERT(program->declarations[2]->as.type_decl.member_count == 2U);
@@ -71,6 +71,27 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[3]->as.spec_decl.as.callable.return_type != NULL);
 
     feng_program_free(program);
+}
+
+static void test_extern_rejects_non_function_top_level_declarations(void) {
+    static const char *kCases[] = {
+        "mod demo.main;\nextern let value: int;\n",
+        "mod demo.main;\nextern type Point {\n    var x: int;\n}\n",
+        "mod demo.main;\nextern enum Status {\n    ok = 0;\n}\n",
+        "mod demo.main;\nextern spec Reader {\n}\n",
+        "mod demo.main;\nextern fit User: Named {\n}\n"
+    };
+
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(kCases[i], strlen(kCases[i]), "extern_non_fn.f", &program, &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message,
+                      "'extern' can only be applied to top-level 'fn' declarations") != NULL);
+    }
 }
 
 static void test_statements_and_expressions(void) {
@@ -1632,6 +1653,7 @@ static void test_generic_target_expression_argument_parses(void) {
 
 int main(void) {
     test_top_level_declarations();
+    test_extern_rejects_non_function_top_level_declarations();
     test_statements_and_expressions();
     test_runtime_annotation_on_extern_function();
     test_enum_declarations_parse();
