@@ -5,6 +5,3 @@
 - throw 非 managed 值未支持；当前只支持 managed payload，codegen.c。
 - aggregate 类型作为泛型实参未支持，代码里明确写了缺 flatten rule，codegen.c 和 codegen.c。
 - extern 模块级 binding 未支持，codegen.c。
-
-**疑似残留**
-- options.c 的注释说直编模式接受 lib 只是为了后续给出“尚不支持”的诊断，但我没找到实际拒绝路径；相反，直编流程看起来已经会生成 lib 输出目录和库名，direct.c 和 direct.c。这更像注释残留，不像真实缺口。
