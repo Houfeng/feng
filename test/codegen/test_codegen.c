@@ -4072,6 +4072,75 @@ static void test_user_constructor_forms_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_type_field_initializers_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.fieldinit;\n"
+        "type UserType {\n"
+        "    let id: int = 7;\n"
+        "}\n"
+        "type User {\n"
+        "    let id: int = 0;\n"
+        "    let x: UserType;\n"
+        "    let y = UserType();\n"
+        "    let z = UserType {};\n"
+        "}\n"
+        "fn total(): int {\n"
+        "    let user = User();\n"
+        "    return user.id + user.x.id + user.y.id + user.z.id;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/type_field_initializers.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs,
+                                            1U,
+                                            FENG_COMPILE_TARGET_LIB,
+                                            &analysis,
+                                            &errors,
+                                            &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path,
+                        errors[i].token.line,
+                        errors[i].token.column,
+                        errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (type field initializers): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__feng__codegen__fieldinit__User *") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__fieldinit__UserType__default_zero()") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -4143,6 +4212,7 @@ int main(void) {
     test_generic_type_generic_method_codegen();
     test_generic_scalar_instance_direct_call_codegen();
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
+    test_type_field_initializers_codegen();
     test_user_constructor_forms_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;

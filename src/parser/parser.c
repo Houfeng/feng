@@ -1080,7 +1080,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
                                             ? FENG_MUTABILITY_LET
                                             : FENG_MUTABILITY_VAR;
-            FengBinding binding = parse_binding_core(parser, mutability, true);
+            FengBinding binding = parse_binding_core(parser, mutability, false);
 
             if (parser->error.message != NULL) {
                 free_annotations(member_annotations, member_annotation_count);

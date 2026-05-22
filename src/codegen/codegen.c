@@ -391,6 +391,7 @@ typedef struct UserField {
     char   *feng_name;     /* e.g., "name" */
     char   *c_name;        /* sanitised */
     CGType *type;          /* heap-owned */
+    const FengTypeMember *member; /* borrowed AST member, for declaration initializers */
 } UserField;
 
 typedef struct UserMethod {
@@ -966,6 +967,10 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static bool cg_emit_expr_raw(CG *cg, const FengExpr *expr, ExprResult *out);
+static bool cg_emit_initializer_for_declared_type(CG *cg,
+                                                  const FengExpr *initializer,
+                                                  const CGType *decl_type,
+                                                  ExprResult *out);
 static void er_free(ExprResult *r);
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out);
@@ -994,6 +999,16 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                        const BuiltinFit *bf,
                                        const UserMethod *m,
                                        bool needs_static);
+static bool cg_emit_user_field_value_store(CG *cg,
+                                           const char *object_expr,
+                                           const UserField *uf,
+                                           ExprResult *value,
+                                           FengToken blame,
+                                           bool replace_existing);
+static bool cg_emit_user_type_member_initializers(CG *cg,
+                                                  const UserType *ut,
+                                                  const char *object_expr,
+                                                  FengToken blame);
 static bool cg_is_builtin_named_fit_target(FengSlice name);
 static bool cg_emit_user_finalizer(CG *cg, const UserType *t);
 static bool cg_current_callable_captures_name(const CG *cg,
@@ -5223,6 +5238,151 @@ static bool cg_resolve_type_for_user_type_member(CG *cg,
     return ok;
 }
 
+static bool cg_resolve_type_fact_for_user_type_member(CG *cg,
+                                                      const UserType *owner,
+                                                      const FengSemanticTypeFact *fact,
+                                                      const FengToken *fallback,
+                                                      CGType **out_type) {
+    if (out_type == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    if (fact == NULL) {
+        return false;
+    }
+
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; ++i) {
+                const BuiltinTypeMap *m = &k_builtin_types[i];
+
+                if (strlen(m->name) == fact->builtin_name.length &&
+                    memcmp(m->name, fact->builtin_name.data, fact->builtin_name.length) == 0) {
+                    *out_type = cgtype_new(m->kind);
+                    return *out_type != NULL;
+                }
+            }
+            return cg_fail(cg,
+                           fallback ? *fallback : (FengToken){0},
+                           "codegen: unsupported builtin inferred type for field");
+
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return cg_resolve_type_for_user_type_member(cg,
+                                                        owner,
+                                                        fact->type_ref,
+                                                        fallback,
+                                                        out_type);
+
+        case FENG_SEMANTIC_TYPE_FACT_DECL:
+            if (fact->type_decl == NULL) {
+                return cg_fail(cg,
+                               fallback ? *fallback : (FengToken){0},
+                               "codegen: inferred field type is missing its declaration");
+            }
+            if (fact->type_decl->kind == FENG_DECL_ENUM) {
+                *out_type = cgtype_new_enum(fact->type_decl);
+                return *out_type != NULL;
+            }
+            {
+                const UserType *ut = cg_find_user_type_by_decl(cg, fact->type_decl);
+
+                if (ut != NULL) {
+                    CGType *type = cgtype_new(CG_TYPE_OBJECT);
+
+                    if (type == NULL) {
+                        return false;
+                    }
+                    type->user = ut;
+                    *out_type = type;
+                    return true;
+                }
+            }
+            {
+                const UserSpec *us = cg_find_user_spec_by_decl(cg, fact->type_decl);
+
+                if (us != NULL) {
+                    CGType *type = cgtype_new(us->form == FENG_SPEC_FORM_CALLABLE
+                                              ? CG_TYPE_CALLABLE
+                                              : CG_TYPE_SPEC);
+
+                    if (type == NULL) {
+                        return false;
+                    }
+                    type->user_spec = us;
+                    *out_type = type;
+                    return true;
+                }
+            }
+            return cg_fail(cg,
+                           fallback ? *fallback : (FengToken){0},
+                           "codegen: unsupported declared inferred field type");
+
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+            break;
+    }
+
+    return false;
+}
+
+static bool cg_resolve_user_field_type(CG *cg,
+                                       const UserType *owner,
+                                       const FengTypeMember *member,
+                                       CGType **out_type) {
+    const FengSemanticTypeFact *fact = NULL;
+
+    if (out_type == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD) {
+        return false;
+    }
+
+    if (member->as.field.type != NULL) {
+        return cg_resolve_type_for_user_type_member(cg,
+                                                    owner,
+                                                    member->as.field.type,
+                                                    &member->token,
+                                                    out_type);
+    }
+
+    if (cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, member);
+    }
+    if (fact != NULL) {
+        return cg_resolve_type_fact_for_user_type_member(cg,
+                                                         owner,
+                                                         fact,
+                                                         &member->token,
+                                                         out_type);
+    }
+
+    if (member->as.field.initializer != NULL) {
+        switch (member->as.field.initializer->kind) {
+            case FENG_EXPR_BOOL:
+                *out_type = cgtype_new(CG_TYPE_BOOL);
+                return *out_type != NULL;
+            case FENG_EXPR_INTEGER:
+                *out_type = cgtype_new(CG_TYPE_I32);
+                return *out_type != NULL;
+            case FENG_EXPR_FLOAT:
+                *out_type = cgtype_new(CG_TYPE_F64);
+                return *out_type != NULL;
+            case FENG_EXPR_STRING:
+                *out_type = cgtype_new(CG_TYPE_STRING);
+                return *out_type != NULL;
+            default:
+                break;
+        }
+    }
+
+    return cg_fail(cg,
+                   member->token,
+                   "codegen: field '%.*s' requires an explicit type or semantic inferred type",
+                   (int)member->as.field.name.length,
+                   member->as.field.name.data);
+}
+
 static bool cg_callable_type_param_names(CG *cg,
                                          const FengCallableSignature *sig,
                                          FengToken blame,
@@ -5991,13 +6151,9 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
             UserField *uf = &t->fields[fi++];
             uf->feng_name = strndup(m->as.field.name.data, m->as.field.name.length);
             uf->c_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
+            uf->member = m;
             if (!uf->feng_name || !uf->c_name) return false;
-            if (!cg_resolve_type_for_user_type_member(cg, t, m->as.field.type,
-                                                      &m->token, &uf->type)) return false;
-            if (m->as.field.initializer) {
-                return cg_fail(cg, m->token,
-                    "codegen: field default initializers not yet supported in Phase 1A");
-            }
+            if (!cg_resolve_user_field_type(cg, t, m, &uf->type)) return false;
         } else if (m->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
                    m->kind == FENG_TYPE_MEMBER_METHOD) {
             bool is_ctor = m->kind == FENG_TYPE_MEMBER_CONSTRUCTOR;
@@ -6082,17 +6238,13 @@ static const UserMethod *cg_user_type_constructor_by_member(const UserType *t,
     return NULL;
 }
 
-static char *cg_user_type_default_construct_expr(const UserType *ut) {
+static char *cg_user_type_raw_object_new_expr(const UserType *ut) {
     Buf b;
     buf_init(&b);
-    if (ut->c_default_zero_name != NULL) {
-        buf_append_fmt(&b, "%s()", ut->c_default_zero_name);
-    } else {
-        buf_append_fmt(&b,
-                       "(struct %s *)feng_object_new(&%s)",
-                       ut->c_struct_name,
-                       ut->c_desc_name);
-    }
+    buf_append_fmt(&b,
+                   "(struct %s *)feng_object_new(&%s)",
+                   ut->c_struct_name,
+                   ut->c_desc_name);
     return b.data;
 }
 
@@ -10938,7 +11090,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         obj_name = cg_fresh_temp(cg, "_obj");
-        obj_init = cg_user_type_default_construct_expr(ut);
+        obj_init = cg_user_type_raw_object_new_expr(ut);
         if (obj_name == NULL || obj_init == NULL) {
             free(obj_name);
             free(obj_init);
@@ -10950,6 +11102,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                        obj_name,
                        obj_init);
         free(obj_init);
+
+        if (!cg_emit_user_type_member_initializers(cg, ut, obj_name, e->token)) {
+            free(obj_name);
+            return false;
+        }
 
         if (!cg_emit_constructor_invoke(cg,
                                         e->as.call.args,
@@ -11399,7 +11556,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     char *tmp = cg_fresh_temp(cg, "_obj");
     if (!tmp) return cg_fail(cg, e->token, "codegen: out of memory");
     {
-        char *obj_init = cg_user_type_default_construct_expr(ut);
+        char *obj_init = cg_user_type_raw_object_new_expr(ut);
         if (obj_init == NULL) {
             free(tmp);
             return cg_fail(cg, e->token, "codegen: out of memory");
@@ -11408,6 +11565,11 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
             "    struct %s *%s = %s;\n",
             ut->c_struct_name, tmp, obj_init);
         free(obj_init);
+    }
+
+    if (!cg_emit_user_type_member_initializers(cg, ut, tmp, e->token)) {
+        free(tmp);
+        return false;
     }
 
     if (target_call != NULL) {
@@ -11456,32 +11618,10 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
             free(assigned); free(tmp); return false;
         }
         const UserField *uf = &ut->fields[idx];
-        if (cgtype_is_managed(uf->type)) {
-            if (v.owns_ref) {
-                buf_append_fmt(cg->cur_body, "    %s->%s = %s;\n",
-                               tmp, uf->c_name, v.c_expr);
-            } else {
-                buf_append_fmt(cg->cur_body,
-                    "    %s->%s = %s; feng_retain(%s->%s);\n",
-                    tmp, uf->c_name, v.c_expr, tmp, uf->c_name);
-            }
-        } else if (cgtype_is_aggregate(uf->type)) {
-            const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
-            if (agg_desc == NULL) {
-                er_free(&v);
-                free(assigned); free(tmp);
-                return cg_fail(cg, fi->token,
-                    "codegen: missing aggregate descriptor for object literal field '%s'",
-                    uf->feng_name);
-            }
-            buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&%s->%s, &%s, &%s);\n",
-                tmp, uf->c_name, v.c_expr, agg_desc);
-        } else {
-            char *cty = cg_ctype_dup(uf->type);
-            buf_append_fmt(cg->cur_body, "    %s->%s = (%s)(%s);\n",
-                           tmp, uf->c_name, cty, v.c_expr);
-            free(cty);
+        if (!cg_emit_user_field_value_store(cg, tmp, uf, &v, fi->token, true)) {
+            er_free(&v);
+            free(assigned); free(tmp);
+            return false;
         }
         er_free(&v);
     }
@@ -12672,6 +12812,8 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "0.0"); break;
         case CG_TYPE_POINTER:
             buf_append_cstr(&b, "NULL"); break;
+        case CG_TYPE_GENERIC_PARAM:
+            buf_append_cstr(&b, "NULL"); break;
         case CG_TYPE_STRING:
             buf_append_cstr(&b, "feng_string_default()"); break;
         case CG_TYPE_ARRAY: {
@@ -12741,6 +12883,167 @@ static bool cg_emit_initializer_for_declared_type(CG *cg,
         return cg_emit_array_literal_typed(cg, initializer, decl_type->element, out);
     }
     return cg_emit_expr(cg, initializer, out);
+}
+
+/* Emit a write into an object field, either as first construction-time
+ * initialization or as an object-literal overwrite after constructor code. */
+static bool cg_emit_user_field_value_store(CG *cg,
+                                           const char *object_expr,
+                                           const UserField *uf,
+                                           ExprResult *value,
+                                           FengToken blame,
+                                           bool replace_existing) {
+    if (cg == NULL || object_expr == NULL || uf == NULL || value == NULL) {
+        return false;
+    }
+
+    if (cgtype_is_managed(uf->type)) {
+        if (replace_existing) {
+            if (value->owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { void *_old = %s->%s; %s->%s = %s; feng_release(_old); }\n",
+                    object_expr, uf->c_name, object_expr, uf->c_name, value->c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_assign((void**)&%s->%s, %s);\n",
+                    object_expr, uf->c_name, value->c_expr);
+            }
+        } else if (value->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = %s;\n",
+                object_expr, uf->c_name, value->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = %s; feng_retain(%s->%s);\n",
+                object_expr, uf->c_name, value->c_expr, object_expr, uf->c_name);
+        }
+        return true;
+    }
+
+    if (cgtype_is_aggregate(uf->type)) {
+        const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+
+        if (agg_desc == NULL) {
+            return cg_fail(cg,
+                           blame,
+                           "codegen: missing aggregate descriptor for field '%s'",
+                           uf->feng_name);
+        }
+        if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    feng_aggregate_assign(&%s->%s, &%s, &%s);\n",
+            object_expr, uf->c_name, value->c_expr, agg_desc);
+        return true;
+    }
+
+    {
+        char *cty = cg_ctype_dup(uf->type);
+
+        if (cty == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    %s->%s = (%s)(%s);\n",
+            object_expr, uf->c_name, cty, value->c_expr);
+        free(cty);
+    }
+    return true;
+}
+
+/* Emit the no-initializer member default for one field during object construction. */
+static bool cg_emit_user_field_default_value(CG *cg,
+                                             const char *object_expr,
+                                             const UserField *uf,
+                                             FengToken blame) {
+    if (cg == NULL || object_expr == NULL || uf == NULL) {
+        return false;
+    }
+
+    if (uf->type != NULL && uf->type->kind == CG_TYPE_CALLABLE) {
+        return true;
+    }
+
+    if (cgtype_is_aggregate(uf->type)) {
+        const char *agg_desc = cg_aggregate_field_desc_name(uf->type);
+
+        if (agg_desc == NULL) {
+            return cg_fail(cg,
+                           blame,
+                           "codegen: missing aggregate descriptor for default field '%s'",
+                           uf->feng_name);
+        }
+        buf_append_fmt(cg->cur_body,
+            "    feng_aggregate_default_init(&%s->%s, &%s);\n",
+            object_expr, uf->c_name, agg_desc);
+        return true;
+    }
+
+    {
+        char *def_expr = NULL;
+        char *cty = NULL;
+
+        if (!cg_default_value_expr(cg, uf->type, &blame, &def_expr)) {
+            return false;
+        }
+        cty = cg_ctype_dup(uf->type);
+        if (cty == NULL) {
+            free(def_expr);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    %s->%s = (%s)(%s);\n",
+            object_expr, uf->c_name, cty, def_expr);
+        free(cty);
+        free(def_expr);
+    }
+    return true;
+}
+
+/* Emit the member declaration-initialization phase for a freshly allocated object. */
+static bool cg_emit_user_type_member_initializers(CG *cg,
+                                                  const UserType *ut,
+                                                  const char *object_expr,
+                                                  FengToken blame) {
+    if (cg == NULL || ut == NULL || object_expr == NULL) {
+        return false;
+    }
+
+    for (size_t i = 0; i < ut->field_count; ++i) {
+        const UserField *uf = &ut->fields[i];
+        const FengTypeMember *member = uf->member;
+
+        if (member != NULL && member->as.field.initializer != NULL) {
+            ExprResult init;
+            bool ok;
+
+            er_init(&init);
+            ok = cg_emit_initializer_for_declared_type(cg,
+                                                       member->as.field.initializer,
+                                                       uf->type,
+                                                       &init);
+            if (!ok) {
+                return false;
+            }
+            ok = cg_emit_user_field_value_store(cg,
+                                                object_expr,
+                                                uf,
+                                                &init,
+                                                member->token,
+                                                false);
+            er_free(&init);
+            if (!ok) {
+                return false;
+            }
+        } else if (!cg_emit_user_field_default_value(cg,
+                                                     object_expr,
+                                                     uf,
+                                                     member != NULL ? member->token : blame)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {

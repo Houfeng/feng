@@ -3696,6 +3696,49 @@ static void test_object_literal_field_value_rejects_non_matching_type(void) {
     feng_program_free(program);
 }
 
+static void test_type_field_inferred_initializer_member_access_accepted(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "type UserType {\n"
+        "    let id: int = 7;\n"
+        "}\n"
+        "type User {\n"
+        "    let id: int = 0;\n"
+        "    let x: UserType;\n"
+        "    let y = UserType();\n"
+        "    let z = UserType {};\n"
+        "}\n"
+        "fn total(): int {\n"
+        "    let user = User();\n"
+        "    return user.id + user.x.id + user.y.id + user.z.id;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_field_inferred_member_access.f", source);
+    const FengProgram *programs[] = {program};
+    const FengDecl *user_type = program->declarations[1];
+    const FengTypeMember *field_y = user_type->as.type_decl.members[2];
+    const FengTypeMember *field_z = user_type->as.type_decl.members[3];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengSemanticTypeFact *fact_y = NULL;
+    const FengSemanticTypeFact *fact_z = NULL;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    fact_y = feng_semantic_lookup_type_fact(analysis, field_y);
+    fact_z = feng_semantic_lookup_type_fact(analysis, field_z);
+    ASSERT(fact_y != NULL);
+    ASSERT(fact_y->kind == FENG_SEMANTIC_TYPE_FACT_DECL);
+    ASSERT(fact_y->type_decl == program->declarations[0]);
+    ASSERT(fact_z != NULL);
+    ASSERT(fact_z->kind == FENG_SEMANTIC_TYPE_FACT_DECL);
+    ASSERT(fact_z->type_decl == program->declarations[0]);
+
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_local_let_assignment_rejects_non_writable_target(void) {
     const char *source =
         "mod demo.main;\n"
@@ -12902,6 +12945,7 @@ int main(void) {
     test_local_assignment_rejects_non_matching_type();
     test_member_assignment_rejects_non_matching_type();
     test_object_literal_field_value_rejects_non_matching_type();
+    test_type_field_inferred_initializer_member_access_accepted();
     test_local_let_assignment_rejects_non_writable_target();
     test_default_parameter_assignment_rejects_non_writable_target();
     test_var_parameter_assignment_is_writable();

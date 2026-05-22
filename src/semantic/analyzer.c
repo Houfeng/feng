@@ -406,6 +406,27 @@ static InferredExprType inferred_expr_type_from_decl(const FengDecl *type_decl) 
     return type;
 }
 
+static InferredExprType inferred_expr_type_from_type_fact(const FengSemanticTypeFact *fact) {
+    InferredExprType type = inferred_expr_type_unknown();
+
+    if (fact == NULL) {
+        return type;
+    }
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            type.kind = FENG_INFERRED_EXPR_TYPE_BUILTIN;
+            type.builtin_name = fact->builtin_name;
+            return type;
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return inferred_expr_type_from_type_ref(fact->type_ref);
+        case FENG_SEMANTIC_TYPE_FACT_DECL:
+            return inferred_expr_type_from_decl(fact->type_decl);
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+            break;
+    }
+    return type;
+}
+
 static const FengEnumItem *find_enum_item_decl(const FengDecl *enum_decl, FengSlice name) {
     size_t item_index;
 
@@ -9523,11 +9544,29 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         return inferred_expr_type_unknown();
     }
 
-    return inferred_expr_type_from_type_ref(
-        substitute_type_ref_for_owner_instance(context,
-                                               owner_type_decl,
-                                               owner_type,
-                                               field_member->as.field.type));
+    if (field_member->as.field.type != NULL) {
+        return inferred_expr_type_from_type_ref(
+            substitute_type_ref_for_owner_instance(context,
+                                                   owner_type_decl,
+                                                   owner_type,
+                                                   field_member->as.field.type));
+    }
+
+    if (context->analysis != NULL) {
+        const FengSemanticTypeFact *fact =
+            feng_semantic_lookup_type_fact(context->analysis, field_member);
+
+        if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+            return inferred_expr_type_from_type_ref(
+                substitute_type_ref_for_owner_instance(context,
+                                                       owner_type_decl,
+                                                       owner_type,
+                                                       fact->type_ref));
+        }
+        return inferred_expr_type_from_type_fact(fact);
+    }
+
+    return inferred_expr_type_unknown();
 }
 
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr) {

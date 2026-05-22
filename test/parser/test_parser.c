@@ -264,6 +264,40 @@ static void test_ast_source_tokens(void) {
     feng_program_free(program);
 }
 
+static void test_type_field_inferred_initializers(void) {
+    const char *source =
+        "mod demo.fields;\n"
+        "type UserType {}\n"
+        "type User {\n"
+        "    let id: int = 0;\n"
+        "    let x: UserType;\n"
+        "    let y = UserType();\n"
+        "    let z = UserType {};\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *user = NULL;
+
+    ASSERT(feng_parse_source(source, strlen(source), "field_infer.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    user = program->declarations[1];
+    ASSERT(user->kind == FENG_DECL_TYPE);
+    ASSERT(user->as.type_decl.member_count == 4U);
+    ASSERT(user->as.type_decl.members[0]->as.field.type != NULL);
+    ASSERT(user->as.type_decl.members[0]->as.field.initializer != NULL);
+    ASSERT(user->as.type_decl.members[1]->as.field.type != NULL);
+    ASSERT(user->as.type_decl.members[1]->as.field.initializer == NULL);
+    ASSERT(user->as.type_decl.members[2]->as.field.type == NULL);
+    ASSERT(user->as.type_decl.members[2]->as.field.initializer != NULL);
+    ASSERT(user->as.type_decl.members[2]->as.field.initializer->kind == FENG_EXPR_CALL);
+    ASSERT(user->as.type_decl.members[3]->as.field.type == NULL);
+    ASSERT(user->as.type_decl.members[3]->as.field.initializer != NULL);
+    ASSERT(user->as.type_decl.members[3]->as.field.initializer->kind == FENG_EXPR_OBJECT_LITERAL);
+
+    feng_program_free(program);
+}
+
 static void test_doc_comments_bind_to_declarations_and_members(void) {
     const char *source =
         "mod demo.docs;\n"
@@ -1612,6 +1646,7 @@ int main(void) {
     test_generic_type_brackets_without_colon_parses_as_index();
     test_member_annotations_and_constructors();
     test_ast_source_tokens();
+    test_type_field_inferred_initializers();
     test_doc_comments_bind_to_declarations_and_members();
     test_doc_comments_require_immediate_declaration();
     test_parse_error();
