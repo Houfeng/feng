@@ -8,7 +8,7 @@
 - 条件判断支持 `if / else if / else` 形式。
 - `if` 支持作为表达式使用,用于条件分支求值。
 - 循环支持 `while`、`for`（三段式）、`for/in`（迭代）、`break` 和 `continue`。
-- `try / catch / finally` 与控制流的详细异常语义见 [Feng 语言异常模型规范](./feng-exception.md)。
+- `try / catch` 与控制流的详细异常语义见 [Feng 语言异常模型规范](./feng-exception.md)。
 
 ## 2 普通条件判断
 
@@ -194,12 +194,11 @@ for let it in items {
 
 ## 8 与异常模型的关系
 
-- `try / catch / finally` 本身属于控制流结构的一部分。
-- `finally` 会在 `return`、`break`、`continue` 和异常展开前执行。
+- `try / catch` 本身属于控制流结构的一部分。
 - `throw`、异常传播和 ABI 边界限制的详细规则见 [Feng 语言异常模型规范](./feng-exception.md)。
 
 ## 9 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、流程控制概要、模块、类型、函数、异常、自动内存管理、包分发与完整示例。
-- [feng-exception.md](./feng-exception.md): `throw`、异常传播与 `try/catch/finally` 的异常语义。
+- [feng-exception.md](./feng-exception.md): `throw`、异常传播与 `try/catch` 表达式的异常语义。
 - 本文档: 条件判断、`if` 表达式、模式匹配、循环与控制转移规则的独立补充文档。
