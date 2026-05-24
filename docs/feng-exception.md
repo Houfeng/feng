@@ -1,26 +1,26 @@
 # Feng 语言异常模型规范
 
-本文档用于补充 [feng-language.md](./feng-language.md) 中的异常处理概要说明,聚焦 Feng 语言中的 `throw`、异常传播、`try/catch/finally` 与 C ABI 边界规则。
+本文档用于补充 [feng-language.md](./feng-language.md) 中的异常处理概要说明,聚焦 Feng 语言中的 `throw`、异常传播、`try/catch` 表达式与 C ABI 边界规则。
 
 > **设计原则基础**: `extern fn` 自身的无函数体约束属于语法层; `@abi` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
 
 ## 1 异常模型概览
 
-- Feng 支持结构化异常处理,使用 `throw` 触发异常,使用 `try/catch/finally` 处理异常。
+- Feng 支持结构化异常处理,使用 `throw` 触发异常,使用 `try/catch` 处理异常。
+- `try` 后只能是表达式,不能是语句块。
 - 异常沿调用栈向外传播,直到被最近的 `catch` 捕获。
-- `finally` 在离开 `try` 作用域时总会执行,无论原因是正常结束、`return`、`break`、`continue` 还是异常。
+- `catch` 可省略; 省略 `catch` 时异常自动继续向上传播。
 - 异常不能跨越 C ABI 边界传播。
 
 ## 2 `throw` 语句
 
-`throw 表达式;` 用于显式抛出异常。
+`throw 表达式;` 用于显式抛出新的异常值。
 
 规则说明:
 
 - `throw` 后必须跟一个非 `void` 表达式。
-- 可抛出的值限于 Feng 可管理的普通值,如基础类型、`string`、数组或 Feng 原生 `type` 对象（含标注 `@abi` 的对象类型）。
-- `T*` / `Foo*` 指针以及其他 C 侧非托管值不可直接作为异常值抛出。
-- `throw` 本身会终止当前执行路径,其后的同级语句不可达。
+- 可抛出的值限于 Feng 可管理的普通值; 具体异常值模型由实现阶段进一步细化。
+- `throw` 会终止当前执行路径,其后的同级语句不可达。
 
 ```feng
 fn ensure_positive(x: int) {
@@ -30,44 +30,44 @@ fn ensure_positive(x: int) {
 }
 ```
 
-## 3 `try/catch/finally` 语义
+## 3 `try/catch` 表达式语义
 
 ### 3.1 `try`
 
-- `try` 用于包裹可能抛出异常的代码块。
-- `try` 块内一旦抛出异常,后续未执行的语句会被中断。
+- `try` 用于求值一个可能抛出异常的表达式。
+- 语法形态: `try <expr> [catch <id> { ... }]`
+- `try` 后只能是单个表达式,不允许 `try { ... }` 语句块形态。
 
 ### 3.2 `catch`
 
-- `catch` 捕获从对应 `try` 块或其内部调用链抛出的异常。
-- 当前语言版本仅支持无绑定形式的 `catch { ... }`,表示捕获任意 Feng 异常。
-- 一个 `try` 块最多跟随一个 `catch` 块。
-- `catch` 块可省略；`try { ... } finally { ... }` 不带 `catch` 合法，异常仍会向上传播，`finally` 保证执行。
+- `catch` 捕获从对应 `try` 表达式或其内部调用链抛出的异常。
+- `catch` 必须绑定异常值标识符,形如 `catch ex { ... }`。
+- `catch` 块中可执行常规语句; 若需继续上抛,应使用 `throw <expr>;` 显式抛出。
 
-### 3.3 `finally`
+### 3.3 作为表达式时的产值与类型规则
 
-- `finally` 用于收尾逻辑,在离开 `try`/`catch` 路径前必定执行。
-- `finally` 中禁止使用 `return`、`break`、`continue` 和新的 `throw`,以避免覆盖既有控制流结果。
+- `try/catch` 可作为表达式出现在赋值右值位置。
+- 当 `try/catch` 作为表达式使用且存在 `catch` 时,`catch` 块必须显式给出结果返回（写法形如 `return <value>;`）。
+- `catch` 返回值类型必须与 `try` 主表达式结果类型一致。
+- 若 `let` 绑定有显式类型声明,则 `try` 主表达式结果与 `catch` 返回值都必须符合该声明类型。
+
+### 3.4 省略 `catch` 时的自动上抛
+
+- 支持 `try <expr>;` 与 `let x = try <expr>;`。
+- 正常时返回 `<expr>` 的求值结果（位于表达式上下文时）。
+- 异常时不在当前点处理,自动继续向上传播,并终止当前语句之后的同级后续语句执行。
 
 ```feng
-fn read_value() {
-    try {
-        let arr = [1, 2, 3];
-        let num = arr[10];
-    } catch {
-        print("读取失败");
-    } finally {
-        print("执行收尾操作");
-    }
+fn load_port(): int {
+    let v = try parse_port() catch err {
+        log(err);
+        return 8080;
+    };
+    return v;
 }
 
-// 不带 catch，异常向上传播，finally 保证执行
-fn with_cleanup() {
-    try {
-        do_work();
-    } finally {
-        release_resource();
-    }
+fn startup() {
+    try init_runtime();
 }
 ```
 
@@ -75,14 +75,14 @@ fn with_cleanup() {
 
 - 未被当前函数处理的异常会继续向调用方传播。
 - 若异常传播到程序入口 `main` 仍未被捕获,程序立即以异常失败状态结束。
-- `catch` 处理完成后,控制流从整个 `try/catch/finally` 结构之后继续执行。
-- `return`、`break`、`continue` 在离开 `try` 前也必须先执行对应的 `finally`。
+- 对于 `try/catch` 表达式,`catch` 完成结果返回后,控制流从该表达式之后继续执行。
+- 对于省略 `catch` 的 `try` 表达式,异常直接继续向外传播。
 
 ### 4.1 异常路径上的资源清理
 
 - 异常沿调用栈传播时,栈上所有已经初始化、当前作用域可见的托管局部(由编译器与运行时共同管理引用计数的对象,例如字符串、数组、对象实例)必须被释放,等价于这些局部正常走完作用域。
 - 释放顺序与正常退出相同:按声明的逆序逐个释放,且每个槽位释放后被置空,任何后续路径都不会重复释放。
-- 抛出表达式自身的值在传递到 `catch` 之前持有 +1 引用;`catch` 块结束后由运行时释放该引用。`catch` 体内若再次抛出(语言后续阶段支持),适用相同规则。
+- 抛出表达式自身的值在传递到 `catch` 之前持有 +1 引用;`catch` 块结束后由运行时释放该引用。`catch` 中再次执行 `throw <expr>;` 时,按新抛出值独立适用相同生命周期规则。
 - 任何被 `@abi` ABI 边界拦截或在程序入口外仍未被捕获的异常,在终止进程前同样要释放沿途所有可见的托管局部,以保证调试信息一致、不掩盖真实泄漏。
 
 ## 5 与 C ABI 的边界约束
@@ -96,6 +96,6 @@ fn with_cleanup() {
 ## 6 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
-- [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch/finally` 的控制流关系。
+- [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch` 表达式的控制流关系。
 - [feng-interop.md](./feng-interop.md): C ABI 路径下的 `extern fn` 导入规则、`@abi` 的 ABI 规则与异常边界。
-- 本文档: `throw`、传播模型、`finally` 执行语义与 C ABI 边界限制。
+- 本文档: `throw`、`try/catch` 表达式语义、传播模型与 C ABI 边界限制。
