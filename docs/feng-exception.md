@@ -31,15 +31,60 @@ fn ensure_positive(x: int) {
 }
 ```
 
-## 3 `try/catch` 表达式语义
+## 3 `try/catch`
 
-### 3.1 `try`
+### 3.1 `try/catch` 用法
+
+作为普通语句使用
+
+```feng
+
+// 常规语句
+try foo() catch ex: string {
+  puts(ex);
+} catch ex: unknown { // 兜底 catch 子句
+  puts("unknown error");
+  return; // 作为语句时，使用 return 结束函数
+}
+
+// catch 省略 ex
+try foo() catch {
+  puts("unknown error");
+}
+
+```
+
+作为表达式使用
+
+```feng
+
+// 常规表达式
+let x = try foo() catch ex: string {
+  puts(ex);
+  // 作为表达式时，必须有返回值，且和 try 表达式的值类型一致
+  // 不可使用 return 语句（和 if 表达式一致）
+  // 作为表达式时，最后一个表达式作为 catch 块的求值结果
+  // 可省略分号也可不少省略分号（和 if 表达式一致）
+  123; 
+};
+
+// catch 省略 ex
+let x = try foo() catch {
+  puts("unknown error");
+  // 作为表达式时，必须有返回值，且和 try 表达式的值类型一致
+  // 不可使用 return 语句（和 if 表达式一致）
+  123;  
+}
+
+```
+
+### 3.2 `try`
 
 - `try` 用于求值一个可能抛出异常的表达式。
 - 语法形态: `try <expr> [catch <id>: Type { ... }]+`，可附加一个或多个 `catch` 子句；每个子句的类型注解必须显式给出，不可省略。
 - `try` 后只能是单个表达式,不允许 `try { ... }` 语句块形态。
 
-### 3.2 `catch`
+### 3.3 `catch`
 
 - `catch` 捕获从对应 `try` 表达式或其内部调用链抛出的异常。
 - `catch` 必须绑定异常值标识符并显式给出类型注解，形如 `catch ex: Type { ... }`；与语言其他位置一致，类型注解不可省略。
