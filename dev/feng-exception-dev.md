@@ -64,7 +64,6 @@ C 函数默认不携带自定义 personality。Feng 运行时在模块初始化�
 含 try/catch 的 Feng 生成 C 文件必须以 **`-fexceptions`** 编译。该 flag 的作用：
 
 - 使 C 栈帧生成完整 CFI（完整的 `.eh_frame` 条目），确保 libunwind 能正确还原中间帧的寄存器。
-- 启用 `__attribute__((cleanup(...)))` 在异常展开路径上的自动调用（中间帧托管局部清理，见实现计划）。
 - **不**自动从 `goto`/label 结构生成 LSDA；LSDA 由 Feng codegen 显式输出为静态 struct。
 
 不加此 flag 时，中间帧的 CFI 不完整，libunwind 无法安全展开，行为未定义。
@@ -86,28 +85,30 @@ void  feng_rethrow(void);        // unknown catch 块中重抛
 
 ### 托管局部展开清理
 
-展开路径（throw → catch 之间）必须正确释放各帧内的托管局部。`FengCleanupNode` / `feng_cleanup_push` / `feng_cleanup_pop` 全部移除，由以下两条规则替代：
+展开路径（throw → catch 之间）必须正确释放各帧内的托管局部。清理机制的改动分两阶段进行。
+
+#### 本次交付（异常系统）
 
 **中间帧**（位于 throw 与 catch 之间、自身无 try-catch 的函数帧）：
 
-- Codegen 在所有托管局部声明上加 `__attribute__((cleanup(feng_release_ptr)))`，配合 `-fexceptions`，编译器自动生成该帧的 cleanup LSDA 条目。
-- 编译器默认为 C 文件注入 `__gcc_personality_v0`，在 CLEANUP_PHASE 自动调用 cleanup 函数，无需 Feng personality 参与。
-- Feng 的自定义 FDE 仅覆盖含 try 的函数的 try 区间，中间帧无自定义 FDE，不产生 personality 冲突。
-- 正常路径亦触发 `__attribute__((cleanup))` 释放（语义等同于现有显式 `feng_release`），无额外开销。
+复用现有 TLS cleanup chain，新增 **TLS 帧标记**（`FengFrameMarker`）提供帧边界信息：
+- Runtime 新增 `FengFrameMarker` 节点类型，插入同一 TLS 链，仅作帧边界标识，无 slot 指针。
+- Codegen 在每个含托管局部的函数入口发射 `feng_frame_push`，出口发射 `feng_frame_pop`。
+- Personality 函数在 CLEANUP_PHASE 中，从链顶逐个 pop + 释放，遇到 `FengFrameMarker` 时 pop 该标记并返回 `_URC_CONTINUE_UNWIND`，完成本帧清理。
+- 现有 `feng_cleanup_push` / `feng_cleanup_pop` 及 codegen 生成逻辑**完全不变**。
 
 ```c
-/* 中间帧托管局部——中间帧函数（无 try/catch）codegen 生成示例 */
-void intermediate_fn(void) {
-    BazType *x __attribute__((cleanup(feng_release_ptr))) = make_baz();
-    /* 正常路径：x 在作用域结束时由 cleanup 释放 */
-    /* 异常展开路径：x 由 __gcc_personality_v0 + cleanup LSDA 自动释放 */
-    call_something(x);
+/* personality CLEANUP_PHASE 中间帧处理伪代码 */
+while (g_cleanup_top && !is_frame_marker(g_cleanup_top)) {
+    FengCleanupNode *n = g_cleanup_top; g_cleanup_top = n->prev;
+    if (n->slot && *n->slot) { feng_release(*n->slot); *n->slot = NULL; }
 }
+if (g_cleanup_top) g_cleanup_top = g_cleanup_top->prev; /* pop 帧标记 */
+return _URC_CONTINUE_UNWIND;
 ```
 
 **try 帧内托管局部**（含 try/catch 的函数，位于 try 体内的托管局部）：
 
-- try 区间由 Feng 自定义 FDE 覆盖，使用 `__feng_personality_v0`，不再使用 `__attribute__((cleanup))`（会与自定义 FDE 的 personality 冲突）。
 - Codegen 将 try 体内托管局部**初始化为 NULL**；正常路径在 try 体末尾显式 `feng_release` 并置 NULL；landing pad 入口处在 dispatch switch 之前对每个 try 体托管局部做 NULL 安全释放：
 
 ```c
@@ -119,6 +120,15 @@ __lp_1:; {
     switch (__clause) { /* ... */ }
 }
 ```
+
+#### 推迟到 defer 交付时统一处理
+
+`defer` 与托管局部清理共享同一套基础设施，两者应一起设计、一起交付：
+
+- 全量切换 `__attribute__((cleanup(feng_release_ptr)))`，替换所有函数所有托管局部声明（约 20+ codegen 调用点）。
+- 移除 `FengCleanupNode` / `FengFrameMarker` / `feng_cleanup_push` / `feng_cleanup_pop` 整套 runtime 机制及相应 codegen 逻辑。
+- `defer` 块以同一套 cleanup 机制实现（每个 defer 块生成捕获变量的结构体 + `__attribute__((cleanup))` ）。
+- **平台确认**：Windows 保持使用 Clang，`__attribute__((cleanup))` 在 macOS / Linux / Windows (Clang) 均可用，无兼容性顾虑。
 
 ---
 
@@ -229,10 +239,9 @@ for each FengCatchClause in LSDA（按源码顺序）:
 
 ```c
 // Feng 源码：
-//   let buf: Bar = make_bar()           // try 体外托管局部
 //   let result = try {
 //       let inner: Baz = make_baz()     // try 体内托管局部
-//       some_expr(buf, inner)
+//       some_expr(inner)
 //   } catch err: Foo { alt } catch ex: unknown { throw ex }
 
 void generated_fn(void) {
@@ -246,16 +255,14 @@ void generated_fn(void) {
     };
     /* 模块初始化时以 &__lsda_1 注册自定义 FDE（见 §0 Personality 函数注入） */
 
-    /* try 体外托管局部：__attribute__((cleanup)) 在正常路径和中间帧展开路径均自动释放 */
-    BarType *buf __attribute__((cleanup(feng_release_ptr))) = make_bar();
-
     /* try 体内托管局部：NULL 初始化，landing pad 入口处显式释放 */
+    /* （try 体外局部由现有 TLS cleanup chain 维护，本次不变） */
     BazType *inner = NULL;
 
     /* --- 正常路径：无任何 try 相关代码 --- */
     __try_begin_1:;
     inner = make_baz();
-    result = some_expr(buf, inner);
+    result = some_expr(inner);
     feng_release(inner); inner = NULL;   /* 正常路径显式释放 try 体内局部 */
     __try_end_1:;
     goto __after_1;
@@ -294,7 +301,9 @@ void generated_fn(void) {
 - [ ] 实现 macOS/Linux 版 `feng_exception_platform.c`：`feng_throw` 堆分配 `FengUnwindException` 后调用 `_Unwind_RaiseException`，实现 `__feng_personality_v0`
 - [ ] Personality 函数：搜索阶段按 LSDA 子句顺序匹配 `desc` 指针；清理阶段将命中子句索引写入 `FengUnwindException.matched_clause`，再调用 `_Unwind_SetIP` 跳转 landing pad
 - [ ] LSDA 注册：模块初始化时通过 `__register_frame` 注册自定义 FDE（含 personality 指针 + LSDA 指针）
-- [ ] 移除旧的 `FengExceptionFrame` / `FengCleanupNode` / `feng_cleanup_push` / `feng_cleanup_pop` 机制
+- [ ] 定义 `FengFrameMarker` 节点类型，扩展 TLS cleanup chain 支持帧边界标记（`src/runtime/feng_runtime.h`）
+- [ ] 实现 `feng_frame_push` / `feng_frame_pop`：在同一 TLS 链上插入/移除帧边界节点（`src/runtime/feng_exception.c`）
+- [ ] Personality 函数 CLEANUP_PHASE 中间帧处理：从链顶释放托管局部至帧标记，pop 帧标记，返回 `_URC_CONTINUE_UNWIND`
 - [ ] 验证正常路径（无异常抛出）汇编输出中无任何异常相关代码
 - [ ] 含 try/catch 的生成 C 文件确认以 `-fexceptions` 编译（参见 Makefile / build 逻辑）
 
@@ -322,9 +331,9 @@ void generated_fn(void) {
 - [ ] `src/codegen/codegen.c`：实现多 catch 子句的 landing pad 分派（按命中子句索引跳转）
 - [ ] `src/codegen/codegen.c`：`catch ex: unknown` 子句：绑定 ex，生成 `feng_rethrow()` 路径
 - [ ] `src/codegen/codegen.c`：try 表达式作为右值，结果值正确穿透到外层
-- [ ] `src/codegen/codegen.c`：托管局部声明加 `__attribute__((cleanup(feng_release_ptr)))`（try 体外及非 try 函数；try 体内局部改为 NULL 初始化 + 正常路径显式释放）
+- [ ] `src/codegen/codegen.c`：try 体内托管局部声明改为 NULL 初始化（不加 cleanup push），正常路径在 try 体末尾显式 `feng_release` + 置 NULL
 - [ ] `src/codegen/codegen.c`：landing pad 入口处，在 dispatch switch 之前为每个 try 体内托管局部生成 NULL 安全的 `feng_release(x)` 调用
-- [ ] 移除 codegen 中所有 `feng_cleanup_push` / `feng_cleanup_pop` 调用生成逻辑
+- [ ] `src/codegen/codegen.c`：在每个含托管局部的函数入口/出口发射 `feng_frame_push` / `feng_frame_pop` 帧标记（中间帧展开清理所需）
 
 ### 测试
 
