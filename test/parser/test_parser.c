@@ -151,6 +151,51 @@ static void test_statements_and_expressions(void) {
     feng_program_free(program);
 }
 
+static void test_try_expression_with_typed_catches(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run(): int {\n"
+        "    let value = try parse() catch err: ParseError { 8080; } catch problem: unknown { 9090; };\n"
+        "    try init_runtime();\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengExpr *try_expr;
+    const FengStmt *try_stmt;
+
+    ASSERT(feng_parse_source(source, strlen(source), "try_expr.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 3U);
+    ASSERT(body->statements[0]->kind == FENG_STMT_BINDING);
+    try_expr = body->statements[0]->as.binding.initializer;
+    ASSERT(try_expr->kind == FENG_EXPR_TRY);
+    ASSERT(try_expr->as.try_expr.body->kind == FENG_EXPR_CALL);
+    ASSERT(try_expr->as.try_expr.clause_count == 2U);
+
+    assert_slice_text(try_expr->as.try_expr.clauses[0].name, "err");
+    ASSERT(try_expr->as.try_expr.clauses[0].type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(try_expr->as.try_expr.clauses[0].type->as.named.segment_count == 1U);
+    assert_slice_text(try_expr->as.try_expr.clauses[0].type->as.named.segments[0], "ParseError");
+    ASSERT(try_expr->as.try_expr.clauses[0].body->statement_count == 1U);
+
+    assert_slice_text(try_expr->as.try_expr.clauses[1].name, "problem");
+    ASSERT(try_expr->as.try_expr.clauses[1].type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(try_expr->as.try_expr.clauses[1].type->as.named.segment_count == 1U);
+    assert_slice_text(try_expr->as.try_expr.clauses[1].type->as.named.segments[0], "unknown");
+
+    try_stmt = body->statements[1];
+    ASSERT(try_stmt->kind == FENG_STMT_EXPR);
+    ASSERT(try_stmt->as.expr->kind == FENG_EXPR_TRY);
+    ASSERT(try_stmt->as.expr->as.try_expr.clause_count == 0U);
+
+    feng_program_free(program);
+}
+
 static void test_runtime_annotation_on_extern_function(void) {
     const char *source =
         "mod demo.main;\n"
@@ -1655,6 +1700,7 @@ int main(void) {
     test_top_level_declarations();
     test_extern_rejects_non_function_top_level_declarations();
     test_statements_and_expressions();
+    test_try_expression_with_typed_catches();
     test_runtime_annotation_on_extern_function();
     test_enum_declarations_parse();
     test_match_with_range_and_list_labels();

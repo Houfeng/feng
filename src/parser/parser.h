@@ -141,6 +141,13 @@ typedef struct FengMatchBranch {
     FengBlock *body;
 } FengMatchBranch;
 
+typedef struct FengTryCatchClause {
+    FengToken token;
+    FengSlice name;
+    FengTypeRef *type;
+    FengBlock *body;
+} FengTryCatchClause;
+
 typedef enum FengExprKind {
     FENG_EXPR_IDENTIFIER = 0,
     FENG_EXPR_SELF,
@@ -160,6 +167,7 @@ typedef enum FengExprKind {
     FENG_EXPR_CAST,
     FENG_EXPR_IF,
     FENG_EXPR_MATCH,
+    FENG_EXPR_TRY,
     FENG_EXPR_ARRAY_NEW
 } FengExprKind;
 
@@ -237,6 +245,11 @@ struct FengExpr {
             size_t branch_count;
             FengBlock *else_block;
         } match_expr;
+        struct {
+            FengExpr *body;
+            FengTryCatchClause *clauses;
+            size_t clause_count;
+        } try_expr;
         struct {
             FengTypeRef *element_type;  /* the element type, e.g. MapEntry<K,V> */
             FengExpr    *size;          /* the size expression n */

@@ -43,7 +43,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 27U);
+    ASSERT(feng_keyword_count() == 28U);
     ASSERT(feng_reserved_word_count() == 11U);
     ASSERT(feng_builtin_annotation_count() == 8U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
@@ -54,6 +54,8 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(keyword_kind == FENG_TOKEN_KW_FIT);
     ASSERT(feng_lookup_keyword("extern", 6U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_EXTERN);
+    ASSERT(feng_lookup_keyword("unknown", 7U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_UNKNOWN);
     ASSERT(!feng_lookup_keyword("bool", 4U, &keyword_kind));
     ASSERT(!feng_lookup_keyword("int", 3U, &keyword_kind));
     ASSERT(!feng_lookup_keyword("float", 5U, &keyword_kind));
@@ -111,7 +113,7 @@ static void test_reserved_words_rejected(void) {
 
 static void test_new_keywords_and_builtin_type_names(void) {
     const char *source =
-        "enum spec fit bool string int long byte float double i32 u8 f64\n";
+        "enum spec fit unknown bool string int long byte float double i32 u8 f64\n";
     FengLexer lexer;
     FengToken token;
 
@@ -123,6 +125,8 @@ static void test_new_keywords_and_builtin_type_names(void) {
     assert_lexeme(&token, "spec");
     token = next_token(&lexer, FENG_TOKEN_KW_FIT);
     assert_lexeme(&token, "fit");
+    token = next_token(&lexer, FENG_TOKEN_KW_UNKNOWN);
+    assert_lexeme(&token, "unknown");
 
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "bool");

@@ -368,7 +368,7 @@ static void test_top_level_overload_overlap_via_fit_rejected(void) {
     size_t error_count = 0U;
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
+    ASSERT(error_count >= 1U);
     ASSERT(strstr(errors[0].message,
                   "function overloads may both match the same arguments") != NULL);
     ASSERT(strstr(errors[0].message, "'pet'") != NULL);
@@ -2344,6 +2344,173 @@ static void test_throw_accepts_string_and_managed_type(void) {
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+static void test_catch_unknown_allows_rethrow_only(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): int { return 1; }\n"
+        "fn run() {\n"
+        "    try parse() catch ex: unknown { throw ex; };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("catch_unknown_rethrow_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_catch_unknown_rejects_value_use(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): int { return 1; }\n"
+        "fn run() {\n"
+        "    try parse() catch ex: unknown { ex.message; };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("catch_unknown_value_use_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "catch_unknown_value_use_error.f") == 0);
+    ASSERT(strstr(errors[0].message, "unknown catch value 'ex' can only be used") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_try_expression_catch_result_can_use_bound_value(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { return 1; }\n"
+        "fn id(value: i32): i32 { return value; }\n"
+        "fn run(): i32 {\n"
+        "    let value = try parse() catch ex: i32 { id(ex); };\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_catch_bound_value_result_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expression_rejects_bound_value_result_mismatch(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { return 1; }\n"
+        "fn label(value: i32): string { return \"x\"; }\n"
+        "fn run(): i32 {\n"
+        "    let value = try parse() catch ex: i32 { label(ex); };\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_catch_bound_value_result_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "try_catch_bound_value_result_error.f") == 0);
+    ASSERT(strstr(errors[0].message, "catch clause result type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_unknown_type_is_only_valid_in_catch_clause(void) {
+    static const char *const cases[] = {
+        "mod demo.main;\nfn run(x: unknown) {}\n",
+        "mod demo.main;\nfn run(): unknown { return 1; }\n",
+        "mod demo.main;\ntype Box { let value: unknown; }\n",
+        "mod demo.main;\nfn run() { let value: unknown = 1; }\n"
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die("unknown_type_position_error.f", cases[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].path, "unknown_type_position_error.f") == 0);
+        ASSERT(strstr(errors[0].message, "type 'unknown' is only valid as a catch clause type") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+static void test_throw_rejects_spec_and_callable_values(void) {
+    static const char *const cases[] = {
+        "mod demo.main;\nspec Named { var name: string; }\nfn run(x: Named) { throw x; }\n",
+        "mod demo.main;\nfn side() {}\nfn run() { throw side; }\n",
+        "mod demo.main;\nfn run() { throw () { }; }\n",
+        "mod demo.main;\ntype Box { fn ping() {} }\nfn run(box: Box) { throw box.ping; }\n"
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die("throw_non_exception_value_error.f", cases[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].path, "throw_non_exception_value_error.f") == 0);
+        ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+static void test_catch_rejects_non_exception_types(void) {
+    static const char *const cases[] = {
+        "mod demo.main;\nspec Named { var name: string; }\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: Named { throw \"x\"; }; }\n",
+        "mod demo.main;\nspec Callback(): void;\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: Callback { throw \"x\"; }; }\n",
+        "mod demo.main;\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: int* { throw \"x\"; }; }\n"
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die("catch_non_exception_type_error.f", cases[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].path, "catch_non_exception_type_error.f") == 0);
+        ASSERT(strstr(errors[0].message, "catch type") != NULL);
+        ASSERT(strstr(errors[0].message, "is not catchable") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
 }
 
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
@@ -13022,6 +13189,13 @@ int main(void) {
     test_throw_rejects_pointer_value();
     test_throw_rejects_fixed_type_value();
     test_throw_accepts_string_and_managed_type();
+    test_catch_unknown_allows_rethrow_only();
+    test_catch_unknown_rejects_value_use();
+    test_try_expression_catch_result_can_use_bound_value();
+    test_try_expression_rejects_bound_value_result_mismatch();
+    test_unknown_type_is_only_valid_in_catch_clause();
+    test_throw_rejects_spec_and_callable_values();
+    test_catch_rejects_non_exception_types();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();

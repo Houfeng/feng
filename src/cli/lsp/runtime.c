@@ -2136,6 +2136,22 @@ static size_t expr_end(const FengExpr *expr) {
                 }
             }
             break;
+        case FENG_EXPR_TRY:
+            if (expr->as.try_expr.body != NULL) {
+                size_t body_end = expr_end(expr->as.try_expr.body);
+
+                if (body_end > end) {
+                    end = body_end;
+                }
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                size_t clause_end = block_end(expr->as.try_expr.clauses[index].body);
+
+                if (clause_end > end) {
+                    end = clause_end;
+                }
+            }
+            break;
         default:
             break;
     }
@@ -4879,6 +4895,23 @@ static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
             }
             return find_expr_hit_in_block(expr->as.match_expr.else_block, offset);
         }
+        case FENG_EXPR_TRY: {
+            const FengExpr *hit = find_expr_hit(expr->as.try_expr.body, offset);
+            size_t clause_index;
+
+            if (hit != NULL) {
+                return hit;
+            }
+            for (clause_index = 0U;
+                 clause_index < expr->as.try_expr.clause_count;
+                 ++clause_index) {
+                hit = find_expr_hit_in_block(expr->as.try_expr.clauses[clause_index].body, offset);
+                if (hit != NULL) {
+                    return hit;
+                }
+            }
+            break;
+        }
         default:
             break;
     }
@@ -6251,6 +6284,8 @@ static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
         }
         case FENG_EXPR_MATCH:
             return find_call_hit_expr(expr->as.match_expr.target, offset);
+        case FENG_EXPR_TRY:
+            return find_call_hit_expr(expr->as.try_expr.body, offset);
         default:
             break;
     }
@@ -6859,6 +6894,13 @@ static bool resolve_expr_reference_target(const FengLspAnalysisSession *session,
     return target->kind != FENG_LSP_RESOLVED_NONE;
 }
 
+static bool resolve_object_field_target_block(const FengLspAnalysisSession *session,
+                                              const FengProgram *program,
+                                              const FengBlock *block,
+                                              size_t offset,
+                                              const FengLspLocalList *locals,
+                                              FengLspResolvedTarget *target);
+
 static bool resolve_object_field_target_expr(const FengLspAnalysisSession *session,
                                              const FengProgram *program,
                                              const FengExpr *expr,
@@ -7033,6 +7075,26 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
                                                     offset,
                                                     locals,
                                                     target);
+        case FENG_EXPR_TRY:
+            if (resolve_object_field_target_expr(session,
+                                                 program,
+                                                 expr->as.try_expr.body,
+                                                 offset,
+                                                 locals,
+                                                 target)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                if (resolve_object_field_target_block(session,
+                                                      program,
+                                                      expr->as.try_expr.clauses[index].body,
+                                                      offset,
+                                                      locals,
+                                                      target)) {
+                    return true;
+                }
+            }
+            return false;
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_SELF:
         case FENG_EXPR_BOOL:
@@ -7726,6 +7788,39 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                                false,
                                                target,
                                                references);
+        case FENG_EXPR_TRY:
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            expr->as.try_expr.body,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                const FengTryCatchClause *clause = &expr->as.try_expr.clauses[index];
+
+                if (!collect_references_in_type_ref(session,
+                                                     program,
+                                                     source,
+                                                     clause->type,
+                                                     target,
+                                                     references) ||
+                    !collect_references_in_block(session,
+                                                 program,
+                                                 source,
+                                                 owner_decl,
+                                                 owner_member,
+                                                 clause->body,
+                                                 false,
+                                                 target,
+                                                 references)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_EXPR_SELF:
         case FENG_EXPR_BOOL:
         case FENG_EXPR_INTEGER:

@@ -42,6 +42,7 @@ static void free_annotations(FengAnnotation *annotations, size_t count);
 static void free_parameters(FengParameter *params, size_t count);
 static void free_type_member(FengTypeMember *member);
 static void free_enum_items(FengEnumItem *items, size_t count);
+static void free_try_catch_clauses(FengTryCatchClause *clauses, size_t count);
 
 static void free_annotation_fields(FengAnnotation *annotation) {
     size_t arg_index;
@@ -247,7 +248,25 @@ static bool parser_expect(Parser *parser, FengTokenKind kind, const char *messag
 }
 
 static bool token_is_identifier_like(const FengToken *token, bool allow_void) {
-    return token->kind == FENG_TOKEN_IDENTIFIER || (allow_void && token->kind == FENG_TOKEN_KW_VOID);
+    return token->kind == FENG_TOKEN_IDENTIFIER ||
+           (allow_void && (token->kind == FENG_TOKEN_KW_VOID ||
+                           token->kind == FENG_TOKEN_KW_UNKNOWN));
+}
+
+static bool token_is_member_name_like(const FengToken *token) {
+    return token->kind == FENG_TOKEN_IDENTIFIER || token->kind == FENG_TOKEN_KW_UNKNOWN;
+}
+
+static bool parser_expect_member_name(Parser *parser,
+                                      FengSlice *out_name,
+                                      const char *message) {
+    if (!token_is_member_name_like(parser_current(parser))) {
+        return parser_error_current(parser, message);
+    }
+
+    *out_name = slice_from_token(parser_current(parser));
+    (void)parser_advance(parser);
+    return true;
 }
 
 static bool parser_expect_identifier_like(Parser *parser,
@@ -2494,6 +2513,65 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
     return expr;
 }
 
+static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
+    FengExpr *expr = new_expr(parser, FENG_EXPR_TRY, try_token);
+    size_t clause_capacity = 0U;
+
+    if (expr == NULL) {
+        return NULL;
+    }
+
+    expr->as.try_expr.body = parse_expression(parser);
+    if (expr->as.try_expr.body == NULL) {
+        free_expr(expr);
+        return NULL;
+    }
+
+    while (parser_match(parser, FENG_TOKEN_KW_CATCH)) {
+        FengTryCatchClause clause;
+
+        memset(&clause, 0, sizeof(clause));
+        clause.token = parser_previous_token(parser);
+
+        if (!parser_expect_identifier_like(parser,
+                                           &clause.name,
+                                           false,
+                                           "catch clauses must bind an exception name")) {
+            free_expr(expr);
+            return NULL;
+        }
+        if (!parser_expect(parser,
+                           FENG_TOKEN_COLON,
+                           "catch clauses must include a ': Type' annotation")) {
+            free_expr(expr);
+            return NULL;
+        }
+        clause.type = parse_type_ref(parser);
+        if (clause.type == NULL) {
+            free_expr(expr);
+            return NULL;
+        }
+        clause.body = parse_block(parser);
+        if (clause.body == NULL) {
+            free_type_ref(clause.type);
+            free_expr(expr);
+            return NULL;
+        }
+        if (!APPEND_VALUE(parser,
+                          expr->as.try_expr.clauses,
+                          expr->as.try_expr.clause_count,
+                          clause_capacity,
+                          clause)) {
+            free_type_ref(clause.type);
+            free_block(clause.body);
+            free_expr(expr);
+            return NULL;
+        }
+    }
+
+    return expr;
+}
+
 static FengExpr *parse_group_or_cast(Parser *parser) {
     if (looks_like_lambda(parser)) {
         return parse_lambda(parser);
@@ -2601,10 +2679,13 @@ static FengExpr *parse_primary(Parser *parser) {
         case FENG_TOKEN_KW_IF:
             (void)parser_advance(parser);
             return parse_if_expression(parser, token);
+        case FENG_TOKEN_KW_TRY:
+            (void)parser_advance(parser);
+            return parse_try_expression(parser, token);
         default:
             (void)parser_error_current(
                 parser,
-                "expected expression term: identifier, literal, call, cast, lambda, or if-expression");
+                "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression");
             return NULL;
     }
 }
@@ -2704,10 +2785,9 @@ static FengExpr *parse_postfix(Parser *parser) {
                 free_expr(expr);
                 return NULL;
             }
-            if (!parser_expect_identifier_like(parser,
-                                               &member->as.member.member,
-                                               false,
-                                               "expected an identifier after '.' in member access")) {
+            if (!parser_expect_member_name(parser,
+                                           &member->as.member.member,
+                                           "expected an identifier after '.' in member access")) {
                 free_expr(member);
                 free_expr(expr);
                 return NULL;
@@ -3360,7 +3440,9 @@ static FengStmt *parse_statement(Parser *parser) {
     if (parser_match(parser, FENG_TOKEN_KW_FOR)) {
         return parse_for_statement(parser);
     }
-    if (parser_match(parser, FENG_TOKEN_KW_TRY)) {
+    if (parser_check(parser, FENG_TOKEN_KW_TRY) &&
+        parser_peek(parser, 1U)->kind == FENG_TOKEN_LBRACE) {
+        (void)parser_advance(parser);
         return parse_try_statement(parser);
     }
     if (parser_match(parser, FENG_TOKEN_KW_RETURN)) {
@@ -3694,11 +3776,26 @@ static void free_expr(FengExpr *expr) {
             free(expr->as.match_expr.branches);
             free_block(expr->as.match_expr.else_block);
             break;
+        case FENG_EXPR_TRY:
+            free_expr(expr->as.try_expr.body);
+            free_try_catch_clauses(expr->as.try_expr.clauses,
+                                   expr->as.try_expr.clause_count);
+            break;
         default:
             break;
     }
 
     free(expr);
+}
+
+static void free_try_catch_clauses(FengTryCatchClause *clauses, size_t count) {
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        free_type_ref(clauses[index].type);
+        free_block(clauses[index].body);
+    }
+    free(clauses);
 }
 
 static void free_block(FengBlock *block) {

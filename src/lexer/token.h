@@ -34,6 +34,7 @@ extern "C" {
     X(TRY, "try") \
     X(CATCH, "catch") \
     X(FINALLY, "finally") \
+    X(UNKNOWN, "unknown") \
     X(THROW, "throw") \
     X(RETURN, "return") \
     X(VOID, "void")

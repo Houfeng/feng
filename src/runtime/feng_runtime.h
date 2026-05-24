@@ -13,6 +13,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if !defined(_WIN32)
+#include <unwind.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -158,6 +162,17 @@ typedef struct FengScalarBox {
 } FengScalarBox;
 
 extern const FengTypeDescriptor feng_scalar_box_descriptor;
+extern const FengTypeDescriptor feng_scalar_bool_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_i8_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_i16_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_i32_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_i64_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_u8_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_u16_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_u32_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_u64_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_f32_exception_descriptor;
+extern const FengTypeDescriptor feng_scalar_f64_exception_descriptor;
 
 FengScalarBox *feng_scalar_box_new_bool(bool value);
 FengScalarBox *feng_scalar_box_new_i8(int8_t value);
@@ -447,6 +462,42 @@ void *feng_object_new(const FengTypeDescriptor *desc);
 
 /* --- Exceptions -------------------------------------------------------- */
 
+/* Feng exception class written into the platform unwind header. The byte
+ * sequence is "FENGEXN\0" and lets the personality function distinguish Feng
+ * exceptions from foreign-language unwind payloads. */
+#define FENG_EXCEPTION_CLASS UINT64_C(0x46454E4745584E00)
+
+/* One catch clause in a generated LSDA table. A NULL type is the `unknown`
+ * catch-all clause; otherwise matching is descriptor-pointer identity. */
+typedef struct FengCatchClause {
+    const FengTypeDescriptor *type;
+} FengCatchClause;
+
+/* Static language-specific data generated per try region. `pc_begin`,
+ * `pc_end`, and `landing_pad` are generated label addresses. */
+typedef struct FengLSDA {
+    const void *pc_begin;
+    const void *pc_end;
+    const void *landing_pad;
+    const FengCatchClause *clauses;
+    int clause_count;
+} FengLSDA;
+
+/* Heap-owned in-flight exception object. On Unix-like platforms the platform
+ * unwind header must be the first field so libunwind can treat this object as
+ * a native `_Unwind_Exception`. Windows uses the same Feng payload surface and
+ * stores the SEH payload in the platform layer. */
+typedef struct FengUnwindException {
+#if defined(_WIN32)
+    uint64_t exception_class;
+#else
+    struct _Unwind_Exception unwind;
+#endif
+    void *value;
+    const FengTypeDescriptor *desc;
+    int matched_clause;
+} FengUnwindException;
+
 /* Linked-list node living on the C stack. Generated code pushes one of these
  * at every managed local's declaration site (binding or materialised
  * temporary) and pops it on the corresponding scope exit. On throw, the
@@ -458,6 +509,13 @@ typedef struct FengCleanupNode {
     struct FengCleanupNode *prev;
     void                  **slot;
 } FengCleanupNode;
+
+/* Function-frame boundary marker inserted into the cleanup chain. It carries
+ * no managed slot; unwind cleanup stops at this marker after releasing the
+ * current frame's managed locals. */
+typedef struct FengFrameMarker {
+    FengCleanupNode node;
+} FengFrameMarker;
 
 typedef struct FengExceptionFrame {
     struct FengExceptionFrame *prev;
@@ -477,10 +535,20 @@ void feng_exception_pop(void);
  * to the local. Pop must be called in strict LIFO order. */
 void feng_cleanup_push(FengCleanupNode *node, void **slot);
 void feng_cleanup_pop(void);
+void feng_frame_push(FengFrameMarker *marker);
+void feng_frame_pop(void);
+
+void *feng_caught_value(void);
+int   feng_caught_clause(void);
+void  feng_release_unwind_exception(void);
 
 #if defined(__GNUC__) || defined(__clang__)
+void feng_throw(void *value, const FengTypeDescriptor *desc) __attribute__((noreturn));
+void feng_rethrow(void) __attribute__((noreturn));
 void feng_exception_throw(void *value, int is_managed) __attribute__((noreturn));
 #else
+void feng_throw(void *value, const FengTypeDescriptor *desc);
+void feng_rethrow(void);
 void feng_exception_throw(void *value, int is_managed);
 #endif
 

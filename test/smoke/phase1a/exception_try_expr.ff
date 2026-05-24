@@ -1,0 +1,85 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+fn throw_text(): string {
+    throw "primary";
+    return "unreachable";
+}
+
+fn throw_i32(): i32 {
+    let value: i32 = 7;
+    throw value;
+    return 0;
+}
+
+fn throw_i32_text(): string {
+    let value: i32 = 7;
+    throw value;
+    return "unreachable";
+}
+
+fn throw_bool(): bool {
+    throw true;
+    return false;
+}
+
+fn throw_bool_text(): string {
+    throw true;
+    return "unreachable";
+}
+
+fn add_i32(left: i32, right: i32): i32 {
+    return left + right;
+}
+
+fn catch_string(): string {
+    let value = try throw_text() catch ex: string {
+        ex;
+    };
+    return value;
+}
+
+fn catch_scalar(): string {
+    let value = try throw_i32() catch ex: i32 {
+        add_i32(ex, 35);
+    };
+    if value == 42 {
+        return "scalar-42";
+    }
+    return "scalar-miss";
+}
+
+fn catch_order(): string {
+    let value = try throw_i32_text() catch ex: bool {
+        "wrong-bool";
+    } catch ex: i32 {
+        "right-i32";
+    };
+    return value;
+}
+
+fn unknown_rethrow(): string {
+    let value = try (try throw_text() catch ex: unknown {
+        throw ex;
+    }) catch ex: string {
+        "unknown-rethrown";
+    };
+    return value;
+}
+
+fn auto_upthrow(): string {
+    let value = try (try throw_bool_text()) catch ex: bool {
+        "auto-upthrow";
+    };
+    return value;
+}
+
+fn main(args: string[]) {
+    puts(&catch_string());
+    puts(&catch_scalar());
+    puts(&catch_order());
+    puts(&unknown_rethrow());
+    puts(&auto_upthrow());
+}

@@ -260,6 +260,8 @@ typedef struct ResolveContext {
     bool current_callable_has_escaping_exception;
     size_t exception_capture_depth;
     size_t finally_depth;
+    size_t unknown_type_depth;
+    size_t unknown_value_depth;
     /* Number of nested `while`/`for` loop bodies currently being resolved
      * inside the active callable scope. Used to enforce that `break` and
      * `continue` can only appear inside a loop body. Reset to 0 across
@@ -336,6 +338,7 @@ static bool path_equals(const FengSlice *left,
 
 static char *format_module_name(const FengSlice *segments, size_t segment_count);
 static bool type_ref_is_void(const FengTypeRef *type_ref);
+static bool type_ref_is_unknown(const FengTypeRef *type_ref);
 static bool type_decl_is_abi_stable(const ResolveContext *context,
                                     const FengDecl *decl,
                                     const AbiTrace *trace);
@@ -948,6 +951,18 @@ static bool type_ref_is_void(const FengTypeRef *type_ref) {
            slice_equals_cstr(type_ref->as.named.segments[0], "void");
 }
 
+static bool type_ref_is_unknown(const FengTypeRef *type_ref) {
+    return type_ref != NULL &&
+           type_ref->kind == FENG_TYPE_REF_NAMED &&
+           type_ref->as.named.segment_count == 1U &&
+           slice_equals_cstr(type_ref->as.named.segments[0], "unknown");
+}
+
+static bool inferred_expr_type_is_unknown_type_ref(InferredExprType type) {
+    return type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+           type_ref_is_unknown(type.type_ref);
+}
+
 static bool type_ref_equals(const FengTypeRef *left, const FengTypeRef *right) {
     size_t index;
 
@@ -1556,6 +1571,31 @@ static bool inject_external_modules_from_expr(
                                                      imported_query,
                                                      program,
                                                      expr->as.match_expr.else_block);
+
+        case FENG_EXPR_TRY:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.try_expr.body)) {
+                return false;
+            }
+            for (size_t clause_index = 0U;
+                 clause_index < expr->as.try_expr.clause_count;
+                 ++clause_index) {
+                const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
+
+                if (!inject_external_modules_from_type_ref(analysis,
+                                                           imported_query,
+                                                           program,
+                                                           clause->type) ||
+                    !inject_external_modules_from_block(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       clause->body)) {
+                    return false;
+                }
+            }
+            return true;
 
         case FENG_EXPR_ARRAY_NEW:
             return inject_external_modules_from_type_ref(analysis,
@@ -3375,6 +3415,7 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static bool resolve_block(ResolveContext *context, const FengBlock *block, bool allow_self);
+static bool resolve_try_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
@@ -4993,6 +5034,25 @@ static const FengExpr *block_yield_expression(const FengBlock *block) {
     return last->as.expr;
 }
 
+static const FengStmt *block_last_statement(const FengBlock *block) {
+    if (block == NULL || block->statement_count == 0U) {
+        return NULL;
+    }
+    return block->statements[block->statement_count - 1U];
+}
+
+static const FengExpr *block_terminal_return_value(const FengBlock *block) {
+    const FengStmt *last = block_last_statement(block);
+
+    return last != NULL && last->kind == FENG_STMT_RETURN ? last->as.return_value : NULL;
+}
+
+static bool block_terminates_with_throw(const FengBlock *block) {
+    const FengStmt *last = block_last_statement(block);
+
+    return last != NULL && last->kind == FENG_STMT_THROW;
+}
+
 static InferredExprType block_yield_inferred_type(ResolveContext *context, const FengBlock *block) {
     const FengExpr *yield = block_yield_expression(block);
 
@@ -5062,6 +5122,98 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         free(else_type_name);
         return resolver_append_error(context, expr->token, message);
     }
+}
+
+static bool validate_try_expr(ResolveContext *context, const FengExpr *expr) {
+    InferredExprType body_type;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_TRY || expr->as.try_expr.clause_count == 0U) {
+        return true;
+    }
+
+    body_type = infer_expr_type(context, expr->as.try_expr.body);
+    for (size_t clause_index = 0U;
+         clause_index < expr->as.try_expr.clause_count;
+         ++clause_index) {
+        const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
+        const FengExpr *result_expr = block_yield_expression(clause->body);
+        InferredExprType result_type;
+
+        if (result_expr == NULL) {
+            result_expr = block_terminal_return_value(clause->body);
+        }
+        if (result_expr == NULL) {
+            if (block_terminates_with_throw(clause->body)) {
+                continue;
+            }
+            return resolver_append_error(
+                context,
+                clause->token,
+                format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+        }
+
+        result_type = infer_expr_type(context, result_expr);
+        if (inferred_expr_type_is_known(body_type) &&
+            inferred_expr_type_is_known(result_type) &&
+            !inferred_expr_types_equal(context, body_type, result_type)) {
+            char *body_type_name = format_inferred_expr_type_name(body_type);
+            char *result_type_name = format_inferred_expr_type_name(result_type);
+            char *message = format_message(
+                "catch clause result type '%s' does not match try expression type '%s'",
+                result_type_name != NULL ? result_type_name : "<unknown>",
+                body_type_name != NULL ? body_type_name : "<unknown>");
+
+            free(body_type_name);
+            free(result_type_name);
+            return resolver_append_error(context, clause->token, message);
+        }
+    }
+
+    return true;
+}
+
+static bool validate_try_catch_clause_result_type(ResolveContext *context,
+                                                  const FengExpr *try_expr,
+                                                  const FengTryCatchClause *clause,
+                                                  InferredExprType body_type) {
+    const FengExpr *result_expr;
+    InferredExprType result_type;
+
+    if (context == NULL || try_expr == NULL || clause == NULL) {
+        return true;
+    }
+
+    result_expr = block_yield_expression(clause->body);
+    if (result_expr == NULL) {
+        result_expr = block_terminal_return_value(clause->body);
+    }
+    if (result_expr == NULL) {
+        if (block_terminates_with_throw(clause->body)) {
+            return true;
+        }
+        return resolver_append_error(
+            context,
+            clause->token,
+            format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+    }
+
+    result_type = infer_expr_type(context, result_expr);
+    if (inferred_expr_type_is_known(body_type) &&
+        inferred_expr_type_is_known(result_type) &&
+        !inferred_expr_types_equal(context, body_type, result_type)) {
+        char *body_type_name = format_inferred_expr_type_name(body_type);
+        char *result_type_name = format_inferred_expr_type_name(result_type);
+        char *message = format_message(
+            "catch clause result type '%s' does not match try expression type '%s'",
+            result_type_name != NULL ? result_type_name : "<unknown>",
+            body_type_name != NULL ? body_type_name : "<unknown>");
+
+        free(body_type_name);
+        free(result_type_name);
+        return resolver_append_error(context, clause->token, message);
+    }
+
+    return true;
 }
 
 /* Match label literal extraction.
@@ -6346,6 +6498,28 @@ static bool callable_value_expr_may_escape_exception(ResolveContext *context,
                                              context, else_yield, expected_type_ref, depth + 1U);
         }
 
+        case FENG_EXPR_TRY: {
+            if (callable_value_expr_may_escape_exception(
+                    context, expr->as.try_expr.body, expected_type_ref, depth + 1U)) {
+                return true;
+            }
+            for (size_t clause_index = 0U;
+                 clause_index < expr->as.try_expr.clause_count;
+                 ++clause_index) {
+                const FengExpr *clause_yield =
+                    block_yield_expression(expr->as.try_expr.clauses[clause_index].body);
+
+                if (clause_yield != NULL && callable_value_expr_may_escape_exception(
+                                                context,
+                                                clause_yield,
+                                                expected_type_ref,
+                                                depth + 1U)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         case FENG_EXPR_CAST:
             return callable_value_expr_may_escape_exception(
                 context, expr->as.cast.value, expected_type_ref, depth + 1U);
@@ -6963,6 +7137,114 @@ static bool validate_loop_control_stmt(ResolveContext *context,
 static bool inferred_expr_type_is_throwable(const ResolveContext *context,
                                             InferredExprType type,
                                             const char **out_reason);
+static InferredExprType resolve_expr_owner_type(ResolveContext *context,
+                                                const FengExpr *expr,
+                                                const FengDecl **out_type_decl,
+                                                const FengSemanticModule **out_provider_module);
+static const FengTypeMember *find_fit_method_member_for_owner_type(const ResolveContext *ctx,
+                                                                   const FengDecl *owner_type_decl,
+                                                                   InferredExprType owner_type,
+                                                                   FengSlice name);
+
+static bool throw_expr_is_callable_value(ResolveContext *context,
+                                         const FengExpr *expr,
+                                         const char **out_reason) {
+    if (expr == NULL) {
+        return false;
+    }
+
+    if (expr->kind == FENG_EXPR_LAMBDA) {
+        if (out_reason != NULL) {
+            *out_reason = "function values cannot be thrown as exceptions";
+        }
+        return true;
+    }
+
+    if (expr->kind == FENG_EXPR_IDENTIFIER) {
+        const LocalNameEntry *local_entry = resolver_find_local_name_entry(context, expr->as.identifier);
+        const VisibleValueEntry *visible_value;
+
+        if (local_entry != NULL && local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
+            if (out_reason != NULL) {
+                *out_reason = "function values cannot be thrown as exceptions";
+            }
+            return true;
+        }
+        if (find_function_overload_set(context->function_sets,
+                                       context->function_set_count,
+                                       expr->as.identifier) != NULL) {
+            if (out_reason != NULL) {
+                *out_reason = "function values cannot be thrown as exceptions";
+            }
+            return true;
+        }
+        visible_value = find_visible_value(context->visible_values,
+                                           context->visible_value_count,
+                                           expr->as.identifier);
+        if (visible_value != NULL && visible_value->is_function) {
+            if (out_reason != NULL) {
+                *out_reason = "function values cannot be thrown as exceptions";
+            }
+            return true;
+        }
+    }
+
+    if (expr->kind == FENG_EXPR_MEMBER) {
+        const FengExpr *object = expr->as.member.object;
+
+        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
+            const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+
+            if (alias != NULL &&
+                find_module_public_function_decl(alias->target_module, expr->as.member.member) != NULL) {
+                if (out_reason != NULL) {
+                    *out_reason = "function values cannot be thrown as exceptions";
+                }
+                return true;
+            }
+        }
+
+        {
+            const FengDecl *owner_type_decl = NULL;
+            const FengSemanticModule *provider_module = NULL;
+            InferredExprType owner_type =
+                resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+            const FengTypeMember *member = NULL;
+
+            (void)provider_module;
+            if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_TYPE) {
+                member = find_instance_member(owner_type_decl, expr->as.member.member);
+                if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
+                    if (out_reason != NULL) {
+                        *out_reason = "member methods cannot be thrown as exceptions";
+                    }
+                    return true;
+                }
+            }
+            if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_SPEC) {
+                member = find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+                if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
+                    if (out_reason != NULL) {
+                        *out_reason = "member methods cannot be thrown as exceptions";
+                    }
+                    return true;
+                }
+            }
+            member = find_fit_method_member_for_owner_type(context,
+                                                           owner_type_decl,
+                                                           owner_type,
+                                                           expr->as.member.member);
+            if (member != NULL) {
+                if (out_reason != NULL) {
+                    *out_reason = "member methods cannot be thrown as exceptions";
+                }
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 
 static bool type_ref_is_throwable(const ResolveContext *context,
                                   const FengTypeRef *type_ref,
@@ -6987,12 +7269,88 @@ static bool type_ref_is_throwable(const ResolveContext *context,
 
         case FENG_TYPE_REF_NAMED:
             decl = resolve_type_ref_decl(context, type_ref);
+            if (decl != NULL && decl->kind == FENG_DECL_SPEC) {
+                if (out_reason != NULL) {
+                    *out_reason = "spec values cannot be thrown as exceptions";
+                }
+                return false;
+            }
             if (decl != NULL && decl->kind == FENG_DECL_TYPE &&
                 annotations_contain_kind(decl->annotations,
                                          decl->annotation_count,
                                          FENG_ANNOTATION_ABI)) {
                 if (out_reason != NULL) {
                     *out_reason = "@abi types are ABI-bound and cannot be thrown as exceptions";
+                }
+                return false;
+            }
+            return true;
+    }
+
+    return true;
+}
+
+static bool type_ref_is_catchable_exception_type(ResolveContext *context,
+                                                 const FengTypeRef *type_ref,
+                                                 const char **out_reason) {
+    const FengDecl *decl;
+
+    if (type_ref == NULL) {
+        return true;
+    }
+    if (type_ref_is_unknown(type_ref)) {
+        return true;
+    }
+
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_POINTER:
+            if (out_reason != NULL) {
+                *out_reason = "pointer types cannot be used in catch clauses";
+            }
+            return false;
+
+        case FENG_TYPE_REF_ARRAY:
+            return true;
+
+        case FENG_TYPE_REF_NAMED:
+            if (type_ref_is_void(type_ref)) {
+                if (out_reason != NULL) {
+                    *out_reason = "void cannot be used in catch clauses";
+                }
+                return false;
+            }
+            if (type_ref_builtin_canonical_name(type_ref) != NULL) {
+                return true;
+            }
+            if (type_ref->as.named.segment_count == 1U &&
+                find_type_param(context, type_ref->as.named.segments[0]) != NULL) {
+                if (out_reason != NULL) {
+                    *out_reason = "generic type parameters cannot be used in catch clauses";
+                }
+                return false;
+            }
+            decl = resolve_type_ref_decl(context, type_ref);
+            if (decl == NULL) {
+                return true;
+            }
+            if (decl->kind == FENG_DECL_SPEC) {
+                if (out_reason != NULL) {
+                    *out_reason = "spec types cannot be used in catch clauses";
+                }
+                return false;
+            }
+            if (decl->kind == FENG_DECL_ENUM) {
+                if (out_reason != NULL) {
+                    *out_reason = "enum types cannot be used in catch clauses";
+                }
+                return false;
+            }
+            if (decl->kind == FENG_DECL_TYPE &&
+                annotations_contain_kind(decl->annotations,
+                                         decl->annotation_count,
+                                         FENG_ANNOTATION_ABI)) {
+                if (out_reason != NULL) {
+                    *out_reason = "@abi types cannot be used in catch clauses";
                 }
                 return false;
             }
@@ -7012,13 +7370,24 @@ static bool inferred_expr_type_is_throwable(const ResolveContext *context,
             return true;
 
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
             return true;
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+            if (out_reason != NULL) {
+                *out_reason = "function values cannot be thrown as exceptions";
+            }
+            return false;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
             return type_ref_is_throwable(context, type.type_ref, out_reason);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
+            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC) {
+                if (out_reason != NULL) {
+                    *out_reason = "spec values cannot be thrown as exceptions";
+                }
+                return false;
+            }
             if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE &&
                 annotations_contain_kind(type.type_decl->annotations,
                                          type.type_decl->annotation_count,
@@ -7043,6 +7412,17 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
     }
 
     throw_type = infer_expr_type(context, stmt != NULL ? stmt->as.throw_value : NULL);
+
+    if (throw_expr_is_callable_value(context, stmt != NULL ? stmt->as.throw_value : NULL, &reason)) {
+        char *type_name = format_inferred_expr_type_name(throw_type);
+        char *message = format_message(
+            "throw expression of type '%s' is not throwable: %s",
+            type_name != NULL ? type_name : "<unknown>",
+            reason != NULL ? reason : "function values cannot be thrown as exceptions");
+
+        free(type_name);
+        return resolver_append_error(context, stmt->token, message);
+    }
 
     if (inferred_expr_type_is_known(throw_type) && inferred_expr_type_is_void(throw_type)) {
         return resolver_append_error(
@@ -8678,6 +9058,20 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
             return false;
         }
 
+        case FENG_EXPR_TRY:
+            if (expr_type_inference_is_pending(context, expr->as.try_expr.body)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                const FengExpr *clause_yield =
+                    block_yield_expression(expr->as.try_expr.clauses[index].body);
+
+                if (clause_yield != NULL && expr_type_inference_is_pending(context, clause_yield)) {
+                    return true;
+                }
+            }
+            return false;
+
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_SELF:
         case FENG_EXPR_BOOL:
@@ -9783,6 +10177,10 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             }
 
             return result_type;
+        }
+
+        case FENG_EXPR_TRY: {
+            return infer_expr_type(context, expr->as.try_expr.body);
         }
 
         default:
@@ -14062,6 +14460,16 @@ static bool resolve_named_type_ref(ResolveContext *context,
 
     /* Normal named type reference (no type arguments). */
     if (segment_count == 1U) {
+        if (type_ref_is_unknown(type_ref)) {
+            if (context->unknown_type_depth > 0U) {
+                return true;
+            }
+            return resolver_append_error(
+                context,
+                type_ref->token,
+                format_message("type 'unknown' is only valid as a catch clause type"));
+        }
+
         if (is_builtin_type_name(name)) {
             if (!allow_void && slice_equals_cstr(name, "void")) {
                 return resolver_append_error(
@@ -14346,6 +14754,17 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                        local_scope)) {
                         return false;
                     }
+                    if (context->unknown_value_depth == 0U &&
+                        inferred_expr_type_is_unknown_type_ref(local->type)) {
+                        return resolver_append_error(
+                            context,
+                            expr->token,
+                            format_message("unknown catch value '%.*s' can only be used in 'throw %.*s'",
+                                           (int)expr->as.identifier.length,
+                                           expr->as.identifier.data,
+                                           (int)expr->as.identifier.length,
+                                           expr->as.identifier.data));
+                    }
                     return true;
                 }
                 if (find_visible_value(context->visible_values,
@@ -14599,6 +15018,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                      expr->token,
                                                      true,
                                                      allow_self);
+
+        case FENG_EXPR_TRY:
+            return resolve_try_expr(context, expr, allow_self);
     }
 
     return true;
@@ -14699,6 +15121,109 @@ static bool resolve_block_with_finally_context(ResolveContext *context,
     context->finally_depth += 1U;
     ok = resolve_block(context, block, allow_self);
     context->finally_depth = previous_finally_depth;
+    return ok;
+}
+
+static bool resolve_type_ref_with_unknown_context(ResolveContext *context,
+                                                  const FengTypeRef *type_ref) {
+    size_t previous_unknown_depth;
+    bool ok;
+
+    if (context == NULL) {
+        return true;
+    }
+
+    previous_unknown_depth = context->unknown_type_depth;
+    context->unknown_type_depth += 1U;
+    ok = resolve_type_ref(context, type_ref, false);
+    context->unknown_type_depth = previous_unknown_depth;
+    return ok;
+}
+
+static bool resolve_try_expr(ResolveContext *context,
+                             const FengExpr *expr,
+                             bool allow_self) {
+    size_t previous_capture_depth;
+    InferredExprType body_type;
+    bool ok;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_TRY) {
+        return true;
+    }
+
+    previous_capture_depth = context->exception_capture_depth;
+    if (expr->as.try_expr.clause_count > 0U) {
+        context->exception_capture_depth += 1U;
+    }
+    ok = resolve_expr(context, expr->as.try_expr.body, allow_self);
+    context->exception_capture_depth = previous_capture_depth;
+    if (!ok) {
+        return false;
+    }
+    body_type = infer_expr_type(context, expr->as.try_expr.body);
+
+    for (size_t clause_index = 0U;
+         clause_index < expr->as.try_expr.clause_count;
+         ++clause_index) {
+        const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
+        InferredExprType catch_type = inferred_expr_type_from_type_ref(clause->type);
+        const char *catch_reason = NULL;
+
+        if (!resolve_type_ref_with_unknown_context(context, clause->type)) {
+            return false;
+        }
+        if (type_ref_is_unknown(clause->type) &&
+            clause_index + 1U < expr->as.try_expr.clause_count) {
+            return resolver_append_error(
+                context,
+                clause->token,
+                format_message("catch clause of type 'unknown' must be the last catch clause"));
+        }
+        if (!type_ref_is_catchable_exception_type(context, clause->type, &catch_reason)) {
+            char *type_name = format_type_ref_name(clause->type);
+            char *message = format_message(
+                "catch type '%s' is not catchable: %s",
+                type_name != NULL ? type_name : "<unknown>",
+                catch_reason != NULL ? catch_reason : "type is not an exception value type");
+
+            free(type_name);
+            return resolver_append_error(context, clause->token, message);
+        }
+        if (!resolver_push_scope(context)) {
+            return false;
+        }
+        ok = resolver_add_local_typed_name(context,
+                           clause->name,
+                           catch_type,
+                           FENG_MUTABILITY_LET) &&
+             resolve_block(context, clause->body, allow_self) &&
+             validate_try_catch_clause_result_type(context,
+                               expr,
+                               clause,
+                               body_type);
+        resolver_pop_scope(context);
+        if (!ok) {
+            return false;
+        }
+    }
+
+    return validate_try_expr(context, expr);
+}
+
+static bool resolve_throw_value_expr(ResolveContext *context,
+                                     const FengExpr *expr,
+                                     bool allow_self) {
+    size_t previous_unknown_value_depth;
+    bool ok;
+
+    if (context == NULL) {
+        return true;
+    }
+
+    previous_unknown_value_depth = context->unknown_value_depth;
+    context->unknown_value_depth += 1U;
+    ok = resolve_expr(context, expr, allow_self);
+    context->unknown_value_depth = previous_unknown_value_depth;
     return ok;
 }
 
@@ -14908,7 +15433,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return validate_return_stmt(context, stmt);
 
         case FENG_STMT_THROW:
-            if (!resolve_expr(context, stmt->as.throw_value, allow_self)) {
+            if (!resolve_throw_value_expr(context, stmt->as.throw_value, allow_self)) {
                 return false;
             }
             if (!validate_throw_stmt(context, stmt)) {

@@ -301,6 +301,41 @@ static bool cg_scalar_box_ctor_name(CGTypeKind kind, const char **out_name) {
     }
 }
 
+static bool cg_scalar_exception_descriptor_name(CGTypeKind kind, const char **out_name) {
+    if (out_name == NULL) return false;
+    switch (kind) {
+        case CG_TYPE_BOOL: *out_name = "feng_scalar_bool_exception_descriptor"; return true;
+        case CG_TYPE_I8: *out_name = "feng_scalar_i8_exception_descriptor"; return true;
+        case CG_TYPE_I16: *out_name = "feng_scalar_i16_exception_descriptor"; return true;
+        case CG_TYPE_I32: *out_name = "feng_scalar_i32_exception_descriptor"; return true;
+        case CG_TYPE_I64: *out_name = "feng_scalar_i64_exception_descriptor"; return true;
+        case CG_TYPE_U8: *out_name = "feng_scalar_u8_exception_descriptor"; return true;
+        case CG_TYPE_U16: *out_name = "feng_scalar_u16_exception_descriptor"; return true;
+        case CG_TYPE_U32: *out_name = "feng_scalar_u32_exception_descriptor"; return true;
+        case CG_TYPE_U64: *out_name = "feng_scalar_u64_exception_descriptor"; return true;
+        case CG_TYPE_F32: *out_name = "feng_scalar_f32_exception_descriptor"; return true;
+        case CG_TYPE_F64: *out_name = "feng_scalar_f64_exception_descriptor"; return true;
+        default: return false;
+    }
+}
+
+static const char *cg_scalar_box_payload_field_name(CGTypeKind kind) {
+    switch (kind) {
+        case CG_TYPE_BOOL: return "b";
+        case CG_TYPE_I8: return "i8";
+        case CG_TYPE_I16: return "i16";
+        case CG_TYPE_I32: return "i32";
+        case CG_TYPE_I64: return "i64";
+        case CG_TYPE_U8: return "u8";
+        case CG_TYPE_U16: return "u16";
+        case CG_TYPE_U32: return "u32";
+        case CG_TYPE_U64: return "u64";
+        case CG_TYPE_F32: return "f32";
+        case CG_TYPE_F64: return "f64";
+        default: return NULL;
+    }
+}
+
 static int cgtype_int_rank(CGTypeKind k) {
     switch (k) {
         case CG_TYPE_I8: case CG_TYPE_U8:  return 1;
@@ -695,6 +730,7 @@ typedef struct Local {
     char     *c_name;   /* mangled C identifier, unique within the function */
     CGType   *type;
     bool      is_param; /* parameters are not released by the frame (caller owns) */
+    bool      is_unknown_exception;
     char     *capture_cell_c_name;
     char     *capture_cell_struct_name;
     char     *capture_cell_desc_name;
@@ -757,10 +793,24 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->c_name = strdup(c_name);
     l->type = type;
     l->is_param = is_param;
+    l->is_unknown_exception = false;
     l->capture_cell_c_name = NULL;
     l->capture_cell_struct_name = NULL;
     l->capture_cell_desc_name = NULL;
     return l->name && l->c_name;
+}
+
+static bool scope_mark_unknown_exception(Scope *s, const char *name, size_t len) {
+    for (Scope *cur = s; cur; cur = cur->parent) {
+        for (size_t i = cur->count; i > 0; i--) {
+            Local *l = &cur->items[i - 1];
+            if (strlen(l->name) == len && memcmp(l->name, name, len) == 0) {
+                l->is_unknown_exception = true;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static const Local *scope_lookup(const Scope *s, const char *name, size_t len) {
@@ -1023,6 +1073,11 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_exception_descriptor_expr_for_type(CG *cg,
+                                                  const CGType *type,
+                                                  FengToken token,
+                                                  char **out_expr);
 static bool cg_append_numeric_op_expr(Buf *b,
                                       CGTypeKind kind,
                                       const char *lhs,
@@ -1977,6 +2032,24 @@ static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
                                                                   out_count,
                                                                   out_capacity,
                                                                   out_captures_self);
+        case FENG_EXPR_TRY:
+            if (!cg_collect_capture_requirements_in_expr(expr->as.try_expr.body,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.try_expr.clause_count; ++i) {
+                if (!cg_collect_capture_requirements_in_block_inner(expr->as.try_expr.clauses[i].body,
+                                                                    out_names,
+                                                                    out_count,
+                                                                    out_capacity,
+                                                                    out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_EXPR_ARRAY_NEW:
             return cg_collect_capture_requirements_in_expr(expr->as.array_new.size,
                                                            out_names,
@@ -9470,6 +9543,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
         case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
         case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
+        case FENG_EXPR_TRY:           ok = cg_emit_try_expr(cg, e, out); break;
         default:
             return cg_fail(cg, e->token,
                 "codegen: expression kind not yet supported in this iteration");
@@ -12390,6 +12464,72 @@ static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
     return cg_probe_expr_type(cg, yield);
 }
 
+static bool cg_assign_expr_result_to_slot(CG *cg,
+                                          const char *slot_name,
+                                          const CGType *result_type,
+                                          bool managed,
+                                          bool aggregate,
+                                          ExprResult *r,
+                                          FengToken err_token) {
+    if (!cg_types_equal(result_type, r->type)) {
+        return cg_fail(cg, err_token,
+                       "codegen: try/catch branches yield mismatched types");
+    }
+    if (managed) {
+        if (r->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                           "        %s = %s;\n",
+                           slot_name,
+                           r->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "        %s = %s; if (%s) feng_retain(%s);\n",
+                           slot_name,
+                           r->c_expr,
+                           slot_name,
+                           slot_name);
+        }
+        return true;
+    }
+    if (aggregate) {
+        const char *agg_desc = cg_aggregate_desc_name(result_type);
+
+        if (agg_desc == NULL) {
+            return cg_fail(cg, err_token,
+                           "codegen: missing aggregate descriptor for try-expression result");
+        }
+        if (r->owns_ref) {
+            cg_materialize_to_local(cg, r, "_t");
+            buf_append_fmt(cg->cur_body,
+                           "        feng_aggregate_take(&%s, &%s, &%s);\n",
+                           slot_name,
+                           r->c_expr,
+                           agg_desc);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "        feng_aggregate_assign(&%s, &%s, &%s);\n",
+                           slot_name,
+                           r->c_expr,
+                           agg_desc);
+        }
+        return true;
+    }
+    {
+        char *cty = cg_ctype_dup(result_type);
+
+        if (cty == NULL) {
+            return cg_fail(cg, err_token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "        %s = (%s)(%s);\n",
+                       slot_name,
+                       cty,
+                       r->c_expr);
+        free(cty);
+    }
+    return true;
+}
+
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
 
@@ -12690,6 +12830,453 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     free(tgt_tmp);
     free(ifv);
+    return out->c_expr != NULL;
+}
+
+static bool cg_type_ref_is_unknown_catch_type(const FengTypeRef *ref) {
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U) {
+        return false;
+    }
+    FengSlice name = ref->as.named.segments[0];
+    return name.length == strlen("unknown") &&
+           memcmp(name.data, "unknown", name.length) == 0;
+}
+
+static bool cg_emit_try_expr_catch_binding(CG *cg,
+                                           const FengTryCatchClause *clause,
+                                           const CGType *catch_type,
+                                           bool is_unknown,
+                                           FengToken err_token) {
+    char *feng_name = strndup(clause->name.data, clause->name.length);
+    char *c_name = NULL;
+
+    if (feng_name == NULL) {
+        return cg_fail(cg, err_token, "codegen: out of memory");
+    }
+    c_name = cg_local_cname(cg, clause->name.data, clause->name.length);
+    if (c_name == NULL) {
+        free(feng_name);
+        return cg_fail(cg, err_token, "codegen: out of memory");
+    }
+
+    if (is_unknown) {
+        CGType *local_type = cgtype_new(CG_TYPE_OBJECT);
+
+        if (local_type == NULL) {
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "        void *%s = feng_caught_value();\n",
+                       c_name);
+        if (!scope_add(cg->cur_scope,
+                       feng_name,
+                       c_name,
+                       local_type,
+                       true)) {
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token, "codegen: out of memory");
+        }
+        if (!scope_mark_unknown_exception(cg->cur_scope,
+                                          feng_name,
+                                          strlen(feng_name))) {
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token,
+                           "codegen: failed to register unknown catch binding");
+        }
+        free(c_name);
+        free(feng_name);
+        return true;
+    }
+
+    if (catch_type == NULL) {
+        free(c_name);
+        free(feng_name);
+        return cg_fail(cg, err_token, "codegen: missing catch binding type");
+    }
+    if (cg_type_kind_is_scalar_builtin(catch_type->kind)) {
+        const char *field_name = cg_scalar_box_payload_field_name(catch_type->kind);
+        char *cty = cg_ctype_dup(catch_type);
+
+        if (field_name == NULL || cty == NULL) {
+            free(cty);
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token,
+                           "codegen: missing scalar catch binding payload field");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "        %s %s = ((FengScalarBox *)feng_caught_value())->payload.%s;\n",
+                       cty,
+                       c_name,
+                       field_name);
+        free(cty);
+    } else {
+        char *cty = cg_ctype_dup(catch_type);
+
+        if (cty == NULL) {
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "        %s %s = (%s)feng_caught_value();\n",
+                       cty,
+                       c_name,
+                       cty);
+        free(cty);
+    }
+    if (!scope_add(cg->cur_scope,
+                   feng_name,
+                   c_name,
+                   cgtype_clone(catch_type),
+                   true)) {
+        free(c_name);
+        free(feng_name);
+        return cg_fail(cg, err_token, "codegen: out of memory");
+    }
+    free(c_name);
+    free(feng_name);
+    return true;
+}
+
+static bool cg_emit_try_expr_body_to_slot(CG *cg,
+                                          const FengExpr *body,
+                                          const char *slot_name,
+                                          const CGType *result_type,
+                                          bool managed,
+                                          bool aggregate,
+                                          FengToken err_token) {
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (body_scope == NULL) {
+        return cg_fail(cg, err_token, "codegen: out of memory");
+    }
+    cg->cur_scope = body_scope;
+
+    ExprResult r;
+    bool ok;
+
+    if (!cg_emit_expr(cg, body, &r)) {
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        return false;
+    }
+    ok = cg_assign_expr_result_to_slot(cg,
+                                       slot_name,
+                                       result_type,
+                                       managed,
+                                       aggregate,
+                                       &r,
+                                       err_token);
+    er_free(&r);
+    if (ok) {
+        cg_release_scope(cg, body_scope);
+    }
+    cg->cur_scope = body_scope->parent;
+    scope_pop_free(body_scope);
+    return ok;
+}
+
+static bool cg_emit_try_catch_block_to_slot(CG *cg,
+                                            const FengBlock *block,
+                                            const char *slot_name,
+                                            const CGType *result_type,
+                                            bool managed,
+                                            bool aggregate,
+                                            FengToken err_token) {
+    if (block == NULL || block->statement_count == 0U) {
+        return cg_fail(cg, err_token,
+                       "codegen: catch block must produce a try-expression value");
+    }
+
+    const FengExpr *yield = cg_branch_yield_expr(block);
+    if (yield == NULL) {
+        return cg_emit_block(cg, block);
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i + 1U < block->statement_count; i++) {
+        if (!cg_emit_stmt(cg, block->statements[i])) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        ok = cg_emit_try_expr_body_to_slot(cg,
+                                           yield,
+                                           slot_name,
+                                           result_type,
+                                           managed,
+                                           aggregate,
+                                           err_token);
+    }
+    return ok;
+}
+
+static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+
+    CGType *result_type = cg_probe_expr_type(cg, e->as.try_expr.body);
+    if (result_type == NULL) {
+        return false;
+    }
+
+    bool managed = cgtype_is_managed(result_type);
+    bool aggregate = cgtype_is_aggregate(result_type);
+    const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
+    if (aggregate && agg_desc == NULL) {
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+                       "codegen: missing aggregate descriptor for try-expression result");
+    }
+
+    char *slot_name = cg_fresh_temp(cg, "_tryv");
+    char *frame_name = cg_fresh_temp(cg, "_ex_frame");
+    char *state_name = cg_fresh_temp(cg, "_ex_state");
+    char *exception_name = cg_fresh_temp(cg, "_ex");
+    char *handled_name = cg_fresh_temp(cg, "_handled");
+    if (slot_name == NULL || frame_name == NULL || state_name == NULL ||
+        exception_name == NULL || handled_name == NULL) {
+        free(slot_name);
+        free(frame_name);
+        free(state_name);
+        free(exception_name);
+        free(handled_name);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+
+    char *cty = cg_ctype_dup(result_type);
+    if (cty == NULL) {
+        free(slot_name);
+        free(frame_name);
+        free(state_name);
+        free(exception_name);
+        free(handled_name);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    if (managed) {
+        buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, slot_name);
+        cg_emit_cleanup_push_for_managed_local(cg, slot_name);
+        if (!scope_add(cg->cur_scope,
+                       slot_name,
+                       slot_name,
+                       cgtype_clone(result_type),
+                       false)) {
+            free(cty);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+    } else if (aggregate) {
+        buf_append_fmt(cg->cur_body, "    %s %s; ", cty, slot_name);
+        if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, slot_name)) {
+            free(cty);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token,
+                           "codegen: missing aggregate default-init rule for try-expression result");
+        }
+        buf_append_cstr(cg->cur_body, ";\n");
+        cg_emit_cleanup_push_for_aggregate_local(cg, slot_name, result_type);
+        if (!scope_add(cg->cur_scope,
+                       slot_name,
+                       slot_name,
+                       cgtype_clone(result_type),
+                       false)) {
+            free(cty);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+    } else {
+        buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, slot_name, cty);
+    }
+    free(cty);
+
+    buf_append_fmt(cg->cur_body,
+                   "    FengExceptionFrame %s;\n"
+                   "    feng_exception_push(&%s);\n"
+                   "    int %s = setjmp(%s.jb);\n"
+                   "    if (%s == 0) {\n",
+                   frame_name,
+                   frame_name,
+                   state_name,
+                   frame_name,
+                   state_name);
+    cg->try_depth++;
+    bool ok = cg_emit_try_expr_body_to_slot(cg,
+                                            e->as.try_expr.body,
+                                            slot_name,
+                                            result_type,
+                                            managed,
+                                            aggregate,
+                                            e->token);
+    cg->try_depth--;
+    if (!ok) {
+        free(slot_name);
+        free(frame_name);
+        free(state_name);
+        free(exception_name);
+        free(handled_name);
+        cgtype_free(result_type);
+        return false;
+    }
+    buf_append_fmt(cg->cur_body,
+                   "        feng_exception_pop();\n"
+                   "    } else {\n"
+                   "        feng_exception_pop();\n"
+                   "        FengUnwindException *%s = (FengUnwindException *)%s.value;\n"
+                   "        bool %s = false;\n",
+                   exception_name,
+                   frame_name,
+                   handled_name);
+
+    for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
+        const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
+        bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
+        CGType *catch_type = NULL;
+        char *desc_expr = NULL;
+
+        if (!is_unknown) {
+            if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
+                free(slot_name);
+                free(frame_name);
+                free(state_name);
+                free(exception_name);
+                free(handled_name);
+                cgtype_free(result_type);
+                return false;
+            }
+            if (!cg_exception_descriptor_expr_for_type(cg,
+                                                       catch_type,
+                                                       clause->token,
+                                                       &desc_expr)) {
+                cgtype_free(catch_type);
+                free(slot_name);
+                free(frame_name);
+                free(state_name);
+                free(exception_name);
+                free(handled_name);
+                cgtype_free(result_type);
+                return false;
+            }
+        }
+
+        if (i == 0U) {
+            buf_append_cstr(cg->cur_body, "        if ");
+        } else {
+            buf_append_cstr(cg->cur_body, "        else if ");
+        }
+        if (is_unknown) {
+            buf_append_fmt(cg->cur_body,
+                           "(!%s) {\n",
+                           handled_name);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "(!%s && %s != NULL && %s->desc == %s) {\n",
+                           handled_name,
+                           exception_name,
+                           exception_name,
+                           desc_expr);
+        }
+        buf_append_fmt(cg->cur_body, "        %s = true;\n", handled_name);
+
+        Scope *catch_scope = scope_push(cg->cur_scope);
+        if (catch_scope == NULL) {
+            cgtype_free(catch_type);
+            free(desc_expr);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return cg_fail(cg, clause->token, "codegen: out of memory");
+        }
+        cg->cur_scope = catch_scope;
+        if (!cg_emit_try_expr_catch_binding(cg,
+                                            clause,
+                                            catch_type,
+                                            is_unknown,
+                                            clause->token)) {
+            cg->cur_scope = catch_scope->parent;
+            scope_pop_free(catch_scope);
+            cgtype_free(catch_type);
+            free(desc_expr);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return false;
+        }
+        cg->try_depth++;
+        ok = cg_emit_try_catch_block_to_slot(cg,
+                                             clause->body,
+                                             slot_name,
+                                             result_type,
+                                             managed,
+                                             aggregate,
+                                             clause->token);
+        cg->try_depth--;
+        if (ok) {
+            cg_release_scope(cg, catch_scope);
+        }
+        cg->cur_scope = catch_scope->parent;
+        scope_pop_free(catch_scope);
+        if (!ok) {
+            cgtype_free(catch_type);
+            free(desc_expr);
+            free(slot_name);
+            free(frame_name);
+            free(state_name);
+            free(exception_name);
+            free(handled_name);
+            cgtype_free(result_type);
+            return false;
+        }
+        buf_append_cstr(cg->cur_body,
+                        "        feng_release_unwind_exception();\n"
+                        "        }\n");
+        cgtype_free(catch_type);
+        free(desc_expr);
+    }
+
+    buf_append_fmt(cg->cur_body,
+                   "        if (!%s) {\n"
+                   "            feng_rethrow();\n"
+                   "        }\n"
+                   "    }\n",
+                   handled_name);
+
+    out->c_expr = strdup(slot_name);
+    out->type = result_type;
+    out->owns_ref = false;
+
+    free(slot_name);
+    free(frame_name);
+    free(state_name);
+    free(exception_name);
+    free(handled_name);
     return out->c_expr != NULL;
 }
 
@@ -15119,6 +15706,60 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+static bool cg_exception_descriptor_expr_for_type(CG *cg,
+                                                  const CGType *type,
+                                                  FengToken token,
+                                                  char **out_expr) {
+    const char *scalar_desc;
+    Buf b;
+
+    if (out_expr == NULL) {
+        return false;
+    }
+    *out_expr = NULL;
+    if (type == NULL) {
+        return cg_fail(cg, token, "codegen: missing exception payload type");
+    }
+
+    if (cg_scalar_exception_descriptor_name(type->kind, &scalar_desc)) {
+        buf_init(&b);
+        buf_append_fmt(&b, "&%s", scalar_desc);
+        *out_expr = b.data;
+        return *out_expr != NULL;
+    }
+
+    switch (type->kind) {
+        case CG_TYPE_STRING:
+            *out_expr = strdup("&feng_string_descriptor");
+            return *out_expr != NULL;
+        case CG_TYPE_ARRAY:
+            *out_expr = strdup("&feng_array_descriptor");
+            return *out_expr != NULL;
+        case CG_TYPE_OBJECT:
+            if (type->user == NULL || type->user->c_desc_name == NULL) {
+                return cg_fail(cg, token,
+                               "codegen: object exception payload is missing a descriptor");
+            }
+            buf_init(&b);
+            buf_append_fmt(&b, "&%s", type->user->c_desc_name);
+            *out_expr = b.data;
+            return *out_expr != NULL;
+        default:
+            return cg_fail(cg, token,
+                           "codegen: unsupported exception payload type");
+    }
+}
+
+static bool cg_expr_is_unknown_exception_identifier(CG *cg, const FengExpr *expr) {
+    const Local *local;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_IDENTIFIER) {
+        return false;
+    }
+    local = scope_lookup(cg->cur_scope, expr->as.identifier.data, expr->as.identifier.length);
+    return local != NULL && local->is_unknown_exception;
+}
+
 /* throw <expr>;
  *
  * Phase 1A only supports managed payloads (string / array / object) — the
@@ -15132,26 +15773,61 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token,
             "codegen: 'throw' requires a value");
     }
+    if (cg_expr_is_unknown_exception_identifier(cg, stmt->as.throw_value)) {
+        buf_append_cstr(cg->cur_body, "    feng_rethrow();\n");
+        return true;
+    }
     ExprResult r;
     if (!cg_emit_expr(cg, stmt->as.throw_value, &r)) return false;
-    if (!cgtype_is_managed(r.type)) {
+    char *desc_expr = NULL;
+    if (!cg_exception_descriptor_expr_for_type(cg, r.type, stmt->token, &desc_expr)) {
         er_free(&r);
-        return cg_fail(cg, stmt->token,
-            "codegen: throwing non-managed values is not yet supported in Phase 1A");
+        return false;
     }
     char *tmp = cg_fresh_temp(cg, "_thr");
-    char *cty = cg_ctype_dup(r.type);
-    if (r.owns_ref) {
-        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
-    } else {
-        buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
-                       cty, tmp, r.c_expr, tmp);
+    if (tmp == NULL) {
+        free(desc_expr);
+        er_free(&r);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
     }
-    free(cty);
+    if (cg_type_kind_is_scalar_builtin(r.type->kind)) {
+        const char *ctor_name = NULL;
+
+        if (!cg_emit_scalar_box_support(cg) ||
+            !cg_scalar_box_ctor_name(r.type->kind, &ctor_name) ||
+            ctor_name == NULL) {
+            free(tmp);
+            free(desc_expr);
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                           "codegen: missing scalar box constructor for throw payload");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    FengScalarBox *%s = %s(%s);\n",
+                       tmp,
+                       ctor_name,
+                       r.c_expr);
+    } else {
+        char *cty = cg_ctype_dup(r.type);
+        if (cty == NULL) {
+            free(tmp);
+            free(desc_expr);
+            er_free(&r);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        if (r.owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                           cty, tmp, r.c_expr, tmp);
+        }
+        free(cty);
+    }
     er_free(&r);
     buf_append_fmt(cg->cur_body,
-                   "    feng_exception_throw((void *)%s, 1);\n", tmp);
+                   "    feng_throw((void *)%s, %s);\n", tmp, desc_expr);
     free(tmp);
+    free(desc_expr);
     return true;
 }
 
@@ -18998,6 +19674,19 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 }
             }
             return cg_collect_generic_instances_from_block(cg, expr->as.match_expr.else_block, scope);
+        case FENG_EXPR_TRY:
+            if (!cg_collect_generic_instances_from_expr(cg, expr->as.try_expr.body, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.try_expr.clause_count; ++i) {
+                const FengTryCatchClause *clause = &expr->as.try_expr.clauses[i];
+
+                if (!cg_collect_generic_instances_from_type_ref(cg, clause->type, scope) ||
+                    !cg_collect_generic_instances_from_block(cg, clause->body, scope)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_EXPR_ARRAY_NEW:
             return cg_collect_generic_instances_from_type_ref(cg,
                                                              expr->as.array_new.element_type,

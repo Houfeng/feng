@@ -279,6 +279,20 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             dump_indent(stream, indent);
             fputc('}', stream);
             break;
+        case FENG_EXPR_TRY:
+            fputs("try ", stream);
+            dump_expr(stream, expr->as.try_expr.body, 0);
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                const FengTryCatchClause *clause = &expr->as.try_expr.clauses[index];
+
+                fputs(" catch ", stream);
+                dump_slice(stream, clause->name);
+                fputs(": ", stream);
+                dump_type_ref(stream, clause->type);
+                fputc(' ', stream);
+                dump_block(stream, clause->body, indent);
+            }
+            break;
         case FENG_EXPR_ARRAY_NEW:
             dump_type_ref(stream, expr->as.array_new.element_type);
             fputc('[', stream);

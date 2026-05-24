@@ -493,6 +493,79 @@ static void test_exception_nested_propagation(void) {
     ASSERT(feng_exception_current() == NULL);
 }
 
+static void test_unwind_exception_payload_contract(void) {
+    FengExceptionFrame frame;
+    TestObject *thrown;
+    FengUnwindException *exception;
+
+    g_finalize_count = 0;
+    thrown = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    feng_exception_push(&frame);
+    if (setjmp(frame.jb) == 0) {
+        feng_throw(thrown, &test_object_descriptor);
+        ASSERT(0);
+    }
+
+    exception = (FengUnwindException *)frame.value;
+    ASSERT(exception != NULL);
+#if defined(_WIN32)
+    ASSERT(exception->exception_class == FENG_EXCEPTION_CLASS);
+#else
+    ASSERT(exception->unwind.exception_class == FENG_EXCEPTION_CLASS);
+#endif
+    ASSERT(exception->value == thrown);
+    ASSERT(exception->desc == &test_object_descriptor);
+    ASSERT(exception->matched_clause == -1);
+    ASSERT(feng_caught_value() == thrown);
+    ASSERT(feng_caught_clause() == -1);
+
+    feng_exception_pop();
+    feng_release_unwind_exception();
+    ASSERT(g_finalize_count == 1);
+    ASSERT(feng_exception_current() == NULL);
+}
+
+static void test_frame_marker_cleanup_boundary(void) {
+    FengExceptionFrame frame;
+    FengFrameMarker marker;
+    FengCleanupNode node;
+    TestObject *local;
+
+    g_finalize_count = 0;
+    local = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    feng_exception_push(&frame);
+    if (setjmp(frame.jb) == 0) {
+        feng_frame_push(&marker);
+        feng_cleanup_push(&node, (void **)&local);
+        feng_exception_throw((void *)(uintptr_t)0x5678, 0);
+        ASSERT(0);
+    }
+
+    ASSERT(g_finalize_count == 1);
+    ASSERT(frame.value == (void *)(uintptr_t)0x5678);
+    feng_exception_pop();
+    ASSERT(feng_exception_current() == NULL);
+}
+
+static void test_frame_marker_lifo_pop(void) {
+    FengFrameMarker marker;
+    FengCleanupNode node;
+    TestObject *local;
+
+    g_finalize_count = 0;
+    local = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    feng_frame_push(&marker);
+    feng_cleanup_push(&node, (void **)&local);
+    feng_cleanup_pop();
+    feng_frame_pop();
+
+    feng_release(local);
+    ASSERT(g_finalize_count == 1);
+}
+
 /* --- Finalizer resurrection (Phase 1B-1) ------------------------------- */
 
 /* Test fixture: a descriptor whose finalizer republishes `self` into a global
@@ -1691,6 +1764,9 @@ int main(void) {
     test_exception_caught();
     test_exception_managed_value_caught();
     test_exception_nested_propagation();
+    test_unwind_exception_payload_contract();
+    test_frame_marker_cleanup_boundary();
+    test_frame_marker_lifo_pop();
     test_finalizer_resurrection_then_release();
     test_finalizer_resurrection_reruns_on_next_release();
     test_finalizer_no_resurrection_releases();
