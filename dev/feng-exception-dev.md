@@ -303,7 +303,7 @@ void generated_fn(void) {
 
 ## 6 TODO
 
-当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端 LSDA/libunwind 路径已落地；旧版 `try { ... } catch { ... } finally { ... }` 兼容语法已移除。Feng 尚未公开发布，后续只维护主规范中的 `try <expr> [catch ...]` 形态。剩余 TODO 聚焦正常路径开销继续收敛、Windows 后端与回归验证。
+当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端 LSDA/libunwind 路径已落地；旧版 `try { ... } catch { ... } finally { ... }` 兼容语法已移除。Feng 尚未公开发布，后续只维护主规范中的 `try <expr> catch ...` 形态（`catch` 子句为必填，零 catch 在解析阶段报错）。剩余 TODO 聚焦正常路径开销继续收敛、Windows 后端与回归验证。
 
 ### 运行时机制
 
@@ -326,6 +326,7 @@ void generated_fn(void) {
 - [x] `src/parser/parser.c`：新增表达式形式 `try <expr>`；旧块形式 `try { ... } catch { ... } finally { ... }` 已移除
 - [x] `src/parser/parser.c`：实现多 `catch` 子句解析，每个子句须含 `id: Type` 注解
 - [x] `src/parser/parser.c`：catch 子句类型注解支持 `unknown` token
+- [x] `src/parser/parser.c`：`try` 至少须有一个 `catch` 子句；零 catch 的 `try <expr>` 在解析阶段报错（`'try' requires at least one 'catch' clause`）
 
 ### 语义层
 
@@ -365,5 +366,5 @@ void generated_fn(void) {
 - [x] 新增测试：void try 表达式作为语句，含 void catch 块
 - [x] 新增测试：catch 块内 `return` 可正确离开函数并释放异常对象
 - [x] 新增测试：catch 块内 `break` / `continue` 可正确离开 try/catch 并继续循环控制流
-- [x] 新增测试：省略 catch 的 `try <expr>` 自动上抛
+- [x] 新增测试：零 catch 的 `try <expr>` 在解析阶段报错（parser 单元测试 `test_try_without_catch_is_rejected` + semantic 单元测试 `test_try_without_catch_is_rejected` 各一条）
 - [x] 全量回归测试通过（兼容层）
