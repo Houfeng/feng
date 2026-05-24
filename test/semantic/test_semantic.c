@@ -2304,7 +2304,7 @@ static void test_try_expression_catch_result_can_use_bound_value(void) {
     feng_program_free(program);
 }
 
-static void test_try_without_catch_can_bind_result(void) {
+static void test_try_without_catch_is_rejected(void) {
     const char *source =
         "mod demo.main;\n"
         "fn parse(): i32 { return 1; }\n"
@@ -2312,19 +2312,12 @@ static void test_try_without_catch_can_bind_result(void) {
         "    let value = try parse();\n"
         "    return value;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("try_without_catch_bind_ok.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
+    FengProgram *program = NULL;
+    FengParseError error;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
-
-    feng_semantic_analysis_free(analysis);
-    feng_program_free(program);
+    ASSERT(!feng_parse_source(source, strlen(source), "try_without_catch_rejected.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
 }
 
 static void test_try_catch_statement_allows_empty_catch(void) {
@@ -13195,7 +13188,7 @@ int main(void) {
     test_catch_unknown_allows_rethrow_only();
     test_catch_unknown_rejects_value_use();
     test_try_expression_catch_result_can_use_bound_value();
-    test_try_without_catch_can_bind_result();
+    test_try_without_catch_is_rejected();
     test_try_catch_statement_allows_empty_catch();
     test_try_expression_rejects_bound_value_result_mismatch();
     test_unknown_type_is_only_valid_in_catch_clause();

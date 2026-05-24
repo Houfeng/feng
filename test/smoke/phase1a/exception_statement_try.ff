@@ -14,7 +14,7 @@ fn fail_i32(): i32 {
 }
 
 fn main(args: string[]) {
-    let label = try make_label();
+    let label = try make_label() catch { "unknown"; };
     puts(&label);
 
     try fail_i32() catch ex: i32 {

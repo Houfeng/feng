@@ -2571,6 +2571,12 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
         }
     }
 
+    if (expr->as.try_expr.clause_count == 0U) {
+        (void)parser_error_at(parser, &try_token, "'try' requires at least one 'catch' clause");
+        free_expr(expr);
+        return NULL;
+    }
+
     return expr;
 }
 

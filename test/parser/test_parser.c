@@ -165,21 +165,19 @@ static void test_try_expression_with_typed_catches(void) {
         "mod demo.main;\n"
         "fn run(): int {\n"
         "    let value = try parse() catch err: ParseError { 8080; } catch problem: unknown { 9090; };\n"
-        "    try init_runtime();\n"
         "    return value;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
     const FengBlock *body;
     const FengExpr *try_expr;
-    const FengStmt *try_expr_stmt;
 
     ASSERT(feng_parse_source(source, strlen(source), "try_expr.f", &program, &error));
     ASSERT(program != NULL);
     ASSERT(program->declaration_count == 1U);
 
     body = program->declarations[0]->as.function_decl.body;
-    ASSERT(body->statement_count == 3U);
+    ASSERT(body->statement_count == 2U);
     ASSERT(body->statements[0]->kind == FENG_STMT_BINDING);
     try_expr = body->statements[0]->as.binding.initializer;
     ASSERT(try_expr->kind == FENG_EXPR_TRY);
@@ -197,12 +195,21 @@ static void test_try_expression_with_typed_catches(void) {
     ASSERT(try_expr->as.try_expr.clauses[1].type->as.named.segment_count == 1U);
     assert_slice_text(try_expr->as.try_expr.clauses[1].type->as.named.segments[0], "unknown");
 
-    try_expr_stmt = body->statements[1];
-    ASSERT(try_expr_stmt->kind == FENG_STMT_TRY);
-    ASSERT(try_expr_stmt->as.expr->kind == FENG_EXPR_TRY);
-    ASSERT(try_expr_stmt->as.expr->as.try_expr.clause_count == 0U);
-
     feng_program_free(program);
+}
+
+static void test_try_without_catch_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    try init_runtime();\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "try_no_catch.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
 }
 
 static void test_runtime_annotation_on_extern_function(void) {
@@ -1711,6 +1718,7 @@ int main(void) {
     test_statements_and_expressions();
     test_try_block_form_is_rejected();
     test_try_expression_with_typed_catches();
+    test_try_without_catch_is_rejected();
     test_runtime_annotation_on_extern_function();
     test_enum_declarations_parse();
     test_match_with_range_and_list_labels();

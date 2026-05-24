@@ -70,7 +70,7 @@ fn unknown_rethrow(): string {
 }
 
 fn auto_upthrow(): string {
-    let value = try (try throw_bool_text()) catch ex: bool {
+    let value = try throw_bool_text() catch ex: bool {
         "auto-upthrow";
     };
     return value;

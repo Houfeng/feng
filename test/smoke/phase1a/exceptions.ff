@@ -27,7 +27,7 @@ fn main(args: string[]) {
     };
     puts(&second);
 
-    try maybe_throw(false);
+    try maybe_throw(false) catch {};
     puts(&"ok-3");
 
     puts(&"done");
