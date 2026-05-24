@@ -3974,7 +3974,6 @@ static void test_generic_aggregate_return_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_aggregate_take(&") != NULL);
     ASSERT(strstr(out.c_source, "feng_aggregate_retain(&") != NULL);
     ASSERT(strstr(out.c_source, "memcpy(_out, &") != NULL);
 

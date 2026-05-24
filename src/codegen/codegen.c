@@ -7908,8 +7908,25 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
         cg_emit_cleanup_push_for_managed_local(cg, tmp);
     } else if (cgtype_is_managed(r->type)) {
         /* Borrowed: don't register for release. */
-    } else if (cgtype_is_aggregate(r->type) && r->owns_ref) {
-        /* Step 4b — fat spec value carries one +1 reference on `subject`. */
+    } else if (cgtype_is_aggregate(r->type)) {
+        /* Step 4b — fat spec value.  Two sub-cases:
+         *
+         * owns_ref=true  (inline expression, e.g. cg_emit_registered_call):
+         *   The C struct copy above is the sole owner of the +1 reference;
+         *   no retain needed.  Just register the copy for cleanup.
+         *
+         * owns_ref=false (out-param temp, e.g. cg_emit_generic_call path 1):
+         *   The source variable already has its own cleanup registration
+         *   that will release the subject.  The bare copy above aliases the
+         *   source's subject pointer without incrementing its refcount, so
+         *   retain here to give the copy an independent +1. */
+        if (!r->owns_ref) {
+            const char *desc = cg_aggregate_desc_name(r->type);
+            if (desc) {
+                buf_append_fmt(cg->cur_body,
+                               "    feng_aggregate_retain(&%s, &%s);\n", tmp, desc);
+            }
+        }
         scope_add(cg->cur_scope, tmp, tmp, cgtype_clone(r->type), false);
         cg_emit_cleanup_push_for_aggregate_local(cg, tmp, r->type);
     }
@@ -17381,6 +17398,13 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                     buf_free(&args_buf);
                     return false;
                 }
+                /* For aggregate (spec fat value) returns: the cleanup chain
+                 * now owns the +1 reference.  Callers that create an alias
+                 * (let binding, materialize-to-local) must retain before
+                 * aliasing, so signal the value as borrowed (owns_ref=false). */
+                if (cgtype_is_aggregate(out->type)) {
+                    out->owns_ref = false;
+                }
             }
             ok = true;
             free(ret_cname);
@@ -17739,6 +17763,13 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 free(type_args);
                 free(ret_cname);
                 return false;
+            }
+            /* For aggregate (spec fat value) returns: the cleanup chain
+             * now owns the +1 reference.  Callers that create an alias
+             * (let binding, materialize-to-local) must retain before
+             * aliasing, so signal the value as borrowed (owns_ref=false). */
+            if (cgtype_is_aggregate(out->type)) {
+                out->owns_ref = false;
             }
         }
     } else {
