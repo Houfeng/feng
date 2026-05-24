@@ -15950,6 +15950,41 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     }
     ExprResult r;
     if (!cg_emit_expr(cg, stmt->as.throw_value, &r)) return false;
+
+    /* Object-form spec fat value: extract the concrete subject pointer and
+     * retrieve its FengTypeDescriptor from the embedded FengManagedHeader.
+     * The witness is discarded — catch only matches on concrete type identity. */
+    if (r.type->kind == CG_TYPE_SPEC) {
+        if (r.type->user_spec == NULL || r.type->user_spec->c_value_struct_name == NULL) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                           "codegen: spec fat value is missing its value struct name");
+        }
+        char *tmp_sv   = cg_fresh_temp(cg, "_thr_sv");
+        char *tmp_subj = cg_fresh_temp(cg, "_thr");
+        if (tmp_sv == NULL || tmp_subj == NULL) {
+            free(tmp_sv);
+            free(tmp_subj);
+            er_free(&r);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        /* Materialize the fat value struct to load .subject exactly once, then
+         * retain the subject before transferring ownership to feng_throw. */
+        buf_append_fmt(cg->cur_body,
+                       "    struct %s %s = %s;\n"
+                       "    void *%s = %s.subject;\n"
+                       "    feng_retain(%s);\n"
+                       "    feng_throw(%s, ((const FengManagedHeader *)%s)->desc);\n",
+                       r.type->user_spec->c_value_struct_name, tmp_sv, r.c_expr,
+                       tmp_subj, tmp_sv,
+                       tmp_subj,
+                       tmp_subj, tmp_subj);
+        free(tmp_sv);
+        free(tmp_subj);
+        er_free(&r);
+        return true;
+    }
+
     char *desc_expr = NULL;
     if (!cg_exception_descriptor_expr_for_type(cg, r.type, stmt->token, &desc_expr)) {
         er_free(&r);

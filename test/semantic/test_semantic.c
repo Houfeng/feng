@@ -2399,12 +2399,13 @@ static void test_unknown_type_is_only_valid_in_catch_clause(void) {
     }
 }
 
-static void test_throw_rejects_spec_and_callable_values(void) {
+static void test_throw_rejects_callable_values(void) {
+    /* fn values, lambdas, member methods, and callable-form specs are not throwable. */
     static const char *const cases[] = {
-        "mod demo.main;\nspec Named { var name: string; }\nfn run(x: Named) { throw x; }\n",
         "mod demo.main;\nfn side() {}\nfn run() { throw side; }\n",
         "mod demo.main;\nfn run() { throw () { }; }\n",
-        "mod demo.main;\ntype Box { fn ping() {} }\nfn run(box: Box) { throw box.ping; }\n"
+        "mod demo.main;\ntype Box { fn ping() {} }\nfn run(box: Box) { throw box.ping; }\n",
+        "mod demo.main;\nspec Callback(): void;\nfn run(cb: Callback) { throw cb; }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -2422,6 +2423,27 @@ static void test_throw_rejects_spec_and_callable_values(void) {
         feng_semantic_errors_free(errors, error_count);
         feng_program_free(program);
     }
+}
+
+static void test_throw_allows_spec_values(void) {
+    /* spec fat values are now throwable: codegen extracts .subject and reads
+     * the concrete descriptor from FengManagedHeader at throw time. */
+    const char *source =
+        "mod demo.main;\n"
+        "spec Named { fn greet(): string; }\n"
+        "type Foo: Named { let x: i32; fn greet(): string { return \"ok\"; } }\n"
+        "fn run(v: Named) { throw v; }\n";
+    FengProgram *program = parse_program_or_die("throw_spec_value_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_catch_rejects_non_exception_types(void) {
@@ -13128,7 +13150,8 @@ int main(void) {
     test_try_catch_statement_allows_empty_catch();
     test_try_expression_rejects_bound_value_result_mismatch();
     test_unknown_type_is_only_valid_in_catch_clause();
-    test_throw_rejects_spec_and_callable_values();
+    test_throw_rejects_callable_values();
+    test_throw_allows_spec_values();
     test_catch_rejects_non_exception_types();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();

@@ -1,0 +1,40 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+spec Describable {
+    fn describe(): string;
+}
+
+type AppError: Describable {
+    let msg: string;
+
+    fn describe(): string {
+        return self.msg;
+    }
+}
+
+fn make_error(msg: string): Describable {
+    let e = AppError { msg: msg };
+    return e;
+}
+
+// throw a spec fat value — subject extracted at throw site,
+// concrete descriptor (AppError) read from FengManagedHeader
+fn fail(msg: string): string {
+    throw make_error(msg);
+    return "unreachable";
+}
+
+fn main(args: string[]) {
+    // catch as concrete AppError — personality matches on descriptor identity
+    let r = try fail("spec-error") catch ex: AppError {
+        ex.msg;
+    } catch ex: unknown {
+        "unknown";
+    };
+    puts(&r);
+
+    puts(&"done");
+}

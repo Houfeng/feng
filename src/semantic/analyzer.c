@@ -7250,9 +7250,10 @@ static bool type_ref_is_throwable(const ResolveContext *context,
 
         case FENG_TYPE_REF_NAMED:
             decl = resolve_type_ref_decl(context, type_ref);
-            if (decl != NULL && decl->kind == FENG_DECL_SPEC) {
+            if (decl != NULL && decl->kind == FENG_DECL_SPEC &&
+                decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 if (out_reason != NULL) {
-                    *out_reason = "spec values cannot be thrown as exceptions";
+                    *out_reason = "callable-spec values are function types and cannot be thrown as exceptions";
                 }
                 return false;
             }
@@ -7363,9 +7364,10 @@ static bool inferred_expr_type_is_throwable(const ResolveContext *context,
             return type_ref_is_throwable(context, type.type_ref, out_reason);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
-            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC) {
+            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC &&
+                type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 if (out_reason != NULL) {
-                    *out_reason = "spec values cannot be thrown as exceptions";
+                    *out_reason = "callable-spec values are function types and cannot be thrown as exceptions";
                 }
                 return false;
             }

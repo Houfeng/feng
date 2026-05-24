@@ -1,0 +1,44 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+type AppError {
+    let code: i32;
+    let msg: string;
+}
+
+fn fail(code: i32, msg: string): string {
+    let e = AppError { code: code, msg: msg };
+    throw e;
+    return "unreachable";
+}
+
+fn code_str(code: i32): string {
+    if code == 42 {
+        return "forty-two";
+    }
+    return "other";
+}
+
+fn main(args: string[]) {
+    // catch concrete type, access fields
+    let r1 = try fail(42, "first-error") catch ex: AppError {
+        ex.msg;
+    };
+    puts(&r1);
+
+    // access numeric field from caught exception
+    let r2 = try fail(0, "second-error") catch ex: AppError {
+        code_str(ex.code);
+    };
+    puts(&r2);
+
+    // exception not thrown — try result is returned directly
+    let r3 = try "no-throw" catch ex: AppError {
+        "unreachable";
+    };
+    puts(&r3);
+
+    puts(&"done");
+}

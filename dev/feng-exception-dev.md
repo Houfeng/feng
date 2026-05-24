@@ -337,28 +337,29 @@ void generated_fn(void) {
 ### Codegen 层
 
 - [x] `src/codegen/codegen.c`：`cg_emit_throw` 新增标量装箱路径（分配 `FengScalarBox`，填充 kind 与 payload）
-- [ ] `src/codegen/codegen.c`：`cg_emit_throw` 新增 spec fat value 路径（提取 subject，丢弃 witness）
-- [ ] `src/codegen/codegen.c`：`cg_emit_try` 重写为表达式形式，emit `__try_begin` / `__try_end` / `__lp` labels 及静态 LSDA 数据
-- [ ] `src/codegen/codegen.c`：实现有类型 catch 的 landing pad 代码生成（`feng_caught_value()` + 转型绑定）
-- [ ] `src/codegen/codegen.c`：实现多 catch 子句的 landing pad 分派（按命中子句索引跳转）
+- [x] `src/codegen/codegen.c`：`cg_emit_throw` 新增 spec fat value 路径（提取 `.subject`，通过 `FengManagedHeader::desc` 运行时取描述符，丢弃 witness）
+- [x] `src/codegen/codegen.c`：`cg_emit_try` 重写为表达式形式，emit `__try_begin` / `__try_end` / `__lp` labels 及静态 LSDA 数据
+- [x] `src/codegen/codegen.c`：实现有类型 catch 的 landing pad 代码生成（`feng_caught_value()` + 转型绑定）
+- [x] `src/codegen/codegen.c`：实现多 catch 子句的 landing pad 分派（按命中子句索引 if/else-if 跳转，避免 C switch 捕获 Feng break/continue）
 - [x] `src/codegen/codegen.c`：`catch ex: unknown` 子句：绑定 ex，生成 `feng_rethrow()` 路径（当前为兼容层）
 - [x] `src/codegen/codegen.c`：try 表达式作为右值，结果值正确穿透到外层（当前为兼容层）
 - [x] `src/codegen/codegen.c`：void try 表达式作为语句时不生成非法 `void` 结果槽；void catch 块允许正常结束（当前为兼容层）
 - [x] `src/codegen/codegen.c`：catch 块内 `return` 会在离开函数前释放当前异常对象并清理已打开的异常帧（当前为兼容层）
 - [x] `src/codegen/codegen.c`：catch 块内 `break` / `continue` 会在跳出 try/catch 前释放当前异常对象并清理需要离开的异常帧（当前为兼容层）
-- [ ] `src/codegen/codegen.c`：try 体内托管局部声明改为 NULL 初始化（不加 cleanup push），正常路径在 try 体末尾显式 `feng_release` + 置 NULL
-- [ ] `src/codegen/codegen.c`：landing pad 入口处，在 dispatch switch 之前为每个 try 体内托管局部生成 NULL 安全的 `feng_release(x)` 调用
-- [ ] `src/codegen/codegen.c`：在每个含托管局部的函数入口/出口发射 `feng_frame_push` / `feng_frame_pop` 帧标记（中间帧展开清理所需）
+- [x] `src/codegen/codegen.c`：try 体内托管局部清理——通过 `feng_try_frame_push` + `feng_frame_release_to` 机制实现（正常路径 `cg_release_scope` 释放；异常路径 landing pad 入口 `feng_frame_release_to(&try_marker)` 释放，等价于 NULL 初始化方案，但复用 cleanup chain）
+- [x] `src/codegen/codegen.c`：landing pad 入口处 dispatch 之前调用 `feng_frame_release_to(&try_marker)` 清理 try 体内所有托管局部（NULL-safe）
+- [x] `src/codegen/codegen.c`：在每个含托管局部的函数入口/出口发射 `feng_frame_push` / `feng_frame_pop` 帧标记（中间帧展开清理所需），通过 `cg_emit_function_eh_prologue` 实现
 
 ### 测试
 
-- [ ] 新增测试：throw 具体 type，catch 匹配具体类型
+- [x] 新增测试：throw 具体 type，catch 匹配具体类型
+- [x] 新增测试：throw spec 类型值（提取 subject 后抛），catch 匹配具体类型
 - [x] 新增测试：throw 标量（`i32` / `bool`），catch 匹配对应类型
 - [x] 新增测试：多 catch 子句，按序匹配
 - [x] 新增测试：`catch ex: unknown`，仅 `throw ex` 合法
 - [x] 新增测试：`catch ex: unknown` 中访问字段/方法，期望语义错误
 - [x] 新增测试：`unknown` 用于 `let` / 参数 / 返回类型，期望语义错误
-- [x] 新增测试：throw spec 值，期望编译错误
+- [x] 规范变更：throw 允许 spec fat value（提取 subject 抛出，catch 仍须实体类型）；语义层移除对 spec throw 的拒绝
 - [x] 新增测试：throw 函数值，期望编译错误
 - [x] 新增测试：try 表达式作为右值（赋值）
 - [x] 新增测试：void try 表达式作为语句，含 void catch 块
