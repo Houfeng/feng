@@ -4,7 +4,7 @@ mod feng.smoke;
 extern fn puts(msg: string*): int;
 
 // A function that allocates a managed local (writable array) and then throws.
-// The cleanup chain must release `tmp` before the longjmp transfers control.
+// The cleanup chain must release `tmp` before exception unwinding reaches catch.
 fn build_and_throw(): string {
     let tmp: i32[!] = [1, 2, 3];
     throw "boom-from-fn";

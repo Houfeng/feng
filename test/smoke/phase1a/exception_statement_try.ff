@@ -1,0 +1,23 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+fn make_label(): string {
+    return "bound-try";
+}
+
+fn fail_i32(): i32 {
+    let payload: i32 = 7;
+    throw payload;
+    return 0;
+}
+
+fn main(args: string[]) {
+    let label = try make_label();
+    puts(&label);
+
+    try fail_i32() catch ex: i32 {
+    };
+    puts(&"statement-catch");
+}

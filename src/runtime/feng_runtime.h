@@ -7,7 +7,6 @@
 #ifndef FENG_RUNTIME_H
 #define FENG_RUNTIME_H
 
-#include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -483,6 +482,17 @@ typedef struct FengLSDA {
     int clause_count;
 } FengLSDA;
 
+void feng_register_lsda(const FengLSDA *regions, int region_count);
+
+#if !defined(_WIN32)
+extern const FengLSDA feng_empty_function_lsda[1];
+_Unwind_Reason_Code __feng_personality_v0(int version,
+                                          _Unwind_Action actions,
+                                          uint64_t exception_class,
+                                          struct _Unwind_Exception *unwind,
+                                          struct _Unwind_Context *context);
+#endif
+
 /* Heap-owned in-flight exception object. On Unix-like platforms the platform
  * unwind header must be the first field so libunwind can treat this object as
  * a native `_Unwind_Exception`. Windows uses the same Feng payload surface and
@@ -515,20 +525,8 @@ typedef struct FengCleanupNode {
  * current frame's managed locals. */
 typedef struct FengFrameMarker {
     FengCleanupNode node;
+    bool            is_function_boundary;
 } FengFrameMarker;
-
-typedef struct FengExceptionFrame {
-    struct FengExceptionFrame *prev;
-    jmp_buf jb;
-    void   *value;
-    int     is_managed;
-    /* Snapshot of the cleanup chain top at the moment this frame was pushed.
-     * On throw, the runtime walks down to (but not past) this node. */
-    struct FengCleanupNode *cleanup_top;
-} FengExceptionFrame;
-
-void feng_exception_push(FengExceptionFrame *frame);
-void feng_exception_pop(void);
 
 /* Push/pop a managed local onto the cleanup chain. `node` must outlive the
  * scope of `slot` and is typically a stack-allocated FengCleanupNode adjacent
@@ -536,7 +534,9 @@ void feng_exception_pop(void);
 void feng_cleanup_push(FengCleanupNode *node, void **slot);
 void feng_cleanup_pop(void);
 void feng_frame_push(FengFrameMarker *marker);
+void feng_try_frame_push(FengFrameMarker *marker);
 void feng_frame_pop(void);
+void feng_frame_release_to(FengFrameMarker *marker);
 
 void *feng_caught_value(void);
 int   feng_caught_clause(void);
@@ -545,14 +545,10 @@ void  feng_release_unwind_exception(void);
 #if defined(__GNUC__) || defined(__clang__)
 void feng_throw(void *value, const FengTypeDescriptor *desc) __attribute__((noreturn));
 void feng_rethrow(void) __attribute__((noreturn));
-void feng_exception_throw(void *value, int is_managed) __attribute__((noreturn));
 #else
 void feng_throw(void *value, const FengTypeDescriptor *desc);
 void feng_rethrow(void);
-void feng_exception_throw(void *value, int is_managed);
 #endif
-
-FengExceptionFrame *feng_exception_current(void);
 
 /* --- Panic ------------------------------------------------------------- */
 

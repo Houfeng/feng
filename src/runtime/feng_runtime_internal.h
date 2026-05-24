@@ -60,13 +60,15 @@ void feng_array_slice_copy_into(struct FengArray *dst,
 /* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
  * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let
  * an exception propagate past its body; if one does, the runtime panics
- * immediately rather than longjmp-ing across ARC/collector C frames (which
+ * immediately rather than unwinding across ARC/collector C frames (which
  * would skip all subsequent ARC bookkeeping and corrupt the candidate
  * buffer). Both the ARC release path and the cycle collector's Phase 1
  * route every user-finalizer call through this helper. Caller is responsible
  * for the NULL-check on `desc->finalizer` only as an optimisation; the
  * helper itself is a no-op when either `desc` or `desc->finalizer` is NULL. */
 void feng_finalizer_invoke(const FengTypeDescriptor *desc, void *self);
+void feng_exception_enter_finalizer(void);
+void feng_exception_leave_finalizer(void);
 
 /* Test-only override for the cycle collector candidate-buffer threshold.
  * Replaces whatever value cycle_init_once read from FENG_GC_THRESHOLD (or

@@ -2,9 +2,9 @@ CC ?= cc
 CPPFLAGS ?= -Isrc -Ithird_party/miniz
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 LDFLAGS ?=
-# Phase 1B cycle collector relies on pthread (recursive mutex). Linked into
-# every binary that pulls in libfeng_runtime objects.
-RUNTIME_LDLIBS ?= -lpthread
+# Phase 1B cycle collector relies on pthread (recursive mutex). Unit tests link
+# runtime objects directly, so they also link the vendored unwinder archive.
+RUNTIME_LDLIBS ?= $(LIBUNWIND_LIB) -lpthread
 DEPFLAGS = -MMD -MP
 
 BUILD_DIR := build
@@ -67,6 +67,7 @@ STATIC_LIB_PREFIX := lib
 STATIC_LIB_EXT := .a
 endif
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
+LIBUNWIND_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_libunwind$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
 
@@ -128,7 +129,7 @@ $(BIN_DIR)/test_semantic: $(TEST_SEMANTIC_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_SEMANTIC_OBJS) $(LDFLAGS) -o $@
 
-$(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS)
+$(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) $(RUNTIME_LDLIBS) -o $@
 
@@ -144,9 +145,15 @@ $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_SYMBOL_OBJS) $(LDFLAGS) -o $@
 
-$(RUNTIME_LIB): $(RUNTIME_OBJS)
+$(RUNTIME_LIB): $(RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(LIB_DIR)
-	$(AR) rcs $@ $(RUNTIME_OBJS)
+	@rm -rf $(BUILD_DIR)/temp/runtime-libunwind-objs
+	@mkdir -p $(BUILD_DIR)/temp/runtime-libunwind-objs
+	cd $(BUILD_DIR)/temp/runtime-libunwind-objs && $(AR) x ../../../$(LIBUNWIND_LIB)
+	$(AR) rcs $@ $(RUNTIME_OBJS) $(BUILD_DIR)/temp/runtime-libunwind-objs/*.o
+
+$(LIBUNWIND_LIB): third_party/libunwind/Makefile scripts/build_libunwind.sh
+	./scripts/build_libunwind.sh $(LIB_DIR)
 
 $(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c
 	@mkdir -p $(dir $@)

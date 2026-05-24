@@ -559,7 +559,7 @@ static void phase1_run_finalizers(WhiteList *wl) {
         if (h->desc != NULL && h->desc->finalizer != NULL) {
             /* Route through the runtime barrier so an uncaught exception in
              * the user finalizer aborts deterministically instead of
-             * longjmp-ing across the collector and leaving g_cycle_lock
+             * unwinding across the collector and leaving g_cycle_lock
              * held. See docs/feng-lifetime.md §13.2. */
             feng_finalizer_invoke(h->desc, (void *)h);
         }

@@ -118,6 +118,8 @@ Version: ${LIBUNWIND_VERSION}
 Included:
 - public unwind headers under include/
 - native Itanium unwind sources used on macOS/Linux
+- the LLVM \`libunwind.cpp\` implementation unit, compiled as C++ with exceptions
+  and RTTI disabled
 - no tests, docs, CMake project files, or shared-library artifacts
 
 Build:
@@ -125,6 +127,13 @@ Build:
 - \`make OUTPUT_DIR=<path>\` overrides the staging directory.
 - \`make install\` is an alias of the staging step.
 - default staged library name: \`libfeng_libunwind.a\`
+- the root Makefile unpacks this archive and merges its object files into
+  \`build/lib/libfeng_runtime.a\`; generated programs link only \`libfeng_runtime\`.
+
+Note:
+- This is LLVM libunwind, not the C-majority \`libunwind/libunwind\` project.
+  The latter provides \`_Unwind_*\` APIs on ELF-oriented targets but is not a
+  direct Darwin/Mach-O replacement in Feng's current backend.
 EOF
 
 cat > "${TARGET_DIR}/Makefile" <<'EOF'

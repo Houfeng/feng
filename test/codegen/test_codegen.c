@@ -4421,7 +4421,18 @@ static void test_void_try_expression_codegen(void) {
         "}\n"
         "fn noop() {\n"
         "}\n"
+        "fn make_value(): i32 {\n"
+        "    return 7;\n"
+        "}\n"
+        "fn fail_i32(): i32 {\n"
+        "    let payload: i32 = 1;\n"
+        "    throw payload;\n"
+        "    return 0;\n"
+        "}\n"
         "fn run_case() {\n"
+        "    let number = try make_value();\n"
+        "    try fail_i32() catch ex: i32 {\n"
+        "    };\n"
         "    try noop();\n"
         "    try fail() catch ex: string {\n"
         "        noop();\n"
@@ -4469,7 +4480,12 @@ static void test_void_try_expression_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "void _tryv") == NULL);
     ASSERT(strstr(out.c_source, "tryvoid__noop__from__void());") != NULL);
-    ASSERT(strstr(out.c_source, "FengExceptionFrame") != NULL);
+    ASSERT(strstr(out.c_source, "FengExceptionFrame") == NULL);
+    ASSERT(strstr(out.c_source, "setjmp") == NULL);
+    ASSERT(strstr(out.c_source, "FengLSDA") != NULL);
+    ASSERT(strstr(out.c_source, "feng_try_frame_push") != NULL);
+    ASSERT(strstr(out.c_source, "_try_keep_lpad") != NULL);
+    ASSERT(strstr(out.c_source, ".cfi_personality") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -4538,7 +4554,11 @@ static void test_try_catch_return_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_exception_pop();") != NULL);
+    ASSERT(strstr(out.c_source, "feng_exception_pop();") == NULL);
+    ASSERT(strstr(out.c_source, "setjmp") == NULL);
+    ASSERT(strstr(out.c_source, "switch (feng_caught_clause())") == NULL);
+    ASSERT(strstr(out.c_source, "int _try_clause_") != NULL);
+    ASSERT(strstr(out.c_source, "feng_frame_pop();") != NULL);
     ASSERT(strstr(out.c_source, "feng_release_unwind_exception();") != NULL);
     compile_generated_c_or_die(out.c_source);
 

@@ -3401,7 +3401,10 @@ static void resolver_free_scopes(ResolveContext *context) {
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static bool resolve_block(ResolveContext *context, const FengBlock *block, bool allow_self);
-static bool resolve_try_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
+static bool resolve_try_expr(ResolveContext *context,
+                             const FengExpr *expr,
+                             bool allow_self,
+                             bool result_required);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
 static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
@@ -5111,10 +5114,13 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 }
 
-static bool validate_try_expr(ResolveContext *context, const FengExpr *expr) {
+static bool validate_try_expr(ResolveContext *context,
+                              const FengExpr *expr,
+                              bool result_required) {
     InferredExprType body_type;
 
-    if (expr == NULL || expr->kind != FENG_EXPR_TRY || expr->as.try_expr.clause_count == 0U) {
+    if (expr == NULL || expr->kind != FENG_EXPR_TRY ||
+        expr->as.try_expr.clause_count == 0U || !result_required) {
         return true;
     }
 
@@ -5166,11 +5172,12 @@ static bool validate_try_expr(ResolveContext *context, const FengExpr *expr) {
 static bool validate_try_catch_clause_result_type(ResolveContext *context,
                                                   const FengExpr *try_expr,
                                                   const FengTryCatchClause *clause,
-                                                  InferredExprType body_type) {
+                                                  InferredExprType body_type,
+                                                  bool result_required) {
     const FengExpr *result_expr;
     InferredExprType result_type;
 
-    if (context == NULL || try_expr == NULL || clause == NULL) {
+    if (context == NULL || try_expr == NULL || clause == NULL || !result_required) {
         return true;
     }
 
@@ -14944,7 +14951,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                      allow_self);
 
         case FENG_EXPR_TRY:
-            return resolve_try_expr(context, expr, allow_self);
+            return resolve_try_expr(context, expr, allow_self, true);
     }
 
     return true;
@@ -15028,7 +15035,8 @@ static bool resolve_type_ref_with_unknown_context(ResolveContext *context,
 
 static bool resolve_try_expr(ResolveContext *context,
                              const FengExpr *expr,
-                             bool allow_self) {
+                             bool allow_self,
+                             bool result_required) {
     size_t previous_capture_depth;
     InferredExprType body_type;
     bool ok;
@@ -15086,14 +15094,15 @@ static bool resolve_try_expr(ResolveContext *context,
              validate_try_catch_clause_result_type(context,
                                expr,
                                clause,
-                               body_type);
+                               body_type,
+                               result_required);
         resolver_pop_scope(context);
         if (!ok) {
             return false;
         }
     }
 
-    return validate_try_expr(context, expr);
+    return validate_try_expr(context, expr, result_required);
 }
 
 static bool resolve_throw_value_expr(ResolveContext *context,
@@ -15201,6 +15210,11 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             }
 
         case FENG_STMT_EXPR:
+            if (stmt->as.expr != NULL && stmt->as.expr->kind == FENG_EXPR_TRY) {
+                return resolve_try_expr(context, stmt->as.expr, allow_self, false) &&
+                       validate_untyped_callable_value_expr(context, stmt->as.expr) &&
+                       validate_untyped_address_of_expr(context, stmt->as.expr);
+            }
             return resolve_expr(context, stmt->as.expr, allow_self) &&
                    validate_untyped_callable_value_expr(context, stmt->as.expr) &&
                    validate_untyped_address_of_expr(context, stmt->as.expr);

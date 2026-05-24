@@ -2304,6 +2304,52 @@ static void test_try_expression_catch_result_can_use_bound_value(void) {
     feng_program_free(program);
 }
 
+static void test_try_without_catch_can_bind_result(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { return 1; }\n"
+        "fn run(): i32 {\n"
+        "    let value = try parse();\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_without_catch_bind_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_catch_statement_allows_empty_catch(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { throw 1; return 0; }\n"
+        "fn run() {\n"
+        "    try parse() catch ex: i32 {\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_catch_statement_empty_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_try_expression_rejects_bound_value_result_mismatch(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13078,6 +13124,8 @@ int main(void) {
     test_catch_unknown_allows_rethrow_only();
     test_catch_unknown_rejects_value_use();
     test_try_expression_catch_result_can_use_bound_value();
+    test_try_without_catch_can_bind_result();
+    test_try_catch_statement_allows_empty_catch();
     test_try_expression_rejects_bound_value_result_mismatch();
     test_unknown_type_is_only_valid_in_catch_clause();
     test_throw_rejects_spec_and_callable_values();

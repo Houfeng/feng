@@ -22,6 +22,13 @@ Feng 采用基于静态 LSDA 表 + libunwind 的零开销异常机制：
 - **Personality 函数**（`__feng_personality_v0`）：libunwind 在展开过程中逐帧调用，读取 LSDA 决定是否在当前帧 catch、跳转到哪个 landing pad。
 - **`_Unwind_RaiseException` / `_Unwind_Resume`**：libunwind 提供的展开入口，由 `feng_throw` 调用。
 
+当前 vendoring 选择：
+
+- 仓库内 `third_party/libunwind` 采用 **LLVM libunwind 20.1.8** 的最小源码闭包。该实现包含 `libunwind.cpp`，因此不是纯 C 依赖。
+- `https://github.com/libunwind/libunwind` 是 C 为主的 libunwind 实现，并提供 `_Unwind_*` API；但其 README 和源码布局主要面向 ELF。2026-05-24 在 macOS/arm64 上验证，默认构建因 Darwin 缺少 ELF/link.h 相关接口、GNU alias 与 ucontext 约束失败，不能作为当前 Darwin 后端的直接替换。
+- LLVM libunwind 源码包含 Windows/SEH 相关实现，主要可用于 MinGW/SEH 场景；Feng 当前生成 C 后端使用 GNU label address、DWARF/Mach-O/ELF unwind metadata 与 `_Unwind_*`，不能视为已支持 MSVC/Windows。Windows 仍需独立 SEH 后端设计与验证。
+- 构建上 `scripts/build_libunwind.sh` 先单独产出 `build/lib/libfeng_libunwind.a`；根 `Makefile` 再将该 archive 解包并合入 `build/lib/libfeng_runtime.a`。生成程序与 CLI driver 的稳定链接面仍只有 `libfeng_runtime`。
+
 **正常路径**：`try` 入口无任何代码，PC 区间在 LSDA 中隐式标记 try 范围，完全零开销。  
 **抛出路径**：`feng_throw` → `_Unwind_RaiseException` → libunwind 逐帧调用 personality → personality 读 LSDA 匹配类型 → 跳转 landing pad。
 
@@ -53,19 +60,19 @@ void generated_fn(void) {
 }
 ```
 
-Windows 实现中 `&&label` 替换为 SEH 的 `__except` 块，平台层以外不受影响。
+Windows 后端不能复用 GNU label address；后续需要以 SEH 或 Windows 可用的等价机制替换此层，平台层以外不改变 Feng 语义。
 
 ### Personality 函数注入
 
-C 函数默认不携带自定义 personality。Feng 运行时在模块初始化时，通过 `__register_frame` 动态注册自定义 FDE，将 `__feng_personality_v0` 注入到含 try/catch 的函数区间。
+C 函数默认不携带自定义 personality。当前后端在每个 Feng 生成函数入口发射平台相关 `.cfi_personality` / `.cfi_lsda` inline asm，使 `_Unwind_RaiseException` 能在 thrower、中间帧与 handler frame 上调用 `__feng_personality_v0`。
+
+2026-05-24 Darwin/arm64 POC 结论：只给含 try/catch 的函数注入 EH CFI 不足以展开；如果 thrower 或中间 Feng 函数没有 personality/FDE，`_Unwind_RaiseException` 会返回 `_URC_END_OF_STACK` 或跳过 Feng personality。因此所有可能被展开穿过的 Feng 生成函数都必须带 EH metadata，哪怕函数本身不含 try/catch。
 
 ### 编译参数要求
 
 Feng 当前编译目标是 C；是否需要异常展开编译参数取决于后端机制，而不是 C/C++ 语言种类。
 
-当前已落地的 `setjmp`/`longjmp` 兼容后端不依赖编译器异常展开元数据，因此不需要 `-fexceptions`。
-
-最终 LSDA + libunwind 零开销后端中，含 try/catch 的 Feng 生成 C 文件必须生成完整 unwind metadata。默认要求以 **`-fexceptions`** 编译；若改用 `-funwind-tables` / `-fasynchronous-unwind-tables` 等等价组合，必须先在目标编译器与平台上验证 `.eh_frame` / FDE / CFI 足以支撑 `_Unwind_RaiseException` 跨帧展开，再更新本文档与构建逻辑。`-fexceptions` 的作用：
+LSDA + libunwind 后端中，含 try/catch 的 Feng 生成 C 文件必须生成完整 unwind metadata。默认要求以 **`-fexceptions`** 编译；若改用 `-funwind-tables` / `-fasynchronous-unwind-tables` 等等价组合，必须先在目标编译器与平台上验证 `.eh_frame` / FDE / CFI 足以支撑 `_Unwind_RaiseException` 跨帧展开，再更新本文档与构建逻辑。`-fexceptions` 的作用：
 
 - 使 C 栈帧生成完整 CFI（完整的 `.eh_frame` 条目），确保 libunwind 能正确还原中间帧的寄存器。
 - **不**自动从 `goto`/label 结构生成 LSDA；LSDA 由 Feng codegen 显式输出为静态 struct。
@@ -85,7 +92,7 @@ void  feng_rethrow(void);        // unknown catch 块中重抛
 ```
 
 - **macOS / Linux**：内部调用 `_Unwind_RaiseException` / `_Unwind_Resume`，实现 Feng personality 函数。
-- **Windows**：内部替换为 SEH（`RaiseException` / `__try`/`__except`），接口不变。
+- **Windows**：尚未交付。LLVM libunwind 有 Windows/SEH 源码，但当前 Feng C 后端的 GNU label address + DWARF/Mach-O/ELF LSDA 方案不能直接迁移到 MSVC/SEH。
 
 ### 托管局部展开清理
 
@@ -97,7 +104,7 @@ void  feng_rethrow(void);        // unknown catch 块中重抛
 
 复用现有 TLS cleanup chain，新增 **TLS 帧标记**（`FengFrameMarker`）提供帧边界信息：
 - Runtime 新增 `FengFrameMarker` 节点类型，插入同一 TLS 链，仅作帧边界标识，无 slot 指针。
-- Codegen 在每个含托管局部的函数入口发射 `feng_frame_push`，出口发射 `feng_frame_pop`。
+- Codegen 在每个 Feng 生成函数入口发射 `feng_frame_push`，出口发射 `feng_frame_pop`。
 - Personality 函数在 CLEANUP_PHASE 中，从链顶逐个 pop + 释放，遇到 `FengFrameMarker` 时 pop 该标记并返回 `_URC_CONTINUE_UNWIND`，完成本帧清理。
 - 现有 `feng_cleanup_push` / `feng_cleanup_pop` 及 codegen 生成逻辑**完全不变**。
 
@@ -113,15 +120,14 @@ return _URC_CONTINUE_UNWIND;
 
 **try 帧内托管局部**（含 try/catch 的函数，位于 try 体内的托管局部）：
 
-- Codegen 将 try 体内托管局部**初始化为 NULL**；正常路径在 try 体末尾显式 `feng_release` 并置 NULL；landing pad 入口处在 dispatch switch 之前对每个 try 体托管局部做 NULL 安全释放：
+- Codegen 在 try 入口额外压入 `feng_try_frame_push` 标记；正常路径 try 体末尾弹出该标记。
+- Landing pad 入口调用 `feng_frame_release_to(&try_marker)`，释放并弹出 try marker 之上的 cleanup nodes，再进入 catch dispatch。
 
 ```c
 /* landing pad 内 try 体托管局部清理（codegen 生成，dispatch 之前） */
 __lp_1:; {
-    feng_release(inner);  /* inner 为 try 体内局部，初始化为 NULL，NULL 安全 */
-    int __clause = feng_caught_clause();
-    void *__ex_val = feng_caught_value();
-    switch (__clause) { /* ... */ }
+    feng_frame_release_to(&try_marker);
+    switch (feng_caught_clause()) { /* ... */ }
 }
 ```
 
@@ -273,7 +279,7 @@ void generated_fn(void) {
 
     /* --- 异常路径：landing pad（personality 在 CLEANUP_PHASE 跳来） --- */
     __lp_1:; {
-        feng_release(inner);              /* try 体内局部清理，NULL 安全，dispatch 之前 */
+        feng_frame_release_to(&try_marker); /* 清理 try 体内 cleanup nodes，dispatch 之前 */
         int __clause = feng_caught_clause();  // 读取 FengUnwindException.matched_clause
         void *__ex_val = feng_caught_value();
         switch (__clause) {
@@ -297,19 +303,19 @@ void generated_fn(void) {
 
 ## 6 TODO
 
-当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端兼容路径已落地；C 后端当前仍复用既有 `setjmp`/`longjmp` 异常帧，不是 §0 要求的 LSDA + libunwind 零开销实现。Feng 尚未公开发布，不保留旧版 `try { ... } catch { ... } finally { ... }` 兼容语法；后续实现只维护主规范中的 `try <expr> [catch ...]` 形态。下列 TODO 中标记为“兼容层已完成”的条目仅表示 public ABI 或 C 后端兼容行为已具备，不能等同于 LSDA 后端完成。
+当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端 LSDA/libunwind 路径已落地；旧版 `try { ... } catch { ... } finally { ... }` 兼容语法已移除。Feng 尚未公开发布，后续只维护主规范中的 `try <expr> [catch ...]` 形态。剩余 TODO 聚焦正常路径开销继续收敛、Windows 后端与回归验证。
 
 ### 运行时机制
 
-- [x] 定义 `FengUnwindException` 结构体（`src/runtime/feng_runtime.h`，兼容层已完成）
-- [x] 定义 `FengLSDA` / `FengCatchClause` 结构体（`src/runtime/feng_runtime.h`，LSDA 后端尚未使用）
-- [x] 实现 `feng_throw` / `feng_caught_value` / `feng_caught_clause` / `feng_rethrow` / `feng_release_unwind_exception`（当前为 `setjmp` 兼容层）
-- [ ] 实现 macOS/Linux 版 `feng_exception_platform.c`：`feng_throw` 堆分配 `FengUnwindException` 后调用 `_Unwind_RaiseException`，实现 `__feng_personality_v0`
-- [ ] Personality 函数：搜索阶段按 LSDA 子句顺序匹配 `desc` 指针；清理阶段将命中子句索引写入 `FengUnwindException.matched_clause`，再调用 `_Unwind_SetIP` 跳转 landing pad
-- [ ] LSDA 注册：模块初始化时通过 `__register_frame` 注册自定义 FDE（含 personality 指针 + LSDA 指针）
-- [x] 定义 `FengFrameMarker` 节点类型，扩展 TLS cleanup chain 支持帧边界标记（`src/runtime/feng_runtime.h`，compat ABI）
-- [x] 实现 `feng_frame_push` / `feng_frame_pop`：在同一 TLS 链上插入/移除帧边界节点（`src/runtime/feng_exception.c`，compat ABI）
-- [ ] Personality 函数 CLEANUP_PHASE 中间帧处理：从链顶释放托管局部至帧标记，pop 帧标记，返回 `_URC_CONTINUE_UNWIND`
+- [x] 定义 `FengUnwindException` 结构体（`src/runtime/feng_runtime.h`）
+- [x] 定义 `FengLSDA` / `FengCatchClause` 结构体（`src/runtime/feng_runtime.h`）
+- [x] 实现 `feng_throw` / `feng_caught_value` / `feng_caught_clause` / `feng_rethrow` / `feng_release_unwind_exception`
+- [x] 实现 macOS/Linux `_Unwind_RaiseException` 路径与 `__feng_personality_v0`
+- [x] Personality 函数：搜索阶段按 LSDA 子句顺序匹配 `desc` 指针；清理阶段将命中子句索引写入 `FengUnwindException.matched_clause`，再调用 `_Unwind_SetIP` 跳转 landing pad
+- [x] LSDA 注册：当前以函数内 static `FengLSDA` + `feng_register_lsda` 注册；FDE/personality 通过生成函数入口 `.cfi_personality` / `.cfi_lsda` 注入
+- [x] 定义 `FengFrameMarker` 节点类型，扩展 TLS cleanup chain 支持帧边界标记（`src/runtime/feng_runtime.h`）
+- [x] 实现 `feng_frame_push` / `feng_frame_pop` / `feng_try_frame_push` / `feng_frame_release_to`（`src/runtime/feng_exception.c`）
+- [x] Personality 函数 CLEANUP_PHASE 中间帧处理：从链顶释放托管局部至函数帧标记，pop 帧标记，返回 `_URC_CONTINUE_UNWIND`
 - [ ] 验证正常路径（无异常抛出）汇编输出中无任何异常相关代码
 - [x] 生成 C 文件以 `-std=gnu11 -fexceptions` 编译，为 LSDA 后端的 GNU label address 与 unwind metadata 做准备（`src/cli/compile/driver.c`）
 

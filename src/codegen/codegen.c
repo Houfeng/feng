@@ -891,6 +891,7 @@ typedef struct CG {
     Buf statics;        /* static caches: literal slots */
     Buf fn_protos;      /* forward declarations for free fn / methods */
     Buf fn_defs;        /* function bodies */
+    Buf eh_defs;        /* LSDA region declarations and registration */
     Buf witness_defs;   /* spec witness thunks + tables (Step 4b);
                            kept separate so emission from inside an
                            in-progress function body cannot splice into
@@ -909,6 +910,7 @@ typedef struct CG {
     bool      in_loop_with_break;
     CGType   *cur_return_type;
     bool      cur_fn_is_main;
+    bool      cur_function_has_frame_marker;
 
     /* Module info. */
     char     *module_mangle;     /* e.g., "feng__examples" */
@@ -982,6 +984,8 @@ typedef struct CG {
     int       try_depth;
     int       active_exception_frame_count;
     int       active_caught_unwind_count;
+    size_t    eh_region_count;
+    size_t    eh_label_counter;
 
     /* String literal cache: each unique literal (by content) gets one static. */
     struct {
@@ -1076,7 +1080,10 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
-static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_try_expr(CG *cg,
+                             const FengExpr *e,
+                             ExprResult *out,
+                             bool result_required);
 static bool cg_exception_descriptor_expr_for_type(CG *cg,
                                                   const CGType *type,
                                                   FengToken token,
@@ -1091,10 +1098,16 @@ static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_return_control_cleanup(CG *cg);
 static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count);
+static bool cg_emit_function_eh_prologue(CG *cg, FengToken token);
+static void cg_emit_function_fallthrough_cleanup(CG *cg);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const char *cname,
                                                      const CGType *type);
+static bool cg_register_local_for_cleanup(CG *cg,
+                                const char *cname,
+                                const CGType *type,
+                                FengToken token);
 static void cg_emit_cleanup_pops_for_aggregate_local(Buf *out, const CGType *type);
 static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
                                                      const char *cname,
@@ -8760,8 +8773,11 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     int saved_local_counter = cg->local_counter;
     int saved_loop_depth = cg->loop_depth;
     int saved_try_depth = cg->try_depth;
+    int saved_active_exception_frame_count = cg->active_exception_frame_count;
+    int saved_active_caught_unwind_count = cg->active_caught_unwind_count;
     CGType *saved_return_type = cg->cur_return_type;
     bool saved_is_main = cg->cur_fn_is_main;
+    bool saved_has_frame_marker = cg->cur_function_has_frame_marker;
     char **saved_captured_names = cg->captured_binding_names;
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
@@ -8791,6 +8807,9 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
+    cg->active_exception_frame_count = 0;
+    cg->active_caught_unwind_count = 0;
+    cg->cur_function_has_frame_marker = false;
     cg->cur_return_type = spec->callable_return_type;
     cg->cur_fn_is_main = false;
     cg->captured_binding_names = body_captured_names;
@@ -8811,6 +8830,9 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         "    (void)_lambda;\n",
         closure_struct_name,
         closure_struct_name);
+    if (!cg_emit_function_eh_prologue(cg, blame)) {
+        goto cleanup;
+    }
 
     for (size_t i = 0; i < capture_count; ++i) {
         Buf cell_expr;
@@ -8873,6 +8895,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     if (lambda_expr->as.lambda.is_block_body) {
         if (!cg_emit_block(cg, lambda_expr->as.lambda.body_block)) goto cleanup;
         cg_release_scope(cg, fn_scope);
+        cg_emit_function_fallthrough_cleanup(cg);
         if (spec->callable_return_type->kind == CG_TYPE_VOID) {
             buf_append_cstr(&fn, "    return;\n");
         } else {
@@ -8886,6 +8909,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             buf_append_fmt(&fn, "    %s;\n", result.c_expr);
             er_free(&result);
             cg_release_scope(cg, fn_scope);
+            cg_emit_function_fallthrough_cleanup(cg);
             buf_append_cstr(&fn, "    return;\n");
         } else if (!cg_emit_return_expr_result(cg, lambda_expr->token, &result)) {
             goto cleanup;
@@ -8906,8 +8930,11 @@ cleanup:
     cg->local_counter = saved_local_counter;
     cg->loop_depth = saved_loop_depth;
     cg->try_depth = saved_try_depth;
+    cg->active_exception_frame_count = saved_active_exception_frame_count;
+    cg->active_caught_unwind_count = saved_active_caught_unwind_count;
     cg->cur_return_type = saved_return_type;
     cg->cur_fn_is_main = saved_is_main;
+    cg->cur_function_has_frame_marker = saved_has_frame_marker;
     cg->captured_binding_names = saved_captured_names;
     cg->captured_binding_name_count = saved_captured_name_count;
     cg->current_callable_captures_self = saved_captures_self;
@@ -9535,7 +9562,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
         case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
         case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
-        case FENG_EXPR_TRY:           ok = cg_emit_try_expr(cg, e, out); break;
+        case FENG_EXPR_TRY:           ok = cg_emit_try_expr(cg, e, out, true); break;
         default:
             return cg_fail(cg, e->token,
                 "codegen: expression kind not yet supported in this iteration");
@@ -9919,10 +9946,22 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         }
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n", cty, tmp, cty, ar.c_expr);
         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
-            cg_emit_cleanup_push_for_managed_local(cg, tmp);
+            if (!cg_register_local_for_cleanup(cg, tmp, ar.type, e->token)) {
+                er_free(&ar);
+                free(tmp);
+                free(cty);
+                ok = false;
+                break;
+            }
             ar.owns_ref = false;
         } else if (cgtype_is_aggregate(ar.type) && ar.owns_ref) {
-            cg_emit_cleanup_push_for_aggregate_local(cg, tmp, ar.type);
+            if (!cg_register_local_for_cleanup(cg, tmp, ar.type, e->token)) {
+                er_free(&ar);
+                free(tmp);
+                free(cty);
+                ok = false;
+                break;
+            }
             ar.owns_ref = false;
         }
         buf_append_fmt(&addr, "&%s", tmp);
@@ -10199,10 +10238,20 @@ static bool cg_emit_generic_type_method_call(CG *cg,
                                tmp,
                                args[i].c_expr);
                 if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_managed_local(cg, tmp);
+                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
+                        free(cty);
+                        free(tmp);
+                        ok = false;
+                        goto cleanup;
+                    }
                     args[i].owns_ref = false;
                 } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp, args[i].type);
+                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
+                        free(cty);
+                        free(tmp);
+                        ok = false;
+                        goto cleanup;
+                    }
                     args[i].owns_ref = false;
                 }
                 Buf ab;
@@ -10268,10 +10317,6 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         out->type = concrete_return;
         out->owns_ref = cgtype_is_managed(concrete_return) ||
                         cgtype_is_aggregate(concrete_return);
-        if (cgtype_is_managed(concrete_return)) {
-            cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
-            out->owns_ref = true;
-        }
         concrete_return = NULL;
     } else {
         out->c_expr = strdup("((void)0)");
@@ -10505,10 +10550,20 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                                tmp,
                                args[i].c_expr);
                 if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_managed_local(cg, tmp);
+                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
+                        free(tmp);
+                        free(cty);
+                        ok = false;
+                        goto cleanup;
+                    }
                     args[i].owns_ref = false;
                 } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    cg_emit_cleanup_push_for_aggregate_local(cg, tmp, args[i].type);
+                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
+                        free(tmp);
+                        free(cty);
+                        ok = false;
+                        goto cleanup;
+                    }
                     args[i].owns_ref = false;
                 }
                 Buf arg;
@@ -10598,11 +10653,6 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         out->type = return_type;
         out->owns_ref = ret_is_erased || cgtype_is_managed(return_type) ||
                         cgtype_is_aggregate(return_type);
-        if (!ret_is_erased && cgtype_is_managed(return_type)) {
-            cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
-        } else if (!ret_is_erased && cgtype_is_aggregate(return_type)) {
-            cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname, return_type);
-        }
         return_type = NULL;
     } else {
         out->c_expr = strdup("((void)0)");
@@ -12979,6 +13029,42 @@ static bool cg_emit_try_expr_body_to_slot(CG *cg,
     return ok;
 }
 
+static bool cg_discard_expr_result(CG *cg, ExprResult *result) {
+    if ((cgtype_is_managed(result->type) || cgtype_is_aggregate(result->type)) &&
+        result->owns_ref) {
+        return cg_materialize_to_local(cg, result, "_t") != NULL;
+    }
+    buf_append_fmt(cg->cur_body, "        (void)(%s);\n", result->c_expr);
+    return true;
+}
+
+static bool cg_emit_try_expr_body_discard(CG *cg,
+                                          const FengExpr *body,
+                                          FengToken err_token) {
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (body_scope == NULL) {
+        return cg_fail(cg, err_token, "codegen: out of memory");
+    }
+    cg->cur_scope = body_scope;
+
+    ExprResult r;
+    bool ok;
+
+    if (!cg_emit_expr(cg, body, &r)) {
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        return false;
+    }
+    ok = cg_discard_expr_result(cg, &r);
+    er_free(&r);
+    if (ok) {
+        cg_release_scope(cg, body_scope);
+    }
+    cg->cur_scope = body_scope->parent;
+    scope_pop_free(body_scope);
+    return ok;
+}
+
 static bool cg_emit_try_catch_block_to_slot(CG *cg,
                                             const FengBlock *block,
                                             const char *slot_name,
@@ -13018,16 +13104,21 @@ static bool cg_emit_try_catch_block_to_slot(CG *cg,
     return ok;
 }
 
-static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+static bool cg_emit_try_expr(CG *cg,
+                             const FengExpr *e,
+                             ExprResult *out,
+                             bool result_required) {
     er_init(out);
 
-    CGType *result_type = cg_probe_expr_type(cg, e->as.try_expr.body);
+    CGType *result_type = result_required
+                              ? cg_probe_expr_type(cg, e->as.try_expr.body)
+                              : cgtype_new(CG_TYPE_VOID);
     if (result_type == NULL) {
         return false;
     }
 
-    bool managed = cgtype_is_managed(result_type);
-    bool aggregate = cgtype_is_aggregate(result_type);
+    bool managed = result_required && cgtype_is_managed(result_type);
+    bool aggregate = result_required && cgtype_is_aggregate(result_type);
     bool is_void = result_type->kind == CG_TYPE_VOID;
     const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
     if (aggregate && agg_desc == NULL) {
@@ -13036,18 +13127,33 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                        "codegen: missing aggregate descriptor for try-expression result");
     }
 
+    int try_id = cg->label_counter++;
+    char begin_label[64];
+    char end_label[64];
+    char landing_label[64];
+    char done_label[64];
+    char catch_done_label[64];
+    char clauses_name[64];
+    char region_name[64];
+    char registered_name[64];
+    char keep_landing_name[64];
+    char caught_clause_name[64];
+    snprintf(begin_label, sizeof begin_label, "_try_begin_%d", try_id);
+    snprintf(end_label, sizeof end_label, "_try_end_%d", try_id);
+    snprintf(landing_label, sizeof landing_label, "_try_lpad_%d", try_id);
+    snprintf(done_label, sizeof done_label, "_try_done_%d", try_id);
+    snprintf(catch_done_label, sizeof catch_done_label, "_try_after_catch_%d", try_id);
+    snprintf(clauses_name, sizeof clauses_name, "_try_clauses_%d", try_id);
+    snprintf(region_name, sizeof region_name, "_try_region_%d", try_id);
+    snprintf(registered_name, sizeof registered_name, "_try_registered_%d", try_id);
+    snprintf(keep_landing_name, sizeof keep_landing_name, "_try_keep_lpad_%d", try_id);
+    snprintf(caught_clause_name, sizeof caught_clause_name, "_try_clause_%d", try_id);
+
     char *slot_name = cg_fresh_temp(cg, "_tryv");
-    char *frame_name = cg_fresh_temp(cg, "_ex_frame");
-    char *state_name = cg_fresh_temp(cg, "_ex_state");
-    char *exception_name = cg_fresh_temp(cg, "_ex");
-    char *handled_name = cg_fresh_temp(cg, "_handled");
-    if (slot_name == NULL || frame_name == NULL || state_name == NULL ||
-        exception_name == NULL || handled_name == NULL) {
+    char *marker_name = cg_fresh_temp(cg, "_try_marker");
+    if (slot_name == NULL || marker_name == NULL) {
         free(slot_name);
-        free(frame_name);
-        free(state_name);
-        free(exception_name);
-        free(handled_name);
+        free(marker_name);
         cgtype_free(result_type);
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
@@ -13056,10 +13162,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         char *cty = cg_ctype_dup(result_type);
         if (cty == NULL) {
             free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
+                free(marker_name);
             cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
@@ -13073,10 +13176,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                            false)) {
                 free(cty);
                 free(slot_name);
-                free(frame_name);
-                free(state_name);
-                free(exception_name);
-                free(handled_name);
+                free(marker_name);
                 cgtype_free(result_type);
                 return cg_fail(cg, e->token, "codegen: out of memory");
             }
@@ -13085,10 +13185,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, slot_name)) {
                 free(cty);
                 free(slot_name);
-                free(frame_name);
-                free(state_name);
-                free(exception_name);
-                free(handled_name);
+                free(marker_name);
                 cgtype_free(result_type);
                 return cg_fail(cg, e->token,
                                "codegen: missing aggregate default-init rule for try-expression result");
@@ -13102,10 +13199,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                            false)) {
                 free(cty);
                 free(slot_name);
-                free(frame_name);
-                free(state_name);
-                free(exception_name);
-                free(handled_name);
+                free(marker_name);
                 cgtype_free(result_type);
                 return cg_fail(cg, e->token, "codegen: out of memory");
             }
@@ -13116,45 +13210,9 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     }
 
     buf_append_fmt(cg->cur_body,
-                   "    FengExceptionFrame %s;\n"
-                   "    feng_exception_push(&%s);\n"
-                   "    int %s = setjmp(%s.jb);\n"
-                   "    if (%s == 0) {\n",
-                   frame_name,
-                   frame_name,
-                   state_name,
-                   frame_name,
-                   state_name);
-    cg->try_depth++;
-    cg->active_exception_frame_count++;
-    bool ok = cg_emit_try_expr_body_to_slot(cg,
-                                            e->as.try_expr.body,
-                                            slot_name,
-                                            result_type,
-                                            managed,
-                                            aggregate,
-                                            e->token);
-    cg->active_exception_frame_count--;
-    cg->try_depth--;
-    if (!ok) {
-        free(slot_name);
-        free(frame_name);
-        free(state_name);
-        free(exception_name);
-        free(handled_name);
-        cgtype_free(result_type);
-        return false;
-    }
-    buf_append_fmt(cg->cur_body,
-                   "        feng_exception_pop();\n"
-                   "    } else {\n"
-                   "        feng_exception_pop();\n"
-                   "        FengUnwindException *%s = (FengUnwindException *)%s.value;\n"
-                   "        bool %s = false;\n",
-                   exception_name,
-                   frame_name,
-                   handled_name);
-
+                   "    static const FengCatchClause %s[%zu] = {\n",
+                   clauses_name,
+                   e->as.try_expr.clause_count);
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
         bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
@@ -13164,10 +13222,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!is_unknown) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
                 free(slot_name);
-                free(frame_name);
-                free(state_name);
-                free(exception_name);
-                free(handled_name);
+                free(marker_name);
                 cgtype_free(result_type);
                 return false;
             }
@@ -13177,43 +13232,107 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                                        &desc_expr)) {
                 cgtype_free(catch_type);
                 free(slot_name);
-                free(frame_name);
-                free(state_name);
-                free(exception_name);
-                free(handled_name);
+                free(marker_name);
+                cgtype_free(result_type);
+                return false;
+            }
+        }
+        buf_append_fmt(cg->cur_body,
+                       "        { %s },\n",
+                       is_unknown ? "NULL" : desc_expr);
+        cgtype_free(catch_type);
+        free(desc_expr);
+    }
+    buf_append_fmt(cg->cur_body,
+                   "    };\n"
+                   "    static FengLSDA %s;\n"
+                   "    static bool %s = false;\n"
+                   "    static volatile int %s = 0;\n"
+                   "    if (!%s) {\n"
+                   "        %s = (FengLSDA){ &&%s, &&%s, &&%s, %s, %zu };\n"
+                   "        feng_register_lsda(&%s, 1);\n"
+                   "        %s = true;\n"
+                   "    }\n"
+                   "    if (%s) goto %s;\n"
+                   "    FengFrameMarker %s;\n"
+                   "    feng_try_frame_push(&%s);\n"
+                   "    %s: ;\n",
+                   region_name,
+                   registered_name,
+                   keep_landing_name,
+                   registered_name,
+                   region_name,
+                   begin_label,
+                   end_label,
+                   landing_label,
+                   clauses_name,
+                   e->as.try_expr.clause_count,
+                   region_name,
+                   registered_name,
+                   keep_landing_name,
+                   landing_label,
+                   marker_name,
+                   marker_name,
+                   begin_label);
+    cg->try_depth++;
+    cg->active_exception_frame_count++;
+    bool ok = result_required
+                  ? cg_emit_try_expr_body_to_slot(cg,
+                                                  e->as.try_expr.body,
+                                                  slot_name,
+                                                  result_type,
+                                                  managed,
+                                                  aggregate,
+                                                  e->token)
+                  : cg_emit_try_expr_body_discard(cg,
+                                                  e->as.try_expr.body,
+                                                  e->token);
+    cg->active_exception_frame_count--;
+    cg->try_depth--;
+    if (!ok) {
+        free(slot_name);
+        free(marker_name);
+        cgtype_free(result_type);
+        return false;
+    }
+    buf_append_fmt(cg->cur_body,
+                   "    %s: ;\n"
+                   "    feng_frame_pop();\n"
+                   "    goto %s;\n"
+                   "    %s: ;\n"
+                   "    feng_frame_release_to(&%s);\n"
+                   "    int %s = feng_caught_clause();\n",
+                   end_label,
+                   done_label,
+                   landing_label,
+                   marker_name,
+                   caught_clause_name);
+
+    for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
+        const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
+        bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
+        CGType *catch_type = NULL;
+
+        if (!is_unknown) {
+            if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
+                free(slot_name);
+                free(marker_name);
                 cgtype_free(result_type);
                 return false;
             }
         }
 
-        if (i == 0U) {
-            buf_append_cstr(cg->cur_body, "        if ");
-        } else {
-            buf_append_cstr(cg->cur_body, "        else if ");
-        }
-        if (is_unknown) {
-            buf_append_fmt(cg->cur_body,
-                           "(!%s) {\n",
-                           handled_name);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                           "(!%s && %s != NULL && %s->desc == %s) {\n",
-                           handled_name,
-                           exception_name,
-                           exception_name,
-                           desc_expr);
-        }
-        buf_append_fmt(cg->cur_body, "        %s = true;\n", handled_name);
+        buf_append_fmt(cg->cur_body,
+                   "    %s (%s == %zu) {\n",
+                   i == 0U ? "if" : "else if",
+                   caught_clause_name,
+                   i);
 
         Scope *catch_scope = scope_push(cg->cur_scope);
         if (catch_scope == NULL) {
             cgtype_free(catch_type);
-            free(desc_expr);
             free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
+            free(marker_name);
             cgtype_free(result_type);
             return cg_fail(cg, clause->token, "codegen: out of memory");
         }
@@ -13226,24 +13345,22 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             cg->cur_scope = catch_scope->parent;
             scope_pop_free(catch_scope);
             cgtype_free(catch_type);
-            free(desc_expr);
             free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
+            free(marker_name);
             cgtype_free(result_type);
             return false;
         }
         cg->try_depth++;
         cg->active_caught_unwind_count++;
-        ok = cg_emit_try_catch_block_to_slot(cg,
-                                             clause->body,
-                                             slot_name,
-                                             result_type,
-                                             managed,
-                                             aggregate,
-                                             clause->token);
+        ok = result_required
+             ? cg_emit_try_catch_block_to_slot(cg,
+                               clause->body,
+                               slot_name,
+                               result_type,
+                               managed,
+                               aggregate,
+                               clause->token)
+             : cg_emit_block(cg, clause->body);
         cg->active_caught_unwind_count--;
         cg->try_depth--;
         if (ok) {
@@ -13253,38 +13370,42 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         scope_pop_free(catch_scope);
         if (!ok) {
             cgtype_free(catch_type);
-            free(desc_expr);
             free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
+            free(marker_name);
             cgtype_free(result_type);
             return false;
         }
         buf_append_cstr(cg->cur_body,
                         "        feng_release_unwind_exception();\n"
-                        "        }\n");
+                        "        goto ");
+        buf_append_cstr(cg->cur_body, catch_done_label);
+        buf_append_cstr(cg->cur_body,
+                        ";\n"
+                        "    }\n");
         cgtype_free(catch_type);
-        free(desc_expr);
     }
 
+    if (e->as.try_expr.clause_count > 0U) {
+        buf_append_cstr(cg->cur_body,
+                        "    else {\n"
+                        "        feng_rethrow();\n"
+                        "    }\n");
+    } else {
+        buf_append_cstr(cg->cur_body,
+                        "    feng_rethrow();\n");
+    }
     buf_append_fmt(cg->cur_body,
-                   "        if (!%s) {\n"
-                   "            feng_rethrow();\n"
-                   "        }\n"
-                   "    }\n",
-                   handled_name);
+                   "    %s: ;\n"
+                   "    %s: ;\n",
+                   catch_done_label,
+                   done_label);
 
     out->c_expr = strdup(is_void ? "((void)0)" : slot_name);
     out->type = result_type;
     out->owns_ref = false;
 
     free(slot_name);
-    free(frame_name);
-    free(state_name);
-    free(exception_name);
-    free(handled_name);
+    free(marker_name);
     return out->c_expr != NULL;
 }
 
@@ -13486,12 +13607,15 @@ static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_fram
         pop_count = 0;
     }
     for (int i = 0; i < pop_count; ++i) {
-        buf_append_cstr(cg->cur_body, "    feng_exception_pop();\n");
+        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
     }
 }
 
 static void cg_emit_return_control_cleanup(CG *cg) {
     cg_emit_control_cleanup_to_try_depth(cg, 0);
+    if (cg->cur_function_has_frame_marker) {
+        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+    }
 }
 
 /* Register a managed local on the per-thread cleanup chain so a throw passing
@@ -13502,6 +13626,27 @@ static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
     buf_append_fmt(cg->cur_body,
                    "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
                    cname, cname, cname);
+}
+
+static bool cg_register_local_for_cleanup(CG *cg,
+                                const char *cname,
+                                const CGType *type,
+                                FengToken token) {
+    CGType *owned_type = cgtype_clone(type);
+
+    if (owned_type == NULL) {
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    if (!scope_add(cg->cur_scope, cname, cname, owned_type, false)) {
+        cgtype_free(owned_type);
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    if (cgtype_is_managed(type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, cname);
+    } else if (cgtype_is_aggregate(type)) {
+        cg_emit_cleanup_push_for_aggregate_local(cg, cname, type);
+    }
+    return true;
 }
 
 /* Register every managed pointer slot of an aggregate local on the cleanup
@@ -15713,7 +15858,13 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     cg->cur_scope = st_scope;
     buf_append_cstr(cg->cur_body, "    {\n");
     ExprResult r;
-    if (!cg_emit_expr(cg, stmt->as.expr, &r)) {
+    if (stmt->as.expr != NULL && stmt->as.expr->kind == FENG_EXPR_TRY) {
+        if (!cg_emit_try_expr(cg, stmt->as.expr, &r, false)) {
+            cg->cur_scope = st_scope->parent;
+            scope_pop_free(st_scope);
+            return false;
+        }
+    } else if (!cg_emit_expr(cg, stmt->as.expr, &r)) {
         cg->cur_scope = st_scope->parent;
         scope_pop_free(st_scope);
         return false;
@@ -15891,6 +16042,37 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
 }
 
 /* ===================== top-level emission ===================== */
+
+static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
+    char *frame_name = cg_fresh_temp(cg, "_fn_frame");
+
+    if (frame_name == NULL) {
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    buf_append_cstr(cg->cur_body,
+                    "#if !defined(_WIN32)\n"
+                    "#if defined(__APPLE__)\n"
+                    "    __asm__ volatile(\".cfi_personality 155, ___feng_personality_v0\\n\"\n"
+                    "                     \".cfi_lsda 16, _feng_empty_function_lsda\\n\");\n"
+                    "#else\n"
+                    "    __asm__ volatile(\".cfi_personality 155, __feng_personality_v0\\n\"\n"
+                    "                     \".cfi_lsda 16, feng_empty_function_lsda\\n\");\n"
+                    "#endif\n"
+                    "#endif\n");
+    buf_append_fmt(cg->cur_body,
+                   "    FengFrameMarker %s; feng_frame_push(&%s);\n",
+                   frame_name,
+                   frame_name);
+    free(frame_name);
+    cg->cur_function_has_frame_marker = true;
+    return true;
+}
+
+static void cg_emit_function_fallthrough_cleanup(CG *cg) {
+    if (cg->cur_function_has_frame_marker) {
+        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+    }
+}
 
 static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
     if (!cg_register_extern(cg, decl)) return false;
@@ -16661,6 +16843,15 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         cg->loop_depth = 0;
         cg->try_depth = 0;
         cg->cur_fn_is_main = false;
+        cg->active_exception_frame_count = 0;
+        cg->active_caught_unwind_count = 0;
+        cg->cur_function_has_frame_marker = false;
+
+        if (!cg_emit_function_eh_prologue(cg, decl->token)) {
+            cg->cur_scope = NULL;
+            scope_pop_free(fn_scope);
+            goto cleanup_params;
+        }
 
         /* Add parameters to scope. */
         for (size_t i = 0; i < param_count; i++) {
@@ -16681,6 +16872,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
         /* Implicit fall-off. */
         cg_release_scope(cg, fn_scope);
+        cg_emit_function_fallthrough_cleanup(cg);
         if (return_type->kind == CG_TYPE_VOID) {
             buf_append_cstr(body, "    return;\n");
         } else {
@@ -16692,6 +16884,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         cg->cur_scope = NULL;
         scope_pop_free(fn_scope);
         cg->cur_body = NULL;
+        cg->cur_function_has_frame_marker = false;
     }
 
     #undef EMIT_GENERIC_PARAMS
@@ -16718,6 +16911,7 @@ cleanup:
     cg->generic_fn_type_param_names = NULL;
     cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
+    cg->cur_function_has_frame_marker = false;
     return ok;
 }
 
@@ -17074,7 +17268,13 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                     }
                     buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, ar.c_expr);
                     if (cgtype_is_managed(ar.type) && ar.owns_ref) {
-                        cg_emit_cleanup_push_for_managed_local(cg, tmp);
+                        if (!cg_register_local_for_cleanup(cg, tmp, ar.type, e->token)) {
+                            free(cty);
+                            free(tmp);
+                            er_free(&ar);
+                            buf_free(&args_buf);
+                            return false;
+                        }
                         ar.owns_ref = false;
                     }
                     Buf addr; buf_init(&addr);
@@ -17136,10 +17336,16 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 return cg_fail(cg, e->token, "codegen: out of memory");
             }
             out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
-            if (cgtype_is_managed(out->type)) {
-                cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
-            } else if (cgtype_is_aggregate(out->type)) {
-                cg_emit_cleanup_push_for_aggregate_local(cg, ret_cname, out->type);
+            if (out->owns_ref) {
+                if (!cg_register_local_for_cleanup(cg, ret_cname, out->type, e->token)) {
+                    free(out->c_expr);
+                    out->c_expr = NULL;
+                    cgtype_free(out->type);
+                    out->type = NULL;
+                    free(ret_cname);
+                    buf_free(&args_buf);
+                    return false;
+                }
             }
             ok = true;
             free(ret_cname);
@@ -17359,9 +17565,12 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             } else {
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, args[i].c_expr);
                 if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    /* Ownership transfers to the local; track for release. */
-                    cg_emit_cleanup_push_for_managed_local(cg, tmp);
-                    args[i].owns_ref = false; /* local now owns it */
+                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
+                        free(cty); free(tmp);
+                        ok = false;
+                        break;
+                    }
+                    args[i].owns_ref = false;
                 }
                 Buf ab; buf_init(&ab);
                 buf_append_fmt(&ab, "&%s", tmp);
@@ -17479,10 +17688,23 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
         out->type = concrete_return;
         out->owns_ref = cgtype_is_managed(concrete_return) ||
                         cgtype_is_aggregate(concrete_return);
-        /* Track managed result for ARC cleanup. */
-        if (cgtype_is_managed(concrete_return)) {
-            cg_emit_cleanup_push_for_managed_local(cg, ret_cname);
-            out->owns_ref = true;
+        if (out->owns_ref) {
+            if (!cg_register_local_for_cleanup(cg, ret_cname, concrete_return, e->token)) {
+                free(out->c_expr);
+                out->c_expr = NULL;
+                out->type = NULL;
+                cgtype_free(concrete_return);
+                for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+                free(arg_addr_exprs);
+                for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+                free(desc_exprs);
+                for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                free(args);
+                for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
+                free(type_args);
+                free(ret_cname);
+                return false;
+            }
         }
     } else {
         out->c_expr = strdup("((void)0)");
@@ -17564,6 +17786,9 @@ static bool cg_emit_function(CG *cg,
             fn->param_names[i] ? fn->param_names[i] : "_p");
     }
     buf_append_cstr(body, ") {\n");
+    if (!cg_emit_function_eh_prologue(cg, decl->token)) {
+        goto cleanup;
+    }
 
     if (!cg_compute_capture_requirements_in_block(decl->as.function_decl.body,
                                                   &captured_names,
@@ -17606,6 +17831,7 @@ static bool cg_emit_function(CG *cg,
     if (!cg_emit_block(cg, decl->as.function_decl.body)) goto cleanup;
 
     cg_release_scope(cg, fn_scope);
+    cg_emit_function_fallthrough_cleanup(cg);
     if (fn->return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
     } else if (is_main && fn->return_type->kind == CG_TYPE_I32) {
@@ -17632,6 +17858,7 @@ cleanup:
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
     cg->cur_fn_is_main = false;
+    cg->cur_function_has_frame_marker = false;
     return ok;
 }
 
@@ -21266,6 +21493,13 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     cg->loop_depth = 0;
     cg->try_depth = 0;
     cg->cur_fn_is_main = false;
+    cg->active_exception_frame_count = 0;
+    cg->active_caught_unwind_count = 0;
+    cg->cur_function_has_frame_marker = false;
+
+    if (!cg_emit_function_eh_prologue(cg, member->token)) {
+        goto cleanup;
+    }
 
     CGType *self_type = cgtype_new(CG_TYPE_OBJECT);
     if (!self_type || !scope_add(fn_scope, "self", "_self", self_type, true)) {
@@ -21284,6 +21518,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 
     if (!cg_emit_block(cg, sig->body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
+    cg_emit_function_fallthrough_cleanup(cg);
     if (return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
     } else {
@@ -21306,6 +21541,7 @@ cleanup:
     }
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
+    cg->cur_function_has_frame_marker = false;
     cg_clear_generic_type_context(cg);
     if (param_types) {
         for (size_t i = 0; i < sig->param_count; ++i) cgtype_free(param_types[i]);
@@ -21748,6 +21984,9 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
         buf_append_fmt(body, " %s", pn);
     }
     buf_append_cstr(body, ") {\n");
+    if (!cg_emit_function_eh_prologue(cg, m->member->token)) {
+        goto cleanup;
+    }
 
     if (t->generic_context_type_param_count > 0U) {
         cg->in_generic_fn = true;
@@ -21835,6 +22074,7 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
 
     if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
+    cg_emit_function_fallthrough_cleanup(cg);
     if (m->return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
     } else {
@@ -21864,6 +22104,7 @@ cleanup:
     }
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
+    cg->cur_function_has_frame_marker = false;
     return ok;
 }
 
@@ -21923,6 +22164,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
+    cg->active_exception_frame_count = 0;
+    cg->active_caught_unwind_count = 0;
+    cg->cur_function_has_frame_marker = false;
 
     for (size_t i = 0; i < m->param_count; i++) {
         buf_append_cstr(body, ", ");
@@ -21935,6 +22179,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         }
     }
     buf_append_cstr(body, ") {\n");
+    if (!cg_emit_function_eh_prologue(cg, m->member->token)) {
+        goto cleanup;
+    }
 
     for (size_t i = 0; i < bf->target_type_param_count; ++i) {
         buf_append_fmt(body,
@@ -22042,6 +22289,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
 
     if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
+    cg_emit_function_fallthrough_cleanup(cg);
     if (m->return_type->kind == CG_TYPE_VOID) {
         buf_append_cstr(body, "    return;\n");
     } else {
@@ -22072,6 +22320,7 @@ cleanup:
     }
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
+    cg->cur_function_has_frame_marker = false;
     return ok;
 }
 
@@ -22099,6 +22348,16 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->try_depth = 0;
+    cg->active_exception_frame_count = 0;
+    cg->active_caught_unwind_count = 0;
+    cg->cur_function_has_frame_marker = false;
+
+    if (!cg_emit_function_eh_prologue(cg, fm->token)) {
+        cgtype_free(void_t);
+        cg->cur_body = NULL;
+        cg->cur_return_type = NULL;
+        return false;
+    }
 
     Scope *fn_scope = scope_push(NULL);
     if (!fn_scope) {
@@ -22125,12 +22384,14 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
         return false;
     }
     cg_release_scope(cg, fn_scope);
+    cg_emit_function_fallthrough_cleanup(cg);
     buf_append_cstr(body, "    return;\n}\n\n");
 
     cg->cur_scope = NULL; scope_pop_free(fn_scope);
     cgtype_free(void_t);
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
+    cg->cur_function_has_frame_marker = false;
     return true;
 }
 
@@ -22172,6 +22433,8 @@ static char *cg_finalize(CG *cg) {
     buf_append_cstr(&out, "\n");
     if (cg->fn_protos.length) buf_append(&out, cg->fn_protos.data, cg->fn_protos.length);
     buf_append_cstr(&out, "\n");
+    if (cg->eh_defs.length) buf_append(&out, cg->eh_defs.data, cg->eh_defs.length);
+    buf_append_cstr(&out, "\n");
     if (cg->fn_defs.length) buf_append(&out, cg->fn_defs.data, cg->fn_defs.length);
     if (cg->witness_defs.length) buf_append(&out, cg->witness_defs.data, cg->witness_defs.length);
     return out.data;
@@ -22183,6 +22446,7 @@ static void cg_dispose(CG *cg) {
     buf_free(&cg->statics);
     buf_free(&cg->fn_protos);
     buf_free(&cg->fn_defs);
+    buf_free(&cg->eh_defs);
     buf_free(&cg->witness_defs);
     free(cg->module_mangle);
     free(cg->module_dot_name);

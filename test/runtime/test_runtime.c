@@ -4,7 +4,6 @@
  * cross-check finalizer counts via test-local descriptors. */
 #include "runtime/feng_runtime.h"
 
-#include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -426,127 +425,51 @@ static void test_expression_equal_contract_uses_descriptor(void) {
 
 static void test_array_slice_aggregate_assigns_elements(void);
 
-static void test_exception_caught(void) {
-    FengExceptionFrame frame;
-    int caught = 0;
-    void *value = NULL;
-
-    feng_exception_push(&frame);
-    if (setjmp(frame.jb) == 0) {
-        feng_exception_throw((void *)(uintptr_t)0x1234, 0);
-        ASSERT(0);
-    } else {
-        caught = 1;
-        value = frame.value;
-        feng_exception_pop();
-    }
-    ASSERT(caught == 1);
-    ASSERT(value == (void *)(uintptr_t)0x1234);
-    ASSERT(feng_exception_current() == NULL);
-}
-
-static void test_exception_managed_value_caught(void) {
-    FengExceptionFrame frame;
-    TestObject *thrown;
-
-    g_finalize_count = 0;
-    thrown = (TestObject *)feng_object_new(&test_object_descriptor);
-
-    feng_exception_push(&frame);
-    if (setjmp(frame.jb) == 0) {
-        feng_exception_throw(thrown, 1);
-        ASSERT(0);
-    } else {
-        ASSERT(frame.value == thrown);
-        ASSERT(frame.is_managed == 1);
-        feng_exception_pop();
-        feng_release(thrown);
-    }
-    ASSERT(g_finalize_count == 1);
-}
-
-static void test_exception_nested_propagation(void) {
-    FengExceptionFrame outer;
-    FengExceptionFrame inner;
-    int outer_caught = 0;
-
-    feng_exception_push(&outer);
-    if (setjmp(outer.jb) == 0) {
-        feng_exception_push(&inner);
-        if (setjmp(inner.jb) == 0) {
-            feng_exception_throw((void *)(uintptr_t)0xABCD, 0);
-            ASSERT(0);
-        } else {
-            void *value = inner.value;
-
-            /* Inner caught — pop and rethrow up to outer. */
-            feng_exception_pop();
-            feng_exception_throw(value, 0);
-            ASSERT(0);
-        }
-    } else {
-        outer_caught = 1;
-        ASSERT(outer.value == (void *)(uintptr_t)0xABCD);
-        feng_exception_pop();
-    }
-    ASSERT(outer_caught == 1);
-    ASSERT(feng_exception_current() == NULL);
-}
-
-static void test_unwind_exception_payload_contract(void) {
-    FengExceptionFrame frame;
-    TestObject *thrown;
-    FengUnwindException *exception;
-
-    g_finalize_count = 0;
-    thrown = (TestObject *)feng_object_new(&test_object_descriptor);
-
-    feng_exception_push(&frame);
-    if (setjmp(frame.jb) == 0) {
-        feng_throw(thrown, &test_object_descriptor);
-        ASSERT(0);
-    }
-
-    exception = (FengUnwindException *)frame.value;
-    ASSERT(exception != NULL);
-#if defined(_WIN32)
-    ASSERT(exception->exception_class == FENG_EXCEPTION_CLASS);
-#else
-    ASSERT(exception->unwind.exception_class == FENG_EXCEPTION_CLASS);
-#endif
-    ASSERT(exception->value == thrown);
-    ASSERT(exception->desc == &test_object_descriptor);
-    ASSERT(exception->matched_clause == -1);
-    ASSERT(feng_caught_value() == thrown);
-    ASSERT(feng_caught_clause() == -1);
-
-    feng_exception_pop();
-    feng_release_unwind_exception();
-    ASSERT(g_finalize_count == 1);
-    ASSERT(feng_exception_current() == NULL);
-}
-
-static void test_frame_marker_cleanup_boundary(void) {
-    FengExceptionFrame frame;
-    FengFrameMarker marker;
+static void test_frame_marker_release_to_try_marker(void) {
+    FengFrameMarker function_marker;
+    FengFrameMarker try_marker;
     FengCleanupNode node;
     TestObject *local;
 
     g_finalize_count = 0;
     local = (TestObject *)feng_object_new(&test_object_descriptor);
 
-    feng_exception_push(&frame);
-    if (setjmp(frame.jb) == 0) {
-        feng_frame_push(&marker);
-        feng_cleanup_push(&node, (void **)&local);
-        feng_exception_throw((void *)(uintptr_t)0x5678, 0);
-        ASSERT(0);
-    }
+    feng_frame_push(&function_marker);
+    feng_try_frame_push(&try_marker);
+    feng_cleanup_push(&node, (void **)&local);
+    feng_frame_release_to(&try_marker);
 
+    ASSERT(local == NULL);
     ASSERT(g_finalize_count == 1);
-    ASSERT(frame.value == (void *)(uintptr_t)0x5678);
-    feng_exception_pop();
-    ASSERT(feng_exception_current() == NULL);
+    feng_frame_pop();
+}
+
+static void test_frame_marker_release_to_try_preserves_outer_cleanup(void) {
+    FengFrameMarker function_marker;
+    FengFrameMarker try_marker;
+    FengCleanupNode outer_node;
+    FengCleanupNode inner_node;
+    TestObject *outer;
+    TestObject *inner;
+
+    g_finalize_count = 0;
+    outer = (TestObject *)feng_object_new(&test_object_descriptor);
+    inner = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    feng_frame_push(&function_marker);
+    feng_cleanup_push(&outer_node, (void **)&outer);
+    feng_try_frame_push(&try_marker);
+    feng_cleanup_push(&inner_node, (void **)&inner);
+
+    feng_frame_release_to(&try_marker);
+    ASSERT(inner == NULL);
+    ASSERT(outer != NULL);
+    ASSERT(g_finalize_count == 1);
+
+    feng_cleanup_pop();
+    feng_frame_pop();
+    feng_release(outer);
+    ASSERT(g_finalize_count == 2);
 }
 
 static void test_frame_marker_lifo_pop(void) {
@@ -997,12 +920,15 @@ static void test_cycle_collector_acyclic_object_never_enqueued(void) {
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* A finalizer that throws an unmanaged exception value and never catches it.
+/* A finalizer that throws an exception value and never catches it.
  * The runtime barrier in feng_finalizer_invoke must intercept the throw and
  * panic; the process must exit via abort() (SIGABRT). */
 static void throwing_finalizer(void *self) {
+    TestObject *payload;
+
     (void)self;
-    feng_exception_throw((void *)"finalizer-throw", 0);
+    payload = (TestObject *)feng_object_new(&test_object_descriptor);
+    feng_throw(payload, &test_object_descriptor);
 }
 
 static const FengTypeDescriptor throwing_descriptor = {
@@ -1761,11 +1687,8 @@ int main(void) {
     test_test_value_identity_contract_retains_managed_pointer();
     test_test_value_identity_contract_retains_aggregate();
     test_array_slice_aggregate_assigns_elements();
-    test_exception_caught();
-    test_exception_managed_value_caught();
-    test_exception_nested_propagation();
-    test_unwind_exception_payload_contract();
-    test_frame_marker_cleanup_boundary();
+    test_frame_marker_release_to_try_marker();
+    test_frame_marker_release_to_try_preserves_outer_cleanup();
     test_frame_marker_lifo_pop();
     test_finalizer_resurrection_then_release();
     test_finalizer_resurrection_reruns_on_next_release();
