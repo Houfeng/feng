@@ -19,7 +19,8 @@
 规则说明:
 
 - `throw` 后必须跟一个非 `void` 表达式。
-- 可抛出的值限于 Feng 可管理的普通值; 具体异常值模型由实现阶段进一步细化。
+- 可抛出的值类型限定为：标量（`i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64`/`f32`/`f64`）、`bool`、`string`、`array`、以及用户定义的 `type` 类型。
+- **不支持抛出 `spec` 类型值、函数类型值或成员方法**。`spec` 是接口抽象，函数/成员方法属于可调用值而非数据；若需抛出实现了某 spec 的对象，应直接抛出其具体 `type` 实例。
 - `throw` 会终止当前执行路径,其后的同级语句不可达。
 
 ```feng
@@ -35,14 +36,20 @@ fn ensure_positive(x: int) {
 ### 3.1 `try`
 
 - `try` 用于求值一个可能抛出异常的表达式。
-- 语法形态: `try <expr> [catch <id> { ... }]`
+- 语法形态: `try <expr> [catch <id>: Type { ... }]+`，可附加一个或多个 `catch` 子句；每个子句的类型注解必须显式给出，不可省略。
 - `try` 后只能是单个表达式,不允许 `try { ... }` 语句块形态。
 
 ### 3.2 `catch`
 
 - `catch` 捕获从对应 `try` 表达式或其内部调用链抛出的异常。
-- `catch` 必须绑定异常值标识符,形如 `catch ex { ... }`。
-- `catch` 块中可执行常规语句; 若需继续上抛,应使用 `throw <expr>;` 显式抛出。
+- `catch` 必须绑定异常值标识符并显式给出类型注解，形如 `catch ex: Type { ... }`；与语言其他位置一致，类型注解不可省略。
+- 支持多个 `catch` 子句，按书写顺序逐一尝试匹配，第一个匹配成功的子句生效，后续子句不再执行。
+- 带具体类型注解的 `catch ex: Type` 仅在抛出值的运行时类型与 `Type` 一致时匹配。
+- 兜底子句写作 `catch ex: unknown`，匹配任意类型的抛出值，应置于所有具体类型子句之后；`unknown` 类型的 `ex` 不可调用任何方法或访问字段，仅允许 `throw ex`（重新上抛）。
+- 每个 `catch` 子句独立匹配一个类型，不支持在单个子句内列举多个类型。
+- `catch` 块中可执行常规语句；若需继续上抛，应使用 `throw <expr>;` 显式抛出。
+- **不支持按 `spec` 类型、函数类型或成员方法匹配**。`catch` 子句的类型注解仅接受具体类型（标量、`bool`、`string`、`array`、`type`）或 `unknown`。
+- **`unknown` 仅限 `catch` 子句**：`unknown` 出现在 `let`、函数参数、返回类型、字段类型等位置时，语法合法但语义非法，语义分析阶段报错拒绝。
 
 ### 3.3 作为表达式时的产值与类型规则
 
@@ -59,9 +66,10 @@ fn ensure_positive(x: int) {
 
 ```feng
 fn load_port(): int {
-    let v = try parse_port() catch err {
-        log(err);
+    let v = try parse_port() catch err: ParseError {
         return 8080;
+    } catch err: unknown {
+        throw err;
     };
     return v;
 }
