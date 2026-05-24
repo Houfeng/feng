@@ -49,6 +49,7 @@ try foo() catch ex: string {
 
 // catch 省略 ex
 try foo() catch {
+  // 这里不能访问 ex，因为 ex 没有绑定，也就不存在 ex
   puts("unknown error");
 }
 
@@ -70,6 +71,7 @@ let x = try foo() catch ex: string {
 
 // catch 省略 ex
 let x = try foo() catch {
+  // 这里不能访问 ex，因为 ex 没有绑定，也就不存在 ex
   puts("unknown error");
   // 作为表达式时，必须有返回值，且和 try 表达式的值类型一致
   // 不可使用 return 语句（和 if 表达式一致）
