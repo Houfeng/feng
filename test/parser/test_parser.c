@@ -198,7 +198,7 @@ static void test_try_expression_with_typed_catches(void) {
     assert_slice_text(try_expr->as.try_expr.clauses[1].type->as.named.segments[0], "unknown");
 
     try_expr_stmt = body->statements[1];
-    ASSERT(try_expr_stmt->kind == FENG_STMT_EXPR);
+    ASSERT(try_expr_stmt->kind == FENG_STMT_TRY);
     ASSERT(try_expr_stmt->as.expr->kind == FENG_EXPR_TRY);
     ASSERT(try_expr_stmt->as.expr->as.try_expr.clause_count == 0U);
 

@@ -3460,6 +3460,28 @@ static FengStmt *parse_statement(Parser *parser) {
         return stmt;
     }
 
+    if (parser_match(parser, FENG_TOKEN_KW_TRY)) {
+        FengToken try_token = parser_previous_token(parser);
+        stmt = new_stmt(parser, FENG_STMT_TRY, try_token);
+        if (stmt == NULL) {
+            return NULL;
+        }
+        stmt->as.expr = parse_try_expression(parser, try_token);
+        if (stmt->as.expr == NULL) {
+            free_stmt(stmt);
+            return NULL;
+        }
+        /* try...catch ends with '}'; allow omitting ';' at end of block. */
+        if (parser_current_token(parser).kind == FENG_TOKEN_RBRACE) {
+            return stmt;
+        }
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "try statements must end with ';'")) {
+            free_stmt(stmt);
+            return NULL;
+        }
+        return stmt;
+    }
+
     stmt = parse_simple_statement(parser, FENG_TOKEN_SEMICOLON);
     if (stmt == NULL) {
         return NULL;
@@ -3789,6 +3811,9 @@ static void free_stmt(FengStmt *stmt) {
             free_expr(stmt->as.assign.value);
             break;
         case FENG_STMT_EXPR:
+            free_expr(stmt->as.expr);
+            break;
+        case FENG_STMT_TRY:
             free_expr(stmt->as.expr);
             break;
         case FENG_STMT_IF:

@@ -1640,6 +1640,7 @@ static bool inject_external_modules_from_stmt(
                                                      program,
                                                      stmt->as.assign.value);
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
             return inject_external_modules_from_expr(analysis,
                                                      imported_query,
                                                      program,
@@ -9303,6 +9304,7 @@ static bool constructor_stmt_binds_let_field(const FengDecl *type_decl,
                                                      field_name);
         case FENG_STMT_BINDING:
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
         case FENG_STMT_RETURN:
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
@@ -15222,12 +15224,12 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 return true;
             }
 
+        case FENG_STMT_TRY:
+            return resolve_try_expr(context, stmt->as.expr, allow_self, false) &&
+                   validate_untyped_callable_value_expr(context, stmt->as.expr) &&
+                   validate_untyped_address_of_expr(context, stmt->as.expr);
+
         case FENG_STMT_EXPR:
-            if (stmt->as.expr != NULL && stmt->as.expr->kind == FENG_EXPR_TRY) {
-                return resolve_try_expr(context, stmt->as.expr, allow_self, false) &&
-                       validate_untyped_callable_value_expr(context, stmt->as.expr) &&
-                       validate_untyped_address_of_expr(context, stmt->as.expr);
-            }
             return resolve_expr(context, stmt->as.expr, allow_self) &&
                    validate_untyped_callable_value_expr(context, stmt->as.expr) &&
                    validate_untyped_address_of_expr(context, stmt->as.expr);

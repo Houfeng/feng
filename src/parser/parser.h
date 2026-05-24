@@ -276,6 +276,7 @@ typedef enum FengStmtKind {
     FENG_STMT_BINDING,
     FENG_STMT_ASSIGN,
     FENG_STMT_EXPR,
+    FENG_STMT_TRY,
     FENG_STMT_IF,
     FENG_STMT_MATCH,
     FENG_STMT_WHILE,

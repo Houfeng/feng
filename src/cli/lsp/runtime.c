@@ -2197,6 +2197,7 @@ static size_t stmt_end(const FengStmt *stmt) {
                 }
             }
             break;
+        case FENG_STMT_TRY:
         case FENG_STMT_EXPR:
             if (stmt->as.expr != NULL) {
                 size_t expr_limit = expr_end(stmt->as.expr);
@@ -4608,6 +4609,7 @@ static bool find_stmt_type_ref_hit(const FengStmt *stmt,
                                            target);
         case FENG_STMT_ASSIGN:
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
         case FENG_STMT_RETURN:
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
@@ -4881,6 +4883,7 @@ static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t off
                     hit = find_expr_hit(stmt->as.assign.value, offset);
                 }
                 break;
+            case FENG_STMT_TRY:
             case FENG_STMT_EXPR:
                 hit = find_expr_hit(stmt->as.expr, offset);
                 break;
@@ -6242,6 +6245,7 @@ static const FengExpr *find_call_hit_in_block(const FengBlock *block, size_t off
                     hit = find_call_hit_expr(stmt->as.assign.value, offset);
                 }
                 break;
+            case FENG_STMT_TRY:
             case FENG_STMT_EXPR:
                 hit = find_call_hit_expr(stmt->as.expr, offset);
                 break;
@@ -7081,6 +7085,7 @@ static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *sessi
                                                     offset,
                                                     locals,
                                                     target);
+        case FENG_STMT_TRY:
         case FENG_STMT_EXPR:
             return resolve_object_field_target_expr(session,
                                                     program,
@@ -7832,6 +7837,7 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                                               stmt->as.assign.value,
                                               target,
                                               references);
+        case FENG_STMT_TRY:
         case FENG_STMT_EXPR:
             return collect_references_in_expr(session,
                                               program,
@@ -8650,6 +8656,7 @@ static bool find_symbol_stmt_type_ref_hit(const FengLspCacheQueryContext *contex
                                                   target);
         case FENG_STMT_ASSIGN:
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
         case FENG_STMT_RETURN:
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:

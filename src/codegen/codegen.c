@@ -1704,6 +1704,7 @@ static bool cg_collect_capture_requirements_in_stmt(const FengStmt *stmt,
                                                            out_capacity,
                                                            out_captures_self);
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
             return cg_collect_capture_requirements_in_expr(stmt->as.expr,
                                                            out_names,
                                                            out_count,
@@ -15870,6 +15871,32 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
     return true;
 }
 
+static bool cg_emit_try_stmt(CG *cg, const FengStmt *stmt) {
+    /* Open a fresh inner scope so any +1 temporaries are released at the
+     * statement boundary (mirrors cg_emit_expr_stmt). */
+    Scope *st_scope = scope_push(cg->cur_scope);
+    if (!st_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = st_scope;
+    buf_append_cstr(cg->cur_body, "    {\n");
+    ExprResult r;
+    if (!cg_emit_try_expr(cg, stmt->as.expr, &r, false)) {
+        cg->cur_scope = st_scope->parent;
+        scope_pop_free(st_scope);
+        return false;
+    }
+    if (cgtype_is_managed(r.type) && r.owns_ref) {
+        cg_materialize_to_local(cg, &r, "_t");
+    } else {
+        buf_append_fmt(cg->cur_body, "    (void)(%s);\n", r.c_expr);
+    }
+    er_free(&r);
+    cg_release_scope(cg, st_scope);
+    cg->cur_scope = st_scope->parent;
+    scope_pop_free(st_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
 static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     /* Open a fresh inner scope so any +1 temporaries from the expression
      * are released at the statement boundary. */
@@ -15878,13 +15905,7 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     cg->cur_scope = st_scope;
     buf_append_cstr(cg->cur_body, "    {\n");
     ExprResult r;
-    if (stmt->as.expr != NULL && stmt->as.expr->kind == FENG_EXPR_TRY) {
-        if (!cg_emit_try_expr(cg, stmt->as.expr, &r, false)) {
-            cg->cur_scope = st_scope->parent;
-            scope_pop_free(st_scope);
-            return false;
-        }
-    } else if (!cg_emit_expr(cg, stmt->as.expr, &r)) {
+    if (!cg_emit_expr(cg, stmt->as.expr, &r)) {
         cg->cur_scope = st_scope->parent;
         scope_pop_free(st_scope);
         return false;
@@ -16075,6 +16096,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_BINDING:  return cg_emit_binding(cg, stmt);
         case FENG_STMT_ASSIGN:   return cg_emit_assign(cg, stmt);
         case FENG_STMT_EXPR:     return cg_emit_expr_stmt(cg, stmt);
+        case FENG_STMT_TRY:      return cg_emit_try_stmt(cg, stmt);
         case FENG_STMT_RETURN:   return cg_emit_return(cg, stmt);
         case FENG_STMT_IF:       return cg_emit_if(cg, stmt);
         case FENG_STMT_MATCH:    return cg_emit_match_stmt(cg, stmt);
@@ -19911,6 +19933,7 @@ static bool cg_collect_generic_instances_from_stmt(CG *cg, const FengStmt *stmt,
             return cg_collect_generic_instances_from_expr(cg, stmt->as.assign.target, scope) &&
                    cg_collect_generic_instances_from_expr(cg, stmt->as.assign.value, scope);
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
             return cg_collect_generic_instances_from_expr(cg, stmt->as.expr, scope);
         case FENG_STMT_IF:
             for (size_t i = 0; i < stmt->as.if_stmt.clause_count; ++i) {

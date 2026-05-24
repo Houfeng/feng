@@ -1888,6 +1888,7 @@ static bool collect_ctor_bound_names_from_stmt(const FengDecl *type_decl,
 
         case FENG_STMT_BINDING:
         case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
         case FENG_STMT_RETURN:
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
