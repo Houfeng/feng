@@ -1710,11 +1710,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         if (!argv_push(&av, cc)) { ok = false; }
-        if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
+        if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
+        if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
-        if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
          * by the current program (e.g. unused coercion sites). They are
          * intentional artefacts of codegen, not user code, so silence the
@@ -1776,11 +1776,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             rc = 1;
         } else {
             if (!argv_push(&av, cc)) { ok = false; }
-            if (ok && !argv_push(&av, "-std=c11")) { ok = false; }
+            if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
+            if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
             if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
-            if (ok && !argv_push(&av, "-pedantic")) { ok = false; }
             /* See bin path above: silence unused-function noise from
              * generated fit helpers for the lib compile too. */
             if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }

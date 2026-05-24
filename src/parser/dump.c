@@ -431,20 +431,6 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
             }
             dump_block(stream, stmt->as.for_stmt.body, indent);
             break;
-        case FENG_STMT_TRY:
-            fputs("try\n", stream);
-            dump_block(stream, stmt->as.try_stmt.try_block, indent);
-            if (stmt->as.try_stmt.catch_block != NULL) {
-                dump_indent(stream, indent);
-                fputs("catch\n", stream);
-                dump_block(stream, stmt->as.try_stmt.catch_block, indent);
-            }
-            if (stmt->as.try_stmt.finally_block != NULL) {
-                dump_indent(stream, indent);
-                fputs("finally\n", stream);
-                dump_block(stream, stmt->as.try_stmt.finally_block, indent);
-            }
-            break;
         case FENG_STMT_RETURN:
             fputs("return", stream);
             if (stmt->as.return_value != NULL) {

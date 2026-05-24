@@ -61,7 +61,11 @@ C 函数默认不携带自定义 personality。Feng 运行时在模块初始化�
 
 ### 编译参数要求
 
-含 try/catch 的 Feng 生成 C 文件必须以 **`-fexceptions`** 编译。该 flag 的作用：
+Feng 当前编译目标是 C；是否需要异常展开编译参数取决于后端机制，而不是 C/C++ 语言种类。
+
+当前已落地的 `setjmp`/`longjmp` 兼容后端不依赖编译器异常展开元数据，因此不需要 `-fexceptions`。
+
+最终 LSDA + libunwind 零开销后端中，含 try/catch 的 Feng 生成 C 文件必须生成完整 unwind metadata。默认要求以 **`-fexceptions`** 编译；若改用 `-funwind-tables` / `-fasynchronous-unwind-tables` 等等价组合，必须先在目标编译器与平台上验证 `.eh_frame` / FDE / CFI 足以支撑 `_Unwind_RaiseException` 跨帧展开，再更新本文档与构建逻辑。`-fexceptions` 的作用：
 
 - 使 C 栈帧生成完整 CFI（完整的 `.eh_frame` 条目），确保 libunwind 能正确还原中间帧的寄存器。
 - **不**自动从 `goto`/label 结构生成 LSDA；LSDA 由 Feng codegen 显式输出为静态 struct。
@@ -293,7 +297,7 @@ void generated_fn(void) {
 
 ## 6 TODO
 
-当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端兼容路径已落地；C 后端当前仍复用既有 `setjmp`/`longjmp` 异常帧，不是 §0 要求的 LSDA + libunwind 零开销实现。下列 TODO 中标记为“兼容层已完成”的条目仅表示 public ABI 或 C 后端兼容行为已具备，不能等同于 LSDA 后端完成。
+当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端兼容路径已落地；C 后端当前仍复用既有 `setjmp`/`longjmp` 异常帧，不是 §0 要求的 LSDA + libunwind 零开销实现。Feng 尚未公开发布，不保留旧版 `try { ... } catch { ... } finally { ... }` 兼容语法；后续实现只维护主规范中的 `try <expr> [catch ...]` 形态。下列 TODO 中标记为“兼容层已完成”的条目仅表示 public ABI 或 C 后端兼容行为已具备，不能等同于 LSDA 后端完成。
 
 ### 运行时机制
 
@@ -307,13 +311,13 @@ void generated_fn(void) {
 - [x] 实现 `feng_frame_push` / `feng_frame_pop`：在同一 TLS 链上插入/移除帧边界节点（`src/runtime/feng_exception.c`，compat ABI）
 - [ ] Personality 函数 CLEANUP_PHASE 中间帧处理：从链顶释放托管局部至帧标记，pop 帧标记，返回 `_URC_CONTINUE_UNWIND`
 - [ ] 验证正常路径（无异常抛出）汇编输出中无任何异常相关代码
-- [ ] 含 try/catch 的生成 C 文件确认以 `-fexceptions` 编译（参见 Makefile / build 逻辑）
+- [x] 生成 C 文件以 `-std=gnu11 -fexceptions` 编译，为 LSDA 后端的 GNU label address 与 unwind metadata 做准备（`src/cli/compile/driver.c`）
 
 ### 词法 / 解析层
 
-- [ ] `src/lexer/token.h`：从 `FENG_KEYWORD_LIST` 中移除 `X(FINALLY, "finally")`
+- [x] `src/lexer/token.h`：从 `FENG_KEYWORD_LIST` 中移除 `X(FINALLY, "finally")`
 - [x] `src/lexer/token.h`：在 `FENG_KEYWORD_LIST` 中添加 `X(UNKNOWN, "unknown")`
-- [x] `src/parser/parser.c`：新增表达式形式 `try <expr>`；旧块形式临时保留以维持既有回归
+- [x] `src/parser/parser.c`：新增表达式形式 `try <expr>`；旧块形式 `try { ... } catch { ... } finally { ... }` 已移除
 - [x] `src/parser/parser.c`：实现多 `catch` 子句解析，每个子句须含 `id: Type` 注解
 - [x] `src/parser/parser.c`：catch 子句类型注解支持 `unknown` token
 
@@ -333,6 +337,9 @@ void generated_fn(void) {
 - [ ] `src/codegen/codegen.c`：实现多 catch 子句的 landing pad 分派（按命中子句索引跳转）
 - [x] `src/codegen/codegen.c`：`catch ex: unknown` 子句：绑定 ex，生成 `feng_rethrow()` 路径（当前为兼容层）
 - [x] `src/codegen/codegen.c`：try 表达式作为右值，结果值正确穿透到外层（当前为兼容层）
+- [x] `src/codegen/codegen.c`：void try 表达式作为语句时不生成非法 `void` 结果槽；void catch 块允许正常结束（当前为兼容层）
+- [x] `src/codegen/codegen.c`：catch 块内 `return` 会在离开函数前释放当前异常对象并清理已打开的异常帧（当前为兼容层）
+- [x] `src/codegen/codegen.c`：catch 块内 `break` / `continue` 会在跳出 try/catch 前释放当前异常对象并清理需要离开的异常帧（当前为兼容层）
 - [ ] `src/codegen/codegen.c`：try 体内托管局部声明改为 NULL 初始化（不加 cleanup push），正常路径在 try 体末尾显式 `feng_release` + 置 NULL
 - [ ] `src/codegen/codegen.c`：landing pad 入口处，在 dispatch switch 之前为每个 try 体内托管局部生成 NULL 安全的 `feng_release(x)` 调用
 - [ ] `src/codegen/codegen.c`：在每个含托管局部的函数入口/出口发射 `feng_frame_push` / `feng_frame_pop` 帧标记（中间帧展开清理所需）
@@ -348,5 +355,8 @@ void generated_fn(void) {
 - [x] 新增测试：throw spec 值，期望编译错误
 - [x] 新增测试：throw 函数值，期望编译错误
 - [x] 新增测试：try 表达式作为右值（赋值）
+- [x] 新增测试：void try 表达式作为语句，含 void catch 块
+- [x] 新增测试：catch 块内 `return` 可正确离开函数并释放异常对象
+- [x] 新增测试：catch 块内 `break` / `continue` 可正确离开 try/catch 并继续循环控制流
 - [x] 新增测试：省略 catch 的 `try <expr>` 自动上抛
 - [x] 全量回归测试通过（兼容层）

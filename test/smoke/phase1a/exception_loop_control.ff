@@ -1,0 +1,44 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+fn fail_void() {
+    throw "boom";
+}
+
+fn break_from_catch(): string {
+    while true {
+        try fail_void() catch ex: string {
+            break;
+        };
+    }
+    return "after-break";
+}
+
+fn continue_from_catch(): string {
+    var index: int = 0;
+    var skipped: int = 0;
+
+    while index < 3 {
+        index += 1;
+        try fail_void() catch ex: string {
+            skipped += 1;
+            continue;
+        };
+        return "unreachable";
+    }
+
+    if skipped == 3 {
+        return "after-continue";
+    }
+    return "bad-continue";
+}
+
+fn main(args: string[]) {
+    let first = break_from_catch();
+    puts(&first);
+
+    let second = continue_from_catch();
+    puts(&second);
+}

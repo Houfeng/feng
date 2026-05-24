@@ -208,11 +208,6 @@ static void collect_calls_in_stmt(const FengStmt *stmt, CallList *out) {
             }
             collect_calls_in_block(stmt->as.match_stmt.else_block, out);
             break;
-        case FENG_STMT_TRY:
-            collect_calls_in_block(stmt->as.try_stmt.try_block, out);
-            collect_calls_in_block(stmt->as.try_stmt.catch_block, out);
-            collect_calls_in_block(stmt->as.try_stmt.finally_block, out);
-            break;
         case FENG_STMT_RETURN:
             collect_calls_in_expr(stmt->as.return_value, out);
             break;
@@ -1829,13 +1824,13 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
 static void test_fixed_function_allows_locally_caught_throw(void) {
     const char *source =
         "mod demo.main;\n"
+        "fn fail(): int {\n"
+        "    throw \"boom\";\n"
+        "}\n"
         "@abi\n"
         "fn recover(): int {\n"
-        "    try {\n"
-        "        throw \"boom\";\n"
-        "    } catch {\n"
-        "        return 0;\n"
-        "    }\n"
+        "    let value = try fail() catch ex: string { 0; };\n"
+        "    return value;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_caught_throw_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -1881,12 +1876,12 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
 static void test_fixed_function_allows_call_to_catching_function(void) {
     const char *source =
         "mod demo.main;\n"
-        "fn helper(): int {\n"
-        "    try {\n"
+        "fn fail(): int {\n"
         "        throw \"boom\";\n"
-        "    } catch {\n"
-        "        return 0;\n"
-        "    }\n"
+        "}\n"
+        "fn helper(): int {\n"
+        "    let value = try fail() catch ex: string { 0; };\n"
+        "    return value;\n"
         "}\n"
         "@abi\n"
         "fn run(): int {\n"
@@ -2019,12 +2014,12 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
     const char *source =
         "mod demo.main;\n"
         "spec Callback(x: int): int;\n"
-        "fn helper(): int {\n"
-        "    try {\n"
+        "fn fail(): int {\n"
         "        throw \"boom\";\n"
-        "    } catch {\n"
-        "        return 0;\n"
-        "    }\n"
+        "}\n"
+        "fn helper(): int {\n"
+        "    let value = try fail() catch ex: string { 0; };\n"
+        "    return value;\n"
         "}\n"
         "@abi\n"
         "fn run(): int {\n"
@@ -2065,111 +2060,6 @@ static void test_throw_rejects_void_expression(void) {
     ASSERT(strcmp(errors[0].path, "throw_void_expression_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "throw statement requires a non-void expression") != NULL);
-
-    feng_semantic_errors_free(errors, error_count);
-    feng_program_free(program);
-}
-
-static void test_finally_rejects_return(void) {
-    const char *source =
-        "mod demo.main;\n"
-        "fn run(): int {\n"
-        "    try {\n"
-        "        return 1;\n"
-        "    } finally {\n"
-        "        return 2;\n"
-        "    }\n"
-        "}\n";
-    FengProgram *program = parse_program_or_die("finally_return_error.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
-
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "finally_return_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
-    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'return'") != NULL);
-
-    feng_semantic_errors_free(errors, error_count);
-    feng_program_free(program);
-}
-
-static void test_finally_rejects_throw(void) {
-    const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
-        "    try {\n"
-        "    } finally {\n"
-        "        throw \"boom\";\n"
-        "    }\n"
-        "}\n";
-    FengProgram *program = parse_program_or_die("finally_throw_error.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
-
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "finally_throw_error.f") == 0);
-    ASSERT(errors[0].token.line == 5U);
-    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'throw'") != NULL);
-
-    feng_semantic_errors_free(errors, error_count);
-    feng_program_free(program);
-}
-
-static void test_finally_rejects_break(void) {
-    const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
-        "    while (true) {\n"
-        "        try {\n"
-        "        } finally {\n"
-        "            break;\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
-    FengProgram *program = parse_program_or_die("finally_break_error.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
-
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "finally_break_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
-    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'break'") != NULL);
-
-    feng_semantic_errors_free(errors, error_count);
-    feng_program_free(program);
-}
-
-static void test_finally_rejects_continue(void) {
-    const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
-        "    while (true) {\n"
-        "        try {\n"
-        "        } finally {\n"
-        "            continue;\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
-    FengProgram *program = parse_program_or_die("finally_continue_error.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
-
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "finally_continue_error.f") == 0);
-    ASSERT(errors[0].token.line == 6U);
-    ASSERT(strstr(errors[0].message, "finally blocks cannot contain 'continue'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -13178,10 +13068,6 @@ int main(void) {
     test_fixed_function_rejects_local_function_value_call_to_throwing_function();
     test_fixed_function_allows_invoked_lambda_wrapping_catching_call();
     test_throw_rejects_void_expression();
-    test_finally_rejects_return();
-    test_finally_rejects_throw();
-    test_finally_rejects_break();
-    test_finally_rejects_continue();
     test_break_outside_loop_is_rejected();
     test_continue_outside_loop_is_rejected();
     test_break_inside_lambda_in_loop_is_rejected();

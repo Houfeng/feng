@@ -5,9 +5,10 @@ extern fn puts(msg: string*): int;
 
 // A function that allocates a managed local (writable array) and then throws.
 // The cleanup chain must release `tmp` before the longjmp transfers control.
-fn build_and_throw() {
+fn build_and_throw(): string {
     let tmp: i32[!] = [1, 2, 3];
     throw "boom-from-fn";
+    return "unreachable";
 }
 
 // A function that allocates a managed local and returns normally.
@@ -21,15 +22,10 @@ fn main(args: string[]) {
     // released by its own scope on normal exit.
     let outer: i32[!] = [10, 20, 30];
 
-    try {
-        // Managed local declared inside the try, before the throw, must be
-        // released by the runtime cleanup walk on the longjmp path.
-        let in_try: i32[!] = [100, 200, 300];
-        build_and_throw();
-        puts(&"unreachable");
-    } catch {
-        puts(&"caught");
-    }
+    let label = try build_and_throw() catch ex: string {
+        "caught";
+    };
+    puts(&label);
 
     build_and_return();
     puts(&"after");

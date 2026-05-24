@@ -20,7 +20,7 @@
  *     FengResolvedCallable.function_decl / .member)
  *   - statements: block, binding (let/var), assignment (identifier or member),
  *                 expression, return, if/else, if-match, while, break, continue,
- *                 throw, try/catch/finally
+ *                 throw, try/catch
  *   - expressions: int/bool/string/float literals, identifier, binary,
  *                  unary, call (free fn / extern fn / method / default ctor),
  *                  member access, array literal, index, numeric cast,

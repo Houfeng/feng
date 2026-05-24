@@ -107,13 +107,6 @@ static void test_statements_and_expressions(void) {
         "            print(i);\n"
         "        }\n"
         "    }\n"
-        "    try {\n"
-        "        throw \"boom\";\n"
-        "    } catch {\n"
-        "        print(\"err\");\n"
-        "    } finally {\n"
-        "        print(\"done\");\n"
-        "    }\n"
         "    return (i32)1;\n"
         "}\n"
         "fn make_adder(base: int): IntToInt {\n"
@@ -132,16 +125,15 @@ static void test_statements_and_expressions(void) {
     ASSERT(main_decl->kind == FENG_DECL_FUNCTION);
     ASSERT(main_decl->as.function_decl.body != NULL);
     main_body = main_decl->as.function_decl.body;
-    ASSERT(main_body->statement_count == 5U);
+    ASSERT(main_body->statement_count == 4U);
 
     ASSERT(main_body->statements[0]->kind == FENG_STMT_BINDING);
     ASSERT(main_body->statements[0]->as.binding.initializer->kind == FENG_EXPR_IF);
     ASSERT(main_body->statements[1]->kind == FENG_STMT_BINDING);
     ASSERT(main_body->statements[1]->as.binding.initializer->kind == FENG_EXPR_MATCH);
     ASSERT(main_body->statements[2]->kind == FENG_STMT_FOR);
-    ASSERT(main_body->statements[3]->kind == FENG_STMT_TRY);
-    ASSERT(main_body->statements[4]->kind == FENG_STMT_RETURN);
-    ASSERT(main_body->statements[4]->as.return_value->kind == FENG_EXPR_CAST);
+    ASSERT(main_body->statements[3]->kind == FENG_STMT_RETURN);
+    ASSERT(main_body->statements[3]->as.return_value->kind == FENG_EXPR_CAST);
 
     ASSERT(program->declarations[1]->kind == FENG_DECL_FUNCTION);
     ASSERT(program->declarations[1]->as.function_decl.body->statement_count == 1U);
@@ -149,6 +141,23 @@ static void test_statements_and_expressions(void) {
     ASSERT(program->declarations[1]->as.function_decl.body->statements[0]->as.return_value->kind == FENG_EXPR_LAMBDA);
 
     feng_program_free(program);
+}
+
+static void test_try_block_form_is_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    try {\n"
+        "        1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "try_block_rejected.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+
 }
 
 static void test_try_expression_with_typed_catches(void) {
@@ -163,7 +172,7 @@ static void test_try_expression_with_typed_catches(void) {
     FengParseError error;
     const FengBlock *body;
     const FengExpr *try_expr;
-    const FengStmt *try_stmt;
+    const FengStmt *try_expr_stmt;
 
     ASSERT(feng_parse_source(source, strlen(source), "try_expr.f", &program, &error));
     ASSERT(program != NULL);
@@ -188,10 +197,10 @@ static void test_try_expression_with_typed_catches(void) {
     ASSERT(try_expr->as.try_expr.clauses[1].type->as.named.segment_count == 1U);
     assert_slice_text(try_expr->as.try_expr.clauses[1].type->as.named.segments[0], "unknown");
 
-    try_stmt = body->statements[1];
-    ASSERT(try_stmt->kind == FENG_STMT_EXPR);
-    ASSERT(try_stmt->as.expr->kind == FENG_EXPR_TRY);
-    ASSERT(try_stmt->as.expr->as.try_expr.clause_count == 0U);
+    try_expr_stmt = body->statements[1];
+    ASSERT(try_expr_stmt->kind == FENG_STMT_EXPR);
+    ASSERT(try_expr_stmt->as.expr->kind == FENG_EXPR_TRY);
+    ASSERT(try_expr_stmt->as.expr->as.try_expr.clause_count == 0U);
 
     feng_program_free(program);
 }
@@ -348,7 +357,7 @@ static void test_type_field_inferred_initializers(void) {
     ASSERT(program != NULL);
     ASSERT(program->declaration_count == 2U);
     user = program->declarations[1];
-    ASSERT(user->kind == FENG_DECL_TYPE);
+    test_try_block_form_is_rejected(); // Ensure try block form is rejected
     ASSERT(user->as.type_decl.member_count == 4U);
     ASSERT(user->as.type_decl.members[0]->as.field.type != NULL);
     ASSERT(user->as.type_decl.members[0]->as.field.initializer != NULL);
@@ -1700,6 +1709,7 @@ int main(void) {
     test_top_level_declarations();
     test_extern_rejects_non_function_top_level_declarations();
     test_statements_and_expressions();
+    test_try_block_form_is_rejected();
     test_try_expression_with_typed_catches();
     test_runtime_annotation_on_extern_function();
     test_enum_declarations_parse();

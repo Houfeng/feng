@@ -33,7 +33,6 @@ extern "C" {
     X(CONTINUE, "continue") \
     X(TRY, "try") \
     X(CATCH, "catch") \
-    X(FINALLY, "finally") \
     X(UNKNOWN, "unknown") \
     X(THROW, "throw") \
     X(RETURN, "return") \

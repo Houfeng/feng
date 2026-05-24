@@ -2292,26 +2292,6 @@ static size_t stmt_end(const FengStmt *stmt) {
                 }
             }
             break;
-        case FENG_STMT_TRY:
-            if (stmt->as.try_stmt.try_block != NULL) {
-                size_t try_end = block_end(stmt->as.try_stmt.try_block);
-                if (try_end > end) {
-                    end = try_end;
-                }
-            }
-            if (stmt->as.try_stmt.catch_block != NULL) {
-                size_t catch_end = block_end(stmt->as.try_stmt.catch_block);
-                if (catch_end > end) {
-                    end = catch_end;
-                }
-            }
-            if (stmt->as.try_stmt.finally_block != NULL) {
-                size_t finally_end = block_end(stmt->as.try_stmt.finally_block);
-                if (finally_end > end) {
-                    end = finally_end;
-                }
-            }
-            break;
         case FENG_STMT_RETURN:
             if (stmt->as.return_value != NULL) {
                 size_t return_end = expr_end(stmt->as.return_value);
@@ -2577,10 +2557,6 @@ static size_t stmt_end_for_source(const char *source, const FengStmt *stmt) {
             return max_size(end, block_end_for_source(source, stmt->as.while_stmt.body));
         case FENG_STMT_FOR:
             return max_size(end, block_end_for_source(source, stmt->as.for_stmt.body));
-        case FENG_STMT_TRY:
-            end = max_size(end, block_end_for_source(source, stmt->as.try_stmt.try_block));
-            end = max_size(end, block_end_for_source(source, stmt->as.try_stmt.catch_block));
-            return max_size(end, block_end_for_source(source, stmt->as.try_stmt.finally_block));
         default:
             return end;
     }
@@ -2893,16 +2869,6 @@ static bool collect_stmt_locals(const FengStmt *stmt,
             return stmt->as.for_stmt.body != NULL
                        ? collect_block_locals(stmt->as.for_stmt.body, offset, locals)
                        : true;
-        case FENG_STMT_TRY:
-            if (stmt->as.try_stmt.try_block != NULL && offset <= block_end(stmt->as.try_stmt.try_block)) {
-                return collect_block_locals(stmt->as.try_stmt.try_block, offset, locals);
-            }
-            if (stmt->as.try_stmt.catch_block != NULL && offset <= block_end(stmt->as.try_stmt.catch_block)) {
-                return collect_block_locals(stmt->as.try_stmt.catch_block, offset, locals);
-            }
-            return stmt->as.try_stmt.finally_block != NULL
-                       ? collect_block_locals(stmt->as.try_stmt.finally_block, offset, locals)
-                       : true;
         default:
             return true;
     }
@@ -3128,16 +3094,6 @@ static bool collect_stmt_locals_for_completion(const char *source,
                 return true;
             }
             return collect_block_locals_for_completion(source, stmt->as.for_stmt.body, offset, locals);
-        case FENG_STMT_TRY:
-            if (block_contains_offset_for_completion(source, stmt->as.try_stmt.try_block, offset)) {
-                return collect_block_locals_for_completion(source, stmt->as.try_stmt.try_block, offset, locals);
-            }
-            if (block_contains_offset_for_completion(source, stmt->as.try_stmt.catch_block, offset)) {
-                return collect_block_locals_for_completion(source, stmt->as.try_stmt.catch_block, offset, locals);
-            }
-            return block_contains_offset_for_completion(source, stmt->as.try_stmt.finally_block, offset)
-                       ? collect_block_locals_for_completion(source, stmt->as.try_stmt.finally_block, offset, locals)
-                       : true;
         default:
             return true;
     }
@@ -4650,26 +4606,6 @@ static bool find_stmt_type_ref_hit(const FengStmt *stmt,
                                            session,
                                            offset,
                                            target);
-        case FENG_STMT_TRY:
-            if (find_block_type_ref_hit(stmt->as.try_stmt.try_block,
-                                        program,
-                                        session,
-                                        offset,
-                                        target)) {
-                return true;
-            }
-            if (find_block_type_ref_hit(stmt->as.try_stmt.catch_block,
-                                        program,
-                                        session,
-                                        offset,
-                                        target)) {
-                return true;
-            }
-            return find_block_type_ref_hit(stmt->as.try_stmt.finally_block,
-                                           program,
-                                           session,
-                                           offset,
-                                           target);
         case FENG_STMT_ASSIGN:
         case FENG_STMT_EXPR:
         case FENG_STMT_RETURN:
@@ -5022,15 +4958,6 @@ static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t off
                     if (hit == NULL) {
                         hit = find_expr_hit(stmt->as.for_stmt.condition, offset);
                     }
-                }
-                break;
-            case FENG_STMT_TRY:
-                hit = find_expr_hit_in_block(stmt->as.try_stmt.try_block, offset);
-                if (hit == NULL) {
-                    hit = find_expr_hit_in_block(stmt->as.try_stmt.catch_block, offset);
-                }
-                if (hit == NULL) {
-                    hit = find_expr_hit_in_block(stmt->as.try_stmt.finally_block, offset);
                 }
                 break;
             case FENG_STMT_RETURN:
@@ -6372,15 +6299,6 @@ static const FengExpr *find_call_hit_in_block(const FengBlock *block, size_t off
                     }
                 }
                 break;
-            case FENG_STMT_TRY:
-                hit = find_call_hit_in_block(stmt->as.try_stmt.try_block, offset);
-                if (hit == NULL) {
-                    hit = find_call_hit_in_block(stmt->as.try_stmt.catch_block, offset);
-                }
-                if (hit == NULL) {
-                    hit = find_call_hit_in_block(stmt->as.try_stmt.finally_block, offset);
-                }
-                break;
             case FENG_STMT_RETURN:
                 hit = find_call_hit_expr(stmt->as.return_value, offset);
                 break;
@@ -6620,19 +6538,6 @@ static bool find_local_binding_at_in_stmt(const char *source_text,
                                                   target)) ||
                    find_local_binding_at_in_block(source_text,
                                                   stmt->as.for_stmt.body,
-                                                  offset,
-                                                  target);
-        case FENG_STMT_TRY:
-            return find_local_binding_at_in_block(source_text,
-                                                  stmt->as.try_stmt.try_block,
-                                                  offset,
-                                                  target) ||
-                   find_local_binding_at_in_block(source_text,
-                                                  stmt->as.try_stmt.catch_block,
-                                                  offset,
-                                                  target) ||
-                   find_local_binding_at_in_block(source_text,
-                                                  stmt->as.try_stmt.finally_block,
                                                   offset,
                                                   target);
         default:
@@ -7283,25 +7188,6 @@ static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *sessi
                                                     offset,
                                                     locals,
                                                     target);
-        case FENG_STMT_TRY:
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.try_stmt.try_block,
-                                                     offset,
-                                                     locals,
-                                                     target) ||
-                   resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.try_stmt.catch_block,
-                                                     offset,
-                                                     locals,
-                                                     target) ||
-                   resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.try_stmt.finally_block,
-                                                     offset,
-                                                     locals,
-                                                     target);
         case FENG_STMT_RETURN:
             return resolve_object_field_target_expr(session,
                                                     program,
@@ -8104,34 +7990,6 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                                               include_declaration,
                                               target,
                                               references);
-        case FENG_STMT_TRY:
-            return collect_references_in_block(session,
-                                               program,
-                                               source,
-                                               owner_decl,
-                                               owner_member,
-                                               stmt->as.try_stmt.try_block,
-                                               include_declaration,
-                                               target,
-                                               references) &&
-                   collect_references_in_block(session,
-                                              program,
-                                              source,
-                                              owner_decl,
-                                              owner_member,
-                                              stmt->as.try_stmt.catch_block,
-                                              include_declaration,
-                                              target,
-                                              references) &&
-                   collect_references_in_block(session,
-                                              program,
-                                              source,
-                                              owner_decl,
-                                              owner_member,
-                                              stmt->as.try_stmt.finally_block,
-                                              include_declaration,
-                                              target,
-                                              references);
         case FENG_STMT_RETURN:
             return collect_references_in_expr(session,
                                               program,
@@ -8788,23 +8646,6 @@ static bool find_symbol_stmt_type_ref_hit(const FengLspCacheQueryContext *contex
             }
             return find_symbol_block_type_ref_hit(context,
                                                   stmt->as.for_stmt.body,
-                                                  offset,
-                                                  target);
-        case FENG_STMT_TRY:
-            if (find_symbol_block_type_ref_hit(context,
-                                               stmt->as.try_stmt.try_block,
-                                               offset,
-                                               target)) {
-                return true;
-            }
-            if (find_symbol_block_type_ref_hit(context,
-                                               stmt->as.try_stmt.catch_block,
-                                               offset,
-                                               target)) {
-                return true;
-            }
-            return find_symbol_block_type_ref_hit(context,
-                                                  stmt->as.try_stmt.finally_block,
                                                   offset,
                                                   target);
         case FENG_STMT_ASSIGN:

@@ -4,7 +4,8 @@
  *   - All I/O strings are heap-allocated and freed; no leaks on the success path.
  *   - All emit_* paths propagate errors via the codegen context; once an error
  *     is set, subsequent emits become no-ops and the entry returns false.
- *   - Generated C is portable C11; no compiler-specific extensions are emitted.
+ *   - Generated C is GNU C11; the host compile path enables GNU extensions
+ *     for the exception backend's label-address strategy.
  *   - String literal allocations are deduplicated per literal site via a
  *     file-static FengString* slot, so each literal allocates exactly once.
  *   - Strings are managed objects; managed locals are released on scope exit
@@ -750,8 +751,8 @@ typedef struct Scope {
      * by the caller that created the scope. */
     const char   *continue_label;
     /* try_depth observed at the moment this scope was pushed. Used by
-     * break/continue to refuse jumping across an enclosing try frame in
-     * Phase 1A (where stack-based exception cleanup is not yet wired). */
+     * break/continue to clean active try/catch frames when jumping out of
+     * generated try/catch code. */
     int           try_depth_at_entry;
     /* Each scope frame also holds a list of indices into items[] in original
      * insertion order; release-on-exit walks them in reverse. */
@@ -977,8 +978,10 @@ typedef struct CG {
     size_t         module_binding_capacity;
 
     /* try/catch state: how many active try frames are open in the current
-     * function. Used to refuse return / break / continue across them in 1A. */
+     * function. Used to refuse break / continue across them in 1A. */
     int       try_depth;
+    int       active_exception_frame_count;
+    int       active_caught_unwind_count;
 
     /* String literal cache: each unique literal (by content) gets one static. */
     struct {
@@ -1086,6 +1089,8 @@ static bool cg_append_numeric_op_expr(Buf *b,
 static bool cg_types_equal(const CGType *a, const CGType *b);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
+static void cg_emit_return_control_cleanup(CG *cg);
+static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const char *cname,
@@ -1800,22 +1805,6 @@ static bool cg_collect_capture_requirements_in_stmt(const FengStmt *stmt,
                                                            out_capacity,
                                                            out_captures_self) &&
                    cg_collect_capture_requirements_in_block_inner(stmt->as.for_stmt.body,
-                                                                  out_names,
-                                                                  out_count,
-                                                                  out_capacity,
-                                                                  out_captures_self);
-        case FENG_STMT_TRY:
-            return cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.try_block,
-                                                                  out_names,
-                                                                  out_count,
-                                                                  out_capacity,
-                                                                  out_captures_self) &&
-                   cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.catch_block,
-                                                                  out_names,
-                                                                  out_count,
-                                                                  out_capacity,
-                                                                  out_captures_self) &&
-                   cg_collect_capture_requirements_in_block_inner(stmt->as.try_stmt.finally_block,
                                                                   out_names,
                                                                   out_count,
                                                                   out_capacity,
@@ -7940,6 +7929,7 @@ static bool cg_emit_return_expr_result(CG *cg,
         }
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r->type)) {
@@ -7970,6 +7960,7 @@ static bool cg_emit_return_expr_result(CG *cg,
         }
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else {
@@ -7985,6 +7976,7 @@ static bool cg_emit_return_expr_result(CG *cg,
                        cty, tmp, cty, r->c_expr);
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     }
@@ -12475,6 +12467,12 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
         return cg_fail(cg, err_token,
                        "codegen: try/catch branches yield mismatched types");
     }
+    if (result_type->kind == CG_TYPE_VOID) {
+        buf_append_fmt(cg->cur_body,
+                       "        (void)(%s);\n",
+                       r->c_expr);
+        return true;
+    }
     if (managed) {
         if (r->owns_ref) {
             buf_append_fmt(cg->cur_body,
@@ -12988,6 +12986,9 @@ static bool cg_emit_try_catch_block_to_slot(CG *cg,
                                             bool managed,
                                             bool aggregate,
                                             FengToken err_token) {
+    if (result_type->kind == CG_TYPE_VOID) {
+        return block == NULL || cg_emit_block(cg, block);
+    }
     if (block == NULL || block->statement_count == 0U) {
         return cg_fail(cg, err_token,
                        "codegen: catch block must produce a try-expression value");
@@ -13027,6 +13028,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     bool managed = cgtype_is_managed(result_type);
     bool aggregate = cgtype_is_aggregate(result_type);
+    bool is_void = result_type->kind == CG_TYPE_VOID;
     const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
@@ -13050,25 +13052,9 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
 
-    char *cty = cg_ctype_dup(result_type);
-    if (cty == NULL) {
-        free(slot_name);
-        free(frame_name);
-        free(state_name);
-        free(exception_name);
-        free(handled_name);
-        cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
-    }
-    if (managed) {
-        buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, slot_name);
-        cg_emit_cleanup_push_for_managed_local(cg, slot_name);
-        if (!scope_add(cg->cur_scope,
-                       slot_name,
-                       slot_name,
-                       cgtype_clone(result_type),
-                       false)) {
-            free(cty);
+    if (!is_void) {
+        char *cty = cg_ctype_dup(result_type);
+        if (cty == NULL) {
             free(slot_name);
             free(frame_name);
             free(state_name);
@@ -13077,39 +13063,57 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
-    } else if (aggregate) {
-        buf_append_fmt(cg->cur_body, "    %s %s; ", cty, slot_name);
-        if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, slot_name)) {
-            free(cty);
-            free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
-            cgtype_free(result_type);
-            return cg_fail(cg, e->token,
-                           "codegen: missing aggregate default-init rule for try-expression result");
+        if (managed) {
+            buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, slot_name);
+            cg_emit_cleanup_push_for_managed_local(cg, slot_name);
+            if (!scope_add(cg->cur_scope,
+                           slot_name,
+                           slot_name,
+                           cgtype_clone(result_type),
+                           false)) {
+                free(cty);
+                free(slot_name);
+                free(frame_name);
+                free(state_name);
+                free(exception_name);
+                free(handled_name);
+                cgtype_free(result_type);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+        } else if (aggregate) {
+            buf_append_fmt(cg->cur_body, "    %s %s; ", cty, slot_name);
+            if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, slot_name)) {
+                free(cty);
+                free(slot_name);
+                free(frame_name);
+                free(state_name);
+                free(exception_name);
+                free(handled_name);
+                cgtype_free(result_type);
+                return cg_fail(cg, e->token,
+                               "codegen: missing aggregate default-init rule for try-expression result");
+            }
+            buf_append_cstr(cg->cur_body, ";\n");
+            cg_emit_cleanup_push_for_aggregate_local(cg, slot_name, result_type);
+            if (!scope_add(cg->cur_scope,
+                           slot_name,
+                           slot_name,
+                           cgtype_clone(result_type),
+                           false)) {
+                free(cty);
+                free(slot_name);
+                free(frame_name);
+                free(state_name);
+                free(exception_name);
+                free(handled_name);
+                cgtype_free(result_type);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, slot_name, cty);
         }
-        buf_append_cstr(cg->cur_body, ";\n");
-        cg_emit_cleanup_push_for_aggregate_local(cg, slot_name, result_type);
-        if (!scope_add(cg->cur_scope,
-                       slot_name,
-                       slot_name,
-                       cgtype_clone(result_type),
-                       false)) {
-            free(cty);
-            free(slot_name);
-            free(frame_name);
-            free(state_name);
-            free(exception_name);
-            free(handled_name);
-            cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
-        }
-    } else {
-        buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, slot_name, cty);
+        free(cty);
     }
-    free(cty);
 
     buf_append_fmt(cg->cur_body,
                    "    FengExceptionFrame %s;\n"
@@ -13122,6 +13126,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                    frame_name,
                    state_name);
     cg->try_depth++;
+    cg->active_exception_frame_count++;
     bool ok = cg_emit_try_expr_body_to_slot(cg,
                                             e->as.try_expr.body,
                                             slot_name,
@@ -13129,6 +13134,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                             managed,
                                             aggregate,
                                             e->token);
+    cg->active_exception_frame_count--;
     cg->try_depth--;
     if (!ok) {
         free(slot_name);
@@ -13230,6 +13236,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return false;
         }
         cg->try_depth++;
+        cg->active_caught_unwind_count++;
         ok = cg_emit_try_catch_block_to_slot(cg,
                                              clause->body,
                                              slot_name,
@@ -13237,6 +13244,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                              managed,
                                              aggregate,
                                              clause->token);
+        cg->active_caught_unwind_count--;
         cg->try_depth--;
         if (ok) {
             cg_release_scope(cg, catch_scope);
@@ -13268,7 +13276,7 @@ static bool cg_emit_try_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                    "    }\n",
                    handled_name);
 
-    out->c_expr = strdup(slot_name);
+    out->c_expr = strdup(is_void ? "((void)0)" : slot_name);
     out->type = result_type;
     out->owns_ref = false;
 
@@ -13465,6 +13473,25 @@ static void cg_release_through(CG *cg, const Scope *stop) {
     for (const Scope *s = cg->cur_scope; s && s != stop; s = s->parent) {
         cg_release_scope(cg, s);
     }
+}
+
+static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count) {
+    int pop_count;
+
+    if (cg->active_caught_unwind_count > 0) {
+        buf_append_cstr(cg->cur_body, "    feng_release_unwind_exception();\n");
+    }
+    pop_count = cg->active_exception_frame_count - keep_exception_frame_count;
+    if (pop_count < 0) {
+        pop_count = 0;
+    }
+    for (int i = 0; i < pop_count; ++i) {
+        buf_append_cstr(cg->cur_body, "    feng_exception_pop();\n");
+    }
+}
+
+static void cg_emit_return_control_cleanup(CG *cg) {
+    cg_emit_control_cleanup_to_try_depth(cg, 0);
 }
 
 /* Register a managed local on the per-thread cleanup chain so a throw passing
@@ -14978,10 +15005,6 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
-    if (cg->try_depth > 0) {
-        return cg_fail(cg, stmt->token,
-            "codegen: 'return' inside try/catch/finally is not yet supported in Phase 1A");
-    }
     /* G6: inside a generic function, all returns use the _out out-parameter. */
     if (cg->in_generic_fn && cg->generic_return_uses_out) {
         return cg_emit_generic_return(cg, stmt);
@@ -14993,6 +15016,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
                 "codegen: void function cannot return a value");
         }
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         if (cg->cur_fn_is_main) {
             buf_append_cstr(cg->cur_body, "    return;\n");
         } else {
@@ -15020,6 +15044,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         }
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else if (cgtype_is_aggregate(r.type)) {
@@ -15061,6 +15086,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         }
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     } else {
@@ -15070,6 +15096,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
                        cty, tmp, cty, r.c_expr);
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body, "    return %s;\n", tmp);
         free(tmp);
     }
@@ -15252,6 +15279,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     Scope *body_scope = scope_push(cg->cur_scope);
     if (!body_scope) { cg->loop_depth--; return cg_fail(cg, stmt->token, "codegen: out of memory"); }
     body_scope->is_loop = true;
+    body_scope->try_depth_at_entry = cg->try_depth;
     cg->cur_scope = body_scope;
     if (!cg_emit_block(cg, stmt->as.while_stmt.body)) {
         cg->cur_scope = body_scope->parent;
@@ -15295,10 +15323,11 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
  * normal release path (and through the break/continue path via the
  * inclusive release added in cg_emit_break_continue).
  *
- * Limitations honoured here:
+ * Invariants honoured here:
  *   - The semantic analyzer (analyzer.c) restricts the for/in sequence to
  *     `T[]` / `T[!]` and ensures the iter binding's mutability matches use.
- *   - try-frame crossing is rejected by cg_emit_break_continue (Phase 1A).
+ *   - break / continue paths emit the same active try/catch cleanup used by
+ *     return before jumping out of generated try/catch blocks.
  */
 static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     int id = cg->label_counter++;
@@ -15377,6 +15406,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "codegen: out of memory");
     }
     body_scope->is_loop = true;
+    body_scope->try_depth_at_entry = cg->try_depth;
     /* Stash label in a stable buffer associated with cur_body — we use the
      * outer scope as the lifetime anchor by allocating on the heap and
      * tracking via the items list: simpler to embed the literal in body_scope
@@ -15526,6 +15556,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "codegen: out of memory");
     }
     body_scope->is_loop = true;
+    body_scope->try_depth_at_entry = cg->try_depth;
     char *cont_label_owned = strdup(cont_label);
     body_scope->continue_label = cont_label_owned;
     cg->cur_scope = body_scope;
@@ -15652,13 +15683,6 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
     for (const Scope *s = cg->cur_scope; s; s = s->parent) {
         if (s->is_loop) { stop = s; break; }
     }
-    /* Refuse to jump across an enclosing try frame: longjmp-based unwind is
-     * not wired into break/continue paths yet (Phase 1A limitation). */
-    if (stop != NULL && cg->try_depth > stop->try_depth_at_entry) {
-        return cg_fail(cg, stmt->token,
-            "codegen: '%s' that crosses a try/catch/finally is not yet supported in Phase 1A",
-            is_break ? "break" : "continue");
-    }
     cg_release_through(cg, stop);
     /* Also release the loop scope itself: the C `break;` / `continue;` (or
      * the `goto _cont_N;` for three-clause `for`) jumps past the body's
@@ -15671,6 +15695,8 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
     if (stop != NULL) {
         cg_release_scope(cg, stop);
     }
+    cg_emit_control_cleanup_to_try_depth(cg,
+                                         stop != NULL ? stop->try_depth_at_entry : 0);
     if (!is_break && stop != NULL && stop->continue_label != NULL) {
         buf_append_fmt(cg->cur_body, "    goto %s;\n", stop->continue_label);
     } else {
@@ -15760,14 +15786,8 @@ static bool cg_expr_is_unknown_exception_identifier(CG *cg, const FengExpr *expr
     return local != NULL && local->is_unknown_exception;
 }
 
-/* throw <expr>;
- *
- * Phase 1A only supports managed payloads (string / array / object) — the
- * runtime carries the value as `void *` plus an `is_managed` flag, and
- * Phase 1A has no boxing path for unmanaged scalars. Codegen takes a +1
- * ownership of the value and hands it to `feng_exception_throw`, which
- * `longjmp`s to the nearest pushed frame and is marked `noreturn` so the
- * C compiler treats subsequent code as unreachable. */
+/* throw <expr>; scalars are boxed into managed FengScalarBox values, while
+ * string / array / object payloads are retained and passed through directly. */
 static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     if (stmt->as.throw_value == NULL) {
         return cg_fail(cg, stmt->token,
@@ -15831,123 +15851,6 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
-/* try { ... } [ catch { ... } ] [ finally { ... } ]
- *
- * Compilation strategy (Phase 1A, single-frame, no rethrow-from-catch):
- *
- *   {
- *       FengExceptionFrame _exc_frame_N;
- *       volatile int       _setjmp_N;
- *       feng_exception_push(&_exc_frame_N);
- *       _setjmp_N = setjmp(_exc_frame_N.jb);
- *       if (_setjmp_N == 0) {
- *           // try body — Feng scope releases happen on this normal path
- *           feng_exception_pop();
- *       } else {
- *           feng_exception_pop();
- *           // catch body (if present); release exception value at end
- *       }
- *       // finally body (if present)
- *       // if no catch and exception fired, rethrow into outer frame
- *   }
- *
- * Limitations recorded for follow-up phases:
- *  - `return` from inside try and `break`/`continue` crossing a try frame
- *    are rejected by codegen (see cg_emit_return / cg_emit_break_continue).
- *
- * ARC on the throw path:
- *  Every managed local registers itself on the per-thread cleanup chain at
- *  declaration (see cg_emit_cleanup_push_for_managed_local). On longjmp,
- *  feng_exception_throw walks the chain down to the frame's snapshot,
- *  releasing each live slot. Locals declared between the try-frame push and
- *  the throw site are therefore released exactly once.
- */
-static bool cg_emit_try(CG *cg, const FengStmt *stmt) {
-    const FengBlock *try_block     = stmt->as.try_stmt.try_block;
-    const FengBlock *catch_block   = stmt->as.try_stmt.catch_block;
-    const FengBlock *finally_block = stmt->as.try_stmt.finally_block;
-
-    if (try_block == NULL) {
-        return cg_fail(cg, stmt->token,
-            "codegen: 'try' requires a body block");
-    }
-
-    int id = cg->label_counter++;
-    char frame[64];
-    char setjmp_var[64];
-    snprintf(frame, sizeof frame, "_exc_frame_%d", id);
-    snprintf(setjmp_var, sizeof setjmp_var, "_exc_setjmp_%d", id);
-
-    buf_append_cstr(cg->cur_body, "    {\n");
-    buf_append_fmt(cg->cur_body, "        FengExceptionFrame %s;\n", frame);
-    buf_append_fmt(cg->cur_body, "        volatile int %s;\n", setjmp_var);
-    buf_append_fmt(cg->cur_body, "        feng_exception_push(&%s);\n", frame);
-    buf_append_fmt(cg->cur_body, "        %s = setjmp(%s.jb);\n",
-                   setjmp_var, frame);
-    buf_append_fmt(cg->cur_body, "        if (%s == 0) {\n", setjmp_var);
-
-    cg->try_depth++;
-    Scope *try_scope = scope_push(cg->cur_scope);
-    if (!try_scope) {
-        cg->try_depth--;
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
-    }
-    try_scope->try_depth_at_entry = cg->try_depth;
-    cg->cur_scope = try_scope;
-    bool ok = cg_emit_block(cg, try_block);
-    if (ok) cg_release_scope(cg, try_scope);
-    cg->cur_scope = try_scope->parent;
-    scope_pop_free(try_scope);
-    cg->try_depth--;
-    if (!ok) return false;
-
-    buf_append_cstr(cg->cur_body, "            feng_exception_pop();\n");
-    buf_append_cstr(cg->cur_body, "        } else {\n");
-    buf_append_cstr(cg->cur_body, "            feng_exception_pop();\n");
-
-    if (catch_block != NULL) {
-        Scope *catch_scope = scope_push(cg->cur_scope);
-        if (!catch_scope) {
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
-        }
-        cg->cur_scope = catch_scope;
-        bool cok = cg_emit_block(cg, catch_block);
-        if (cok) cg_release_scope(cg, catch_scope);
-        cg->cur_scope = catch_scope->parent;
-        scope_pop_free(catch_scope);
-        if (!cok) return false;
-        /* Caught: drop the +1 reference the throw site retained. */
-        buf_append_fmt(cg->cur_body,
-                       "            if (%s.is_managed && %s.value) feng_release(%s.value);\n",
-                       frame, frame, frame);
-    }
-
-    buf_append_cstr(cg->cur_body, "        }\n");
-
-    if (finally_block != NULL) {
-        Scope *fin_scope = scope_push(cg->cur_scope);
-        if (!fin_scope) {
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
-        }
-        cg->cur_scope = fin_scope;
-        bool fok = cg_emit_block(cg, finally_block);
-        if (fok) cg_release_scope(cg, fin_scope);
-        cg->cur_scope = fin_scope->parent;
-        scope_pop_free(fin_scope);
-        if (!fok) return false;
-    }
-
-    if (catch_block == NULL) {
-        /* No catch: re-throw to outer frame after finally has run. */
-        buf_append_fmt(cg->cur_body,
-                       "        if (%s != 0) feng_exception_throw(%s.value, %s.is_managed);\n",
-                       setjmp_var, frame, frame);
-    }
-
-    buf_append_cstr(cg->cur_body, "    }\n");
-    return true;
-}
-
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
     if (cg->failed) return false;
     switch (stmt->kind) {
@@ -15974,7 +15877,6 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);
         case FENG_STMT_CONTINUE: return cg_emit_break_continue(cg, stmt, false);
         case FENG_STMT_THROW:    return cg_emit_throw(cg, stmt);
-        case FENG_STMT_TRY:      return cg_emit_try(cg, stmt);
         default:
             return cg_fail(cg, stmt->token,
                 "codegen: statement kind not yet supported in this iteration");
@@ -16453,6 +16355,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
                 "codegen: void function cannot return a value");
         }
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_cstr(cg->cur_body, "    return;\n");
         return true;
     }
@@ -16468,6 +16371,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         size_t idx = cg->cur_return_type->generic_param_index;
         const char *desc = cg->generic_fn_type_param_descs[idx];
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         if (r.owns_ref) {
             buf_append_fmt(cg->cur_body,
                 "    switch (%s->kind) {\n"
@@ -16520,6 +16424,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         }
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body,
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
@@ -16558,6 +16463,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
 
         free(cty);
         cg_release_through(cg, NULL);
+    cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body,
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
@@ -16568,6 +16474,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             "    %s %s = (%s)(%s);\n", cty, tmp, cty, r.c_expr);
         free(cty);
         cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body,
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
@@ -19748,10 +19655,6 @@ static bool cg_collect_generic_instances_from_stmt(CG *cg, const FengStmt *stmt,
                    cg_collect_generic_instances_from_binding(cg, &stmt->as.for_stmt.iter_binding, scope) &&
                    cg_collect_generic_instances_from_expr(cg, stmt->as.for_stmt.iter_expr, scope) &&
                    cg_collect_generic_instances_from_block(cg, stmt->as.for_stmt.body, scope);
-        case FENG_STMT_TRY:
-            return cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.try_block, scope) &&
-                   cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.catch_block, scope) &&
-                   cg_collect_generic_instances_from_block(cg, stmt->as.try_stmt.finally_block, scope);
         case FENG_STMT_RETURN:
             return cg_collect_generic_instances_from_expr(cg, stmt->as.return_value, scope);
         case FENG_STMT_THROW:

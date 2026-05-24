@@ -1886,26 +1886,6 @@ static bool collect_ctor_bound_names_from_stmt(const FengDecl *type_decl,
                                                        path,
                                                        out_error);
 
-        case FENG_STMT_TRY:
-            return collect_ctor_bound_names_from_block(type_decl,
-                                                       stmt->as.try_stmt.try_block,
-                                                       bound_names,
-                                                       bound_count,
-                                                       path,
-                                                       out_error) &&
-                   collect_ctor_bound_names_from_block(type_decl,
-                                                       stmt->as.try_stmt.catch_block,
-                                                       bound_names,
-                                                       bound_count,
-                                                       path,
-                                                       out_error) &&
-                   collect_ctor_bound_names_from_block(type_decl,
-                                                       stmt->as.try_stmt.finally_block,
-                                                       bound_names,
-                                                       bound_count,
-                                                       path,
-                                                       out_error);
-
         case FENG_STMT_BINDING:
         case FENG_STMT_EXPR:
         case FENG_STMT_RETURN:

@@ -259,7 +259,6 @@ typedef struct ResolveContext {
     size_t *error_capacity;
     bool current_callable_has_escaping_exception;
     size_t exception_capture_depth;
-    size_t finally_depth;
     size_t unknown_type_depth;
     size_t unknown_value_depth;
     /* Number of nested `while`/`for` loop bodies currently being resolved
@@ -1726,19 +1725,6 @@ static bool inject_external_modules_from_stmt(
                                                      imported_query,
                                                      program,
                                                      stmt->as.for_stmt.body);
-        case FENG_STMT_TRY:
-            return inject_external_modules_from_block(analysis,
-                                                     imported_query,
-                                                     program,
-                                                     stmt->as.try_stmt.try_block) &&
-                   inject_external_modules_from_block(analysis,
-                                                     imported_query,
-                                                     program,
-                                                     stmt->as.try_stmt.catch_block) &&
-                   inject_external_modules_from_block(analysis,
-                                                     imported_query,
-                                                     program,
-                                                     stmt->as.try_stmt.finally_block);
         case FENG_STMT_RETURN:
             return inject_external_modules_from_expr(analysis,
                                                      imported_query,
@@ -3426,6 +3412,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
 static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
+static bool inferred_expr_type_is_void(InferredExprType expr_type);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
 static FengSpecCoercionCallableSource classify_callable_source(
     const ResolveContext *context,
@@ -5146,6 +5133,10 @@ static bool validate_try_expr(ResolveContext *context, const FengExpr *expr) {
             if (block_terminates_with_throw(clause->body)) {
                 continue;
             }
+            if (inferred_expr_type_is_known(body_type) &&
+                inferred_expr_type_is_void(body_type)) {
+                continue;
+            }
             return resolver_append_error(
                 context,
                 clause->token,
@@ -5189,6 +5180,10 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
     }
     if (result_expr == NULL) {
         if (block_terminates_with_throw(clause->body)) {
+            return true;
+        }
+        if (inferred_expr_type_is_known(body_type) &&
+            inferred_expr_type_is_void(body_type)) {
             return true;
         }
         return resolver_append_error(
@@ -7099,30 +7094,9 @@ static bool callable_signatures_equal_for_owner_instance(
     return type_refs_semantically_equal(context, left_return, right_return);
 }
 
-static bool current_stmt_is_inside_finally(const ResolveContext *context) {
-    return context != NULL && context->finally_depth > 0U;
-}
-
-static bool validate_finally_forbidden_control_stmt(ResolveContext *context,
-                                                    const FengStmt *stmt,
-                                                    const char *keyword) {
-    if (!current_stmt_is_inside_finally(context)) {
-        return true;
-    }
-
-    return resolver_append_error(
-        context,
-        stmt != NULL ? stmt->token : context->program->module_token,
-        format_message("finally blocks cannot contain '%s'", keyword));
-}
-
 static bool validate_loop_control_stmt(ResolveContext *context,
                                        const FengStmt *stmt,
                                        const char *keyword) {
-    if (!validate_finally_forbidden_control_stmt(context, stmt, keyword)) {
-        return false;
-    }
-
     if (context != NULL && context->loop_depth > 0U) {
         return true;
     }
@@ -7406,10 +7380,6 @@ static bool inferred_expr_type_is_throwable(const ResolveContext *context,
 static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
     InferredExprType throw_type;
     const char *reason = NULL;
-
-    if (!validate_finally_forbidden_control_stmt(context, stmt, "throw")) {
-        return false;
-    }
 
     throw_type = infer_expr_type(context, stmt != NULL ? stmt->as.throw_value : NULL);
 
@@ -8573,34 +8543,6 @@ static InferredExprType infer_stmt_return_type(ResolveContext *context, const Fe
         }
         case FENG_STMT_FOR:
             return infer_block_return_type(context, stmt->as.for_stmt.body);
-        case FENG_STMT_TRY: {
-            InferredExprType try_type = infer_block_return_type(context, stmt->as.try_stmt.try_block);
-            InferredExprType catch_type =
-                infer_block_return_type(context, stmt->as.try_stmt.catch_block);
-            InferredExprType finally_type = stmt->as.try_stmt.finally_block != NULL
-                                                ? infer_block_return_type(
-                                                      context, stmt->as.try_stmt.finally_block)
-                                                : inferred_expr_type_unknown();
-
-            if (inferred_expr_type_is_known(try_type)) {
-                current = try_type;
-            }
-            if (inferred_expr_type_is_known(catch_type)) {
-                if (!inferred_expr_type_is_known(current)) {
-                    current = catch_type;
-                } else if (!inferred_expr_types_equal(context, current, catch_type)) {
-                    return inferred_expr_type_unknown();
-                }
-            }
-            if (inferred_expr_type_is_known(finally_type)) {
-                if (!inferred_expr_type_is_known(current)) {
-                    current = finally_type;
-                } else if (!inferred_expr_types_equal(context, current, finally_type)) {
-                    return inferred_expr_type_unknown();
-                }
-            }
-            return current;
-        }
         default:
             return current;
     }
@@ -9349,16 +9291,6 @@ static bool constructor_stmt_binds_let_field(const FengDecl *type_decl,
                                                     field_name) ||
                    constructor_block_binds_let_field(type_decl,
                                                      stmt->as.for_stmt.body,
-                                                     field_name);
-        case FENG_STMT_TRY:
-            return constructor_block_binds_let_field(type_decl,
-                                                     stmt->as.try_stmt.try_block,
-                                                     field_name) ||
-                   constructor_block_binds_let_field(type_decl,
-                                                     stmt->as.try_stmt.catch_block,
-                                                     field_name) ||
-                   constructor_block_binds_let_field(type_decl,
-                                                     stmt->as.try_stmt.finally_block,
                                                      field_name);
         case FENG_STMT_BINDING:
         case FENG_STMT_EXPR:
@@ -14580,14 +14512,12 @@ static void lambda_save_callable_context(ResolveContext *context,
                                          bool *out_prev_saw_return,
                                          bool *out_prev_escape,
                                          size_t *out_prev_exception_capture,
-                                         size_t *out_prev_finally,
                                          size_t *out_prev_loop) {
     *out_prev_sig = context->current_callable_signature;
     *out_prev_inferred_return = context->current_callable_inferred_return_type;
     *out_prev_saw_return = context->current_callable_saw_return;
     *out_prev_escape = context->current_callable_has_escaping_exception;
     *out_prev_exception_capture = context->exception_capture_depth;
-    *out_prev_finally = context->finally_depth;
     *out_prev_loop = context->loop_depth;
 }
 
@@ -14597,14 +14527,12 @@ static void lambda_restore_callable_context(ResolveContext *context,
                                             bool prev_saw_return,
                                             bool prev_escape,
                                             size_t prev_exception_capture,
-                                            size_t prev_finally,
                                             size_t prev_loop) {
     context->current_callable_signature = prev_sig;
     context->current_callable_inferred_return_type = prev_inferred_return;
     context->current_callable_saw_return = prev_saw_return;
     context->current_callable_has_escaping_exception = prev_escape;
     context->exception_capture_depth = prev_exception_capture;
-    context->finally_depth = prev_finally;
     context->loop_depth = prev_loop;
 }
 
@@ -14615,7 +14543,6 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     bool prev_saw_return;
     bool prev_escape;
     size_t prev_exception_capture;
-    size_t prev_finally;
     size_t prev_loop;
     bool prev_self_capturable;
     bool effective_allow_self;
@@ -14655,7 +14582,6 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                  &prev_saw_return,
                                  &prev_escape,
                                  &prev_exception_capture,
-                                 &prev_finally,
                                  &prev_loop);
     prev_self_capturable = context->self_capturable;
 
@@ -14669,7 +14595,6 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     context->current_callable_saw_return = false;
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
-    context->finally_depth = 0U;
     context->loop_depth = 0U;
     /* self_capturable stays the same: if the lambda body could see self, so
      * can a lambda nested inside it. */
@@ -14707,7 +14632,6 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                     prev_saw_return,
                                     prev_escape,
                                     prev_exception_capture,
-                                    prev_finally,
                                     prev_loop);
     context->self_capturable = prev_self_capturable;
 
@@ -15086,44 +15010,6 @@ static bool resolve_block(ResolveContext *context, const FengBlock *block, bool 
     return ok;
 }
 
-static bool resolve_block_with_exception_capture(ResolveContext *context,
-                                                 const FengBlock *block,
-                                                 bool allow_self,
-                                                 bool catches_exceptions) {
-    size_t previous_capture_depth;
-    bool ok;
-
-    if (context == NULL) {
-        return true;
-    }
-
-    previous_capture_depth = context->exception_capture_depth;
-    if (catches_exceptions) {
-        context->exception_capture_depth += 1U;
-    }
-
-    ok = resolve_block(context, block, allow_self);
-    context->exception_capture_depth = previous_capture_depth;
-    return ok;
-}
-
-static bool resolve_block_with_finally_context(ResolveContext *context,
-                                               const FengBlock *block,
-                                               bool allow_self) {
-    size_t previous_finally_depth;
-    bool ok;
-
-    if (context == NULL) {
-        return true;
-    }
-
-    previous_finally_depth = context->finally_depth;
-    context->finally_depth += 1U;
-    ok = resolve_block(context, block, allow_self);
-    context->finally_depth = previous_finally_depth;
-    return ok;
-}
-
 static bool resolve_type_ref_with_unknown_context(ResolveContext *context,
                                                   const FengTypeRef *type_ref) {
     size_t previous_unknown_depth;
@@ -15413,21 +15299,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return ok;
         }
 
-        case FENG_STMT_TRY:
-            return resolve_block_with_exception_capture(context,
-                                                        stmt->as.try_stmt.try_block,
-                                                        allow_self,
-                                                        stmt->as.try_stmt.catch_block != NULL) &&
-                   resolve_block(context, stmt->as.try_stmt.catch_block, allow_self) &&
-                   resolve_block_with_finally_context(context,
-                                                     stmt->as.try_stmt.finally_block,
-                                                     allow_self);
-
         case FENG_STMT_RETURN:
             if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
-                return false;
-            }
-            if (!validate_finally_forbidden_control_stmt(context, stmt, "return")) {
                 return false;
             }
             return validate_return_stmt(context, stmt);
@@ -15466,7 +15339,6 @@ static bool resolve_callable(ResolveContext *context,
     bool previous_callable_has_escaping_exception =
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
-    size_t previous_finally_depth = context->finally_depth;
     size_t previous_loop_depth = context->loop_depth;
     bool previous_self_capturable = context->self_capturable;
     /* G4-1/G4-14: push callable-level type params (method generics). */
@@ -15512,7 +15384,6 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = false;
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
-    context->finally_depth = 0U;
     context->loop_depth = 0U;
     /* Inside a member method or constructor body, lambdas may capture self. */
     if (allow_self && context->current_type_decl != NULL) {
@@ -15525,7 +15396,6 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
-        context->finally_depth = previous_finally_depth;
         context->loop_depth = previous_loop_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -15539,7 +15409,6 @@ static bool resolve_callable(ResolveContext *context,
             context->current_callable_saw_return = previous_callable_saw_return;
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
             context->exception_capture_depth = previous_exception_capture_depth;
-            context->finally_depth = previous_finally_depth;
             context->loop_depth = previous_loop_depth;
             context->current_callable_signature = previous_callable_signature;
             context->self_capturable = previous_self_capturable;
@@ -15553,7 +15422,6 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
-        context->finally_depth = previous_finally_depth;
         context->loop_depth = previous_loop_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -15573,7 +15441,6 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
-        context->finally_depth = previous_finally_depth;
         context->loop_depth = previous_loop_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -15628,7 +15495,6 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = previous_callable_saw_return;
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
     context->exception_capture_depth = previous_exception_capture_depth;
-    context->finally_depth = previous_finally_depth;
     context->loop_depth = previous_loop_depth;
     context->current_callable_signature = previous_callable_signature;
     context->self_capturable = previous_self_capturable;

@@ -29,11 +29,10 @@ fn array_clone_invalid_range() {
   let values: int[] = [1, 2, 3];
   var caught: bool = false;
 
-  try {
-    values.clone((long)2, (long)4);
-  } catch {
+  let ignored = try values.clone((long)2, (long)4) catch ex: string {
     caught = true;
-  }
+    values;
+  };
 
   check(caught, "slice/array-clone-invalid-range");
 }
@@ -42,11 +41,10 @@ fn array_clone_negative_end() {
   let values: int[] = [1, 2, 3];
   var caught: bool = false;
 
-  try {
-    values.clone((long)0, (long)-1);
-  } catch {
+  let ignored = try values.clone((long)0, (long)-1) catch ex: string {
     caught = true;
-  }
+    values;
+  };
 
   check(caught, "slice/array-clone-negative-length");
 }
@@ -95,11 +93,10 @@ fn span_slice_invalid_relative_range() {
   let middle = values.slice((long)1, (long)3);
   var caught: bool = false;
 
-  try {
-    middle.slice((long)1, (long)3);
-  } catch {
+  let ignored = try middle.slice((long)1, (long)3) catch ex: string {
     caught = true;
-  }
+    middle;
+  };
 
   check(caught, "slice/span-subslice-invalid-range");
 }

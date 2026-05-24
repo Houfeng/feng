@@ -54,8 +54,9 @@ fn ensure_positive(x: int) {
 ### 3.3 作为表达式时的产值与类型规则
 
 - `try/catch` 可作为表达式出现在赋值右值位置。
-- 当 `try/catch` 作为表达式使用且存在 `catch` 时,`catch` 块必须显式给出结果返回（写法形如 `return <value>;`）。
-- `catch` 返回值类型必须与 `try` 主表达式结果类型一致。
+- 当 `try/catch` 作为非 `void` 表达式使用且存在 `catch` 时,每个可正常完成的 `catch` 块必须以结果表达式结束；也可以用 `return <value>;` 或 `throw <expr>;` 终止当前路径。
+- `catch` 结果类型必须与 `try` 主表达式结果类型一致。
+- 当 `try` 主表达式结果类型为 `void` 时,`catch` 块可以只执行语句并正常结束,不需要结果表达式。
 - 若 `let` 绑定有显式类型声明,则 `try` 主表达式结果与 `catch` 返回值都必须符合该声明类型。
 
 ### 3.4 省略 `catch` 时的自动上抛

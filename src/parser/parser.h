@@ -280,7 +280,6 @@ typedef enum FengStmtKind {
     FENG_STMT_MATCH,
     FENG_STMT_WHILE,
     FENG_STMT_FOR,
-    FENG_STMT_TRY,
     FENG_STMT_RETURN,
     FENG_STMT_THROW,
     FENG_STMT_BREAK,
@@ -332,11 +331,6 @@ struct FengStmt {
             FengBinding iter_binding; /* name + mutability + type (NULL until inferred) */
             FengExpr *iter_expr;
         } for_stmt;
-        struct {
-            FengBlock *try_block;
-            FengBlock *catch_block;
-            FengBlock *finally_block;
-        } try_stmt;
         FengExpr *return_value;
         FengExpr *throw_value;
     } as;

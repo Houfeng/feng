@@ -3313,45 +3313,6 @@ static FengStmt *parse_for_statement(Parser *parser) {
     return stmt;
 }
 
-static FengStmt *parse_try_statement(Parser *parser) {
-    FengStmt *stmt = new_stmt(parser, FENG_STMT_TRY, parser_previous_token(parser));
-
-    if (stmt == NULL) {
-        return NULL;
-    }
-
-    stmt->as.try_stmt.try_block = parse_block(parser);
-    if (stmt->as.try_stmt.try_block == NULL) {
-        free_stmt(stmt);
-        return NULL;
-    }
-
-    if (parser_match(parser, FENG_TOKEN_KW_CATCH)) {
-        stmt->as.try_stmt.catch_block = parse_block(parser);
-        if (stmt->as.try_stmt.catch_block == NULL) {
-            free_stmt(stmt);
-            return NULL;
-        }
-    }
-
-    if (parser_match(parser, FENG_TOKEN_KW_FINALLY)) {
-        stmt->as.try_stmt.finally_block = parse_block(parser);
-        if (stmt->as.try_stmt.finally_block == NULL) {
-            free_stmt(stmt);
-            return NULL;
-        }
-    }
-
-    if (stmt->as.try_stmt.catch_block == NULL && stmt->as.try_stmt.finally_block == NULL) {
-        (void)parser_error_current(parser,
-                       "try statements must have at least one catch block or finally block");
-        free_stmt(stmt);
-        return NULL;
-    }
-
-    return stmt;
-}
-
 static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator) {
     FengStmt *stmt;
 
@@ -3439,11 +3400,6 @@ static FengStmt *parse_statement(Parser *parser) {
     }
     if (parser_match(parser, FENG_TOKEN_KW_FOR)) {
         return parse_for_statement(parser);
-    }
-    if (parser_check(parser, FENG_TOKEN_KW_TRY) &&
-        parser_peek(parser, 1U)->kind == FENG_TOKEN_LBRACE) {
-        (void)parser_advance(parser);
-        return parse_try_statement(parser);
     }
     if (parser_match(parser, FENG_TOKEN_KW_RETURN)) {
         stmt = new_stmt(parser, FENG_STMT_RETURN, parser_previous_token(parser));
@@ -3863,11 +3819,6 @@ static void free_stmt(FengStmt *stmt) {
                 free_stmt(stmt->as.for_stmt.update);
             }
             free_block(stmt->as.for_stmt.body);
-            break;
-        case FENG_STMT_TRY:
-            free_block(stmt->as.try_stmt.try_block);
-            free_block(stmt->as.try_stmt.catch_block);
-            free_block(stmt->as.try_stmt.finally_block);
             break;
         case FENG_STMT_RETURN:
             free_expr(stmt->as.return_value);
