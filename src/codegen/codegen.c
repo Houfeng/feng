@@ -13233,10 +13233,11 @@ static bool cg_emit_try_expr(CG *cg,
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
         bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
+        bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         CGType *catch_type = NULL;
         char *desc_expr = NULL;
 
-        if (!is_unknown) {
+        if (!is_unknown && !is_anonymous) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
                 free(slot_name);
                 free(marker_name);
@@ -13256,7 +13257,7 @@ static bool cg_emit_try_expr(CG *cg,
         }
         buf_append_fmt(cg->cur_body,
                        "        { %s },\n",
-                       is_unknown ? "NULL" : desc_expr);
+                       (is_unknown || is_anonymous) ? "NULL" : desc_expr);
         cgtype_free(catch_type);
         free(desc_expr);
     }
@@ -13328,9 +13329,10 @@ static bool cg_emit_try_expr(CG *cg,
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
         bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
+        bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         CGType *catch_type = NULL;
 
-        if (!is_unknown) {
+        if (!is_unknown && !is_anonymous) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
                 free(slot_name);
                 free(marker_name);
@@ -13354,7 +13356,8 @@ static bool cg_emit_try_expr(CG *cg,
             return cg_fail(cg, clause->token, "codegen: out of memory");
         }
         cg->cur_scope = catch_scope;
-        if (!cg_emit_try_expr_catch_binding(cg,
+        if (!is_anonymous &&
+            !cg_emit_try_expr_catch_binding(cg,
                                             clause,
                                             catch_type,
                                             is_unknown,

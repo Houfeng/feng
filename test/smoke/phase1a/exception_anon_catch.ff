@@ -1,0 +1,48 @@
+mod feng.smoke;
+
+@cdecl("libc")
+extern fn puts(msg: string*): int;
+
+fn throw_i32(): i32 {
+    let v: i32 = 42;
+    throw v;
+    return 0;
+}
+
+fn throw_string(): string {
+    throw "oops";
+    return "";
+}
+
+fn anon_catch_expr(): string {
+    return try throw_string() catch {
+        "anon-expr-caught";
+    };
+}
+
+fn main(args: string[]) {
+    // anonymous catch as statement: catches any exception
+    try throw_i32() catch {
+        puts(&"anon-stmt-any");
+    };
+
+    // anonymous catch after specific catch: specific should fire when type matches
+    try throw_i32() catch ex: i32 {
+        puts(&"specific-i32");
+    } catch {
+        puts(&"anon-fallback");
+    };
+
+    // anonymous catch fires when specific clause does not match
+    try throw_string() catch ex: i32 {
+        puts(&"specific-i32");
+    } catch {
+        puts(&"anon-fallback");
+    };
+
+    // anonymous catch as expression: produce a value
+    let v = anon_catch_expr();
+    puts(&v);
+
+    puts(&"done");
+}

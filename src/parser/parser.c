@@ -2533,23 +2533,25 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
         memset(&clause, 0, sizeof(clause));
         clause.token = parser_previous_token(parser);
 
-        if (!parser_expect_identifier_like(parser,
-                                           &clause.name,
-                                           false,
-                                           "catch clauses must bind an exception name")) {
-            free_expr(expr);
-            return NULL;
-        }
-        if (!parser_expect(parser,
-                           FENG_TOKEN_COLON,
-                           "catch clauses must include a ': Type' annotation")) {
-            free_expr(expr);
-            return NULL;
-        }
-        clause.type = parse_type_ref(parser);
-        if (clause.type == NULL) {
-            free_expr(expr);
-            return NULL;
+        if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
+            if (!parser_expect_identifier_like(parser,
+                                               &clause.name,
+                                               false,
+                                               "catch clauses must bind an exception name")) {
+                free_expr(expr);
+                return NULL;
+            }
+            if (!parser_expect(parser,
+                               FENG_TOKEN_COLON,
+                               "catch clauses must include a ': Type' annotation")) {
+                free_expr(expr);
+                return NULL;
+            }
+            clause.type = parse_type_ref(parser);
+            if (clause.type == NULL) {
+                free_expr(expr);
+                return NULL;
+            }
         }
         clause.body = parse_block(parser);
         if (clause.body == NULL) {

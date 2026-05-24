@@ -2471,6 +2471,55 @@ static void test_catch_rejects_non_exception_types(void) {
     }
 }
 
+static void test_catch_without_binding_accepts_anonymous_clause(void) {
+    /* catch { } (anonymous) is valid as statement or expression catch-all */
+    static const char *const cases[] = {
+        /* statement: anonymous catch-all */
+        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run() { try parse() catch { }; }\n",
+        /* statement: anonymous catch-all after specific catch */
+        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run() { try parse() catch ex: i32 { } catch { }; }\n",
+        /* expression: anonymous catch-all producing value */
+        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run(): i32 { return try parse() catch { 0 }; }\n"
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die("catch_anon_ok.f", cases[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+        ASSERT(analysis != NULL);
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+static void test_catch_anonymous_must_be_last_clause(void) {
+    /* anonymous catch { } must be the last catch clause */
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { throw 1; return 0; }\n"
+        "fn run() { try parse() catch { } catch ex: i32 { }; }\n";
+    FengProgram *program = parse_program_or_die("catch_anon_not_last_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "catch_anon_not_last_error.f") == 0);
+    ASSERT(strstr(errors[0].message, "must be the last catch clause") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13153,6 +13202,8 @@ int main(void) {
     test_throw_rejects_callable_values();
     test_throw_allows_spec_values();
     test_catch_rejects_non_exception_types();
+    test_catch_without_binding_accepts_anonymous_clause();
+    test_catch_anonymous_must_be_last_clause();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();

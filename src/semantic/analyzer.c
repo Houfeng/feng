@@ -15062,20 +15062,22 @@ static bool resolve_try_expr(ResolveContext *context,
          clause_index < expr->as.try_expr.clause_count;
          ++clause_index) {
         const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
+        bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         InferredExprType catch_type = inferred_expr_type_from_type_ref(clause->type);
         const char *catch_reason = NULL;
 
         if (!resolve_type_ref_with_unknown_context(context, clause->type)) {
             return false;
         }
-        if (type_ref_is_unknown(clause->type) &&
+        if ((type_ref_is_unknown(clause->type) || is_anonymous) &&
             clause_index + 1U < expr->as.try_expr.clause_count) {
             return resolver_append_error(
                 context,
                 clause->token,
-                format_message("catch clause of type 'unknown' must be the last catch clause"));
+                format_message("catch clause matching any exception must be the last catch clause"));
         }
-        if (!type_ref_is_catchable_exception_type(context, clause->type, &catch_reason)) {
+        if (!is_anonymous &&
+            !type_ref_is_catchable_exception_type(context, clause->type, &catch_reason)) {
             char *type_name = format_type_ref_name(clause->type);
             char *message = format_message(
                 "catch type '%s' is not catchable: %s",
@@ -15088,16 +15090,25 @@ static bool resolve_try_expr(ResolveContext *context,
         if (!resolver_push_scope(context)) {
             return false;
         }
-        ok = resolver_add_local_typed_name(context,
-                           clause->name,
-                           catch_type,
-                           FENG_MUTABILITY_LET) &&
-             resolve_block(context, clause->body, allow_self) &&
-             validate_try_catch_clause_result_type(context,
-                               expr,
-                               clause,
-                               body_type,
-                               result_required);
+        if (is_anonymous) {
+            ok = resolve_block(context, clause->body, allow_self) &&
+                 validate_try_catch_clause_result_type(context,
+                                   expr,
+                                   clause,
+                                   body_type,
+                                   result_required);
+        } else {
+            ok = resolver_add_local_typed_name(context,
+                               clause->name,
+                               catch_type,
+                               FENG_MUTABILITY_LET) &&
+                 resolve_block(context, clause->body, allow_self) &&
+                 validate_try_catch_clause_result_type(context,
+                                   expr,
+                                   clause,
+                                   body_type,
+                                   result_required);
+        }
         resolver_pop_scope(context);
         if (!ok) {
             return false;
