@@ -247,3 +247,4 @@ fn main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不�
 - [Feng 语言类型规范](./feng-type.md): `type`、构造函数、终结器函数与成员规则。
 - [Feng 语言类型规范](./feng-type.md): `self`、方法值与对象行为细节。
 - [Feng 语言对象生命周期规范](./feng-lifetime.md): 闭包环境的托管语义。
+- [Feng 语言变长参数规范](./feng-function-variadic.md): 变长参数（`T...`）的语法、语义与编译期约束。
