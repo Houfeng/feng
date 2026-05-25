@@ -25,9 +25,9 @@ fn readLine_uses_remaining_input() {
   check(stdio.read(eofBuffer) == (long)0, "stdio/read-eof-count");
   check(stdio.read(emptyBuffer) == (long)0, "stdio/read-empty-buffer");
 
-  print("__STDIO_READLINE1__={0}", first);
-  print("__STDIO_READLINE2__={0}", second);
-  print("__STDIO_READLINE3__={0}", third);
+  writeLine("__STDIO_READLINE1__=" + first);
+  writeLine("__STDIO_READLINE2__=" + second);
+  writeLine("__STDIO_READLINE3__=" + third);
 }
 
 fn write_writes_stdout() {
@@ -35,6 +35,13 @@ fn write_writes_stdout() {
   let written = stdio.write(marker);
 
   check(written == (long)16, "stdio/write-return");
+}
+
+fn writeLine_writes_stdout() {
+  let marker = "__STDIO_LINE__";
+  let written = stdio.writeLine(marker);
+
+  check(written == (long)15, "stdio/writeLine-return");
 }
 
 fn writeError_writes_stderr() {
@@ -45,20 +52,18 @@ fn writeError_writes_stderr() {
 }
 
 fn print_formats_output() {
-  let args: string[] = ["left", "right"];
-  let methodWritten = stdio.print("__STDIO_METHOD_PRINT__ {0}/{1}", args);
-  let topWritten = print("__STDIO_TOP_PRINT__ {0}/{1}", "left", "right");
-  let literalWritten = print("__STDIO_LITERAL__ {2}", "left", "right");
+  let topWritten = print("__STDIO_TOP_PRINT__ {0}/{1}\n", "left", "right");
+  let literalWritten = print("__STDIO_LITERAL__ {2}\n", "left", "right");
 
-  check(methodWritten == "__STDIO_METHOD_PRINT__ left/right".length() + (long)1, "stdio/method-print-return");
-  check(topWritten == "__STDIO_TOP_PRINT__ left/right".length() + (long)1, "stdio/top-print-return");
-  check(literalWritten == "__STDIO_LITERAL__ {2}".length() + (long)1, "stdio/literal-print-return");
+  check(topWritten == "__STDIO_TOP_PRINT__ left/right\n".length(), "stdio/top-print-return");
+  check(literalWritten == "__STDIO_LITERAL__ {2}\n".length(), "stdio/literal-print-return");
 }
 
 pu fn run_stdio_api_tests() {
   read_reads_into_buffer();
   readLine_uses_remaining_input();
   write_writes_stdout();
+  writeLine_writes_stdout();
   writeError_writes_stderr();
   print_formats_output();
 }

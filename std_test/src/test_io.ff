@@ -2,28 +2,36 @@ mod std_test;
 
 use std;
 
-fn input_reads_one_line_per_call() {
-  let first = input();
-  let second = input();
-  let third = input();
+fn readLine_reads_one_line_per_call() {
+  let first = readLine();
+  let second = readLine();
+  let third = readLine();
 
-  check(first.length() == (long)5, "io/input-first-line-length");
-  check(second.length() == (long)2, "io/input-second-line-length");
-  check(third.length() == (long)0, "io/input-eof-empty-length");
+  check(first.length() == (long)5, "io/readLine-first-line-length");
+  check(second.length() == (long)2, "io/readLine-second-line-length");
+  check(third.length() == (long)0, "io/readLine-eof-empty-length");
 
-  print("__STD_IO_INPUT1__={0}", first);
-  print("__STD_IO_INPUT2__={0}", second);
-  print("__STD_IO_INPUT3__={0}", third);
+  writeLine("__STD_IO_READLINE1__=" + first);
+  writeLine("__STD_IO_READLINE2__=" + second);
+  writeLine("__STD_IO_READLINE3__=" + third);
 }
 
-fn print_writes_stdout_with_newline() {
-  let marker = "__STD_IO_PRINT__";
+fn writeLine_writes_stdout_with_newline() {
+  let marker = "__STD_IO_WRITELINE__";
+  let written = writeLine(marker);
+
+  check(written == marker.length() + (long)1, "io/writeLine-return");
+}
+
+fn print_writes_stdout_without_newline() {
+  let marker = "__STD_IO_PRINT__\n";
   let written = print(marker);
 
-  check(written == marker.length() + (long)1, "io/print-return");
+  check(written == marker.length(), "io/print-return");
 }
 
 pu fn run_io_tests() {
-  input_reads_one_line_per_call();
-  print_writes_stdout_with_newline();
+  readLine_reads_one_line_per_call();
+  writeLine_writes_stdout_with_newline();
+  print_writes_stdout_without_newline();
 }

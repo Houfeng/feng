@@ -115,15 +115,16 @@ std-tests: cli runtime
 	$(BIN_DIR)/feng build ./std
 	$(BIN_DIR)/feng build ./std_test
 	./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_INPUT1__=ABCDE$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_INPUT2__=FG$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_INPUT3__=$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_READLINE1__=ABCDE$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_READLINE3__=$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_WRITELINE__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE1__=DE$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE3__=$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_WRITE__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_METHOD_PRINT__ left/right$$' ./std_test/build/std_test.stdout
+	grep -q '^__STDIO_LINE__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
 
