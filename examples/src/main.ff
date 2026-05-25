@@ -9,5 +9,7 @@ use std;
 fn main(args: string[]) {
   print("Please enter your name: ");
   let msg = readLine();
-  println("Hello: {0}", msg);
+  for var i = 0; i < 10; i += 1 {
+    println("Hello: {0}", msg);
+  }
 }
