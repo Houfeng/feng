@@ -11,16 +11,9 @@ fn input_reads_one_line_per_call() {
   check(second.length() == (long)2, "io/input-second-line-length");
   check(third.length() == (long)0, "io/input-eof-empty-length");
 
-  output("__STD_IO_INPUT1__=" + first + "\n");
-  output("__STD_IO_INPUT2__=" + second + "\n");
-  output("__STD_IO_INPUT3__=" + third + "\n");
-}
-
-fn output_writes_stdout() {
-  let marker = "__STD_IO_OUTPUT__\n";
-  let written = output(marker);
-
-  check(written == marker.length(), "io/output-return");
+  print("__STD_IO_INPUT1__={0}", first);
+  print("__STD_IO_INPUT2__={0}", second);
+  print("__STD_IO_INPUT3__={0}", third);
 }
 
 fn print_writes_stdout_with_newline() {
@@ -32,6 +25,5 @@ fn print_writes_stdout_with_newline() {
 
 pu fn run_io_tests() {
   input_reads_one_line_per_call();
-  output_writes_stdout();
   print_writes_stdout_with_newline();
 }

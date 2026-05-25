@@ -25,9 +25,9 @@ fn readLine_uses_remaining_input() {
   check(stdio.read(eofBuffer) == (long)0, "stdio/read-eof-count");
   check(stdio.read(emptyBuffer) == (long)0, "stdio/read-empty-buffer");
 
-  output("__STDIO_READLINE1__=" + first + "\n");
-  output("__STDIO_READLINE2__=" + second + "\n");
-  output("__STDIO_READLINE3__=" + third + "\n");
+  print("__STDIO_READLINE1__={0}", first);
+  print("__STDIO_READLINE2__={0}", second);
+  print("__STDIO_READLINE3__={0}", third);
 }
 
 fn write_writes_stdout() {

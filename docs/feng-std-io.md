@@ -7,7 +7,7 @@
 - 为 Feng 提供一个可复用的标准输入输出对象 `Stdio`，把底层字节 I/O 与上层文本封装收敛到同一处公开面。
 - 保持低层 API bytes-first：`read`、`write` 与 `writeError` 都直接处理 `byte` 缓冲或 `byte[]` 数据，不隐式引入文本编码规则。
 - 在 `Stdio` 之上提供最小必要的文本便利能力：`readLine` 负责按行读取 UTF-8 文本，`print` 负责按格式插值后输出一行文本。
-- 为现有使用方保留兼容顶层函数 `input`、`output` 与 `print`；这些函数只是默认实例 `stdio` 的语义包装，不另建独立实现分支。
+- 为现有使用方保留兼容顶层函数 `input` 与 `print`；这些函数只是默认实例 `stdio` 的语义包装，不另建独立实现分支。
 
 ## 2 公开 API
 
@@ -31,7 +31,6 @@
 | 函数 | 签名 | 说明 |
 | --- | --- | --- |
 | `input` | `pu fn input(): string` | `stdio.readLine()` 的兼容包装 |
-| `output` | `pu fn output(text: string): long` | 将 `text` 的 UTF-8 字节序列写到标准输出；语义等价于 `stdio.write(...)` |
 | `print` | `pu fn print(format: string, args: string...): long` | `stdio.print(format, args...)` 的兼容包装 |
 
 ## 3 语义
@@ -65,7 +64,6 @@
 ### 3.4 顶层兼容包装
 
 - `input()` 的语义固定等价于 `stdio.readLine()`。
-- `output(text)` 的语义固定等价于把 `text` 当前的 UTF-8 字节序列传给 `stdio.write(...)`。
 - 顶层 `print(format, args...)` 的语义固定等价于把 variadic `args` 组装成 `string[]` 后委托给 `stdio.print(format, args)`。
 - 兼容顶层函数不得拥有与 `stdio` 方法不一致的独立分支逻辑。
 
@@ -81,8 +79,8 @@
 - [必须] 顶层 `print` 的签名固定为 `print(format: string, args: string...)`。
 - [必须] `{argsIndex}` 占位符中的下标按零基解释。
 - [必须] 非法或越界占位符按字面文本输出，不得抛错或静默删除。
-- [必须] 兼容顶层 `input`、`output` 与 `print` 都委托给默认实例 `stdio`。
-- [禁止] 为 `write`、`writeError` 或 `output` 自动追加换行。
+- [必须] 兼容顶层 `input` 与 `print` 都委托给默认实例 `stdio`。
+- [禁止] 为 `write` 或 `writeError` 自动追加换行。
 - [禁止] 为 `print` 引入除 `{argsIndex}` 之外的隐式格式规则。
 - [禁止] 在兼容层重新实现一套独立 I/O 行为，导致与 `stdio` 语义分叉。
 

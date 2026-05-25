@@ -1,17 +1,14 @@
 mod std_test;
 
-use std;
-
 fn main(args: string[]) {
-  if args.length() > (long)1 {
-    run_stdio_api_tests();
-    return;
-  }
-
+  replaceStdin("ABCDE\nFG");
   run_map_tests();
   run_set_tests();
   run_list_tests();
   run_length_tests();
   run_slice_tests();
   run_io_tests();
+
+  replaceStdin("ABCDE\nFG");
+  run_stdio_api_tests();
 }

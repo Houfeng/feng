@@ -6,6 +6,15 @@ use std;
 extern fn write(fd: int, buf: string*, count: long): long;
 
 @cdecl("libc")
+extern fn pipe(fds: int*): int;
+
+@cdecl("libc")
+extern fn dup2(from: int, to: int): int;
+
+@cdecl("libc")
+extern fn close(fd: int): int;
+
+@cdecl("libc")
 extern fn exit(code: int): void;
 
 fn logLine(text: string) {
@@ -15,11 +24,39 @@ fn logLine(text: string) {
   write(2, &newline, newline.length());
 }
 
+fn failNow(name: string) {
+  logLine("FAIL: " + name);
+  exit(1);
+}
+
 pu fn check(cond: bool, name: string) {
   if cond {
     logLine("ok: " + name);
   } else {
-    logLine("FAIL: " + name);
-    exit(1);
+    failNow(name);
+  }
+}
+
+pu fn replaceStdin(text: string) {
+  let fds: int[!] = int[: (long)2];
+
+  if pipe(&fds) != 0 {
+    failNow("harness/stdin-pipe");
+  }
+  if write(fds[1], &text, text.length()) != text.length() {
+    close(fds[0]);
+    close(fds[1]);
+    failNow("harness/stdin-write");
+  }
+  if close(fds[1]) != 0 {
+    close(fds[0]);
+    failNow("harness/stdin-close-write");
+  }
+  if dup2(fds[0], 0) < 0 {
+    close(fds[0]);
+    failNow("harness/stdin-dup2");
+  }
+  if close(fds[0]) != 0 {
+    failNow("harness/stdin-close-read");
   }
 }

@@ -339,15 +339,6 @@ pu fn input(): string {
 }
 
 /**
- * Writes `text` to standard output without appending a newline.
- * @param text - UTF-8 text to write
- * @return actual bytes written or a negative value on error
- */
-pu fn output(text: string): long {
-	return stdio.write(feng_string_to_utf8_bytes(text));
-}
-
-/**
  * Writes `format` after `{argsIndex}` interpolation followed by a newline.
  * @param format - source format string
  * @param args - zero-based interpolation arguments
