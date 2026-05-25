@@ -2248,6 +2248,91 @@ static void test_break_inside_loop_inside_if_expr_block_is_accepted(void) {
     feng_program_free(program);
 }
 
+static void test_break_directly_in_try_expr_catch_block_is_rejected(void) {
+    /* break directly inside a catch block of a try expression is invalid
+     * because the expression must produce a value on every path. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { return 1; }\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        let x: i32 = try parse() catch ex: i32 { break; 0 };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_in_try_catch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "break_in_try_catch_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message,
+                  "'break' cannot appear directly inside a catch block") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_continue_directly_in_try_expr_catch_block_is_rejected(void) {
+    /* continue directly inside a catch block of a try expression is invalid
+     * for the same reason: the expression must produce a value. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): i32 { return 1; }\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        let x: i32 = try parse() catch ex: i32 { continue; 0 };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("continue_in_try_catch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "continue_in_try_catch_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strstr(errors[0].message,
+                  "'continue' cannot appear directly inside a catch block") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_break_inside_loop_inside_try_expr_catch_block_is_accepted(void) {
+    /* A loop nested inside a catch block of a try expression may contain
+     * break/continue normally because those target the inner loop. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn parse(): bool { return true; }\n"
+        "fn run() {\n"
+        "    let x: bool = try parse() catch ex: bool {\n"
+        "        while (true) {\n"
+        "            break;\n"
+        "        }\n"
+        "        true\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_in_loop_in_try_catch_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_throw_rejects_pointer_value(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13269,6 +13354,9 @@ int main(void) {
     test_break_directly_in_if_expr_block_is_rejected();
     test_continue_directly_in_if_expr_block_is_rejected();
     test_break_inside_loop_inside_if_expr_block_is_accepted();
+    test_break_directly_in_try_expr_catch_block_is_rejected();
+    test_continue_directly_in_try_expr_catch_block_is_rejected();
+    test_break_inside_loop_inside_try_expr_catch_block_is_accepted();
     test_throw_rejects_pointer_value();
     test_throw_rejects_fixed_type_value();
     test_throw_accepts_string_and_managed_type();

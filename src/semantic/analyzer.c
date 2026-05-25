@@ -272,6 +272,12 @@ typedef struct ResolveContext {
      * into one of these blocks because every path through the expression must
      * produce a value.  Reset to 0 across callable / lambda boundaries. */
     size_t if_expr_depth;
+    /* Number of catch blocks belonging to a try expression currently being
+     * resolved.  When non-zero, `break` and `continue` from an outer loop
+     * cannot escape into a catch block because every path through the
+     * expression must produce a value.  Reset to 0 across callable / lambda
+     * boundaries. */
+    size_t catch_expr_depth;
     /* When true, a lambda body resolved in this context may capture `self`
      * from the enclosing type. Set inside type method/constructor bodies and
      * inside callable-spec field initializers. */
@@ -7123,10 +7129,20 @@ static bool validate_loop_control_stmt(ResolveContext *context,
                            keyword));
     }
 
+    if (context != NULL && context->catch_expr_depth > 0U) {
+        return resolver_append_error(
+            context,
+            stmt != NULL ? stmt->token : context->program->module_token,
+            format_message("'%s' cannot appear directly inside a catch block; "
+                           "place it inside a loop within the block",
+                           keyword));
+    }
+
     return resolver_append_error(
         context,
         stmt != NULL ? stmt->token : context->program->module_token,
         format_message("'%s' statement is only allowed inside a 'while' or 'for' loop",
+
                        keyword));
 }
 
@@ -14538,7 +14554,8 @@ static void lambda_save_callable_context(ResolveContext *context,
                                          bool *out_prev_escape,
                                          size_t *out_prev_exception_capture,
                                          size_t *out_prev_loop,
-                                         size_t *out_prev_if_expr_depth) {
+                                         size_t *out_prev_if_expr_depth,
+                                         size_t *out_prev_catch_expr_depth) {
     *out_prev_sig = context->current_callable_signature;
     *out_prev_inferred_return = context->current_callable_inferred_return_type;
     *out_prev_saw_return = context->current_callable_saw_return;
@@ -14546,6 +14563,7 @@ static void lambda_save_callable_context(ResolveContext *context,
     *out_prev_exception_capture = context->exception_capture_depth;
     *out_prev_loop = context->loop_depth;
     *out_prev_if_expr_depth = context->if_expr_depth;
+    *out_prev_catch_expr_depth = context->catch_expr_depth;
 }
 
 static void lambda_restore_callable_context(ResolveContext *context,
@@ -14555,7 +14573,8 @@ static void lambda_restore_callable_context(ResolveContext *context,
                                             bool prev_escape,
                                             size_t prev_exception_capture,
                                             size_t prev_loop,
-                                            size_t prev_if_expr_depth) {
+                                            size_t prev_if_expr_depth,
+                                            size_t prev_catch_expr_depth) {
     context->current_callable_signature = prev_sig;
     context->current_callable_inferred_return_type = prev_inferred_return;
     context->current_callable_saw_return = prev_saw_return;
@@ -14563,6 +14582,7 @@ static void lambda_restore_callable_context(ResolveContext *context,
     context->exception_capture_depth = prev_exception_capture;
     context->loop_depth = prev_loop;
     context->if_expr_depth = prev_if_expr_depth;
+    context->catch_expr_depth = prev_catch_expr_depth;
 }
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
@@ -14574,6 +14594,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t prev_exception_capture;
     size_t prev_loop;
     size_t prev_if_expr_depth;
+    size_t prev_catch_expr_depth;
     bool prev_self_capturable;
     bool effective_allow_self;
     LambdaCaptureFrame frame;
@@ -14613,7 +14634,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                  &prev_escape,
                                  &prev_exception_capture,
                                  &prev_loop,
-                                 &prev_if_expr_depth);
+                                 &prev_if_expr_depth,
+                                 &prev_catch_expr_depth);
     prev_self_capturable = context->self_capturable;
 
     /* Inside the lambda body, `self` is available iff the enclosing context
@@ -14628,6 +14650,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
     context->if_expr_depth = 0U;
+    context->catch_expr_depth = 0U;
     /* self_capturable stays the same: if the lambda body could see self, so
      * can a lambda nested inside it. */
     context->self_capturable = effective_allow_self;
@@ -14665,7 +14688,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                     prev_escape,
                                     prev_exception_capture,
                                     prev_loop,
-                                    prev_if_expr_depth);
+                                    prev_if_expr_depth,
+                                    prev_catch_expr_depth);
     context->self_capturable = prev_self_capturable;
 
     resolver_pop_scope(context);
@@ -15127,24 +15151,41 @@ static bool resolve_try_expr(ResolveContext *context,
         if (!resolver_push_scope(context)) {
             return false;
         }
-        if (is_anonymous) {
-            ok = resolve_block(context, clause->body, allow_self) &&
-                 validate_try_catch_clause_result_type(context,
-                                   expr,
-                                   clause,
-                                   body_type,
-                                   result_required);
-        } else {
-            ok = resolver_add_local_typed_name(context,
-                               clause->name,
-                               catch_type,
-                               FENG_MUTABILITY_LET) &&
-                 resolve_block(context, clause->body, allow_self) &&
-                 validate_try_catch_clause_result_type(context,
-                                   expr,
-                                   clause,
-                                   body_type,
-                                   result_required);
+        {
+            /* Prevent break/continue from an outer loop from escaping into a
+             * catch block that belongs to a try expression: every path through
+             * the expression must produce a value, so a bare break/continue
+             * would leave the result undefined.  Loops nested inside the catch
+             * block restore loop_depth and may contain break/continue normally. */
+            size_t saved_loop_depth = context->loop_depth;
+
+            if (result_required) {
+                context->loop_depth = 0U;
+                context->catch_expr_depth += 1U;
+            }
+            if (is_anonymous) {
+                ok = resolve_block(context, clause->body, allow_self) &&
+                     validate_try_catch_clause_result_type(context,
+                                       expr,
+                                       clause,
+                                       body_type,
+                                       result_required);
+            } else {
+                ok = resolver_add_local_typed_name(context,
+                                   clause->name,
+                                   catch_type,
+                                   FENG_MUTABILITY_LET) &&
+                     resolve_block(context, clause->body, allow_self) &&
+                     validate_try_catch_clause_result_type(context,
+                                       expr,
+                                       clause,
+                                       body_type,
+                                       result_required);
+            }
+            if (result_required) {
+                context->loop_depth = saved_loop_depth;
+                context->catch_expr_depth -= 1U;
+            }
         }
         resolver_pop_scope(context);
         if (!ok) {
@@ -15405,6 +15446,7 @@ static bool resolve_callable(ResolveContext *context,
     size_t previous_exception_capture_depth = context->exception_capture_depth;
     size_t previous_loop_depth = context->loop_depth;
     size_t previous_if_expr_depth = context->if_expr_depth;
+    size_t previous_catch_expr_depth = context->catch_expr_depth;
     bool previous_self_capturable = context->self_capturable;
     /* G4-1/G4-14: push callable-level type params (method generics). */
     const TypeParamEntry *previous_type_params = context->type_params;
@@ -15451,6 +15493,7 @@ static bool resolve_callable(ResolveContext *context,
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
     context->if_expr_depth = 0U;
+    context->catch_expr_depth = 0U;
     /* Inside a member method or constructor body, lambdas may capture self. */
     if (allow_self && context->current_type_decl != NULL) {
         context->self_capturable = true;
@@ -15464,6 +15507,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
+        context->catch_expr_depth = previous_catch_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -15478,6 +15522,7 @@ static bool resolve_callable(ResolveContext *context,
             context->exception_capture_depth = previous_exception_capture_depth;
             context->loop_depth = previous_loop_depth;
             context->if_expr_depth = previous_if_expr_depth;
+            context->catch_expr_depth = previous_catch_expr_depth;
             context->current_callable_signature = previous_callable_signature;
             context->self_capturable = previous_self_capturable;
             return false;
@@ -15492,6 +15537,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
+        context->catch_expr_depth = previous_catch_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return true;
@@ -15512,6 +15558,7 @@ static bool resolve_callable(ResolveContext *context,
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
+        context->catch_expr_depth = previous_catch_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -15567,6 +15614,7 @@ static bool resolve_callable(ResolveContext *context,
     context->exception_capture_depth = previous_exception_capture_depth;
     context->loop_depth = previous_loop_depth;
     context->if_expr_depth = previous_if_expr_depth;
+    context->catch_expr_depth = previous_catch_expr_depth;
     context->current_callable_signature = previous_callable_signature;
     context->self_capturable = previous_self_capturable;
     return ok;
