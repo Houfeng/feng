@@ -57,9 +57,9 @@ if (has_variadic) {
 
 打包产生的临时 `FengArray*` 在调用点前 retain，调用返回后 release。现有 ARC 对函数调用参数的托管机制应能自然覆盖此场景；**在 codegen 实现时需确认**：若现有机制不覆盖临时数组的 release，则需在调用点后显式插入 release 代码。
 
-### 重载优先级
+### 重载冲突与消歧
 
-语义匹配时，对于同名重载集合：先尝试按精确参数个数匹配普通重载；只有所有普通重载均无法匹配当前 `arg_count` 时，才尝试匹配变参重载（`arg_count >= fixed_count`）。
+按规范，声明侧必须先严格检测非变参重载与变参重载之间是否存在参数类型重叠。若存在某个实参序列能同时匹配两者，则在声明处直接报冲突错误，不依赖“普通重载优先于变参重载”的调用侧优先级规则消歧。仅当声明侧冲突检测通过后，调用侧才按唯一匹配继续解析。
 
 ---
 
@@ -68,21 +68,21 @@ if (has_variadic) {
 ### Phase 1：文档
 
 - [x] **V1**：新建 `docs/feng-function-variadic.md`，完整描述变参规范（语法、语义、规则、编译期、运行时）
-- [ ] **V2**：在 `docs/feng-function.md` § 8 关联章节增加对 `feng-function-variadic.md` 的引用链接
+- [x] **V2**：在 `docs/feng-function.md` § 8 关联章节增加对 `feng-function-variadic.md` 的引用链接
 
 ### Phase 2：Parser
 
-- [ ] **P1**：`src/parser/parser.h`（line ~65-70）  
+- [x] **P1**：`src/parser/parser.h`（line ~65-70）  
   在 `FengParameter` 结构体中添加 `bool is_variadic` 字段。
 
-- [ ] **P2**：`src/parser/parser.c`，`parse_parameters()`（line ~616-680）  
+- [x] **P2**：`src/parser/parser.c`，`parse_parameters()`（line ~616-680）  
   **目标**：识别 `name: T...` 语法。  
   实现要点：
   - 解析完类型 `T` 后，检查下一个 token 是否为 `...`（三点号）；若是，消耗该 token，设 `param.is_variadic = true`，并将参数类型从 `T` 替换为 `T[]`（构造 `FengTypeRef{kind=ARRAY, element_writable=false, inner=T}`）。
   - 解析完一个 `is_variadic=true` 的参数后，若下一个 token 是逗号（而非 `)`），立即报编译期错误："变长参数必须是最后一个参数"，阻止通过。
-  - 若参数列表中已出现一个 `is_variadic=true` 的参数，再次遇到 `...` 时同样报错："一个函数最多只能有一个变长参数"。
+  - 不允许多个变参；结合“变参必须位于最后一个参数位置”的规则，多个变参声明同样必须在编译期被拒绝。
 
-- [ ] **P3**：`src/parser/parser.c`，`parse_callable_signature()`（line ~744-760）  
+- [x] **P3**：`src/parser/parser.c`，`parse_callable_signature()`（line ~744-760）  
   **目标**：将 `is_variadic` 信息透传，使 `spec` 声明同样支持变参。  
   `spec` 声明与 `fn` 走同一参数解析路径（`parse_parameters()`），P2 完成后此处应自动获得支持；确认 `FengCallableSignature` 的构建路径正确保留 `is_variadic` 即可。  
   同时在此处对 `extern fn` 检查：若 `extern fn` 的参数含 `is_variadic=true`，报错并阻止通过。
@@ -101,11 +101,11 @@ if (has_variadic) {
   **目标**：通过 callable-form spec 值调用时同样支持变参匹配。  
   此函数最终调用 S1 中的 `function_type_parameters_match_args()`，确认调用链路完整即可；若有独立计数检查需同步修改。
 
-- [ ] **S3**：`src/parser/analyzer.c`，spec-fn 结构匹配路径  
+- [x] **S3**：`src/parser/analyzer.c`，spec-fn 结构匹配路径  
   **目标**：未绑定函数或 lambda 进入变参 callable-form spec 位置时，变参标志必须一致。  
   实现要点：在结构匹配阶段，逐个参数对比 `is_variadic` 标记；`fn(args: T[])` 不匹配 `spec S(args: T...)`，反之亦然；两侧变参标志不一致时报错。
 
-- [ ] **S4**：`src/parser/analyzer.c`，重载冲突检测路径  
+- [x] **S4**：`src/parser/analyzer.c`，重载冲突检测路径  
   **目标**：声明侧检测含变参重载之间的参数类型重叠。  
   实现要点：在同名重载注册阶段，对新增重载与已有同名重载逐对执行以下算法：  
   令 `nf` = 新重载固定参数数，`ng` = 已有重载固定参数数。  
@@ -116,7 +116,7 @@ if (has_variadic) {
 
 ### Phase 4：Codegen
 
-- [ ] **C1**：`src/codegen/codegen.c`，`cg_emit_call()`（line ~10730-10850）  
+- [x] **C1**：`src/codegen/codegen.c`，`cg_emit_call()`（line ~10730-10850）  
   **目标**：调用侧变参自动打包。  
   实现要点：
   - 获取被调用方签名，检查最后参数是否 `is_variadic`。
@@ -152,7 +152,7 @@ if (has_variadic) {
   f("bad")   // 错误：string 不匹配 int
   ```
 
-- [ ] **T4**：变参不在最后 → 编译期报错
+- [x] **T4**：变参不在最后 → 编译期报错
   ```feng
   fn bad(args: int..., x: int): void { }   // 错误
   ```
@@ -171,16 +171,14 @@ if (has_variadic) {
   p("hello", "world")   // 合法，自动打包
   ```
 
-- [ ] **T7**：重载优先级验证
+- [ ] **T7**：重载冲突验证
   ```feng
-  fn f(x: int): void { }         // 普通重载
-  fn f(args: int...): void { }   // 变参重载
-  f(5)   // 应匹配普通重载
-  f()    // 应匹配变参重载
-  f(1, 2) // 应匹配变参重载
+  fn f(x: int): void { }
+  fn f(args: int...): void { }
+  // 错误：声明冲突；`(int)` 落入变参的等效展开范围
   ```
 
-- [ ] **T8**：全量回归（`make test` 或对应回归命令），确保无现有用例破坏。
+- [x] **T8**：全量回归（`make test` 或对应回归命令），确保无现有用例破坏。
 
 ---
 
@@ -194,7 +192,7 @@ if (has_variadic) {
 | Semantic 匹配 | `src/parser/analyzer.c` | `function_type_parameters_match_args()`（line ~7713） | 计数松弛 + 元素类型逐一检查 |
 | Semantic 间接 | `src/parser/analyzer.c` | `callable_parameters_match_args()`（line ~8440） | spec 值调用路径同步 |
 | Semantic 结构 | `src/parser/analyzer.c` | 结构匹配路径 | 变参标志一致性检查 |
-| Semantic 重载 | `src/parser/analyzer.c` | 重载决议路径 | 普通重载优先于变参重载 |
+| Semantic 重载 | `src/parser/analyzer.c` | 重载冲突检测路径 | 声明侧检测变参与非变参参数重叠并拒绝冲突 |
 | Codegen 调用 | `src/codegen/codegen.c` | `cg_emit_call()`（line ~10730） | 变参实参打包为 `T[]` |
 | Codegen 参考 | `src/codegen/codegen.c` | `cg_emit_array_literal_typed()`（line ~11934） | 复用现有数组字面量生成 |
 | Codegen spec | `src/codegen/codegen.c` | spec 值 indirect call 路径 | 同样执行打包 |
