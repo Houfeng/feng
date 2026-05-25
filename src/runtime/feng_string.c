@@ -102,6 +102,35 @@ FengString *feng_string_from_utf8_bytes(FengArray *value, int64_t length) {
     return result;
 }
 
+/* Returns a freshly allocated byte array containing a copy of the string's
+ * current UTF-8 byte sequence. The result is a plain byte[] so standard
+ * library code can perform bytes-first I/O without depending on string's
+ * internal layout. */
+FengArray *feng_string_to_utf8_bytes(FengString *value) {
+    const struct FengString *source = (const struct FengString *)value;
+    size_t length = source != NULL ? source->length : 0U;
+    FengArray *result;
+    unsigned char *data;
+
+    result = feng_array_new_kinded(FENG_VALUE_TRIVIAL,
+                                   NULL,
+                                   NULL,
+                                   sizeof(uint8_t),
+                                   length);
+
+    if (length == 0U) {
+        return result;
+    }
+
+    data = (unsigned char *)feng_array_data(result);
+    if (data == NULL) {
+        feng_panic("feng_string_to_utf8_bytes: non-empty result has no payload");
+    }
+
+    memcpy(data, source->data, length);
+    return result;
+}
+
 FengString *feng_string_concat(const FengString *left, const FengString *right) {
     const struct FengString *l = (const struct FengString *)left;
     const struct FengString *r = (const struct FengString *)right;

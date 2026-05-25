@@ -474,6 +474,9 @@ static uint32_t writer_serialize_callable_type(WriterContext *ctx,
         param_tseq_flags[param_index] = decl->params[param_index].mutability == FENG_MUTABILITY_VAR
                                             ? FENG_SYMBOL_FT_TSEQ_FLAG_VAR
                                             : 0U;
+        if (decl->params[param_index].is_variadic) {
+            param_tseq_flags[param_index] |= FENG_SYMBOL_FT_TSEQ_FLAG_VARIADIC;
+        }
         if ((decl->params[param_index].name != NULL && param_name_strs[param_index] == 0U) ||
             (decl->params[param_index].type != NULL && param_type_ids[param_index] == 0U)) {
             free(param_name_strs);

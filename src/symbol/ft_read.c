@@ -575,6 +575,8 @@ static bool parse_callable_from_type_ref(ReadContext *ctx,
         decl->params[decl->param_count].mutability =
             (flags & FENG_SYMBOL_FT_TSEQ_FLAG_VAR) != 0U ? FENG_MUTABILITY_VAR
                                                           : FENG_MUTABILITY_LET;
+        decl->params[decl->param_count].is_variadic =
+            (flags & FENG_SYMBOL_FT_TSEQ_FLAG_VARIADIC) != 0U;
         decl->params[decl->param_count].type =
             parse_type_by_id(ctx, type_id_elem, path, out_error);
         if ((name_str != 0U && decl->params[decl->param_count].name == NULL) ||

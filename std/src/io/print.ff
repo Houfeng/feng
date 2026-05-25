@@ -1,20 +1,359 @@
 pu mod std;
 
+use std.collections;
+
+@cdecl("libc")
+extern fn read(fd: int, buf: byte*, count: long): long;
+
+@cdecl("libc")
+extern fn write(fd: int, buf: byte*, count: long): long;
+
+@runtime
+extern fn feng_string_from_utf8_bytes(value: byte[], length: long): string;
+
+@runtime
+extern fn feng_string_to_utf8_bytes(value: string): byte[];
+
 /**
- * Writes `text` followed by a newline to standard output.
- * @param text - UTF-8 text to write before the trailing newline
- * @return total bytes written, or a negative value on error
+ * Returns a new empty immutable byte array.
  */
-pu fn print(text: string): long {
-	let textWritten = output(text);
-	if textWritten < (long)0 {
-		return textWritten;
+pr fn emptyByteArray(): byte[] {
+	let items: byte[!] = byte[: (long)0];
+	return (byte[])items;
+}
+
+/**
+ * Returns a new empty immutable string array.
+ */
+pr fn emptyStringArray(): string[] {
+	let items: string[!] = string[: (long)0];
+	return (string[])items;
+}
+
+/**
+ * Appends all bytes from `values` to `target`.
+ * @param target - byte list receiving appended data
+ * @param values - bytes to append
+ */
+pr fn appendBytes(target: List<byte>, values: byte[]) {
+	let length = values.length();
+	for var index: long = (long)0; index < length; index += (long)1 {
+		target.add(values[index]);
+	}
+}
+
+/**
+ * Converts collected line bytes into a UTF-8 string.
+ * @param line - byte list containing the line payload
+ * @return UTF-8 string built from the current list entries
+ */
+pr fn lineBytesToString(line: List<byte>): string {
+	let entries = line.entries();
+	return feng_string_from_utf8_bytes(entries, entries.length());
+}
+
+/**
+ * Builds the final UTF-8 byte sequence for `print`, including the trailing newline.
+ * @param format - source format string containing `{argsIndex}` placeholders
+ * @param args - interpolation arguments packed as a read-only string array
+ * @return rendered bytes ending with a single newline byte
+ */
+pr fn renderPrintedBytes(format: string, args: string[]): byte[] {
+	let output = List<byte>();
+	let formatBytes = feng_string_to_utf8_bytes(format);
+	let encodedArgList = List<byte[]>();
+	let argsLength = args.length();
+
+	for var argIndex: long = (long)0; argIndex < argsLength; argIndex += (long)1 {
+		encodedArgList.add(feng_string_to_utf8_bytes(args[argIndex]));
 	}
 
-	let newlineWritten = write(1, &"\n_", (long)1);
-	if newlineWritten < (long)0 {
-		return newlineWritten;
+	let encodedArgs = encodedArgList.entries();
+	let formatLength = formatBytes.length();
+	var index: long = (long)0;
+
+	while index < formatLength {
+		let current = formatBytes[index];
+		if current != (byte)123 {
+			output.add(current);
+			index += (long)1;
+			continue;
+		}
+
+		var closing: long = index + (long)1;
+		var placeholderIndex: long = (long)0;
+		var hasDigits = false;
+		var isValid = true;
+
+		while closing < formatLength {
+			let token = formatBytes[closing];
+			if token == (byte)125 {
+				break;
+			}
+			if token < (byte)48 || token > (byte)57 {
+				isValid = false;
+				break;
+			}
+			hasDigits = true;
+			placeholderIndex = placeholderIndex * (long)10 + ((long)token - (long)48);
+			closing += (long)1;
+		}
+
+		if isValid && hasDigits && closing < formatLength && formatBytes[closing] == (byte)125 && placeholderIndex < encodedArgs.length() {
+			appendBytes(output, encodedArgs[placeholderIndex]);
+			index = closing + (long)1;
+			continue;
+		}
+
+		output.add(current);
+		index += (long)1;
 	}
 
-	return textWritten + newlineWritten;
+	output.add((byte)10);
+	return output.entries();
+}
+
+/**
+ * Builds the final UTF-8 byte sequence for a plain text line.
+ * @param text - source text written before the trailing newline
+ * @return rendered bytes ending with a single newline byte
+ */
+pr fn renderPlainLine(text: string): byte[] {
+	return renderPrintedBytes(text, emptyStringArray());
+}
+
+/**
+ * Standard input/output object backed by libc standard streams.
+ */
+pu type Stdio {
+	pr let inputFd: int;
+	pr let outputFd: int;
+	pr let errorFd: int;
+	pr var pending: byte[];
+	pr var pendingOffset: long;
+
+	/**
+	 * Creates a stdio object bound to the process standard streams.
+	 */
+	pu fn Stdio() {
+		self.inputFd = 0;
+		self.outputFd = 1;
+		self.errorFd = 2;
+		self.pending = emptyByteArray();
+		self.pendingOffset = (long)0;
+	}
+
+	/**
+	 * Clears unread bytes retained for the next `readLine` call.
+	 */
+	pr fn clearPending() {
+		self.pending = emptyByteArray();
+		self.pendingOffset = (long)0;
+	}
+
+	/**
+	 * Copies unread pending bytes into `buffer`.
+	 * @param buffer - writable destination buffer
+	 * @return number of bytes copied from the pending segment
+	 */
+	pr fn consumePending(buffer: byte[!]): long {
+		let capacity = buffer.length();
+		if capacity == (long)0 {
+			return (long)0;
+		}
+
+		let pendingLength = self.pending.length();
+		if self.pendingOffset >= pendingLength {
+			self.clearPending();
+			return (long)0;
+		}
+
+		var written: long = (long)0;
+		while written < capacity && self.pendingOffset < pendingLength {
+			buffer[written] = self.pending[self.pendingOffset];
+			written += (long)1;
+			self.pendingOffset += (long)1;
+		}
+
+		if self.pendingOffset >= pendingLength {
+			self.clearPending();
+		}
+
+		return written;
+	}
+
+	/**
+	 * Stores the unread suffix of `buffer` for the next `readLine` call.
+	 * @param buffer - source buffer that still contains unread bytes
+	 * @param start - zero-based inclusive start index of the unread suffix
+	 * @param end - zero-based exclusive end index of the unread suffix
+	 */
+	pr fn savePending(buffer: byte[!], start: long, end: long) {
+		if start >= end {
+			self.clearPending();
+			return;
+		}
+
+		self.pending = ((byte[])buffer).clone(start, end);
+		self.pendingOffset = (long)0;
+	}
+
+	/**
+	 * Reads bytes from standard input into `buffer`.
+	 * @param buffer - writable destination buffer
+	 * @return actual bytes read, `0` on EOF, or a negative value on error
+	 */
+	pu fn read(buffer: byte[!]): long {
+		let capacity = buffer.length();
+		if capacity == (long)0 {
+			return (long)0;
+		}
+
+		let pendingWritten = self.consumePending(buffer);
+		if pendingWritten == capacity {
+			return pendingWritten;
+		}
+
+		if pendingWritten == (long)0 {
+			let libcRead = read(self.inputFd, &buffer, capacity);
+			if libcRead < (long)0 {
+				return libcRead;
+			}
+			return libcRead;
+		}
+
+		let remaining = capacity - pendingWritten;
+		let tail: byte[!] = byte[: remaining];
+		let libcRead = read(self.inputFd, &tail, remaining);
+		if libcRead < (long)0 {
+			if pendingWritten > (long)0 {
+				return pendingWritten;
+			}
+			return libcRead;
+		}
+
+		for var index: long = (long)0; index < libcRead; index += (long)1 {
+			buffer[pendingWritten + index] = tail[index];
+		}
+
+		return pendingWritten + libcRead;
+	}
+
+	/**
+	 * Writes bytes to standard output without appending a newline.
+	 * @param bytes - bytes to write
+	 * @return actual bytes written, or a negative value on error
+	 */
+	pu fn write(bytes: byte[]): long {
+		let length = bytes.length();
+		if length == (long)0 {
+			return (long)0;
+		}
+		return write(self.outputFd, &bytes, length);
+	}
+
+	/**
+	 * Writes bytes to standard error without appending a newline.
+	 * @param bytes - bytes to write
+	 * @return actual bytes written, or a negative value on error
+	 */
+	pu fn writeError(bytes: byte[]): long {
+		let length = bytes.length();
+		if length == (long)0 {
+			return (long)0;
+		}
+		return write(self.errorFd, &bytes, length);
+	}
+
+	/**
+	 * Reads a single UTF-8 line from standard input.
+	 * The trailing newline is not included. Returns `""` on EOF before any byte.
+	 * @return line content without the trailing newline
+	 */
+	pu fn readLine(): string {
+		let line = List<byte>();
+		let chunk: byte[!] = byte[: (long)4096];
+		var foundNewline = false;
+
+		while !foundNewline {
+			let count = self.read(chunk);
+			if count < (long)0 {
+				throw "Stdio read failed";
+			}
+			if count == (long)0 {
+				break;
+			}
+
+			var index: long = (long)0;
+			while index < count {
+				let current = chunk[index];
+				if current == (byte)10 {
+					self.savePending(chunk, index + (long)1, count);
+					foundNewline = true;
+					break;
+				}
+				if current != (byte)13 {
+					line.add(current);
+				}
+				index += (long)1;
+			}
+		}
+
+		return lineBytesToString(line);
+	}
+
+	/**
+	 * Interpolates `format` with `{argsIndex}` placeholders and writes one line.
+	 * @param format - source format string
+	 * @param args - zero-based interpolation arguments packed as a string array
+	 * @return total bytes written, including the trailing newline
+	 */
+	pu fn print(text: string): long {
+		return self.write(renderPlainLine(text));
+	}
+
+	/**
+	 * Interpolates `format` with `{argsIndex}` placeholders and writes one line.
+	 * @param format - source format string
+	 * @param args - zero-based interpolation arguments packed as a string array
+	 * @return total bytes written, including the trailing newline
+	 */
+	pu fn print(format: string, args: string[]): long {
+		let rendered = renderPrintedBytes(format, args);
+		return self.write(rendered);
+	}
+}
+
+/**
+ * Default stdio instance bound to stdin, stdout, and stderr.
+ */
+pu let stdio = Stdio();
+
+/**
+ * Reads a single UTF-8 line from the default standard input.
+ * The trailing newline is not included. Returns `""` on EOF before any byte.
+ * @return line content without the trailing newline
+ */
+pu fn input(): string {
+	return stdio.readLine();
+}
+
+/**
+ * Writes `text` to standard output without appending a newline.
+ * @param text - UTF-8 text to write
+ * @return actual bytes written or a negative value on error
+ */
+pu fn output(text: string): long {
+	return stdio.write(feng_string_to_utf8_bytes(text));
+}
+
+/**
+ * Writes `format` after `{argsIndex}` interpolation followed by a newline.
+ * @param format - source format string
+ * @param args - zero-based interpolation arguments
+ * @return total bytes written, including the trailing newline
+ */
+pu fn print(format: string, args: string...): long {
+	let rendered = renderPrintedBytes(format, args);
+	return stdio.write(rendered);
 }

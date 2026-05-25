@@ -1,6 +1,13 @@
 mod std_test;
 
+use std;
+
 fn main(args: string[]) {
+  if args.length() > (long)1 {
+    run_stdio_api_tests();
+    return;
+  }
+
   run_map_tests();
   run_set_tests();
   run_list_tests();

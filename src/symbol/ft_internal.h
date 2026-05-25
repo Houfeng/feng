@@ -74,8 +74,9 @@
 #define FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT    8U
 #define FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE  9U
 
-/* TSEQ element flag: bit 0 = mutable (var) parameter */
+/* TSEQ element flags: bit 0 = mutable (var) parameter, bit 1 = variadic T... parameter */
 #define FENG_SYMBOL_FT_TSEQ_FLAG_VAR 0x0001U
+#define FENG_SYMBOL_FT_TSEQ_FLAG_VARIADIC 0x0002U
 
 typedef struct FengSymbolFtHeader {
     uint8_t magic[4];
@@ -149,7 +150,7 @@ typedef struct FengSymbolFtTypeRecord {
 typedef struct FengSymbolFtTseqRecord {
     uint32_t name_str;  /* param name string id; 0 for the return-type slot */
     uint32_t type_id;   /* TYPS.id of the element type; 0 = void/none */
-    uint16_t flags;     /* FT_TSEQ_FLAG_VAR for mutable param; 0 for return slot */
+    uint16_t flags;     /* FT_TSEQ_FLAG_*; 0 for the return slot */
     uint16_t reserved0; /* must be 0 */
 } FengSymbolFtTseqRecord;
 

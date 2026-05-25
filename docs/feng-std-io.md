@@ -1,43 +1,94 @@
 # Feng 标准库 I/O 规范
 
-本文档定义随编译器分发的标准库 `std` 当前提供的最小 I/O 入口：`input`、`output` 与 `print`。本文只规定公开 API 的语义，不规定底层必须绑定哪一种特定 C 函数实现。
+本文档定义随编译器分发的标准库 `std` 当前提供的标准输入输出模型。本文只规定公开 API 的语义：底层实现必须基于 libc，但不要求绑定到某一个固定的 libc 符号组合。
 
 ## 1 职责
 
-- 在不引入额外对象模型或格式化系统的前提下，为 Feng 提供最小可用的标准输入与标准输出入口。
-- 保持 API 简单可组合：`input` 负责从标准输入按行读取 UTF-8 文本并返回 `string`；`output` 负责把字符串写到标准输出；`print` 在 `output` 之上提供换行输出。
-- 当前阶段不定义格式化打印或文件 I/O；这些能力留待后续独立规范扩展。
+- 为 Feng 提供一个可复用的标准输入输出对象 `Stdio`，把底层字节 I/O 与上层文本封装收敛到同一处公开面。
+- 保持低层 API bytes-first：`read`、`write` 与 `writeError` 都直接处理 `byte` 缓冲或 `byte[]` 数据，不隐式引入文本编码规则。
+- 在 `Stdio` 之上提供最小必要的文本便利能力：`readLine` 负责按行读取 UTF-8 文本，`print` 负责按格式插值后输出一行文本。
+- 为现有使用方保留兼容顶层函数 `input`、`output` 与 `print`；这些函数只是默认实例 `stdio` 的语义包装，不另建独立实现分支。
 
 ## 2 公开 API
 
-这三个函数都定义在根模块 `std` 中。使用方通过 `use std;` 后即可直接调用。
+这些符号都定义在根模块 `std` 中。使用方通过 `use std;` 后即可直接调用。
+
+### 2.1 `Stdio` 与默认实例
+
+| 符号 | 签名 | 说明 |
+| --- | --- | --- |
+| `Stdio` | `pu type Stdio` | 标准输入输出对象，封装标准输入、标准输出与标准错误的默认传输行为 |
+| `Stdio.read` | `pu fn read(buffer: byte[!]): long` | 从标准输入读取至多 `buffer.length()` 个字节写入 `buffer`，返回本次实际读入字节数 |
+| `Stdio.write` | `pu fn write(bytes: byte[]): long` | 将 `bytes` 原样写到标准输出，不自动追加换行 |
+| `Stdio.writeError` | `pu fn writeError(bytes: byte[]): long` | 将 `bytes` 原样写到标准错误，不自动追加换行 |
+| `Stdio.readLine` | `pu fn readLine(): string` | 从标准输入读取一行 UTF-8 文本，不包含行尾换行 |
+| `Stdio.print` | `pu fn print(text: string): long` | 将 `text` 原样写到标准输出，并追加单个 `"\n"` |
+| `Stdio.print` | `pu fn print(format: string, args: string[]): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到标准输出，并追加单个 `"\n"` |
+| `stdio` | `pu let stdio = Stdio()` | 绑定到标准输入、标准输出与标准错误的默认实例 |
+
+### 2.2 兼容顶层函数
 
 | 函数 | 签名 | 说明 |
 | --- | --- | --- |
-| `input` | `pu fn input(): string` | 从标准输入读取一行 UTF-8 文本，不包含行尾换行；若在读取任何字节前到达 EOF，返回 `""` |
-| `output` | `pu fn output(text: string): long` | 将 `text` 的 UTF-8 字节序列写到标准输出，不自动追加换行 |
-| `print` | `pu fn print(text: string): long` | 先输出 `text`，再输出单个换行符 `"\n"` |
+| `input` | `pu fn input(): string` | `stdio.readLine()` 的兼容包装 |
+| `output` | `pu fn output(text: string): long` | 将 `text` 的 UTF-8 字节序列写到标准输出；语义等价于 `stdio.write(...)` |
+| `print` | `pu fn print(format: string, args: string...): long` | `stdio.print(format, args...)` 的兼容包装 |
 
 ## 3 语义
 
-- `input()` 每次调用从标准输入读取一行 UTF-8 文本并返回新的 `string` 值；行尾分隔符不属于返回内容。
-- `input()` 以换行符 `"\n"` 或 EOF 作为本次读取结束条件。若在读取到任何字节前到达 EOF，返回 `""`；若在读到部分字节后遇到 EOF，则返回该部分字节构成的最后一行。
-- `output(text)` 以 `text` 当前的 UTF-8 字节序列为输出内容；返回值为本次实际写出的字节数。该函数不得隐式追加换行。
-- `print(text)` 的语义是输出 `text + "\n"` 到标准输出。实现可以通过一次或多次底层输出调用完成，但对使用方可观察到的结果必须等价于把单个换行符追加到 `text` 末尾后再输出。
-- `print` 当前仅接受 `string`。格式化能力不在本版范围内，后续若扩展，必须通过独立规范补充而不是改变本文件对现有签名的定义。
+### 3.1 低层字节 I/O
+
+- `stdio` 默认绑定标准文件描述符 `0/1/2`，分别代表标准输入、标准输出与标准错误。
+- `Stdio.read(buffer)` 以 `buffer` 作为调用方提供的可写字节缓冲；返回值为本次实际读入字节数。
+- `Stdio.read(buffer)` 在到达 EOF 时返回 `0`；若底层 libc 读操作失败，则返回底层的负值错误结果。
+- `Stdio.read(buffer)` 在 `buffer.length() == 0` 时必须直接返回 `0`，不得访问底层输入流。
+- `Stdio.write(bytes)` 与 `Stdio.writeError(bytes)` 以 `bytes` 当前内容为输出字节序列；返回值为本次实际写出的字节数，失败时返回底层的负值错误结果。
+- `Stdio.write(bytes)` 与 `Stdio.writeError(bytes)` 都不得自动追加换行、NUL 终止符或其他额外字节。
+
+### 3.2 `readLine`
+
+- `Stdio.readLine()` 每次调用从标准输入读取一行 UTF-8 文本并返回新的 `string` 值；行尾分隔符不属于返回内容。
+- `Stdio.readLine()` 以换行符 `"\n"` 或 EOF 作为本次读取结束条件。若在读取到任何字节前到达 EOF，返回 `""`；若在读到部分字节后遇到 EOF，则返回该部分字节构成的最后一行。
+- `Stdio.readLine()` 必须忽略行内的回车字节 `"\r"`，以兼容 `CRLF` 输入；该规则只影响按行读取包装，不改变低层 `read` 的原始字节语义。
+- `Stdio.readLine()` 若底层 `read` 返回负值错误结果，不得静默吞掉错误；实现必须抛出明确的标准库异常文本。
+
+### 3.3 `print`
+
+- `Stdio.print(text)` 把 `text` 当前的 UTF-8 字节序列写到标准输出，最后追加单个 `"\n"` 字节。
+- `Stdio.print(format, args)` 先解析 `format` 的 UTF-8 字节序列，再把解析结果写到标准输出，最后追加单个 `"\n"` 字节。
+- 占位符语法固定为 `{argsIndex}`：其中 `argsIndex` 是十进制、零基、仅由 ASCII 数字组成的参数下标，例如 `{0}`、`{1}`、`{12}`。
+- 当占位符合法且 `argsIndex` 在 `args` 范围内时，`print` 必须以对应 `args[argsIndex]` 的 UTF-8 字节序列替换该占位符。
+- 当 `{...}` 片段不是合法占位符，或合法但下标越界时，`print` 必须按字面文本原样输出该片段，不得报错、丢弃或做其他隐式转换。
+- `Stdio.print(text)` 与 `Stdio.print(format, args)` 的返回值都是实际写到标准输出的总字节数，包含末尾追加的单个换行字节。
+- `print` 只接受 `string` 与 `string...`；不得为其引入隐式数值转字符串、`spec` 值格式化或其他未定义的格式系统。
+
+### 3.4 顶层兼容包装
+
+- `input()` 的语义固定等价于 `stdio.readLine()`。
+- `output(text)` 的语义固定等价于把 `text` 当前的 UTF-8 字节序列传给 `stdio.write(...)`。
+- 顶层 `print(format, args...)` 的语义固定等价于把 variadic `args` 组装成 `string[]` 后委托给 `stdio.print(format, args)`。
+- 兼容顶层函数不得拥有与 `stdio` 方法不一致的独立分支逻辑。
 
 ## 4 规则
 
-- [必须] `input` 当前不接受参数；不得要求调用方为 `input` 提供外部字节缓冲。
-- [必须] `input` 的返回类型固定为 `string`；返回内容不得包含触发本次按行读取结束的 `"\n"`。
-- [必须] `input` 在读取任何字节前到达 EOF 时必须返回 `""`，而不是报错、返回 `null` 或暴露底层错误码。
-- [必须] `output` 与 `print` 当前只接受 `string`；不得为其引入隐式数值转字符串或隐式格式化规则。
-- [必须] `output` 不得自动追加换行；需要换行时必须由调用方显式调用 `print` 或手动输出 `"\n"`。
-- [必须] `print` 的换行行为固定为输出单个 `"\n"` 字节。
-- [必须] `input`、`output` 与 `print` 都属于标准库 `std` 的公开顶层函数，而不是方法、成员函数或对象包装器。
+- [必须] `Stdio` 是当前标准库 I/O 的权威公开抽象；默认实例名固定为 `stdio`。
+- [必须] `Stdio.read` 的参数类型固定为 `byte[!]`，返回类型固定为 `long`。
+- [必须] `Stdio.write` 与 `Stdio.writeError` 的参数类型固定为 `byte[]`，返回类型固定为 `long`。
+- [必须] `Stdio.read`、`Stdio.write` 与 `Stdio.writeError` 的语义都直接面向 bytes，不得隐式执行 UTF-8 编码、解码或字符串拼接。
+- [必须] `Stdio.readLine` 的返回类型固定为 `string`；返回内容不得包含触发本次按行读取结束的 `"\n"`。
+- [必须] `Stdio.print` 必须同时提供 `print(text: string)` 与 `print(format: string, args: string[])` 两个公开重载。
+- [必须] `Stdio.print` 的换行行为固定为追加单个 `"\n"` 字节。
+- [必须] 顶层 `print` 的签名固定为 `print(format: string, args: string...)`。
+- [必须] `{argsIndex}` 占位符中的下标按零基解释。
+- [必须] 非法或越界占位符按字面文本输出，不得抛错或静默删除。
+- [必须] 兼容顶层 `input`、`output` 与 `print` 都委托给默认实例 `stdio`。
+- [禁止] 为 `write`、`writeError` 或 `output` 自动追加换行。
+- [禁止] 为 `print` 引入除 `{argsIndex}` 之外的隐式格式规则。
+- [禁止] 在兼容层重新实现一套独立 I/O 行为，导致与 `stdio` 语义分叉。
 
 ## 5 关联
 
 - [feng-language.md](./feng-language.md): 语言核心总览。
-- [feng-builtin-type.md](./feng-builtin-type.md): `string`、`byte` 与 `byte[]` 的语义。
+- [feng-builtin-type.md](./feng-builtin-type.md): `string`、`byte`、`byte[]` 与 `byte[!]` 的语义。
+- [feng-function-variadic.md](./feng-function-variadic.md): 顶层 `print(format, args: string...)` 使用的变长参数规则。
 - [feng-interop.md](./feng-interop.md): 标准库通过普通 `extern fn` 暴露原生能力时的 ABI 约束。

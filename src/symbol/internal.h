@@ -26,6 +26,7 @@ typedef struct FengSymbolParamView {
     FengToken token;
     char *name;
     FengMutability mutability;
+    bool is_variadic;
     FengSymbolTypeView *type;
 } FengSymbolParamView;
 

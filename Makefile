@@ -120,6 +120,14 @@ std-tests: cli runtime
 	grep -q '^__STD_IO_INPUT3__=$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_OUTPUT__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
+	printf 'ABCDE\nFG' | ./std_test/build/bin/std_test stdio-api > ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_READLINE1__=DE$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_READLINE2__=FG$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_READLINE3__=$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_WRITE__$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_METHOD_PRINT__ left/right$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/stdio_api.stdout
+	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/stdio_api.stdout
 
 smoke: cli runtime
 	./scripts/run_smoke.sh

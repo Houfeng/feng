@@ -1076,6 +1076,7 @@ static bool fill_params_with_tparams(FengSymbolDeclView *decl,
 
         param.token = params[index].token;
         param.mutability = normalize_mutability(params[index].mutability);
+        param.is_variadic = params[index].is_variadic;
         param.name = feng_symbol_internal_dup_slice(params[index].name);
         param.type = build_type_from_type_ref_with_tparams(params[index].type,
                                                            type_params,

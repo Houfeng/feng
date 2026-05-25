@@ -1120,7 +1120,10 @@ static bool cg_append_aggregate_default_init_call(Buf *out,
                                                   const char *lvalue_expr);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
-static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m);
+static bool cg_emit_user_method(CG *cg,
+                                const UserType *t,
+                                const UserMethod *m,
+                                bool needs_static);
 static bool cg_emit_builtin_fit_method(CG *cg,
                                        const BuiltinFit *bf,
                                        const UserMethod *m,
@@ -20551,10 +20554,28 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 }
                 if (!ut) return cg_fail(cg, d->token, "codegen: internal: type not registered");
                 for (size_t ci = 0; ci < ut->constructor_count; ci++) {
-                    if (!cg_emit_user_method(cg, ut, &ut->constructors[ci])) return false;
+                    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
+                                          d->visibility == FENG_VISIBILITY_PUBLIC &&
+                                          ut->constructors[ci].member->visibility ==
+                                              FENG_VISIBILITY_PUBLIC);
+                    if (!cg_emit_user_method(cg,
+                                             ut,
+                                             &ut->constructors[ci],
+                                             needs_static)) {
+                        return false;
+                    }
                 }
                 for (size_t mi = 0; mi < ut->method_count; mi++) {
-                    if (!cg_emit_user_method(cg, ut, &ut->methods[mi])) return false;
+                    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
+                                          d->visibility == FENG_VISIBILITY_PUBLIC &&
+                                          ut->methods[mi].member->visibility ==
+                                              FENG_VISIBILITY_PUBLIC);
+                    if (!cg_emit_user_method(cg,
+                                             ut,
+                                             &ut->methods[mi],
+                                             needs_static)) {
+                        return false;
+                    }
                 }
                 if (!cg_emit_user_finalizer(cg, ut)) return false;
                 break;
@@ -20575,7 +20596,16 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     if (uf->decl != d) continue;
                     emitted_fit = true;
                     for (size_t mi = 0; mi < uf->method_count; mi++) {
-                        if (!cg_emit_user_method(cg, uf->target, &uf->methods[mi])) return false;
+                        bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
+                                              d->visibility == FENG_VISIBILITY_PUBLIC &&
+                                              uf->methods[mi].member->visibility ==
+                                                  FENG_VISIBILITY_PUBLIC);
+                        if (!cg_emit_user_method(cg,
+                                                 uf->target,
+                                                 &uf->methods[mi],
+                                                 needs_static)) {
+                            return false;
+                        }
                     }
                 }
                 for (size_t fit_index = 0; fit_index < cg->builtin_fit_count; ++fit_index) {
@@ -22265,7 +22295,10 @@ cleanup:
 
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
  * parameter typed as `struct T *`. */
-static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) {
+static bool cg_emit_user_method(CG *cg,
+                                const UserType *t,
+                                const UserMethod *m,
+                                bool needs_static) {
     char **captured_names = NULL;
     size_t captured_name_count = 0U;
     const char **context_desc_names = NULL;
@@ -22301,13 +22334,15 @@ static bool cg_emit_user_method(CG *cg, const UserType *t, const UserMethod *m) 
         }
     }
 
-    cg_emit_user_method_proto(&cg->fn_protos, t, m, true);
+    cg_emit_user_method_proto(&cg->fn_protos, t, m, needs_static);
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
     cg->cur_return_type = m->return_type;
     cg->cur_fn_is_main = false;
-    buf_append_cstr(body, "static ");
+    if (needs_static) {
+        buf_append_cstr(body, "static ");
+    }
     cg_emit_c_type(body, m->return_type);
     buf_append_fmt(body, " %s(struct %s *self", m->c_name, t->c_struct_name);
     for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {

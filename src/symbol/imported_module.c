@@ -572,6 +572,7 @@ static FengParameter *synthesize_parameters(const FengSymbolDeclView *symbol_dec
     for (index = 0U; index < symbol_decl->param_count; ++index) {
         params[index].token = symbol_decl->params[index].token;
         params[index].mutability = symbol_decl->params[index].mutability;
+        params[index].is_variadic = symbol_decl->params[index].is_variadic;
         if (!clone_cstr_as_slice(symbol_decl->params[index].name, &params[index].name)) {
             free_synthetic_parameters(params, symbol_decl->param_count);
             return NULL;

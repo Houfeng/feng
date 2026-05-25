@@ -457,6 +457,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
         for (index = 0U; index < decl->param_count; ++index) {
             clone->params[index].token = decl->params[index].token;
             clone->params[index].mutability = decl->params[index].mutability;
+            clone->params[index].is_variadic = decl->params[index].is_variadic;
             clone->params[index].name = feng_symbol_internal_dup_cstr(decl->params[index].name);
             clone->params[index].type = feng_symbol_internal_type_clone(decl->params[index].type,
                                                                         out_error);

@@ -1,0 +1,64 @@
+mod std_test;
+
+use std;
+
+fn read_reads_into_buffer() {
+  let head: byte[!] = byte[: (long)3];
+  let readCount = stdio.read(head);
+
+  check(readCount == (long)3, "stdio/read-head-count");
+  check(head[0] == (byte)65, "stdio/read-head-0");
+  check(head[1] == (byte)66, "stdio/read-head-1");
+  check(head[2] == (byte)67, "stdio/read-head-2");
+}
+
+fn readLine_uses_remaining_input() {
+  let first = stdio.readLine();
+  let second = stdio.readLine();
+  let third = stdio.readLine();
+  let eofBuffer: byte[!] = byte[: (long)2];
+  let emptyBuffer: byte[!] = byte[: (long)0];
+
+  check(first.length() == (long)2, "stdio/readLine-first-length");
+  check(second.length() == (long)2, "stdio/readLine-second-length");
+  check(third.length() == (long)0, "stdio/readLine-eof-length");
+  check(stdio.read(eofBuffer) == (long)0, "stdio/read-eof-count");
+  check(stdio.read(emptyBuffer) == (long)0, "stdio/read-empty-buffer");
+
+  output("__STDIO_READLINE1__=" + first + "\n");
+  output("__STDIO_READLINE2__=" + second + "\n");
+  output("__STDIO_READLINE3__=" + third + "\n");
+}
+
+fn write_writes_stdout() {
+  let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 87, 82, 73, 84, 69, 95, 95, 10];
+  let written = stdio.write(marker);
+
+  check(written == (long)16, "stdio/write-return");
+}
+
+fn writeError_writes_stderr() {
+  let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 69, 82, 82, 79, 82, 95, 95, 10];
+  let written = stdio.writeError(marker);
+
+  check(written == (long)16, "stdio/writeError-return");
+}
+
+fn print_formats_output() {
+  let args: string[] = ["left", "right"];
+  let methodWritten = stdio.print("__STDIO_METHOD_PRINT__ {0}/{1}", args);
+  let topWritten = print("__STDIO_TOP_PRINT__ {0}/{1}", "left", "right");
+  let literalWritten = print("__STDIO_LITERAL__ {2}", "left", "right");
+
+  check(methodWritten == "__STDIO_METHOD_PRINT__ left/right".length() + (long)1, "stdio/method-print-return");
+  check(topWritten == "__STDIO_TOP_PRINT__ left/right".length() + (long)1, "stdio/top-print-return");
+  check(literalWritten == "__STDIO_LITERAL__ {2}".length() + (long)1, "stdio/literal-print-return");
+}
+
+pu fn run_stdio_api_tests() {
+  read_reads_into_buffer();
+  readLine_uses_remaining_input();
+  write_writes_stdout();
+  writeError_writes_stderr();
+  print_formats_output();
+}
