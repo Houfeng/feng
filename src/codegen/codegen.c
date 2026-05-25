@@ -843,9 +843,10 @@ typedef struct FreeFn {
     char     *c_abi_name;
     CGType  **param_types;
     char    **param_names;
-    size_t    param_count;
+    size_t    param_count;   /* total params, including the variadic T[] param */
     CGType   *return_type;
     bool      is_abi;
+    bool      is_variadic;   /* true when the last param is a variadic T... */
     const FengDecl *decl;
     const FengProgram *owner_program;
 } FreeFn;
@@ -6137,6 +6138,7 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     f->is_abi = cg_annotations_contain_kind(decl->annotations,
                                             decl->annotation_count,
                                             FENG_ANNOTATION_ABI);
+    f->is_variadic = sig->param_count > 0U && sig->params[sig->param_count - 1U].is_variadic;
     char *surface_name = cg_fn_mangle(cg->module_mangle, &sig->name);
     f->param_count = sig->param_count;
     f->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
@@ -9592,12 +9594,144 @@ static bool cg_emit_registered_call(CG *cg,
                                     const FengExpr *e,
                                     const FreeFn *fn,
                                     const ExternFn *ext,
+                                    ExprResult *out);
+static char *cg_array_element_descriptor(const CGType *elem);
+
+/* Pack variadic call arguments args[0..n-1] into a newly-allocated FengArray*.
+ * Each argument must be coercible to elem_type (the inner type of the T[]
+ * variadic parameter).  The returned ExprResult carries owns_ref=true;
+ * callers must materialize it to a tracked local before passing on. */
+static bool cg_pack_variadic_args(CG *cg,
+                                  const FengToken *tok,
+                                  FengExpr *const *args,
+                                  size_t n,
+                                  const CGType *elem_type,
+                                  ExprResult *out) {
+    CGType *elem = cgtype_clone(elem_type);
+    char *arr_tmp = cg_fresh_temp(cg, "_varr");
+    char *elem_cty = cg_ctype_dup(elem);
+    char *desc_expr = cg_array_element_descriptor(elem);
+
+    er_init(out);
+
+    if (!elem || !arr_tmp || !elem_cty || !desc_expr) {
+        cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+        return cg_fail(cg, *tok, "codegen: out of memory packing variadic arguments");
+    }
+
+    bool elem_managed = cgtype_is_managed(elem);
+    bool elem_aggregate = cgtype_is_aggregate(elem);
+    const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
+
+    if (elem_aggregate && agg_desc == NULL) {
+        cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+        return cg_fail(cg, *tok,
+            "codegen: missing aggregate descriptor for variadic element type");
+    }
+
+    if (n == 0) {
+        /* Empty variadic: produce a zero-length array. */
+        if (elem_aggregate) {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                arr_tmp, agg_desc, elem_cty);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false");
+        }
+        free(elem_cty); free(desc_expr);
+        out->c_expr = strdup(arr_tmp);
+        free(arr_tmp);
+        out->type = cgtype_new(CG_TYPE_ARRAY);
+        if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
+        out->type->element = elem;
+        out->owns_ref = true;
+        return true;
+    }
+
+    /* Emit and collect each variadic argument. */
+    ExprResult *items = calloc(n, sizeof *items);
+    if (!items) {
+        cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+        return cg_fail(cg, *tok, "codegen: out of memory packing variadic arguments");
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!cg_emit_expr_for_expected_type(cg, args[i], elem, &items[i])) {
+            for (size_t k = 0; k < i; k++) er_free(&items[k]);
+            free(items);
+            cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+            return false;
+        }
+        if ((cgtype_is_managed(items[i].type) || cgtype_is_aggregate(items[i].type)) &&
+            items[i].owns_ref) {
+            cg_materialize_to_local(cg, &items[i], "_t");
+        }
+    }
+
+    /* Allocate the array and fill slots. */
+    if (elem_aggregate) {
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new_kinded("
+            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+            arr_tmp, agg_desc, elem_cty, n);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
+    }
+
+    char *slots_tmp = cg_fresh_temp(cg, "_vslots");
+    if (!slots_tmp) {
+        for (size_t k = 0; k < n; k++) er_free(&items[k]);
+        free(items); cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+        return cg_fail(cg, *tok, "codegen: out of memory");
+    }
+    buf_append_fmt(cg->cur_body,
+        "    %s *%s = (%s *)feng_array_data(%s);\n",
+        elem_cty, slots_tmp, elem_cty, arr_tmp);
+
+    for (size_t i = 0; i < n; i++) {
+        if (elem_aggregate) {
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
+                slots_tmp, i, items[i].c_expr, agg_desc);
+        } else if (elem_managed) {
+            buf_append_fmt(cg->cur_body,
+                "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
+                slots_tmp, i, items[i].c_expr, slots_tmp, i);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    %s[%zu] = (%s)(%s);\n",
+                slots_tmp, i, elem_cty, items[i].c_expr);
+        }
+    }
+
+    free(slots_tmp); free(elem_cty); free(desc_expr);
+    for (size_t k = 0; k < n; k++) er_free(&items[k]);
+    free(items);
+
+    out->c_expr = strdup(arr_tmp);
+    free(arr_tmp);
+    out->type = cgtype_new(CG_TYPE_ARRAY);
+    if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
+    out->type->element = elem;
+    out->owns_ref = true;
+    return true;
+}
+
+static bool cg_emit_registered_call(CG *cg,
+                                    const FengExpr *e,
+                                    const FreeFn *fn,
+                                    const ExternFn *ext,
                                     ExprResult *out) {
     const FengExpr *callee = e->as.call.callee;
     FengSlice name;
-    size_t expected;
     Buf args_buf;
     bool ok = true;
+    bool fn_is_variadic = fn != NULL && fn->is_variadic;
+    size_t fixed_count = fn_is_variadic ? fn->param_count - 1U : 0U;
 
     if (callee->kind == FENG_EXPR_IDENTIFIER) {
         name = callee->as.identifier;
@@ -9610,15 +9744,29 @@ static bool cg_emit_registered_call(CG *cg,
             "codegen: undefined function '%.*s'", (int)name.length, name.data);
     }
 
-    expected = ext ? ext->param_count : fn->param_count;
-    if (e->as.call.arg_count != expected) {
-        return cg_fail(cg, e->token,
-            "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
-            (int)name.length, name.data, expected, e->as.call.arg_count);
+    /* Argument-count validation. */
+    if (fn_is_variadic) {
+        if (e->as.call.arg_count < fixed_count) {
+            return cg_fail(cg, e->token,
+                "codegen: too few arguments for variadic function '%.*s' (need at least %zu, got %zu)",
+                (int)name.length, name.data, fixed_count, e->as.call.arg_count);
+        }
+    } else {
+        size_t expected = ext ? ext->param_count : fn->param_count;
+
+        if (e->as.call.arg_count != expected) {
+            return cg_fail(cg, e->token,
+                "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
+                (int)name.length, name.data, expected, e->as.call.arg_count);
+        }
     }
 
     buf_init(&args_buf);
-    for (size_t i = 0; i < e->as.call.arg_count; i++) {
+
+    /* Emit fixed-position arguments (same for variadic and non-variadic). */
+    size_t fixed_arg_limit = fn_is_variadic ? fixed_count : e->as.call.arg_count;
+
+    for (size_t i = 0; i < fixed_arg_limit; i++) {
         ExprResult ar;
         CGType *expected_ty = ext ? ext->param_types[i] : fn->param_types[i];
 
@@ -9642,6 +9790,28 @@ static bool cg_emit_registered_call(CG *cg,
         }
         er_free(&ar);
     }
+
+    /* Pack variadic arguments into a FengArray* and append as the last argument. */
+    if (ok && fn_is_variadic) {
+        const CGType *elem_type = fn->param_types[fn->param_count - 1U]->element;
+        size_t variadic_arg_count = e->as.call.arg_count - fixed_count;
+        ExprResult varr;
+
+        if (!cg_pack_variadic_args(cg, &e->token,
+                                   e->as.call.args + fixed_count,
+                                   variadic_arg_count,
+                                   elem_type, &varr)) {
+            ok = false;
+        } else {
+            if (cgtype_is_managed(varr.type) && varr.owns_ref) {
+                cg_materialize_to_local(cg, &varr, "_t");
+            }
+            if (fixed_count > 0U) buf_append_cstr(&args_buf, ", ");
+            buf_append_cstr(&args_buf, varr.c_expr);
+            er_free(&varr);
+        }
+    }
+
     if (!ok) {
         buf_free(&args_buf);
         return false;

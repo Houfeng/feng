@@ -13225,6 +13225,54 @@ static void test_generic_same_name_same_arity_different_constraint_rejected(void
     feng_program_free(program);
 }
 
+/* T6: variadic overload conflict — fn foo(x: int, y: int...) conflicts with
+ * fn foo(x: int, y: int) because the variadic can be called with 2 fixed args. */
+static void test_variadic_overload_conflict_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn foo(x: int, y: int...): int { return x; }\n"
+        "fn foo(x: int, y: int): int { return y; }\n"
+        "fn check(): int { return foo(1, 2); }\n";
+    FengProgram *program = parse_program_or_die("variadic_conflict.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* T7: spec satisfaction requires matching variadic flag — a spec with a
+ * variadic method cannot be satisfied by a non-variadic implementation. */
+static void test_variadic_spec_satisfaction_mismatch_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Logger {\n"
+        "    fn log(values: int...): void;\n"
+        "}\n"
+        "type Console {}\n"
+        "fit Console: Logger {\n"
+        "    fn log(values: int[]): void {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_spec.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -13702,6 +13750,8 @@ int main(void) {
     test_generic_spec_generic_parent_forwarding_ok();
     test_generic_duplicate_fn_by_type_param_name_only_rejected();
     test_generic_same_name_same_arity_different_constraint_rejected();
+    test_variadic_overload_conflict_rejected();
+    test_variadic_spec_satisfaction_mismatch_rejected();
 
     puts("semantic tests passed");
     return 0;

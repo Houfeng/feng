@@ -1712,6 +1712,70 @@ static void test_generic_target_expression_argument_parses(void) {
     feng_program_free(program);
 }
 
+/* T1: fn sum(values: int...): int — variadic parameter parses and is
+ * normalised to is_variadic=true with type int[]. */
+static void test_variadic_parameter_parses(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn sum(values: int...): int {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengParameter *param;
+
+    ASSERT(feng_parse_source(source, strlen(source), "variadic_param.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+
+    fn_decl = program->declarations[0];
+    ASSERT(fn_decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(fn_decl->as.function_decl.param_count == 1U);
+
+    param = &fn_decl->as.function_decl.params[0];
+    ASSERT(param->is_variadic);
+    /* Type is normalised to int[] (FENG_TYPE_REF_ARRAY wrapping int). */
+    ASSERT(param->type != NULL);
+    ASSERT(param->type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(param->type->as.inner != NULL);
+    ASSERT(param->type->as.inner->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(param->type->as.inner->as.named.segment_count == 1U);
+    assert_slice_text(param->type->as.inner->as.named.segments[0], "int");
+
+    feng_program_free(program);
+}
+
+/* T4: variadic parameter must be the last parameter. */
+static void test_parse_error_variadic_not_last(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn bad(x: int..., y: int): int {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "variadic_not_last.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "variadic parameter must be the last parameter") != NULL);
+}
+
+/* T5: extern fn cannot use variadic parameters. */
+static void test_parse_error_extern_fn_variadic(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "extern fn bad(x: int...): int;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "extern_variadic.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "extern function declarations cannot use variadic parameters") != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_extern_rejects_non_function_top_level_declarations();
@@ -1785,6 +1849,9 @@ int main(void) {
     test_generic_parse_error_missing_closing_gt();
     test_generic_parse_error_missing_type_param_name();
     test_generic_target_expression_argument_parses();
+    test_variadic_parameter_parses();
+    test_parse_error_variadic_not_last();
+    test_parse_error_extern_fn_variadic();
     puts("parser tests passed");
     return 0;
 }

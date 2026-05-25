@@ -659,10 +659,37 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
                 return false;
             }
 
+            /* Variadic parameter: T... is normalised to T[] with is_variadic=true. */
+            param.is_variadic = false;
+            if (parser_match(parser, FENG_TOKEN_ELLIPSIS)) {
+                FengTypeRef *arr_wrapper = new_type_ref(parser, FENG_TYPE_REF_ARRAY, param.token);
+
+                if (arr_wrapper == NULL) {
+                    free_type_ref(param.type);
+                    free_parameters(params, count);
+                    return false;
+                }
+                arr_wrapper->as.inner = param.type;
+                arr_wrapper->array_element_writable = false;
+                param.type = arr_wrapper;
+                param.is_variadic = true;
+            }
+
             if (!APPEND_VALUE(parser, params, count, capacity, param)) {
                 free_type_ref(param.type);
                 free_parameters(params, count);
                 return false;
+            }
+
+            /* Variadic must be the last parameter. */
+            if (param.is_variadic) {
+                if (parser_check(parser, FENG_TOKEN_COMMA)) {
+                    (void)parser_error_current(parser,
+                        "variadic parameter must be the last parameter");
+                    free_parameters(params, count);
+                    return false;
+                }
+                break;
             }
         } while (parser_match(parser, FENG_TOKEN_COMMA));
     }
@@ -1707,6 +1734,19 @@ static FengDecl *parse_function_declaration(Parser *parser,
         is_extern ? "extern function declarations must end with ';' and cannot have a body '{...}'"
                   : "function declarations must provide a body '{...}'");
     if (parser->error.message != NULL) {
+        free_decl(decl);
+        return NULL;
+    }
+
+    /* Extern fn cannot have variadic parameters. */
+    if (is_extern &&
+        decl->as.function_decl.param_count > 0U &&
+        decl->as.function_decl.params[decl->as.function_decl.param_count - 1U].is_variadic) {
+        size_t last = decl->as.function_decl.param_count - 1U;
+
+        (void)parser_error_at(parser,
+            &decl->as.function_decl.params[last].token,
+            "extern function declarations cannot use variadic parameters");
         free_decl(decl);
         return NULL;
     }

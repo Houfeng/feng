@@ -1037,11 +1037,81 @@ static bool parameters_equal(const FengCallableSignature *left, const FengCallab
     }
 
     for (index = 0U; index < left->param_count; ++index) {
+        if (left->params[index].is_variadic != right->params[index].is_variadic) {
+            return false;
+        }
         if (!type_ref_equals(left->params[index].type, right->params[index].type)) {
             return false;
         }
     }
 
+    return true;
+}
+
+/* ---- Variadic overload conflict helpers ---- */
+
+/* Return true if the last parameter of sig is variadic. */
+static bool sig_is_variadic(const FengCallableSignature *sig) {
+    return sig->param_count > 0U && sig->params[sig->param_count - 1U].is_variadic;
+}
+
+/* Return the number of fixed (non-variadic) parameters. */
+static size_t sig_fixed_count(const FengCallableSignature *sig) {
+    return sig_is_variadic(sig) ? sig->param_count - 1U : sig->param_count;
+}
+
+/* Return the element type T of the variadic T[] parameter. */
+static const FengTypeRef *sig_variadic_elem(const FengCallableSignature *sig) {
+    return sig->params[sig->param_count - 1U].type->as.inner;
+}
+
+/* Return the effective parameter type at position pos, extending with the
+ * variadic element type beyond the fixed range when the sig is variadic. */
+static const FengTypeRef *sig_param_type_at(const FengCallableSignature *sig, size_t pos) {
+    size_t fixed = sig_fixed_count(sig);
+
+    if (pos < fixed) {
+        return sig->params[pos].type;
+    }
+    return sig_variadic_elem(sig);
+}
+
+/* Return true when two signatures — at least one of which is variadic — could
+ * both match the same call-argument sequence, i.e. they conflict.
+ *
+ * Algorithm (fill-and-compare):
+ *   Let nf = fixed-param count of left, ng = fixed-param count of right.
+ *   n = max(nf, ng) when the shorter side is variadic; otherwise length mismatch
+ *   → no conflict.
+ *   Compare positions [0..n-1] using sig_param_type_at which extends the
+ *   variadic side with its element type.  All positions must agree for a
+ *   conflict to exist. */
+static bool variadic_parameters_conflict(const FengCallableSignature *left,
+                                         const FengCallableSignature *right) {
+    size_t nf = sig_fixed_count(left);
+    size_t ng = sig_fixed_count(right);
+    size_t n;
+    size_t i;
+
+    if (nf < ng) {
+        if (!sig_is_variadic(left)) {
+            return false; /* non-variadic left can't extend to cover right's fixed params */
+        }
+        n = ng;
+    } else if (nf > ng) {
+        if (!sig_is_variadic(right)) {
+            return false;
+        }
+        n = nf;
+    } else {
+        n = nf; /* equal fixed counts — compare them all */
+    }
+
+    for (i = 0U; i < n; ++i) {
+        if (!type_ref_equals(sig_param_type_at(left, i), sig_param_type_at(right, i))) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -6912,9 +6982,18 @@ static bool callable_parameters_match_args(ResolveContext *context,
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
     bool ok = true;
+    bool is_variadic = callable->param_count > 0U &&
+                       callable->params[callable->param_count - 1U].is_variadic;
+    size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
 
-    if (callable->param_count != arg_count) {
-        return false;
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else {
+        if (callable->param_count != arg_count) {
+            return false;
+        }
     }
     if (callable->type_param_count > 0U) {
         type_args = calloc(callable->type_param_count, sizeof *type_args);
@@ -6927,7 +7006,14 @@ static bool callable_parameters_match_args(ResolveContext *context,
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type = callable->params[arg_index].type;
+        const FengTypeRef *param_type;
+
+        if (arg_index < fixed_count) {
+            param_type = callable->params[arg_index].type;
+        } else {
+            /* Variadic position: match against element type T (stored as T[]->inner). */
+            param_type = callable->params[fixed_count].type->as.inner;
+        }
 
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
@@ -6937,11 +7023,12 @@ static bool callable_parameters_match_args(ResolveContext *context,
         }
 
         /* G4-12: a type-parameter position accepts any argument type. */
-        if (param_type_is_type_param_ref(callable, param_type)) {
+        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
             continue;
         }
 
         if (allow_wrapped_inference &&
+            arg_index < fixed_count &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
                                                           callable,
@@ -6990,9 +7077,18 @@ static bool callable_parameters_match_args_for_owner_instance(
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
     bool ok = true;
+    bool is_variadic = callable->param_count > 0U &&
+                       callable->params[callable->param_count - 1U].is_variadic;
+    size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
 
-    if (callable->param_count != arg_count) {
-        return false;
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else {
+        if (callable->param_count != arg_count) {
+            return false;
+        }
     }
     if (callable->type_param_count > 0U) {
         type_args = calloc(callable->type_param_count, sizeof *type_args);
@@ -7005,7 +7101,14 @@ static bool callable_parameters_match_args_for_owner_instance(
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type = callable->params[arg_index].type;
+        const FengTypeRef *param_type;
+
+        if (arg_index < fixed_count) {
+            param_type = callable->params[arg_index].type;
+        } else {
+            /* Variadic position: match against element type T (stored as T[]->inner). */
+            param_type = callable->params[fixed_count].type->as.inner;
+        }
 
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
@@ -7014,18 +7117,20 @@ static bool callable_parameters_match_args_for_owner_instance(
             break;
         }
 
-        if (param_type_is_type_param_ref(callable, param_type)) {
+        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
             continue;
         }
 
-        param_type = substitute_type_ref_for_owner_instance(context,
-                                                            owner_type_decl,
-                                                            owner_type,
-                                                            param_type);
-        param_type = substitute_type_ref_for_fit_instance(context,
-                                                          fit_decl,
-                                                          owner_type,
-                                                          param_type);
+        if (arg_index < fixed_count) {
+            param_type = substitute_type_ref_for_owner_instance(context,
+                                                                owner_type_decl,
+                                                                owner_type,
+                                                                param_type);
+            param_type = substitute_type_ref_for_fit_instance(context,
+                                                              fit_decl,
+                                                              owner_type,
+                                                              param_type);
+        }
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
             resolve_function_type_decl(context, param_type) == NULL) {
@@ -7033,6 +7138,7 @@ static bool callable_parameters_match_args_for_owner_instance(
             break;
         }
         if (allow_wrapped_inference &&
+            arg_index < fixed_count &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
                                                           callable,
@@ -12572,6 +12678,16 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
                                  decl->as.type_decl.name.data,
                                  (int)si->name.length, si->name.data)) && ok;
                 }
+            } else if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
+                       variadic_parameters_conflict(si, sj)) {
+                ok = resolver_append_error(
+                         context,
+                         si->token,
+                         format_message(
+                             "variadic method overload conflicts with existing method '%.*s' in type '%.*s'",
+                             (int)si->name.length, si->name.data,
+                             (int)decl->as.type_decl.name.length,
+                             decl->as.type_decl.name.data)) && ok;
             }
         }
     }
@@ -15828,8 +15944,19 @@ static bool callable_signatures_match_for_satisfaction(const ResolveContext *ctx
                                                        const FengCallableSignature *spec_sig,
                                                        const FengCallableSignature *type_sig) {
     size_t i;
+    bool spec_variadic;
+    bool type_variadic;
 
     if (spec_sig->param_count != type_sig->param_count) {
+        return false;
+    }
+    /* Variadic flag must match: a variadic spec method can only be satisfied
+     * by a variadic implementation and vice versa. */
+    spec_variadic = spec_sig->param_count > 0U &&
+                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
+    type_variadic = type_sig->param_count > 0U &&
+                    type_sig->params[type_sig->param_count - 1U].is_variadic;
+    if (spec_variadic != type_variadic) {
         return false;
     }
     for (i = 0U; i < spec_sig->param_count; ++i) {
@@ -15850,8 +15977,17 @@ static bool callable_signatures_match_for_satisfaction_in_spec_ref(
     const FengCallableSignature *spec_sig,
     const FengCallableSignature *type_sig) {
     size_t i;
+    bool spec_variadic;
+    bool type_variadic;
 
     if (spec_sig->param_count != type_sig->param_count) {
+        return false;
+    }
+    spec_variadic = spec_sig->param_count > 0U &&
+                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
+    type_variadic = type_sig->param_count > 0U &&
+                    type_sig->params[type_sig->param_count - 1U].is_variadic;
+    if (spec_variadic != type_variadic) {
         return false;
     }
     for (i = 0U; i < spec_sig->param_count; ++i) {
@@ -17104,8 +17240,13 @@ static bool validate_type_member_overload_overlap(ResolveContext *context,
                 continue;
             }
             /* Identical-parameter pairs are already reported by
-             * validate_type_member_overloads with a more specific message. */
+             * validate_type_member_overloads with a more specific message.
+             * Variadic conflicts are also reported there. */
             if (parameters_equal(si, sj)) {
+                continue;
+            }
+            if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
+                variadic_parameters_conflict(si, sj)) {
                 continue;
             }
             if (signatures_potentially_overlap(context, si, sj)) {
@@ -17170,8 +17311,13 @@ static bool validate_top_level_overload_overlap(ResolveContext *context,
             }
             other_sig = &other->as.function_decl;
             /* Identical-parameter pairs are already reported by
-             * check_symbol_conflicts with a more specific message. */
+             * check_symbol_conflicts with a more specific message.
+             * Variadic conflicts are also reported there. */
             if (parameters_equal(current, other_sig)) {
+                continue;
+            }
+            if ((sig_is_variadic(current) || sig_is_variadic(other_sig)) &&
+                variadic_parameters_conflict(current, other_sig)) {
                 continue;
             }
             if (signatures_potentially_overlap(context, current, other_sig)) {
@@ -18202,25 +18348,43 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         for (index = 0U; index < function_set->decl_count; ++index) {
                             const FengCallableSignature *existing =
                                 &function_set->decls[index]->as.function_decl;
+                            bool params_eq = parameters_equal(existing, &decl->as.function_decl);
+                            bool var_conflict = !params_eq &&
+                                (sig_is_variadic(existing) || sig_is_variadic(&decl->as.function_decl)) &&
+                                variadic_parameters_conflict(existing, &decl->as.function_decl);
 
-                            if (!parameters_equal(existing, &decl->as.function_decl)) {
+                            if (!params_eq && !var_conflict) {
                                 continue;
                             }
 
-                            if (return_type_equals(existing->return_type, decl->as.function_decl.return_type)) {
-                                char *message = format_message("duplicate function signature '%.*s'",
-                                                               (int)decl->as.function_decl.name.length,
-                                                               decl->as.function_decl.name.data);
+                            if (params_eq) {
+                                if (return_type_equals(existing->return_type, decl->as.function_decl.return_type)) {
+                                    char *message = format_message("duplicate function signature '%.*s'",
+                                                                   (int)decl->as.function_decl.name.length,
+                                                                   decl->as.function_decl.name.data);
 
-                                ok = append_error(errors,
-                                                  error_count,
-                                                  error_capacity,
-                                                  program->path,
-                                                  decl->as.function_decl.token,
-                                                  message);
+                                    ok = append_error(errors,
+                                                      error_count,
+                                                      error_capacity,
+                                                      program->path,
+                                                      decl->as.function_decl.token,
+                                                      message);
+                                } else {
+                                    char *message = format_message(
+                                        "function overloads cannot differ only by return type: '%.*s'",
+                                        (int)decl->as.function_decl.name.length,
+                                        decl->as.function_decl.name.data);
+
+                                    ok = append_error(errors,
+                                                      error_count,
+                                                      error_capacity,
+                                                      program->path,
+                                                      decl->as.function_decl.token,
+                                                      message);
+                                }
                             } else {
                                 char *message = format_message(
-                                    "function overloads cannot differ only by return type: '%.*s'",
+                                    "variadic function overload conflicts with existing overload '%.*s'",
                                     (int)decl->as.function_decl.name.length,
                                     decl->as.function_decl.name.data);
 

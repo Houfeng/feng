@@ -4567,6 +4567,112 @@ static void test_try_catch_return_codegen(void) {
     feng_program_free(program);
 }
 
+/* T2: variadic function called with zero variadic arguments — the compiler
+ * must emit feng_array_new(..., 0) for the implicit empty array. */
+static void test_variadic_zero_args_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.variadic_zero;\n"
+        "fn sum(values: int...): int {\n"
+        "    return 0;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return sum();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/variadic_zero.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (variadic zero args): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* An empty-variadic call must produce a zero-length array allocation. */
+    ASSERT(strstr(out.c_source, "(size_t)0") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* T3+T8: variadic function called with multiple arguments — the compiler must
+ * emit feng_array_new with the correct count and the generated C must compile. */
+static void test_variadic_multi_args_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.variadic_multi;\n"
+        "fn sum(values: int...): int {\n"
+        "    return 0;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return sum(1, 2, 3);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/variadic_multi.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (variadic multi args): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* Three variadic args → array allocation with count 3. */
+    ASSERT(strstr(out.c_source, "(size_t)3") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -4647,6 +4753,8 @@ int main(void) {
     test_try_catch_return_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
+    test_variadic_zero_args_codegen();
+    test_variadic_multi_args_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

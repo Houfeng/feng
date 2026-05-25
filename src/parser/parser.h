@@ -67,6 +67,7 @@ typedef struct FengParameter {
     FengMutability mutability;
     FengSlice name;
     FengTypeRef *type;
+    bool is_variadic; /* true if declared as T...; type is stored as T[] */
 } FengParameter;
 
 typedef struct FengAnnotation {
