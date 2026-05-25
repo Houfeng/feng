@@ -45,12 +45,12 @@ pr fn lineBytesToString(line: List<byte>): string {
 }
 
 /**
- * Builds the final UTF-8 byte sequence for `print`, excluding the trailing newline.
+ * Builds the final UTF-8 byte sequence for `format`/`print`/`println`, excluding the trailing newline.
  * @param format - source format string containing `{argsIndex}` placeholders
  * @param args - interpolation arguments packed as a read-only string array
  * @return rendered bytes without any trailing newline byte
  */
-pr fn renderPrintedBytes(format: string, args: string[]): byte[] {
+pr fn renderFormattedBytes(format: string, args: string[]): byte[] {
 	let output = List<byte>();
 	let formatBytes = feng_string_to_utf8_bytes(format);
 	let encodedArgList = List<byte[]>();
@@ -102,6 +102,17 @@ pr fn renderPrintedBytes(format: string, args: string[]): byte[] {
 	}
 
 	return output.entries();
+}
+
+/**
+ * Builds the final formatted string for `format`/`print`/`println`, excluding any implicit newline.
+ * @param fmt - source format string containing `{argsIndex}` placeholders
+ * @param args - interpolation arguments packed as a read-only string array
+ * @return formatted UTF-8 string without any implicit trailing newline
+ */
+pr fn renderFormattedString(fmt: string, args: string[]): string {
+	let rendered = renderFormattedBytes(fmt, args);
+	return feng_string_from_utf8_bytes(rendered, rendered.length());
 }
 
 /**
@@ -247,6 +258,15 @@ pu type Stdio {
 	}
 
 	/**
+	 * Writes text to standard output without appending a newline.
+	 * @param text - UTF-8 text to write
+	 * @return actual bytes written, or a negative value on error
+	 */
+	pu fn write(text: string): long {
+		return self.write(feng_string_to_utf8_bytes(text));
+	}
+
+	/**
 	 * Writes text to standard output and appends one trailing newline byte.
 	 * @param text - UTF-8 text written before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
@@ -268,6 +288,34 @@ pu type Stdio {
 			return (long)0;
 		}
 		return write(self.errorFd, &bytes, length);
+	}
+
+	/**
+	 * Writes text to standard error without appending a newline.
+	 * @param text - UTF-8 text to write
+	 * @return actual bytes written, or a negative value on error
+	 */
+	pu fn writeError(text: string): long {
+		return self.writeError(feng_string_to_utf8_bytes(text));
+	}
+
+	/**
+	 * Writes bytes to standard error and appends one trailing newline byte.
+	 * @param bytes - bytes to write before the trailing newline
+	 * @return actual bytes written, including the trailing newline, or a negative value on error
+	 */
+	pu fn writeErrorLine(bytes: byte[]): long {
+		let line = appendTrailingNewline(bytes);
+		return self.writeError(line);
+	}
+
+	/**
+	 * Writes text to standard error and appends one trailing newline byte.
+	 * @param text - UTF-8 text written before the trailing newline
+	 * @return actual bytes written, including the trailing newline, or a negative value on error
+	 */
+	pu fn writeErrorLine(text: string): long {
+		return self.writeErrorLine(feng_string_to_utf8_bytes(text));
 	}
 
 	/**
@@ -333,24 +381,33 @@ pu fn writeLine(text: string): long {
 }
 
 /**
+ * Formats `fmt` using `{argsIndex}` interpolation and returns the rendered string.
+ * @param fmt - source format string
+ * @param args - zero-based interpolation arguments
+	 * @return formatted text without any implicit trailing newline
+ */
+pu fn format(fmt: string, args: string...): string {
+	return renderFormattedString(fmt, args);
+}
+
+/**
  * Writes `format` after `{argsIndex}` interpolation without appending a newline.
- * @param format - source format string
+ * @param fmt - source format string
  * @param args - zero-based interpolation arguments
 	 * @return total bytes written
  */
-pu fn print(format: string, args: string...): long {
-	let rendered = renderPrintedBytes(format, args);
+pu fn print(fmt: string, args: string...): long {
+	let rendered = renderFormattedBytes(fmt, args);
 	return stdio.write(rendered);
 }
 
 /**
- * Writes `format` after `{argsIndex}` interpolation and appends one trailing newline.
- * @param format - source format string
+ * Writes `fmt` after `{argsIndex}` interpolation and appends one trailing newline.
+ * @param fmt - source format string
  * @param args - zero-based interpolation arguments
 	 * @return total bytes written, including the trailing newline
  */
-pu fn println(format: string, args: string...): long {
-	let rendered = renderPrintedBytes(format, args);
-	let text = feng_string_from_utf8_bytes(rendered, rendered.length());
+pu fn println(fmt: string, args: string...): long {
+	let text = renderFormattedString(fmt, args);
 	return stdio.writeLine(text);
 }

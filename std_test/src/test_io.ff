@@ -23,6 +23,17 @@ fn writeLine_writes_stdout_with_newline() {
   check(written == marker.length() + (long)1, "io/writeLine-return");
 }
 
+fn format_returns_text() {
+  let rendered = format("__STD_IO_FORMAT__ {0}/{1}", "left", "right");
+  let literal = format("__STD_IO_FORMAT_LITERAL__ {2}", "left", "right");
+
+  check(rendered.length() == "__STD_IO_FORMAT__ left/right".length(), "io/format-return");
+  check(literal.length() == "__STD_IO_FORMAT_LITERAL__ {2}".length(), "io/format-literal-return");
+
+  writeLine(rendered);
+  writeLine(literal);
+}
+
 fn print_writes_stdout_without_newline() {
   let marker = "__STD_IO_PRINT__\n";
   let written = print(marker);
@@ -40,6 +51,7 @@ fn println_writes_stdout_with_newline() {
 pu fn run_io_tests() {
   readLine_reads_one_line_per_call();
   writeLine_writes_stdout_with_newline();
+  format_returns_text();
   print_writes_stdout_without_newline();
   println_writes_stdout_with_newline();
 }

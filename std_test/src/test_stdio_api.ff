@@ -37,6 +37,13 @@ fn write_writes_stdout() {
   check(written == (long)16, "stdio/write-return");
 }
 
+fn write_text_writes_stdout() {
+  let marker = "__STDIO_WRITE_TEXT__\n";
+  let written = stdio.write(marker);
+
+  check(written == marker.length(), "stdio/write-text-return");
+}
+
 fn writeLine_writes_stdout() {
   let marker = "__STDIO_LINE__";
   let written = stdio.writeLine(marker);
@@ -49,6 +56,23 @@ fn writeError_writes_stderr() {
   let written = stdio.writeError(marker);
 
   check(written == (long)16, "stdio/writeError-return");
+}
+
+fn writeError_text_writes_stderr() {
+  let marker = "__STDIO_ERROR_TEXT__\n";
+  let written = stdio.writeError(marker);
+
+  check(written == marker.length(), "stdio/writeError-text-return");
+}
+
+fn writeErrorLine_writes_stderr() {
+  let empty: byte[!] = byte[: (long)0];
+  let text = "__STDIO_ERROR_LINE_TEXT__";
+  let bytesWritten = stdio.writeErrorLine((byte[])empty);
+  let textWritten = stdio.writeErrorLine(text);
+
+  check(bytesWritten == (long)1, "stdio/writeErrorLine-bytes-return");
+  check(textWritten == text.length() + (long)1, "stdio/writeErrorLine-text-return");
 }
 
 fn print_formats_output() {
@@ -65,7 +89,10 @@ pu fn run_stdio_api_tests() {
   read_reads_into_buffer();
   readLine_uses_remaining_input();
   write_writes_stdout();
+  write_text_writes_stdout();
   writeLine_writes_stdout();
   writeError_writes_stderr();
+  writeError_text_writes_stderr();
+  writeErrorLine_writes_stderr();
   print_formats_output();
 }
