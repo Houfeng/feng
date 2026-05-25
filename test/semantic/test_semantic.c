@@ -2164,6 +2164,90 @@ static void test_break_and_continue_inside_for_loop_are_accepted(void) {
     feng_program_free(program);
 }
 
+static void test_break_directly_in_if_expr_block_is_rejected(void) {
+    /* break directly inside an if-expression block is invalid because the
+     * expression must produce a value on every path. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        let x: bool = if (true) { break; false } else { false };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_in_if_expr_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "break_in_if_expr_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "'break' cannot appear directly inside an 'if' expression block") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_continue_directly_in_if_expr_block_is_rejected(void) {
+    /* continue directly inside an if-expression block is invalid for the same
+     * reason as break: the expression must produce a value. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    while (true) {\n"
+        "        let x: bool = if (true) { true } else { continue; false };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("continue_in_if_expr_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "continue_in_if_expr_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "'continue' cannot appear directly inside an 'if' expression block") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_break_inside_loop_inside_if_expr_block_is_accepted(void) {
+    /* A loop nested inside an if-expression block may contain break/continue
+     * normally because those target the inner loop, not the if-expression. */
+    const char *source =
+        "mod demo.main;\n"
+        "fn run() {\n"
+        "    let x: bool = if (true) {\n"
+        "        while (true) {\n"
+        "            break;\n"
+        "        }\n"
+        "        true\n"
+        "    } else {\n"
+        "        false\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("break_in_loop_in_if_expr_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_throw_rejects_pointer_value(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13182,6 +13266,9 @@ int main(void) {
     test_continue_outside_loop_is_rejected();
     test_break_inside_lambda_in_loop_is_rejected();
     test_break_and_continue_inside_for_loop_are_accepted();
+    test_break_directly_in_if_expr_block_is_rejected();
+    test_continue_directly_in_if_expr_block_is_rejected();
+    test_break_inside_loop_inside_if_expr_block_is_accepted();
     test_throw_rejects_pointer_value();
     test_throw_rejects_fixed_type_value();
     test_throw_accepts_string_and_managed_type();

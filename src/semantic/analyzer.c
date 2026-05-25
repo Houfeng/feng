@@ -267,6 +267,11 @@ typedef struct ResolveContext {
      * callable / lambda boundaries so that a lambda nested in a loop cannot
      * jump out of the surrounding loop. */
     size_t loop_depth;
+    /* Number of nested `if` expression value blocks currently being resolved.
+     * When non-zero, `break` and `continue` from an outer loop cannot escape
+     * into one of these blocks because every path through the expression must
+     * produce a value.  Reset to 0 across callable / lambda boundaries. */
+    size_t if_expr_depth;
     /* When true, a lambda body resolved in this context may capture `self`
      * from the enclosing type. Set inside type method/constructor bodies and
      * inside callable-spec field initializers. */
@@ -7107,6 +7112,15 @@ static bool validate_loop_control_stmt(ResolveContext *context,
                                        const char *keyword) {
     if (context != NULL && context->loop_depth > 0U) {
         return true;
+    }
+
+    if (context != NULL && context->if_expr_depth > 0U) {
+        return resolver_append_error(
+            context,
+            stmt != NULL ? stmt->token : context->program->module_token,
+            format_message("'%s' cannot appear directly inside an 'if' expression block; "
+                           "place it inside a loop within the block",
+                           keyword));
     }
 
     return resolver_append_error(
@@ -14523,13 +14537,15 @@ static void lambda_save_callable_context(ResolveContext *context,
                                          bool *out_prev_saw_return,
                                          bool *out_prev_escape,
                                          size_t *out_prev_exception_capture,
-                                         size_t *out_prev_loop) {
+                                         size_t *out_prev_loop,
+                                         size_t *out_prev_if_expr_depth) {
     *out_prev_sig = context->current_callable_signature;
     *out_prev_inferred_return = context->current_callable_inferred_return_type;
     *out_prev_saw_return = context->current_callable_saw_return;
     *out_prev_escape = context->current_callable_has_escaping_exception;
     *out_prev_exception_capture = context->exception_capture_depth;
     *out_prev_loop = context->loop_depth;
+    *out_prev_if_expr_depth = context->if_expr_depth;
 }
 
 static void lambda_restore_callable_context(ResolveContext *context,
@@ -14538,13 +14554,15 @@ static void lambda_restore_callable_context(ResolveContext *context,
                                             bool prev_saw_return,
                                             bool prev_escape,
                                             size_t prev_exception_capture,
-                                            size_t prev_loop) {
+                                            size_t prev_loop,
+                                            size_t prev_if_expr_depth) {
     context->current_callable_signature = prev_sig;
     context->current_callable_inferred_return_type = prev_inferred_return;
     context->current_callable_saw_return = prev_saw_return;
     context->current_callable_has_escaping_exception = prev_escape;
     context->exception_capture_depth = prev_exception_capture;
     context->loop_depth = prev_loop;
+    context->if_expr_depth = prev_if_expr_depth;
 }
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
@@ -14555,6 +14573,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     bool prev_escape;
     size_t prev_exception_capture;
     size_t prev_loop;
+    size_t prev_if_expr_depth;
     bool prev_self_capturable;
     bool effective_allow_self;
     LambdaCaptureFrame frame;
@@ -14593,7 +14612,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                  &prev_saw_return,
                                  &prev_escape,
                                  &prev_exception_capture,
-                                 &prev_loop);
+                                 &prev_loop,
+                                 &prev_if_expr_depth);
     prev_self_capturable = context->self_capturable;
 
     /* Inside the lambda body, `self` is available iff the enclosing context
@@ -14607,6 +14627,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
+    context->if_expr_depth = 0U;
     /* self_capturable stays the same: if the lambda body could see self, so
      * can a lambda nested inside it. */
     context->self_capturable = effective_allow_self;
@@ -14643,7 +14664,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                     prev_saw_return,
                                     prev_escape,
                                     prev_exception_capture,
-                                    prev_loop);
+                                    prev_loop,
+                                    prev_if_expr_depth);
     context->self_capturable = prev_self_capturable;
 
     resolver_pop_scope(context);
@@ -14936,13 +14958,26 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    resolve_expr(context, expr->as.cast.value, allow_self) &&
                    validate_cast_expr(context, expr);
 
-        case FENG_EXPR_IF:
-            if (!resolve_expr(context, expr->as.if_expr.condition, allow_self) ||
-                !resolve_block(context, expr->as.if_expr.then_block, allow_self) ||
-                !resolve_block(context, expr->as.if_expr.else_block, allow_self)) {
+        case FENG_EXPR_IF: {
+            size_t prev_loop_depth = context->loop_depth;
+            bool ok;
+
+            if (!resolve_expr(context, expr->as.if_expr.condition, allow_self)) {
                 return false;
             }
-            return validate_if_expr(context, expr);
+            /* Prevent break/continue from an outer loop from appearing directly
+             * inside an if-expression block.  Blocks must yield a value on every
+             * path, so a bare break/continue would make the expression
+             * unevaluable.  Loops nested inside the block restore loop_depth and
+             * may contain their own break/continue normally. */
+            context->loop_depth = 0U;
+            context->if_expr_depth += 1U;
+            ok = resolve_block(context, expr->as.if_expr.then_block, allow_self) &&
+                 resolve_block(context, expr->as.if_expr.else_block, allow_self);
+            context->loop_depth = prev_loop_depth;
+            context->if_expr_depth -= 1U;
+            return ok && validate_if_expr(context, expr);
+        }
 
         case FENG_EXPR_MATCH:
             return resolve_and_validate_match_common(context,
@@ -15369,6 +15404,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
     size_t previous_loop_depth = context->loop_depth;
+    size_t previous_if_expr_depth = context->if_expr_depth;
     bool previous_self_capturable = context->self_capturable;
     /* G4-1/G4-14: push callable-level type params (method generics). */
     const TypeParamEntry *previous_type_params = context->type_params;
@@ -15414,6 +15450,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
+    context->if_expr_depth = 0U;
     /* Inside a member method or constructor body, lambdas may capture self. */
     if (allow_self && context->current_type_decl != NULL) {
         context->self_capturable = true;
@@ -15426,6 +15463,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
+        context->if_expr_depth = previous_if_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -15439,6 +15477,7 @@ static bool resolve_callable(ResolveContext *context,
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
             context->exception_capture_depth = previous_exception_capture_depth;
             context->loop_depth = previous_loop_depth;
+            context->if_expr_depth = previous_if_expr_depth;
             context->current_callable_signature = previous_callable_signature;
             context->self_capturable = previous_self_capturable;
             return false;
@@ -15452,6 +15491,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
+        context->if_expr_depth = previous_if_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return true;
@@ -15471,6 +15511,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
+        context->if_expr_depth = previous_if_expr_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -15525,6 +15566,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
     context->exception_capture_depth = previous_exception_capture_depth;
     context->loop_depth = previous_loop_depth;
+    context->if_expr_depth = previous_if_expr_depth;
     context->current_callable_signature = previous_callable_signature;
     context->self_capturable = previous_self_capturable;
     return ok;
