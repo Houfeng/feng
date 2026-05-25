@@ -17,7 +17,7 @@ type Counter: IntSequence {
   }
 }
 
-fn main(args: string[]) {
+fn generic_example(args: string[]) {
   let counter: IntSequence = Counter();
   if counter.size() == 1 {
     puts(&"generic spec parent ok");

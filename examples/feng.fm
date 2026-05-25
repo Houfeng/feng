@@ -2,7 +2,7 @@
 [package]
 name:    "examples"
 version: "0.1.0"
-target:  "lib"
+target:  "bin"
 src:     "src/"
 out:     "build/"
 

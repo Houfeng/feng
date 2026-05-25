@@ -1,27 +1,13 @@
 mod feng.examples;
 
-use feng.examples.loop;
-use feng.examples.loop as lp;
-use std.collections;
+use std;
 
-/**
- * Prints a message to the console.
- */
-@cdecl("libc")
-extern fn puts(msg: string*): int;
-
-fn test<T>(x: T): T {
-  puts(&"test");
-  return x;
-}
 
 /**
  * The main function.
  */
 fn main(args: string[]) {
-  puts(&("hello, examples"));
-  puts(&test_top_binding);
-  // lp.loop_example([""]);
-  test(1);
-  // let map = Map<string, int>();
+  print("Please enter your name: ");
+  let msg = readLine();
+  println("Hello: {0}", msg);
 }
