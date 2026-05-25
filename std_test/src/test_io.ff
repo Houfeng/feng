@@ -30,8 +30,16 @@ fn print_writes_stdout_without_newline() {
   check(written == marker.length(), "io/print-return");
 }
 
+fn println_writes_stdout_with_newline() {
+  let marker = "__STD_IO_PRINTLN__";
+  let written = println(marker);
+
+  check(written == marker.length() + (long)1, "io/println-return");
+}
+
 pu fn run_io_tests() {
   readLine_reads_one_line_per_call();
   writeLine_writes_stdout_with_newline();
   print_writes_stdout_without_newline();
+  println_writes_stdout_with_newline();
 }

@@ -120,6 +120,7 @@ std-tests: cli runtime
 	grep -q '^__STD_IO_READLINE3__=$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_WRITELINE__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
+	grep -q '^__STD_IO_PRINTLN__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE1__=DE$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_READLINE3__=$$' ./std_test/build/std_test.stdout
@@ -127,6 +128,7 @@ std-tests: cli runtime
 	grep -q '^__STDIO_LINE__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
+	grep -q '^__STDIO_PRINTLN__ left/right$$' ./std_test/build/std_test.stdout
 
 smoke: cli runtime
 	./scripts/run_smoke.sh

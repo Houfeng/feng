@@ -342,3 +342,15 @@ pu fn print(format: string, args: string...): long {
 	let rendered = renderPrintedBytes(format, args);
 	return stdio.write(rendered);
 }
+
+/**
+ * Writes `format` after `{argsIndex}` interpolation and appends one trailing newline.
+ * @param format - source format string
+ * @param args - zero-based interpolation arguments
+	 * @return total bytes written, including the trailing newline
+ */
+pu fn println(format: string, args: string...): long {
+	let rendered = renderPrintedBytes(format, args);
+	let text = feng_string_from_utf8_bytes(rendered, rendered.length());
+	return stdio.writeLine(text);
+}

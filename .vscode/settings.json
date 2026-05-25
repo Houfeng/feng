@@ -13,6 +13,7 @@
     "libname",
     "miniz",
     "nums",
+    "println",
     "venv"
   ],
   "chat.agent.maxRequests": 200

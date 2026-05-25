@@ -54,9 +54,11 @@ fn writeError_writes_stderr() {
 fn print_formats_output() {
   let topWritten = print("__STDIO_TOP_PRINT__ {0}/{1}\n", "left", "right");
   let literalWritten = print("__STDIO_LITERAL__ {2}\n", "left", "right");
+  let printlnWritten = println("__STDIO_PRINTLN__ {0}/{1}", "left", "right");
 
   check(topWritten == "__STDIO_TOP_PRINT__ left/right\n".length(), "stdio/top-print-return");
   check(literalWritten == "__STDIO_LITERAL__ {2}\n".length(), "stdio/literal-print-return");
+  check(printlnWritten == "__STDIO_PRINTLN__ left/right".length() + (long)1, "stdio/println-return");
 }
 
 pu fn run_stdio_api_tests() {
