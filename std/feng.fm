@@ -6,4 +6,4 @@ src:     "src/"
 out:     "build/"
 
 [assets]
-extlib: "lib/"
+extlib: "extlib/"

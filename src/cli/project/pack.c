@@ -155,6 +155,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     size_t asset_entry_count = 0U;
     char *library_path = NULL;
     char *host_library_name = NULL;
+    char *host_target = NULL;
     char *public_mod_root = NULL;
     char *extlib_root = NULL;
     char *error_message = NULL;
@@ -195,8 +196,15 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         rc = 1;
         goto done;
     }
-    library_path = dup_printf("%s/lib/%s",
+    if (!feng_fb_detect_host_target(&host_target, &error_message)) {
+        fprintf(stderr, "error: %s\n",
+                error_message != NULL ? error_message : "failed to detect host target");
+        rc = 1;
+        goto done;
+    }
+    library_path = dup_printf("%s/lib/%s/%s",
                               context.out_root,
+                              host_target,
                               host_library_name);
     if (library_path == NULL) {
         fprintf(stderr, "error: out of memory while preparing package paths\n");
@@ -267,6 +275,7 @@ done:
     feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
     free(error_message);
     free(host_library_name);
+    free(host_target);
     free(extlib_root);
     dispose_asset_entries(asset_entries, asset_entry_count);
     free(public_mod_root);

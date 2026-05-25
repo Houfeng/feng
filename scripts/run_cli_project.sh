@@ -258,7 +258,7 @@ if expect_ok default_path bash -lc "cd '$FIXTURE' && '$FENG' build"; then
 fi
 
 if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
-    lib="$LIB_FIXTURE/build/lib/libhello_library.a"
+    lib="$LIB_FIXTURE/build/lib/$HOST_TARGET/libhello_library.a"
     workspace_ft="$LIB_FIXTURE/build/obj/symbols/feng/cli/project/lib.ft"
     public_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
     if [[ ! -f "$lib" ]]; then

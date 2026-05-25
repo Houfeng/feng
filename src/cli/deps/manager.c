@@ -1612,7 +1612,18 @@ static bool build_local_project_bundle(const char *program,
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
     }
-    library_path = dup_printf("%s/lib/%s", context.out_root, host_library_name);
+    {
+        char *host_target = NULL;
+        char *host_target_error = NULL;
+        if (!feng_fb_detect_host_target(&host_target, &host_target_error)) {
+            free(host_target_error);
+            free(host_library_name);
+            feng_cli_project_context_dispose(&context);
+            return set_errorf(error, manifest_path, 0U, "failed to detect host target");
+        }
+        library_path = dup_printf("%s/lib/%s/%s", context.out_root, host_target, host_library_name);
+        free(host_target);
+    }
     public_mod_root = dup_printf("%s/mod", context.out_root);
     if (library_path == NULL || public_mod_root == NULL) {
         free(host_library_name);

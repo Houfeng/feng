@@ -15,6 +15,33 @@ EXPECTED="$ROOT/test/smoke/phase1a/hello.expected"
 WORK="$(mktemp -d -t feng_cli_XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
+detect_host_target() {
+    local os arch
+
+    case "$(uname -s)" in
+        Darwin)         os="macos" ;;
+        Linux)          os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+        *)
+            echo "unsupported host OS for CLI smoke: $(uname -s)" >&2
+            exit 2
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        arm64|aarch64)  arch="arm64" ;;
+        x86_64|amd64)   arch="x64" ;;
+        *)
+            echo "unsupported host architecture for CLI smoke: $(uname -m)" >&2
+            exit 2
+            ;;
+    esac
+
+    printf '%s-%s\n' "$os" "$arch"
+}
+
+HOST_TARGET="$(detect_host_target)"
+
 if [[ ! -x "$FENG" ]]; then
     echo "missing $FENG (run 'make cli' first)" >&2
     exit 2
@@ -253,7 +280,7 @@ fi
 # 3. --target=lib should produce a static archive under <out>/lib
 out3="$WORK/case_lib"
 if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib --out="$out3" --name=hello_lib; then
-    lib="$out3/lib/libhello_lib.a"
+    lib="$out3/lib/$HOST_TARGET/libhello_lib.a"
     if [[ ! -f "$lib" ]]; then
         echo "FAIL[lib_static] missing archive $lib"
         failures=$((failures + 1))

@@ -229,9 +229,17 @@ static char *host_static_library_path(const char *dir, const char *stem) {
 }
 
 static char *host_static_library_output_path(const char *out_dir, const char *stem) {
-    char *lib_dir = path_join(out_dir, "lib");
-    char *path = host_static_library_path(lib_dir, stem);
+    char *host_target = NULL;
+    char *lib_base;
+    char *lib_dir;
+    char *path;
 
+    ASSERT(feng_fb_detect_host_target(&host_target, NULL));
+    lib_base = path_join(out_dir, "lib");
+    lib_dir = path_join(lib_base, host_target);
+    free(lib_base);
+    free(host_target);
+    path = host_static_library_path(lib_dir, stem);
     free(lib_dir);
     return path;
 }

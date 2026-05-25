@@ -216,8 +216,26 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
 
     /* Materialise the output layout up front. */
     char *ir_dir = path_join(opts.out_dir, "ir/c");
-    char *artifact_dir = path_join(opts.out_dir,
-                                   opts.target == FENG_COMPILE_TARGET_BIN ? "bin" : "lib");
+    char *artifact_dir = NULL;
+    if (opts.target == FENG_COMPILE_TARGET_LIB) {
+        char *host_target = NULL;
+        char *host_target_error = NULL;
+        if (!feng_fb_detect_host_target(&host_target, &host_target_error)) {
+            fprintf(stderr, "error: %s\n",
+                    host_target_error != NULL ? host_target_error
+                                              : "failed to detect host target");
+            free(host_target_error);
+            free(ir_dir);
+            feng_cli_direct_options_dispose(&opts);
+            return 1;
+        }
+        char *lib_base = path_join(opts.out_dir, "lib");
+        artifact_dir = lib_base != NULL ? path_join(lib_base, host_target) : NULL;
+        free(lib_base);
+        free(host_target);
+    } else {
+        artifact_dir = path_join(opts.out_dir, "bin");
+    }
     public_symbol_dir = path_join(opts.out_dir, "mod");
     workspace_symbol_dir = path_join(opts.out_dir, "obj/symbols");
     if (ir_dir == NULL || artifact_dir == NULL || public_symbol_dir == NULL ||
