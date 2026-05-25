@@ -163,6 +163,7 @@ typedef struct FunctionCallResolution {
     FunctionCallResolutionKind kind;
     const FengDecl *decl;
     const FengCallableSignature *callable;
+    bool rejected_existing_array_for_variadic;
     const FengTypeMember *member;       /* set for type-method / fit-method */
     const FengDecl *owner_type_decl;    /* set for type-method / fit-method */
     const FengDecl *fit_decl;           /* set for fit-method */
@@ -6780,6 +6781,29 @@ static const FengTypeRef *callable_arg_type_ref_from_expr(ResolveContext *contex
     return *owned_type_ref;
 }
 
+static bool expr_is_existing_array_for_expected_type_ref(ResolveContext *context,
+                                                         const FengExpr *expr,
+                                                         const FengTypeRef *expected_array_type) {
+    FengTypeRef *owned_type_ref = NULL;
+    const FengTypeRef *actual_type_ref;
+    bool matches;
+
+    if (context == NULL || expr == NULL || expected_array_type == NULL ||
+        expected_array_type->kind != FENG_TYPE_REF_ARRAY) {
+        return false;
+    }
+
+    actual_type_ref = callable_arg_type_ref_from_expr(context, expr, &owned_type_ref);
+    matches = actual_type_ref != NULL &&
+              actual_type_ref->kind == FENG_TYPE_REF_ARRAY &&
+              type_refs_semantically_equal(context, expected_array_type, actual_type_ref);
+
+    if (owned_type_ref != NULL) {
+        free_synthetic_type_ref(owned_type_ref);
+    }
+    return matches;
+ }
+
 /* Structural unification helper shared by both direct-`T` inference and the
  * narrower wrapped-shape inference path. It is intentionally generic; whether
  * wrapped shapes such as `T[]` may reach here is decided before the call. */
@@ -6977,7 +7001,8 @@ static bool callable_parameters_match_args(ResolveContext *context,
                                            const FengCallableSignature *callable,
                                            FengExpr *const *args,
                                            size_t arg_count,
-                                           bool allow_wrapped_inference) {
+                                           bool allow_wrapped_inference,
+                                           bool *out_rejected_existing_array_for_variadic) {
     size_t arg_index;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -6985,6 +7010,10 @@ static bool callable_parameters_match_args(ResolveContext *context,
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+
+    if (out_rejected_existing_array_for_variadic != NULL) {
+        *out_rejected_existing_array_for_variadic = false;
+    }
 
     if (is_variadic) {
         if (arg_count < fixed_count) {
@@ -7043,6 +7072,16 @@ static bool callable_parameters_match_args(ResolveContext *context,
         }
 
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_rejected_existing_array_for_variadic != NULL &&
+                is_variadic &&
+                arg_count == callable->param_count &&
+                arg_index == fixed_count &&
+                expr_is_existing_array_for_expected_type_ref(
+                    context,
+                    args[arg_index],
+                    callable->params[fixed_count].type)) {
+                *out_rejected_existing_array_for_variadic = true;
+            }
             ok = false;
             break;
         }
@@ -7072,7 +7111,8 @@ static bool callable_parameters_match_args_for_owner_instance(
     InferredExprType owner_type,
     FengExpr *const *args,
     size_t arg_count,
-    bool allow_wrapped_inference) {
+    bool allow_wrapped_inference,
+    bool *out_rejected_existing_array_for_variadic) {
     size_t arg_index;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -7080,6 +7120,10 @@ static bool callable_parameters_match_args_for_owner_instance(
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+
+    if (out_rejected_existing_array_for_variadic != NULL) {
+        *out_rejected_existing_array_for_variadic = false;
+    }
 
     if (is_variadic) {
         if (arg_count < fixed_count) {
@@ -7152,6 +7196,26 @@ static bool callable_parameters_match_args_for_owner_instance(
             continue;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_rejected_existing_array_for_variadic != NULL &&
+                is_variadic &&
+                arg_count == callable->param_count &&
+                arg_index == fixed_count) {
+                const FengTypeRef *array_param_type = substitute_type_ref_for_owner_instance(
+                    context,
+                    owner_type_decl,
+                    owner_type,
+                    callable->params[fixed_count].type);
+
+                array_param_type = substitute_type_ref_for_fit_instance(context,
+                                                                        fit_decl,
+                                                                        owner_type,
+                                                                        array_param_type);
+                if (expr_is_existing_array_for_expected_type_ref(context,
+                                                                 args[arg_index],
+                                                                 array_param_type)) {
+                    *out_rejected_existing_array_for_variadic = true;
+                }
+            }
             ok = false;
             break;
         }
@@ -7588,7 +7652,7 @@ static ConstructorResolution resolve_accessible_constructor_overload(
             continue;
         }
         if (!callable_parameters_match_args(
-                context, &member->as.callable, args, arg_count, false)) {
+            context, &member->as.callable, args, arg_count, false, NULL)) {
             continue;
         }
 
@@ -7624,11 +7688,17 @@ static FunctionCallResolution resolve_top_level_function_overload(
         if (decl == NULL || decl->kind != FENG_DECL_FUNCTION) {
             continue;
         }
+        bool rejected_existing_array_for_variadic = false;
+
         if (!callable_parameters_match_args(context,
                                             &decl->as.function_decl,
                                             args,
                                             arg_count,
-                                            decl->is_extern)) {
+                                            decl->is_extern,
+                                            &rejected_existing_array_for_variadic)) {
+            if (rejected_existing_array_for_variadic) {
+                result.rejected_existing_array_for_variadic = true;
+            }
             continue;
         }
 
@@ -7819,19 +7889,39 @@ static CallableValueResolution resolve_accessible_method_value_overload(
 static bool function_type_parameters_match_args(ResolveContext *context,
                                                 const FengDecl *type_decl,
                                                 FengExpr *const *args,
-                                                size_t arg_count) {
+                                                size_t arg_count,
+                                                bool *out_rejected_existing_array_for_variadic) {
     size_t arg_index;
+    bool is_variadic;
+    size_t fixed_count;
+
+    if (out_rejected_existing_array_for_variadic != NULL) {
+        *out_rejected_existing_array_for_variadic = false;
+    }
 
     if (!decl_is_function_type(type_decl)) {
         return false;
     }
-    if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
+    is_variadic = type_decl->as.spec_decl.as.callable.param_count > 0U &&
+                  type_decl->as.spec_decl.as.callable
+                      .params[type_decl->as.spec_decl.as.callable.param_count - 1U]
+                      .is_variadic;
+    fixed_count = is_variadic ? type_decl->as.spec_decl.as.callable.param_count - 1U
+                              : type_decl->as.spec_decl.as.callable.param_count;
+
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
         return false;
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type =
-            type_decl->as.spec_decl.as.callable.params[arg_index].type;
+            arg_index < fixed_count
+                ? type_decl->as.spec_decl.as.callable.params[arg_index].type
+                : type_decl->as.spec_decl.as.callable.params[fixed_count].type->as.inner;
 
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
@@ -7839,6 +7929,16 @@ static bool function_type_parameters_match_args(ResolveContext *context,
             return false;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_rejected_existing_array_for_variadic != NULL &&
+                is_variadic &&
+                arg_count == type_decl->as.spec_decl.as.callable.param_count &&
+                arg_index == fixed_count &&
+                expr_is_existing_array_for_expected_type_ref(
+                    context,
+                    args[arg_index],
+                    type_decl->as.spec_decl.as.callable.params[fixed_count].type)) {
+                *out_rejected_existing_array_for_variadic = true;
+            }
             return false;
         }
     }
@@ -7851,22 +7951,44 @@ static bool function_type_parameters_match_args_for_instance(
     const FengDecl *type_decl,
     InferredExprType owner_type,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    bool *out_rejected_existing_array_for_variadic) {
     size_t arg_index;
+    bool is_variadic;
+    size_t fixed_count;
+
+    if (out_rejected_existing_array_for_variadic != NULL) {
+        *out_rejected_existing_array_for_variadic = false;
+    }
 
     if (!decl_is_function_type(type_decl)) {
         return false;
     }
-    if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
+    is_variadic = type_decl->as.spec_decl.as.callable.param_count > 0U &&
+                  type_decl->as.spec_decl.as.callable
+                      .params[type_decl->as.spec_decl.as.callable.param_count - 1U]
+                      .is_variadic;
+    fixed_count = is_variadic ? type_decl->as.spec_decl.as.callable.param_count - 1U
+                              : type_decl->as.spec_decl.as.callable.param_count;
+
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
         return false;
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengTypeRef *declared_param_type =
+            arg_index < fixed_count
+                ? type_decl->as.spec_decl.as.callable.params[arg_index].type
+                : type_decl->as.spec_decl.as.callable.params[fixed_count].type->as.inner;
         const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
             context,
             type_decl,
             owner_type,
-            type_decl->as.spec_decl.as.callable.params[arg_index].type);
+            declared_param_type);
 
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
@@ -7874,6 +7996,22 @@ static bool function_type_parameters_match_args_for_instance(
             return false;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_rejected_existing_array_for_variadic != NULL &&
+                is_variadic &&
+                arg_count == type_decl->as.spec_decl.as.callable.param_count &&
+                arg_index == fixed_count) {
+                const FengTypeRef *array_param_type = substitute_type_ref_for_owner_instance(
+                    context,
+                    type_decl,
+                    owner_type,
+                    type_decl->as.spec_decl.as.callable.params[fixed_count].type);
+
+                if (expr_is_existing_array_for_expected_type_ref(context,
+                                                                 args[arg_index],
+                                                                 array_param_type)) {
+                    *out_rejected_existing_array_for_variadic = true;
+                }
+            }
             return false;
         }
     }
@@ -7906,11 +8044,17 @@ static FunctionCallResolution resolve_module_public_function_overload(
                 !slice_equals(decl->as.function_decl.name, name)) {
                 continue;
             }
+            bool rejected_existing_array_for_variadic = false;
+
             if (!callable_parameters_match_args(context,
                                                 &decl->as.function_decl,
                                                 args,
                                                 arg_count,
-                                                decl->is_extern)) {
+                                                decl->is_extern,
+                                                &rejected_existing_array_for_variadic)) {
+                if (rejected_existing_array_for_variadic) {
+                    result.rejected_existing_array_for_variadic = true;
+                }
                 continue;
             }
 
@@ -8277,15 +8421,24 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
 
     (void)fit_module;
-    if (!callable_parameters_match_args_for_owner_instance(st->context,
-                                                           &member->as.callable,
-                                                           st->owner_type_decl,
-                                                           fit_decl,
-                                                           st->owner_type,
-                                                           st->args,
-                                                           st->arg_count,
-                                                           false)) {
-        return true;
+    {
+        bool rejected_existing_array_for_variadic = false;
+
+        if (!callable_parameters_match_args_for_owner_instance(
+                st->context,
+                &member->as.callable,
+                st->owner_type_decl,
+                fit_decl,
+                st->owner_type,
+                st->args,
+                st->arg_count,
+                false,
+                &rejected_existing_array_for_variadic)) {
+            if (rejected_existing_array_for_variadic) {
+                st->result.rejected_existing_array_for_variadic = true;
+            }
+            return true;
+        }
     }
     if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
         st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
@@ -8357,6 +8510,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
             for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
                 const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
 
+                bool rejected_existing_array_for_variadic = false;
+
                 if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                     !slice_equals(member->as.callable.name, name) ||
                     !callable_parameters_match_args_for_owner_instance(context,
@@ -8366,7 +8521,11 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                        owner_type,
                                                                        args,
                                                                        arg_count,
-                                                                       false)) {
+                                                                       false,
+                                                                       &rejected_existing_array_for_variadic)) {
+                    if (rejected_existing_array_for_variadic) {
+                        result.rejected_existing_array_for_variadic = true;
+                    }
                     continue;
                 }
                 if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
@@ -8406,6 +8565,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
         for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
             const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
 
+            bool rejected_existing_array_for_variadic = false;
+
             if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                 !slice_equals(member->as.callable.name, name) ||
                 !type_member_is_accessible_from(context, provider_module, member) ||
@@ -8417,7 +8578,11 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                    owner_type,
                                                                    args,
                                                                    arg_count,
-                                                                   false)) {
+                                                                   false,
+                                                                   &rejected_existing_array_for_variadic)) {
+                if (rejected_existing_array_for_variadic) {
+                    result.rejected_existing_array_for_variadic = true;
+                }
                 continue;
             }
 
@@ -8489,6 +8654,20 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengTypeRef *spec_type_ref,
                                            FengToken err_token);
 
+static bool report_existing_array_rejected_for_variadic_call(ResolveContext *context,
+                                                             const FengExpr *callee) {
+    char *target_name = format_expr_target_name(callee);
+    bool ok = resolver_append_error(
+        context,
+        callee != NULL ? callee->token : (FengToken){0},
+        format_message(
+            "call target '%s' does not accept an existing array at a variadic argument position; pass elements individually",
+            target_name != NULL ? target_name : "<expression>"));
+
+    free(target_name);
+    return ok;
+}
+
 static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
@@ -8498,6 +8677,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     const FengDecl *callee_constraint_decl =
         resolve_callable_constraint_type_decl(context, callee_type);
     char *target_name = NULL;
+    bool rejected_existing_array_for_variadic = false;
 
     if (callee != NULL &&
         (callee->kind == FENG_EXPR_LAMBDA ||
@@ -8512,7 +8692,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                              callee_type_decl,
                                                              callee_type,
                                                              args,
-                                                             arg_count)) {
+                                                             arg_count,
+                                                             &rejected_existing_array_for_variadic)) {
             if (!validate_borrowed_data_pointer_call_arguments(
                     context,
                     callee,
@@ -8529,6 +8710,10 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                              callee_type_decl->as.spec_decl.as.callable.param_count,
                                              FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
             return true;
+        }
+
+        if (rejected_existing_array_for_variadic) {
+            return report_existing_array_rejected_for_variadic_call(context, callee);
         }
 
         target_name = format_expr_target_name(callee);
@@ -8550,7 +8735,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
         if (function_type_parameters_match_args(context,
                                                 callee_constraint_decl,
                                                 args,
-                                                arg_count)) {
+                                                arg_count,
+                                                &rejected_existing_array_for_variadic)) {
             if (!validate_borrowed_data_pointer_call_arguments(
                     context,
                     callee,
@@ -8570,6 +8756,10 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                 callee_constraint_decl->as.spec_decl.as.callable.param_count,
                 FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
             return true;
+        }
+
+        if (rejected_existing_array_for_variadic) {
+            return report_existing_array_rejected_for_variadic_call(context, callee);
         }
 
         target_name = format_expr_target_name(callee);
@@ -8957,7 +9147,8 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                          callee_type_decl,
                                                          callee_type,
                                                          expr->as.call.args,
-                                                         expr->as.call.arg_count)) {
+                                                         expr->as.call.arg_count,
+                                                         NULL)) {
         return inferred_expr_type_from_return_type_ref(
             substitute_type_ref_for_owner_instance(
                 context,
@@ -8971,7 +9162,8 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
         function_type_parameters_match_args(context,
                                             callee_type_decl,
                                             expr->as.call.args,
-                                            expr->as.call.arg_count)) {
+                                            expr->as.call.arg_count,
+                                            NULL)) {
         return inferred_expr_type_from_return_type_ref(
             callee_type_decl->as.spec_decl.as.callable.return_type);
     }
@@ -11433,19 +11625,32 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                                              size_t param_count,
                                              FengSpecObjectSubjectStorageKind preferred_storage) {
     size_t i;
+    bool is_variadic;
+    size_t fixed_count;
 
-    if (params == NULL || args == NULL || param_count != arg_count) {
+    if (params == NULL || args == NULL) {
+        return;
+    }
+    is_variadic = param_count > 0U && params[param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? param_count - 1U : param_count;
+    if (!is_variadic && param_count != arg_count) {
+        return;
+    }
+    if (is_variadic && arg_count < fixed_count) {
         return;
     }
     for (i = 0U; i < arg_count; ++i) {
-        if (resolve_function_type_decl(context, params[i].type) != NULL) {
-            record_callable_spec_coercion_site(context, args[i], params[i].type);
+        const FengTypeRef *param_type =
+            i < fixed_count ? params[i].type : params[fixed_count].type->as.inner;
+
+        if (resolve_function_type_decl(context, param_type) != NULL) {
+            record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
         }
         record_object_spec_coercion_site_if_applicable(context,
-                                                        args[i],
-                                                        params[i].type,
-                                                        preferred_storage);
+                                                       args[i],
+                                                       param_type,
+                                                       preferred_storage);
     }
 }
 
@@ -11458,16 +11663,28 @@ static void record_object_arg_coercion_sites_for_owner_instance(
     const FengDecl *owner_type_decl,
     InferredExprType owner_type) {
     size_t i;
+    bool is_variadic;
+    size_t fixed_count;
 
-    if (params == NULL || args == NULL || param_count != arg_count) {
+    if (params == NULL || args == NULL) {
+        return;
+    }
+    is_variadic = param_count > 0U && params[param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? param_count - 1U : param_count;
+    if (!is_variadic && param_count != arg_count) {
+        return;
+    }
+    if (is_variadic && arg_count < fixed_count) {
         return;
     }
     for (i = 0U; i < arg_count; ++i) {
+        const FengTypeRef *declared_param_type =
+            i < fixed_count ? params[i].type : params[fixed_count].type->as.inner;
         const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
             context,
             owner_type_decl,
             owner_type,
-            params[i].type);
+            declared_param_type);
         if (resolve_function_type_decl(context, param_type) != NULL) {
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
@@ -12069,16 +12286,26 @@ static bool validate_borrowed_data_pointer_call_arguments(
     size_t param_count,
     bool allow_borrowed_data_pointer_args) {
     size_t index;
+    bool is_variadic;
+    size_t fixed_count;
 
     if (allow_borrowed_data_pointer_args || params == NULL) {
         return true;
     }
 
-    for (index = 0U; index < arg_count && index < param_count; ++index) {
+    is_variadic = param_count > 0U && params[param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? param_count - 1U : param_count;
+    if (is_variadic && arg_count < fixed_count) {
+        return true;
+    }
+
+    for (index = 0U; index < arg_count; ++index) {
+        const FengTypeRef *param_type =
+            (is_variadic && index >= fixed_count) ? params[fixed_count].type->as.inner : params[index].type;
         char *callee_name;
         char *expr_name;
 
-        if (!type_ref_is_data_pointer_type(context, params[index].type) ||
+        if (!type_ref_is_data_pointer_type(context, param_type) ||
             !expr_is_borrowed_data_pointer_value(context, args[index], 0U)) {
             continue;
         }
@@ -13624,6 +13851,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                        callee->as.member.member.data,
                                        expr->as.call.arg_count));
                 }
+                if (resolution.rejected_existing_array_for_variadic) {
+                    return report_existing_array_rejected_for_variadic_call(context, callee);
+                }
                 if (find_module_public_function_decl(alias->target_module, callee->as.member.member) != NULL) {
                     return resolver_append_error(
                         context,
@@ -13731,6 +13961,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                    callee->as.member.member.data,
                                    expr->as.call.arg_count));
             }
+            if (resolution.rejected_existing_array_for_variadic) {
+                return report_existing_array_rejected_for_variadic_call(context, callee);
+            }
             if (accessible_method != NULL) {
                 return resolver_append_error(
                     context,
@@ -13804,6 +14037,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 free(owner_name);
                 return ok;
             }
+            if (resolution.rejected_existing_array_for_variadic) {
+                return report_existing_array_rejected_for_variadic_call(context, callee);
+            }
         }
 
         return validate_callable_typed_expr_call(context,
@@ -13865,6 +14101,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                        (int)callee->as.identifier.length,
                                        callee->as.identifier.data,
                                        expr->as.call.arg_count));
+                }
+
+                if (resolution.rejected_existing_array_for_variadic) {
+                    return report_existing_array_rejected_for_variadic_call(context, callee);
                 }
 
                 return resolver_append_error(

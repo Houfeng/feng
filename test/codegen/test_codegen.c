@@ -4673,6 +4673,111 @@ static void test_variadic_multi_args_codegen(void) {
     feng_program_free(program);
 }
 
+/* T2: fixed parameters stay positional and only the variadic suffix is packed. */
+static void test_variadic_fixed_prefix_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.variadic_fixed_prefix;\n"
+        "fn log(level: int, args: string...): int {\n"
+        "    return level;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    return log(1, \"a\", \"b\");\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/variadic_fixed_prefix.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (variadic fixed prefix): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "(size_t)2") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* T6/C2: calling a variadic callable-form spec value must also pack variadic arguments. */
+static void test_variadic_callable_spec_lambda_codegen(void) {
+    static const char *kSource =
+        "mod feng.codegen.variadic_spec_lambda;\n"
+        "spec Mapper(args: int...): int;\n"
+        "fn run(): int {\n"
+        "    let mapper: Mapper = (args: int...) {\n"
+        "        return 0;\n"
+        "    };\n"
+        "    return mapper(1, 2);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/variadic_spec_lambda.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (variadic callable spec lambda): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengLambda__") != NULL);
+    ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+    ASSERT(strstr(out.c_source, "(size_t)2") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -4755,6 +4860,8 @@ int main(void) {
     test_user_constructor_forms_codegen();
     test_variadic_zero_args_codegen();
     test_variadic_multi_args_codegen();
+    test_variadic_fixed_prefix_codegen();
+    test_variadic_callable_spec_lambda_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

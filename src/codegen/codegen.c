@@ -584,6 +584,7 @@ typedef struct UserSpec {
     CGType         *callable_return_type;
     CGType        **callable_param_types;
     size_t          callable_param_count;
+    bool            callable_is_variadic;
     const FengDecl *decl;
     bool            is_generic_instance;
     const FengDecl *generic_origin_decl;
@@ -6524,6 +6525,10 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
     const FengDecl *decl = s->decl;
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         s->callable_param_count = decl->as.spec_decl.as.callable.param_count;
+        s->callable_is_variadic = decl->as.spec_decl.as.callable.param_count > 0U &&
+                                  decl->as.spec_decl.as.callable
+                                      .params[decl->as.spec_decl.as.callable.param_count - 1U]
+                                      .is_variadic;
         s->callable_param_types = decl->as.spec_decl.as.callable.param_count
             ? calloc(decl->as.spec_decl.as.callable.param_count,
                      sizeof *s->callable_param_types)
@@ -9372,6 +9377,9 @@ static bool cg_callable_specs_signature_compatible(const UserSpec *src,
     if (src->callable_param_count != dst->callable_param_count) {
         return false;
     }
+    if (src->callable_is_variadic != dst->callable_is_variadic) {
+        return false;
+    }
     for (size_t i = 0U; i < src->callable_param_count; ++i) {
         if (!cg_types_equal(src->callable_param_types[i],
                             dst->callable_param_types[i])) {
@@ -10028,13 +10036,25 @@ static bool cg_emit_callable_value_call(CG *cg,
                                         const UserSpec *spec,
                                         ExprResult *out) {
     Buf args_buf;
+    bool is_variadic;
+    size_t fixed_count;
 
     er_init(out);
     if (spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
             "codegen: callable value call requires a callable-form spec type");
     }
-    if (e->as.call.arg_count != spec->callable_param_count) {
+    is_variadic = spec->callable_is_variadic;
+    fixed_count = is_variadic ? spec->callable_param_count - 1U : spec->callable_param_count;
+    if (is_variadic) {
+        if (e->as.call.arg_count < fixed_count) {
+            return cg_fail(cg, e->token,
+                "codegen: too few arguments for variadic callable '%s' (need at least %zu, got %zu)",
+                spec->feng_name,
+                fixed_count,
+                e->as.call.arg_count);
+        }
+    } else if (e->as.call.arg_count != spec->callable_param_count) {
         return cg_fail(cg, e->token,
             "codegen: wrong argument count for callable '%s' (expected %zu, got %zu)",
             spec->feng_name,
@@ -10046,7 +10066,7 @@ static bool cg_emit_callable_value_call(CG *cg,
     }
 
     buf_init(&args_buf);
-    for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+    for (size_t i = 0; i < (is_variadic ? fixed_count : e->as.call.arg_count); ++i) {
         ExprResult ar;
         if (!cg_emit_expr_for_expected_type(cg,
                                             e->as.call.args[i],
@@ -10061,6 +10081,27 @@ static bool cg_emit_callable_value_call(CG *cg,
         buf_append_cstr(&args_buf, ", ");
         buf_append_cstr(&args_buf, ar.c_expr);
         er_free(&ar);
+    }
+
+    if (is_variadic) {
+        ExprResult varr;
+        size_t variadic_arg_count = e->as.call.arg_count - fixed_count;
+
+        if (!cg_pack_variadic_args(cg,
+                                   &e->token,
+                                   e->as.call.args + fixed_count,
+                                   variadic_arg_count,
+                                   spec->callable_param_types[spec->callable_param_count - 1U]->element,
+                                   &varr)) {
+            buf_free(&args_buf);
+            return false;
+        }
+        if (cgtype_is_managed(varr.type) && varr.owns_ref) {
+            cg_materialize_to_local(cg, &varr, "_t");
+        }
+        buf_append_cstr(&args_buf, ", ");
+        buf_append_cstr(&args_buf, varr.c_expr);
+        er_free(&varr);
     }
 
     Buf b; buf_init(&b);
@@ -10087,6 +10128,9 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     const char *desc_name = cg_generic_param_desc_name(cg, generic_param_index);
     char **arg_addr_exprs = NULL;
     bool ok = true;
+    bool is_variadic;
+    size_t fixed_count;
+    size_t emitted_arg_count;
 
     er_init(out);
     if (constraint == NULL || constraint->form != FENG_SPEC_FORM_CALLABLE ||
@@ -10095,7 +10139,20 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         return cg_fail(cg, e->token,
             "codegen: generic direct call requires a callable-form spec constraint");
     }
-    if (e->as.call.arg_count != constraint->callable_param_count) {
+    is_variadic = constraint->callable_is_variadic;
+    fixed_count = is_variadic ? constraint->callable_param_count - 1U
+                              : constraint->callable_param_count;
+    emitted_arg_count = is_variadic ? constraint->callable_param_count : e->as.call.arg_count;
+    if (is_variadic) {
+        if (e->as.call.arg_count < fixed_count) {
+            er_free(callee);
+            return cg_fail(cg, e->token,
+                "codegen: too few arguments for variadic callable constraint '%s' (need at least %zu, got %zu)",
+                constraint->feng_name,
+                fixed_count,
+                e->as.call.arg_count);
+        }
+    } else if (e->as.call.arg_count != constraint->callable_param_count) {
         er_free(callee);
         return cg_fail(cg, e->token,
             "codegen: wrong argument count for callable constraint '%s' (expected %zu, got %zu)",
@@ -10104,13 +10161,13 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
             e->as.call.arg_count);
     }
 
-    arg_addr_exprs = calloc(e->as.call.arg_count, sizeof *arg_addr_exprs);
+    arg_addr_exprs = calloc(emitted_arg_count, sizeof *arg_addr_exprs);
     if (arg_addr_exprs == NULL) {
         er_free(callee);
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
 
-    for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+    for (size_t i = 0; i < fixed_count; ++i) {
         ExprResult ar;
         char *tmp = NULL;
         char *cty = NULL;
@@ -10163,8 +10220,37 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         }
     }
 
+    if (ok && is_variadic) {
+        ExprResult varr;
+        Buf addr; buf_init(&addr);
+
+        if (!cg_pack_variadic_args(cg,
+                                   &e->token,
+                                   e->as.call.args + fixed_count,
+                                   e->as.call.arg_count - fixed_count,
+                                   constraint->callable_param_types[constraint->callable_param_count - 1U]->element,
+                                   &varr)) {
+            ok = false;
+        } else {
+            if ((cgtype_is_managed(varr.type) || cgtype_is_aggregate(varr.type)) && varr.owns_ref) {
+                if (cg_materialize_to_local(cg, &varr, "_ca") == NULL) {
+                    er_free(&varr);
+                    ok = false;
+                }
+            }
+            if (ok) {
+                buf_append_fmt(&addr, "&%s", varr.c_expr);
+                arg_addr_exprs[emitted_arg_count - 1U] = addr.data;
+                if (arg_addr_exprs[emitted_arg_count - 1U] == NULL) {
+                    ok = false;
+                }
+            }
+            er_free(&varr);
+        }
+    }
+
     if (!ok) {
-        for (size_t i = 0; i < e->as.call.arg_count; ++i) free(arg_addr_exprs[i]);
+        for (size_t i = 0; i < emitted_arg_count; ++i) free(arg_addr_exprs[i]);
         free(arg_addr_exprs);
         er_free(callee);
         return false;
@@ -10184,7 +10270,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
                            constraint->c_witness_struct_name,
                            desc_name,
                            callee->c_expr);
-            for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+            for (size_t i = 0; i < emitted_arg_count; ++i) {
                 buf_append_fmt(cg->cur_body, ", %s", arg_addr_exprs[i]);
             }
             buf_append_fmt(cg->cur_body, ", &%s);\n", ret_tmp);
@@ -10204,7 +10290,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
                        constraint->c_witness_struct_name,
                        desc_name,
                        callee->c_expr);
-        for (size_t i = 0; i < e->as.call.arg_count; ++i) {
+        for (size_t i = 0; i < emitted_arg_count; ++i) {
             buf_append_fmt(cg->cur_body, ", %s", arg_addr_exprs[i]);
         }
         buf_append_cstr(cg->cur_body, ", NULL);\n");
@@ -10214,7 +10300,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         ok = out->c_expr && out->type;
     }
 
-    for (size_t i = 0; i < e->as.call.arg_count; ++i) free(arg_addr_exprs[i]);
+    for (size_t i = 0; i < emitted_arg_count; ++i) free(arg_addr_exprs[i]);
     free(arg_addr_exprs);
     er_free(callee);
     return ok;
@@ -18374,6 +18460,7 @@ static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
     }
     if (src->form == FENG_SPEC_FORM_CALLABLE) {
         if (src->callable_param_count != dst->callable_param_count ||
+            src->callable_is_variadic != dst->callable_is_variadic ||
             !cg_types_equal(src->callable_return_type, dst->callable_return_type)) {
             return false;
         }
@@ -18425,6 +18512,7 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                    dst->c_witness_struct_name, var.data);
     if (src->form == FENG_SPEC_FORM_CALLABLE) {
         if (src->callable_param_count != dst->callable_param_count ||
+            src->callable_is_variadic != dst->callable_is_variadic ||
             !cg_types_equal(src->callable_return_type, dst->callable_return_type)) {
             buf_free(&var);
             return cg_fail(cg, blame,

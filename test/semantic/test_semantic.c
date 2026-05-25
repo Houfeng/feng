@@ -13225,7 +13225,148 @@ static void test_generic_same_name_same_arity_different_constraint_rejected(void
     feng_program_free(program);
 }
 
-/* T6: variadic overload conflict — fn foo(x: int, y: int...) conflicts with
+/* T1: a variadic-only function must accept 0 / 1 / N arguments. */
+static void test_variadic_accepts_zero_one_many_arguments(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn sum(args: int...): int {\n"
+        "    return 0;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let zero = sum();\n"
+        "    let one = sum(1);\n"
+        "    return sum(zero, one, 3);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_zero_one_many_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* T2: fixed arguments remain positional, variadic suffix accepts zero or many elements. */
+static void test_fixed_and_variadic_parameters_accept_calls(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn log(level: int, args: string...): int {\n"
+        "    return level;\n"
+        "}\n"
+        "fn run(): int {\n"
+        "    let base = log(0);\n"
+        "    return log(base, \"a\", \"b\");\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_fixed_prefix_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* T3: each variadic element must match the variadic element type. */
+static void test_variadic_rejects_mismatched_element_type(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn f(args: int...): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    f(\"bad\");\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_type_mismatch_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "variadic_type_mismatch_error.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "top-level function 'f' has no overload accepting 1 argument(s)") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* T5: an existing T[] value cannot be passed directly into a variadic position. */
+static void test_variadic_rejects_existing_array_argument(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn f(args: int...): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn run(): void {\n"
+        "    let arr: int[] = [1, 2];\n"
+        "    f(arr);\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_existing_array_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "variadic_existing_array_error.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message,
+                  "does not accept an existing array at a variadic argument position") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* T6: variadic callable-form specs accept variadic lambdas and remain callable through the spec value. */
+static void test_variadic_callable_spec_lambda_call_ok(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "spec Printer(args: int...): int;\n"
+        "fn run(): int {\n"
+        "    let printer: Printer = (args: int...) {\n"
+        "        return 0;\n"
+        "    };\n"
+        "    return printer(1, 2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_callable_spec_lambda_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Variadic overload conflict — fn foo(x: int, y: int...) conflicts with
  * fn foo(x: int, y: int) because the variadic can be called with 2 fixed args. */
 static void test_variadic_overload_conflict_rejected(void) {
     const char *source =
@@ -13247,7 +13388,34 @@ static void test_variadic_overload_conflict_rejected(void) {
     feng_program_free(program);
 }
 
-/* T7: spec satisfaction requires matching variadic flag — a spec with a
+/* T7: fn f(x: int) conflicts with fn f(args: int...) at declaration time. */
+static void test_variadic_single_fixed_and_variadic_overload_conflict_rejected(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "fn f(x: int): void {\n"
+        "    return;\n"
+        "}\n"
+        "fn f(args: int...): void {\n"
+        "    return;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("variadic_single_conflict.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "variadic_single_conflict.f") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "variadic function overload conflicts with existing overload") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Variadic spec satisfaction requires matching variadic flag — a spec with a
  * variadic method cannot be satisfied by a non-variadic implementation. */
 static void test_variadic_spec_satisfaction_mismatch_rejected(void) {
     const char *source =
@@ -13750,7 +13918,13 @@ int main(void) {
     test_generic_spec_generic_parent_forwarding_ok();
     test_generic_duplicate_fn_by_type_param_name_only_rejected();
     test_generic_same_name_same_arity_different_constraint_rejected();
+    test_variadic_accepts_zero_one_many_arguments();
+    test_fixed_and_variadic_parameters_accept_calls();
+    test_variadic_rejects_mismatched_element_type();
+    test_variadic_rejects_existing_array_argument();
+    test_variadic_callable_spec_lambda_call_ok();
     test_variadic_overload_conflict_rejected();
+    test_variadic_single_fixed_and_variadic_overload_conflict_rejected();
     test_variadic_spec_satisfaction_mismatch_rejected();
 
     puts("semantic tests passed");
