@@ -66,8 +66,29 @@ else
 STATIC_LIB_PREFIX := lib
 STATIC_LIB_EXT := .a
 endif
+
+# Detect host target (os-arch) for extlib path
+_UNAME_S := $(shell uname -s)
+_UNAME_M := $(shell uname -m)
+ifeq ($(_UNAME_S),Darwin)
+  _HOST_OS := macos
+else ifeq ($(_UNAME_S),Linux)
+  _HOST_OS := linux
+else
+  _HOST_OS := windows
+endif
+ifeq ($(_UNAME_M),arm64)
+  _HOST_ARCH := arm64
+else ifeq ($(_UNAME_M),aarch64)
+  _HOST_ARCH := arm64
+else
+  _HOST_ARCH := x64
+endif
+HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
+EXTLIB_DIR := extlib/$(HOST_TARGET)
+
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
-LIBUNWIND_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_libunwind$(STATIC_LIB_EXT)
+LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_libunwind$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
 
@@ -152,8 +173,11 @@ $(RUNTIME_LIB): $(RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	cd $(BUILD_DIR)/temp/runtime-libunwind-objs && $(AR) x ../../../$(LIBUNWIND_LIB)
 	$(AR) rcs $@ $(RUNTIME_OBJS) $(BUILD_DIR)/temp/runtime-libunwind-objs/*.o
 
-$(LIBUNWIND_LIB): third_party/libunwind/Makefile scripts/build_libunwind.sh
-	./scripts/build_libunwind.sh $(LIB_DIR)
+# libunwind is a pre-built vendored library; run scripts/build_libunwind.sh once to produce it.
+$(LIBUNWIND_LIB):
+	@echo "error: $@ not found" >&2
+	@echo "hint:  run scripts/build_libunwind.sh to build libunwind into extlib/$(HOST_TARGET)/" >&2
+	@exit 1
 
 $(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c
 	@mkdir -p $(dir $@)
