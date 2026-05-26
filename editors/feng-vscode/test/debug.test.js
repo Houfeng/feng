@@ -365,9 +365,12 @@ async function run() {
                 version: '2.0.0',
                 tasks: [{
                     label: 'feng: build examples/hello_world',
-                    type: 'feng',
-                    task: 'build',
-                    cwd: '${workspaceFolder}/examples/hello_world',
+                    type: 'process',
+                    command: 'feng',
+                    args: ['build'],
+                    options: {
+                        cwd: '${workspaceFolder}/examples/hello_world'
+                    },
                     group: 'build',
                     problemMatcher: []
                 }]

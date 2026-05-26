@@ -426,11 +426,25 @@ function parseJsonDocument(source) {
 }
 
 function createPersistedBuildTask(projectRoot, workspaceFolder, vscodeApi = vscode) {
+    const executablePathConfig = getExecutablePathConfig(vscodeApi);
+    const workspaceFolders = vscodeApi.workspace != null && Array.isArray(vscodeApi.workspace.workspaceFolders)
+        ? vscodeApi.workspace.workspaceFolders
+        : [];
+    const primaryWorkspaceFolder = workspaceFolders.length > 0 ? workspaceFolders[0] : undefined;
+    const resolvedExecutablePath = resolveExecutablePath(executablePathConfig.executablePath,
+                                                         getPrimaryWorkspaceRoot(vscodeApi),
+                                                         executablePathConfig.hasExplicitSetting);
+
     return {
         label: createBuildTaskLabel(projectRoot, workspaceFolder),
-        type: FENG_TASK_TYPE,
-        task: FENG_BUILD_TASK,
-        cwd: createWorkspaceVariablePath(projectRoot, workspaceFolder, vscodeApi),
+        type: 'process',
+        command: path.isAbsolute(resolvedExecutablePath)
+            ? createWorkspaceVariablePath(resolvedExecutablePath, primaryWorkspaceFolder, vscodeApi)
+            : resolvedExecutablePath,
+        args: ['build'],
+        options: {
+            cwd: createWorkspaceVariablePath(projectRoot, workspaceFolder, vscodeApi)
+        },
         group: 'build',
         problemMatcher: []
     };
