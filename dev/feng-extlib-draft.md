@@ -24,3 +24,13 @@
 - `libunistring` 与 `PCRE2` 的同步脚本都只允许把 Feng 当前实际消费的最小源码闭包落到 `third_party/`，不保留测试、工具链文件、16/32-bit 变体或其他无关目录。
 - `PCRE2` 当前先固定为 **8-bit 静态库 + Unicode/UTF 支持**；同步时生成并保留 `config.h`、`pcre2.h` 与 `pcre2_chartables.c`，但不携带 POSIX wrapper、shared library 产物和 SLJIT JIT 依赖树。
 - `libunistring` 的构建产物统一写入 `std/lib/libfeng_std_unistring.a`，`PCRE2` 的构建产物统一写入 `std/lib/libfeng_std_pcre2.a`，避免在标准库侧直接依赖上游默认库名。
+
+---
+
+## libsodium
+
+加解密库选型已固定为 `libsodium`。
+
+- `libsodium` 的官方白名单同步规则、同步范围、显式排除项与构建约束，统一收敛到 [feng-extlib-libsodium.md](./feng-extlib-libsodium.md)。
+- `feng-extlib-draft.md` 只保留总览结论，不再承载 `libsodium` 的细节闭包规则，避免这里继续膨胀成专项设计文档。
+- 后续若调整 `libsodium` 的同步版本、算法闭包、构建宏或输出物路径，只修改 [feng-extlib-libsodium.md](./feng-extlib-libsodium.md)。
