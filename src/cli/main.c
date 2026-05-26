@@ -16,17 +16,17 @@ void feng_cli_print_usage(const char *program) {
     int compile_indent = (int)(2U + strlen(program) + strlen(" <files...> "));
 
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s <files...> [options]\n", program);
-    fprintf(stderr, "  %s <command>  [options]\n", program);
+    fprintf(stderr, "  %s <command>  [<options>]\n", program);
+    fprintf(stderr, "  %s <files...> [<options>]\n", program);
     fprintf(stderr, "\n");
     fprintf(stderr, "Project:\n");
-    fprintf(stderr, "  %s init  [<name>] [--target=<bin|lib>]\n", program);
-    fprintf(stderr, "  %s build [<path>] [--release]\n", program);
-    fprintf(stderr, "  %s check [<path>] [--format=<text|json>]\n", program);
-    fprintf(stderr, "  %s run   [<path>] [--release] [-- <program-args>...]\n", program);
-    fprintf(stderr, "  %s clean [<path>]\n", program);
-    fprintf(stderr, "  %s pack  [<path>]\n", program);
-    fprintf(stderr, "  %s deps  <add|remove|install> ...\n", program);
+    fprintf(stderr, "  %s init       [<name>] [--target=<bin|lib>]\n", program);
+    fprintf(stderr, "  %s build      [<path>] [--release]\n", program);
+    fprintf(stderr, "  %s check      [<path>] [--format=<text|json>]\n", program);
+    fprintf(stderr, "  %s run        [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stderr, "  %s clean      [<path>]\n", program);
+    fprintf(stderr, "  %s pack       [<path>]\n", program);
+    fprintf(stderr, "  %s deps       <add|remove|install> ...\n", program);
     fprintf(stderr, "\n");
     fprintf(stderr, "Compile:\n");
     fprintf(stderr, "  %s <files...> [--target=<bin|lib>]\n", program);
@@ -42,8 +42,8 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "  -v, --version   Display version information.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Protocol:\n");
-    fprintf(stderr, "  %s lsp [--stdio]\n", program);
-    fprintf(stderr, "  %s dap [--stdio]\n", program);
+    fprintf(stderr, "  %s lsp        [--stdio]\n", program);
+    fprintf(stderr, "  %s dap        [--stdio]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
