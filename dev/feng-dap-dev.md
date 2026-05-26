@@ -39,8 +39,8 @@
 
 ### 1.2 里程碑 TODO
 
-- [ ] 收敛调试方案、实施边界与文档约束。
-- [ ] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
+- [x] 收敛调试方案、实施边界与文档约束。
+- [x] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
 - [ ] 在 `src/debug/` 中生成并汇总 `.fd`。
 - [ ] 新增 `feng dap` 代理层并消费 `.fd`。
 - [ ] 补齐 VS Code 集成与回归验证。
@@ -605,22 +605,22 @@ VARS:
 ## 8. 分步任务 TODO
 
 - [ ] Phase 1：规范与边界收敛
-  - [ ] 收敛本方案文档。
-  - [ ] 同步更新 `docs/feng-build.md`。
-  - [ ] 同步更新 `docs/feng-cli.md`。
-  - [ ] 同步更新 `docs/feng-symbol-table.md`。
-  - [ ] 明确 `.fd` 的产物语义、生命周期与 `.ft` 边界。
-  - [ ] 把“禁止改动词法 / 语法 / 语义层、禁止顺手改 unrelated 代码”的实施约束写死。
+  - [x] 收敛本方案文档。
+  - [x] 同步更新 `docs/feng-build.md`。
+  - [x] 同步更新 `docs/feng-cli.md`。
+  - [x] 同步更新 `docs/feng-symbol-table.md`。
+  - [x] 明确 `.fd` 的产物语义、生命周期与 `.ft` 边界。
+  - [x] 把“禁止改动词法 / 语法 / 语义层、禁止顺手改 unrelated 代码”的实施约束写死。
 
-- [ ] Phase 2：编译器非 `release` 发码链路
-  - [ ] 落实基于 `PKG_NAME://<package-relative path>` 的 `#line` 输出。
-  - [ ] 定义与 `.fd` 容器解耦的抽象调试信息结构。
-  - [ ] 仅在 codegen 中输出抽象调试信息，不直接写 `.fd`。
-  - [ ] 为变量和 callable 后端命名建立稳定约束。
+- [x] Phase 2：编译器非 `release` 发码链路
+  - [x] 落实基于 `PKG_NAME://<package-relative path>` 的 `#line` 输出。
+  - [x] 定义与 `.fd` 容器解耦的抽象调试信息结构。
+  - [x] 仅在 codegen 中输出抽象调试信息，不直接写 `.fd`。
+  - [x] 为变量和 callable 后端命名建立稳定约束。
 
 - [ ] Phase 3：`src/debug/` 生成与汇总 `.fd`
-  - [ ] 基于 codegen 输出的抽象调试信息生成当前产物 `.fd`。
-  - [ ] 支持本地 `target=lib` 的非 `release` `.fd` 写出。
+  - [x] 基于 codegen 输出的抽象调试信息生成当前产物 `.fd`。
+  - [x] 支持本地 `target=lib` 的非 `release` `.fd` 写出。
   - [ ] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
   - [ ] 明确并实现最终 `META` 重写规则。
 

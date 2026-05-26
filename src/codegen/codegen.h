@@ -43,6 +43,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "debug/debug.h"
 #include "semantic/semantic.h"
 
 #ifdef __cplusplus
@@ -51,11 +52,14 @@ extern "C" {
 
 typedef struct FengCodegenOptions {
     bool emit_line_directives;   /* if true, emit #line for source mapping */
+    const FengDebugSourceMapping *debug_source_mappings;
+    size_t debug_source_mapping_count;
 } FengCodegenOptions;
 
 typedef struct FengCodegenOutput {
     char  *c_source;             /* malloc'd, NUL-terminated */
     size_t c_source_length;      /* strlen(c_source) */
+    FengDebugInfo debug_info;    /* abstract frame/variable mappings */
 } FengCodegenOutput;
 
 typedef struct FengCodegenError {

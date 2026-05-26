@@ -24,11 +24,11 @@ feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
 - `--target <目标>`: 编译目标,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定
 - `--out <输出路径>`: 指定输出文件路径; 该参数必须显式指定,编译器不假定默认输出位置
-- `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
+- `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。调试友好构建会保留主机编译器的 `-O0` / `-g` 路径,并额外生成稳定 `#line` 与当前产物对应的 `.fd` 调试 sidecar; 项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
 
-编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与对应平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。当前版本不支持交叉编译,始终以当前平台为目标平台。
+编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与对应平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。当前版本不支持交叉编译,始终以当前平台为目标平台。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
 
 ### 2.2 构建模块索引
 
@@ -108,6 +108,16 @@ extern fn ssl_connect(fd: int): int;
 - 运行期释放只处理 `.fb/extlib/<当前平台>/` 下与已收集库名精确命中的动态库后缀（Linux `lib<name>.so`、macOS `lib<name>.dylib`、Windows `<name>.dll`）；未命中的动态库、`extlib/` 中的静态库（`.a` / `.lib`）与 `.fb/lib/<平台>/` 中的正式静态库都不参与运行期释放。
 - 若多个依赖包在当前平台提供同名动态库,构建应报错,避免在可执行文件目录中发生静默覆盖。
 
+### 2.6 调试 sidecar 与源码映射
+
+调试产物遵循以下规则:
+
+- 非 `release` 的 `target=bin` 与 `target=lib` 构建都生成与最终产物同级的 `.fd` sidecar; `target=bin` 产物形态为 `build/bin/<artifact>` 与 `build/bin/<artifact>.fd`, `target=lib` 产物则在库文件同级生成 `.fd`。
+- `release` 构建默认不生成 `.fd`,也不额外保留调试态插桩。
+- `#line` 的文件名参数固定使用逻辑源码 URI `PKG_NAME://<package-relative path>`,其中 `PKG_NAME` 取源码所属包的 `feng.fm.name`; 编译器不得把宿主磁盘绝对路径写进 `#line`。
+- `.fd` 只记录 LLDB 无法直接知道的最小调试事实,例如 package URI 到本地包根的映射、frame 显示名重写、变量显示名映射与少量特殊 carrier 的 `read_expr`; 地址到源码行的映射仍以主机编译器基于 `#line` 与 `-g` 生成的原生调试信息为准。
+- `.fd` 属于 artifact-scoped 本地调试产物,`feng clean` 应与其他构建产物一并删除,`feng pack` 不得打包 `.fd`。
+
 ## 3 构建工具职责
 
 ### 3.1 读取项目清单
@@ -138,6 +148,12 @@ extern fn ssl_connect(fd: int): int;
 6. 若两个不同分支依赖同一包的不同精确版本,构建工具报冲突错误,要求用户显式消解版本分歧
 7. 若本地项目依赖图出现循环,构建工具立即报错
 8. 依赖图锁定后,构建工具将其展平成一组确定的 `.fb` 路径列表,作为后续 `--pkg` 参数输入给编译器
+
+对调试构建补充以下约束:
+
+- 当顶层项目是 `target=bin` 且未指定 `--release` 时,递归本地 `target=lib` 依赖除了产出自身普通库制品外,还必须产出中间 `.fd`。
+- 顶层 `target=bin` 构建完成后,构建工具负责把主项目与递归本地依赖的中间 `.fd` 汇总为最终 binary 对应的单个 `.fd`; 运行时的 `feng dap` 只读取这个最终 sidecar,不在会话中递归追踪多个依赖 sidecar。
+- 若两个输入 `.fd` 对同一 `PKG_NAME` 提供不一致本地包根,或对同一 `frame_backend_symbol + backend_name` 提供不一致映射,构建必须立即报错,不得把歧义推迟到调试会话。
 
 `feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; `feng pack` 固定使用 release 模式完成同样的递归构建与打包。
 
@@ -174,6 +190,10 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 3. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
 5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树（包含 `[assets].extlib` 直接 staging 的内容）与 `build/assets/` 中其余 `[assets]` staging 目录打包为 `.fb` ZIP 归档
+
+补充约束:
+
+- `pack` 只复用公开 `.ft`、正式库与资源 staging; `.fd` 调试 sidecar 不属于分发接口,不得进入 `.fb`。
 
 ## 4 交互协议总览
 

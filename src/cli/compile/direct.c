@@ -10,9 +10,10 @@
 
 #include "archive/fb.h"
 #include "cli/common.h"
+#include "cli/compile/direct.h"
 #include "cli/compile/driver.h"
-#include "cli/compile/options.h"
 #include "cli/frontend.h"
+#include "debug/debug.h"
 #include "codegen/codegen.h"
 #include "symbol/export.h"
 #include "symbol/imported_module.h"
@@ -113,6 +114,23 @@ static char *replace_with_sibling_filename(const char *path, const char *filenam
     return out;
 }
 
+static char *artifact_fd_path(const char *artifact_path) {
+    size_t length;
+    char *out;
+
+    if (artifact_path == NULL) {
+        return NULL;
+    }
+    length = strlen(artifact_path);
+    out = (char *)malloc(length + 4U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, artifact_path, length);
+    memcpy(out + length, ".fd", 4U);
+    return out;
+}
+
 static void cleanup_empty_ir_dirs(const char *c_path) {
     char *ir_c_dir = path_dirname_dup(c_path);
     char *ir_dir;
@@ -205,14 +223,18 @@ static void on_semantic_info(void *user,
 
 /* --- entry --------------------------------------------------------------- */
 
-int feng_cli_direct_main(const char *program, int argc, char **argv) {
+int feng_cli_direct_run(const char *program,
+                        FengCliDirectOptions *parsed_opts,
+                        const FengCliDirectDebugContext *debug_context) {
     FengCliDirectOptions opts = {0};
     char *c_path = NULL;
     char *public_symbol_dir = NULL;
     char *workspace_symbol_dir = NULL;
-    if (!feng_cli_direct_options_parse(program, argc, argv, &opts)) {
+    if (parsed_opts == NULL) {
         return 1;
     }
+    opts = *parsed_opts;
+    memset(parsed_opts, 0, sizeof(*parsed_opts));
 
     /* Materialise the output layout up front. */
     char *ir_dir = path_join(opts.out_dir, "ir/c");
@@ -364,9 +386,21 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     }
 
     /* Codegen aggregate (multi-file capable, see P3). */
+    FengCodegenOptions codegen_options = {0};
+    const FengCodegenOptions *active_codegen_options = NULL;
     FengCodegenOutput out = {0};
     FengCodegenError cgerr = {0};
-    bool cg_ok = feng_codegen_emit_program(analysis, opts.target, NULL, &out, &cgerr);
+    if (debug_context != NULL && !opts.release && debug_context->source_count > 0U) {
+        codegen_options.emit_line_directives = true;
+        codegen_options.debug_source_mappings = debug_context->sources;
+        codegen_options.debug_source_mapping_count = debug_context->source_count;
+        active_codegen_options = &codegen_options;
+    }
+    bool cg_ok = feng_codegen_emit_program(analysis,
+                                           opts.target,
+                                           active_codegen_options,
+                                           &out,
+                                           &cgerr);
     if (!cg_ok) {
         const FengCliLoadedSource *blame_src = NULL;
         if (cgerr.path != NULL) {
@@ -488,6 +522,35 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
+    char *fd_path = NULL;
+    if (active_codegen_options != NULL) {
+        fd_path = artifact_fd_path(artifact_path);
+        if (fd_path == NULL) {
+            fprintf(stderr, "out of memory composing debug sidecar path\n");
+            if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
+            free(artifact_path);
+            free(c_path);
+            feng_codegen_error_free(&cgerr);
+            feng_codegen_output_free(&out);
+            feng_semantic_analysis_free(analysis);
+            feng_symbol_imported_module_cache_free(imported_module_cache);
+            feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
+            feng_cli_free_loaded_sources(sources, source_count);
+            free(workspace_symbol_dir);
+            free(public_symbol_dir);
+            free(ir_dir);
+            free(artifact_dir);
+            feng_cli_direct_options_dispose(&opts);
+            return 1;
+        }
+        if (unlink(fd_path) != 0 && errno != ENOENT) {
+            fprintf(stderr,
+                    "warning: could not remove stale debug sidecar %s: %s\n",
+                    fd_path,
+                    strerror(errno));
+        }
+    }
+
     /* Hand off to the host driver. Programs are passed so it can mine
      * extern calling-convention annotations for additional link libraries. */
     const FengProgram **prog_array = NULL;
@@ -500,6 +563,7 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
         if (prog_array == NULL) {
             fprintf(stderr, "out of memory collecting programs for driver\n");
             if (!opts.keep_intermediate) cleanup_intermediate_outputs(c_path, true);
+            free(fd_path);
             free(artifact_path);
             free(c_path);
             feng_codegen_error_free(&cgerr);
@@ -539,7 +603,26 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);
 
+    if (drv_rc == 0 && active_codegen_options != NULL && fd_path != NULL) {
+        char *fd_error = NULL;
+
+        if (!feng_debug_write_fd(fd_path,
+                                 artifact_path,
+                                 debug_context->sources,
+                                 debug_context->source_count,
+                                 &out.debug_info,
+                                 &fd_error)) {
+            fprintf(stderr,
+                    "failed to write %s: %s\n",
+                    fd_path,
+                    fd_error != NULL ? fd_error : "(unknown)");
+            free(fd_error);
+            drv_rc = 1;
+        }
+    }
+
     free(prog_array);
+    free(fd_path);
     free(artifact_path);
     free(c_path);
     free(workspace_symbol_dir);
@@ -554,4 +637,13 @@ int feng_cli_direct_main(const char *program, int argc, char **argv) {
     free(artifact_dir);
     feng_cli_direct_options_dispose(&opts);
     return drv_rc;
+}
+
+int feng_cli_direct_main(const char *program, int argc, char **argv) {
+    FengCliDirectOptions opts = {0};
+
+    if (!feng_cli_direct_options_parse(program, argc, argv, &opts)) {
+        return 1;
+    }
+    return feng_cli_direct_run(program, &opts, NULL);
 }
