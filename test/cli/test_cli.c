@@ -4628,6 +4628,382 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
     free(remove_error);
 }
 
+/* Run one minimal stackTrace -> evaluate DAP interaction and capture backend traffic. */
+static void run_dap_evaluate_session(FengCodegenMapingInfo *info,
+                                     const char *evaluate_expression,
+                                     char **out_stdout_text,
+                                     char **out_stderr_text,
+                                     char **out_requests_text,
+                                     int *out_rc) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "    let answer = 42;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_evaluate_phase5_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *escaped_evaluate_expression;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *evaluate_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *evaluate_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_evaluate_json;
+    char *backend_evaluate_text;
+    char *escaped_backend_initialize_text;
+    char *escaped_backend_stack_trace_text;
+    char *escaped_backend_evaluate_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    ASSERT(info != NULL);
+    ASSERT(evaluate_expression != NULL);
+    ASSERT(out_stdout_text != NULL);
+    ASSERT(out_stderr_text != NULL);
+    ASSERT(out_requests_text != NULL);
+    ASSERT(out_rc != NULL);
+    *out_stdout_text = NULL;
+    *out_stderr_text = NULL;
+    *out_requests_text = NULL;
+    *out_rc = -1;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"int\",\"variablesReference\":0}}");
+    backend_evaluate_text = build_dap_message_text(backend_evaluate_json);
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
+    escaped_backend_evaluate_text = json_escape_text(backend_evaluate_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const responses = {\n"
+                                "  initialize: \"%s\",\n"
+                                "  stackTrace: \"%s\",\n"
+                                "  evaluate: \"%s\"\n"
+                                "};\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "process.stdout.write(responses.initialize);\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') process.stdout.write(responses.stackTrace);\n"
+                                "    if (message.command === 'evaluate') process.stdout.write(responses.evaluate);\n"
+                                "  }\n"
+                                "});\n"
+                                "process.stdin.on('end', () => { fs.writeFileSync(requestsPath, requests); });\n",
+                                requests_path,
+                                escaped_backend_initialize_text,
+                                escaped_backend_stack_trace_text,
+                                escaped_backend_evaluate_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    escaped_evaluate_expression = json_escape_text(evaluate_expression);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    evaluate_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"evaluate\",\"arguments\":{\"expression\":\"%s\",\"frameId\":7,\"context\":\"watch\"}}",
+                               escaped_evaluate_expression);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    evaluate_text = build_dap_message_text(evaluate_json);
+    input_text = dup_printf("%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text);
+
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"command\":\"stackTrace\"",
+                                                               evaluate_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
+    requests_text = read_text_file(requests_path);
+
+    *out_stdout_text = stdout_text;
+    *out_stderr_text = stderr_text;
+    *out_requests_text = requests_text;
+    *out_rc = rc;
+
+    free(input_text);
+    free(evaluate_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(evaluate_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_evaluate_expression);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(escaped_backend_evaluate_text);
+    free(escaped_backend_stack_trace_text);
+    free(escaped_backend_initialize_text);
+    free(backend_evaluate_text);
+    free(backend_evaluate_json);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure Phase 5 evaluate rewrites member/index/arithmetic/comparison expressions. */
+static void test_dap_rewrites_phase5_evaluate_expression(void) {
+    char *stdout_text;
+    char *stderr_text;
+    char *requests_text;
+    int rc;
+    FengCodegenMapingInfo info = {0};
+
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 NULL,
+                                                 "captured",
+                                                 "(_capture_cell->value)",
+                                                 FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_items",
+                                                 "items",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+
+    run_dap_evaluate_session(&info,
+                             "captured.member[3] + answer * 2 == items[0]",
+                             &stdout_text,
+                             &stderr_text,
+                             &requests_text,
+                             &rc);
+    ASSERT(rc == 0);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((_capture_cell->value)).member[3] + backend_local * 2 == backend_items[0]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"command\":\"evaluate\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"result\":\"42\"") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    feng_codegen_maping_info_dispose(&info);
+}
+
+/* Ensure evaluate rejects non-constant index expressions before forwarding. */
+static void test_dap_rejects_nonconstant_index_evaluate_expression(void) {
+    char *stdout_text;
+    char *stderr_text;
+    char *requests_text;
+    int rc;
+    FengCodegenMapingInfo info = {0};
+
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_items",
+                                                 "items",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+
+    run_dap_evaluate_session(&info,
+                             "items[answer]",
+                             &stdout_text,
+                             &stderr_text,
+                             &requests_text,
+                             &rc);
+    ASSERT(rc == 0);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") == NULL);
+    ASSERT(strstr(stdout_text, "\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "evaluate index access must use an integer literal") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    feng_codegen_maping_info_dispose(&info);
+}
+
+/* Ensure evaluate rejects function calls before forwarding. */
+static void test_dap_rejects_function_call_evaluate_expression(void) {
+    char *stdout_text;
+    char *stderr_text;
+    char *requests_text;
+    int rc;
+    FengCodegenMapingInfo info = {0};
+
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+
+    run_dap_evaluate_session(&info,
+                             "answer()",
+                             &stdout_text,
+                             &stderr_text,
+                             &requests_text,
+                             &rc);
+    ASSERT(rc == 0);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") == NULL);
+    ASSERT(strstr(stdout_text, "\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "function calls are not supported in Feng watch expressions") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    feng_codegen_maping_info_dispose(&info);
+}
+
+/* Ensure evaluate rejects assignments before forwarding. */
+static void test_dap_rejects_assignment_evaluate_expression(void) {
+    char *stdout_text;
+    char *stderr_text;
+    char *requests_text;
+    int rc;
+    FengCodegenMapingInfo info = {0};
+
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+
+    run_dap_evaluate_session(&info,
+                             "answer = 1",
+                             &stdout_text,
+                             &stderr_text,
+                             &requests_text,
+                             &rc);
+    ASSERT(rc == 0);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") == NULL);
+    ASSERT(strstr(stdout_text, "\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "assignment is not supported in Feng watch expressions") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    feng_codegen_maping_info_dispose(&info);
+}
+
 static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     static const char *kBadSource =
         "mod test.lsp;\n"
@@ -9853,6 +10229,10 @@ int main(void) {
     test_dap_hides_hidden_stack_trace_frames();
     test_dap_rewrites_variables_to_feng_names();
     test_dap_rewrites_identifier_evaluate_expression();
+    test_dap_rewrites_phase5_evaluate_expression();
+    test_dap_rejects_nonconstant_index_evaluate_expression();
+    test_dap_rejects_function_call_evaluate_expression();
+    test_dap_rejects_assignment_evaluate_expression();
     test_dap_rejects_fingerprint_mismatch_before_backend_spawn();
     test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();

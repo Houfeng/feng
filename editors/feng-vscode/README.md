@@ -78,4 +78,4 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 - When a launch configuration omits `program`, the extension tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/bin/<name>`.
 - When a launch configuration omits `preLaunchTask`, the extension binds it to the generated Feng build task for that project.
 - The current debug surface targets macOS + `lldb-dap` and the non-`release` local `target=bin` build path.
-- `evaluate` currently only covers the identifier subset exposed by `feng dap`; richer watch expressions remain future work.
+- `evaluate` currently covers the read-only subset exposed by `feng dap`: identifiers, member access, constant integer indexing, and simple arithmetic/comparison expressions. Function calls, assignments, and other unsupported watch expressions are rejected explicitly.

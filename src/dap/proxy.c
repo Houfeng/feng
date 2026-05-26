@@ -2148,7 +2148,7 @@ cleanup:
     return ok;
 }
 
-/* Accept only the Phase 4 minimal identifier evaluate subset. */
+/* Recognize one plain identifier-shaped token. */
 static bool proxy_is_identifier_expression(const char *expression) {
     size_t index;
 
@@ -2164,6 +2164,574 @@ static bool proxy_is_identifier_expression(const char *expression) {
         }
     }
     return true;
+}
+
+/* Replace one owned error-detail string with a formatted message. */
+static bool proxy_set_error_detail_printf(char **out_error_detail, const char *fmt, ...) {
+    va_list args;
+    va_list args_copy;
+    int needed;
+    char *detail;
+
+    if (out_error_detail == NULL) {
+        return false;
+    }
+    free(*out_error_detail);
+    *out_error_detail = NULL;
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return false;
+    }
+    detail = (char *)malloc((size_t)needed + 1U);
+    if (detail == NULL) {
+        va_end(args_copy);
+        return false;
+    }
+    vsnprintf(detail, (size_t)needed + 1U, fmt, args_copy);
+    va_end(args_copy);
+    *out_error_detail = detail;
+    return true;
+}
+
+/* Parser state for the supported read-only Feng watch subset. */
+typedef struct FengDapEvaluateParser {
+    const FengDebugArtifact *artifact;
+    const char *frame_backend_symbol;
+    const char *expression;
+    size_t length;
+    size_t position;
+} FengDapEvaluateParser;
+
+static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
+                                              const char *frame_backend_symbol,
+                                              const char *identifier,
+                                              char **out_backend_expression,
+                                              char **out_error_detail);
+
+static bool proxy_parse_evaluate_comparison(FengDapEvaluateParser *parser,
+                                            char **buffer,
+                                            size_t *length,
+                                            size_t *capacity,
+                                            char **out_error_detail);
+
+/* Skip insignificant whitespace in one decoded evaluate expression. */
+static void proxy_evaluate_skip_whitespace(FengDapEvaluateParser *parser) {
+    while (parser->position < parser->length &&
+           isspace((unsigned char)parser->expression[parser->position])) {
+        parser->position += 1U;
+    }
+}
+
+/* Append one zero-terminated string to a dynamic byte buffer. */
+static bool proxy_append_cstr(char **buffer,
+                              size_t *length,
+                              size_t *capacity,
+                              const char *text) {
+    if (text == NULL) {
+        return true;
+    }
+    return proxy_append_bytes(buffer, length, capacity, text, strlen(text));
+}
+
+/* Append one resolved backend leaf expression, wrapping complex carriers safely. */
+static bool proxy_append_evaluate_leaf_expression(char **buffer,
+                                                  size_t *length,
+                                                  size_t *capacity,
+                                                  const char *backend_expression) {
+    if (backend_expression == NULL) {
+        return false;
+    }
+    if (proxy_is_identifier_expression(backend_expression)) {
+        return proxy_append_cstr(buffer, length, capacity, backend_expression);
+    }
+    return proxy_append_byte(buffer, length, capacity, '(') &&
+           proxy_append_cstr(buffer, length, capacity, backend_expression) &&
+           proxy_append_byte(buffer, length, capacity, ')');
+}
+
+/* Parse one identifier token from the current evaluate cursor. */
+static bool proxy_parse_evaluate_identifier_token(FengDapEvaluateParser *parser,
+                                                  char **out_identifier,
+                                                  char **out_error_detail,
+                                                  const char *error_message) {
+    size_t start;
+
+    *out_identifier = NULL;
+    proxy_evaluate_skip_whitespace(parser);
+    if (parser->position >= parser->length ||
+        !(isalpha((unsigned char)parser->expression[parser->position]) ||
+          parser->expression[parser->position] == '_')) {
+        proxy_set_error_detail_printf(out_error_detail, "%s", error_message);
+        return false;
+    }
+    start = parser->position;
+    parser->position += 1U;
+    while (parser->position < parser->length &&
+           (isalnum((unsigned char)parser->expression[parser->position]) ||
+            parser->expression[parser->position] == '_')) {
+        parser->position += 1U;
+    }
+    *out_identifier = proxy_dup_bytes((const unsigned char *)(parser->expression + start),
+                                      parser->position - start);
+    if (*out_identifier == NULL) {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "out of memory rewriting evaluate expression");
+        return false;
+    }
+    return true;
+}
+
+/* Parse one decimal integer literal token from the current evaluate cursor. */
+static bool proxy_parse_evaluate_integer_literal(FengDapEvaluateParser *parser,
+                                                 bool allow_sign,
+                                                 char **buffer,
+                                                 size_t *length,
+                                                 size_t *capacity,
+                                                 char **out_error_detail,
+                                                 const char *error_message) {
+    size_t start;
+
+    proxy_evaluate_skip_whitespace(parser);
+    if (allow_sign && parser->position < parser->length &&
+        (parser->expression[parser->position] == '+' ||
+         parser->expression[parser->position] == '-')) {
+        if (!proxy_append_byte(buffer,
+                               length,
+                               capacity,
+                               (unsigned char)parser->expression[parser->position])) {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "out of memory rewriting evaluate expression");
+            return false;
+        }
+        parser->position += 1U;
+    }
+    start = parser->position;
+    while (parser->position < parser->length &&
+           isdigit((unsigned char)parser->expression[parser->position])) {
+        parser->position += 1U;
+    }
+    if (start == parser->position) {
+        proxy_set_error_detail_printf(out_error_detail, "%s", error_message);
+        return false;
+    }
+    if (!proxy_append_bytes(buffer,
+                            length,
+                            capacity,
+                            parser->expression + start,
+                            parser->position - start)) {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "out of memory rewriting evaluate expression");
+        return false;
+    }
+    return true;
+}
+
+/* Parse one primary evaluate atom before postfix operators. */
+static bool proxy_parse_evaluate_primary(FengDapEvaluateParser *parser,
+                                         char **buffer,
+                                         size_t *length,
+                                         size_t *capacity,
+                                         char **out_error_detail) {
+    char *identifier = NULL;
+    char *backend_expression = NULL;
+
+    proxy_evaluate_skip_whitespace(parser);
+    if (parser->position >= parser->length) {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "unexpected end of Feng watch expression");
+        return false;
+    }
+    if (parser->expression[parser->position] == '(') {
+        parser->position += 1U;
+        if (!proxy_append_byte(buffer, length, capacity, '(') ||
+            !proxy_parse_evaluate_comparison(parser,
+                                             buffer,
+                                             length,
+                                             capacity,
+                                             out_error_detail)) {
+            return false;
+        }
+        proxy_evaluate_skip_whitespace(parser);
+        if (parser->position >= parser->length || parser->expression[parser->position] != ')') {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "evaluate expression is missing ')' to close a grouped subexpression");
+            return false;
+        }
+        parser->position += 1U;
+        if (!proxy_append_byte(buffer, length, capacity, ')')) {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "out of memory rewriting evaluate expression");
+            return false;
+        }
+        return true;
+    }
+    if (isdigit((unsigned char)parser->expression[parser->position])) {
+        return proxy_parse_evaluate_integer_literal(parser,
+                                                    false,
+                                                    buffer,
+                                                    length,
+                                                    capacity,
+                                                    out_error_detail,
+                                                    "evaluate arithmetic and comparison expressions only support integer literals");
+    }
+    if (!proxy_parse_evaluate_identifier_token(parser,
+                                               &identifier,
+                                               out_error_detail,
+                                               "unsupported Feng watch expression syntax")) {
+        return false;
+    }
+    if (!proxy_resolve_evaluate_identifier(parser->artifact,
+                                           parser->frame_backend_symbol,
+                                           identifier,
+                                           &backend_expression,
+                                           out_error_detail)) {
+        free(identifier);
+        return false;
+    }
+    free(identifier);
+    if (backend_expression == NULL ||
+        !proxy_append_evaluate_leaf_expression(buffer,
+                                               length,
+                                               capacity,
+                                               backend_expression)) {
+        free(backend_expression);
+        if (backend_expression == NULL) {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "failed to resolve evaluate expression");
+        } else {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "out of memory rewriting evaluate expression");
+        }
+        return false;
+    }
+    free(backend_expression);
+    return true;
+}
+
+/* Parse one postfix expression including member and constant index access. */
+static bool proxy_parse_evaluate_postfix(FengDapEvaluateParser *parser,
+                                         char **buffer,
+                                         size_t *length,
+                                         size_t *capacity,
+                                         char **out_error_detail) {
+    if (!proxy_parse_evaluate_primary(parser, buffer, length, capacity, out_error_detail)) {
+        return false;
+    }
+    for (;;) {
+        char *member_name = NULL;
+
+        proxy_evaluate_skip_whitespace(parser);
+        if (parser->position >= parser->length) {
+            return true;
+        }
+        if (parser->expression[parser->position] == '.') {
+            parser->position += 1U;
+            if (!proxy_append_byte(buffer, length, capacity, '.') ||
+                !proxy_parse_evaluate_identifier_token(parser,
+                                                       &member_name,
+                                                       out_error_detail,
+                                                       "evaluate member access must use an identifier after '.'") ||
+                !proxy_append_cstr(buffer, length, capacity, member_name)) {
+                free(member_name);
+                if (member_name != NULL && out_error_detail != NULL && *out_error_detail == NULL) {
+                    proxy_set_error_detail_printf(out_error_detail,
+                                                  "out of memory rewriting evaluate expression");
+                }
+                return false;
+            }
+            free(member_name);
+            continue;
+        }
+        if (parser->expression[parser->position] == '[') {
+            parser->position += 1U;
+            if (!proxy_append_byte(buffer, length, capacity, '[') ||
+                !proxy_parse_evaluate_integer_literal(parser,
+                                                     true,
+                                                     buffer,
+                                                     length,
+                                                     capacity,
+                                                     out_error_detail,
+                                                     "evaluate index access must use an integer literal")) {
+                return false;
+            }
+            proxy_evaluate_skip_whitespace(parser);
+            if (parser->position >= parser->length || parser->expression[parser->position] != ']') {
+                proxy_set_error_detail_printf(out_error_detail,
+                                              "evaluate index access must use an integer literal enclosed by '[' and ']'"
+                );
+                return false;
+            }
+            parser->position += 1U;
+            if (!proxy_append_byte(buffer, length, capacity, ']')) {
+                proxy_set_error_detail_printf(out_error_detail,
+                                              "out of memory rewriting evaluate expression");
+                return false;
+            }
+            continue;
+        }
+        if (parser->expression[parser->position] == '(') {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "function calls are not supported in Feng watch expressions");
+            return false;
+        }
+        return true;
+    }
+}
+
+/* Parse one unary arithmetic expression. */
+static bool proxy_parse_evaluate_unary(FengDapEvaluateParser *parser,
+                                       char **buffer,
+                                       size_t *length,
+                                       size_t *capacity,
+                                       char **out_error_detail) {
+    proxy_evaluate_skip_whitespace(parser);
+    if (parser->position < parser->length &&
+        (parser->expression[parser->position] == '+' ||
+         parser->expression[parser->position] == '-')) {
+        char op = parser->expression[parser->position];
+
+        parser->position += 1U;
+        if (!proxy_append_byte(buffer, length, capacity, (unsigned char)op)) {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "out of memory rewriting evaluate expression");
+            return false;
+        }
+        return proxy_parse_evaluate_unary(parser,
+                                          buffer,
+                                          length,
+                                          capacity,
+                                          out_error_detail);
+    }
+    if (parser->position < parser->length && parser->expression[parser->position] == '!') {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "logical negation is not supported in Feng watch expressions");
+        return false;
+    }
+    return proxy_parse_evaluate_postfix(parser,
+                                        buffer,
+                                        length,
+                                        capacity,
+                                        out_error_detail);
+}
+
+/* Parse one multiplicative arithmetic expression. */
+static bool proxy_parse_evaluate_multiplicative(FengDapEvaluateParser *parser,
+                                                char **buffer,
+                                                size_t *length,
+                                                size_t *capacity,
+                                                char **out_error_detail) {
+    if (!proxy_parse_evaluate_unary(parser, buffer, length, capacity, out_error_detail)) {
+        return false;
+    }
+    for (;;) {
+        char op;
+
+        proxy_evaluate_skip_whitespace(parser);
+        if (parser->position >= parser->length) {
+            return true;
+        }
+        op = parser->expression[parser->position];
+        if (op != '*' && op != '/' && op != '%') {
+            return true;
+        }
+        parser->position += 1U;
+        if (!proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_append_byte(buffer, length, capacity, (unsigned char)op) ||
+            !proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_parse_evaluate_unary(parser,
+                                        buffer,
+                                        length,
+                                        capacity,
+                                        out_error_detail)) {
+            if (out_error_detail != NULL && *out_error_detail == NULL) {
+                proxy_set_error_detail_printf(out_error_detail,
+                                              "out of memory rewriting evaluate expression");
+            }
+            return false;
+        }
+    }
+}
+
+/* Parse one additive arithmetic expression. */
+static bool proxy_parse_evaluate_additive(FengDapEvaluateParser *parser,
+                                          char **buffer,
+                                          size_t *length,
+                                          size_t *capacity,
+                                          char **out_error_detail) {
+    if (!proxy_parse_evaluate_multiplicative(parser,
+                                             buffer,
+                                             length,
+                                             capacity,
+                                             out_error_detail)) {
+        return false;
+    }
+    for (;;) {
+        char op;
+
+        proxy_evaluate_skip_whitespace(parser);
+        if (parser->position >= parser->length) {
+            return true;
+        }
+        op = parser->expression[parser->position];
+        if (op != '+' && op != '-') {
+            return true;
+        }
+        parser->position += 1U;
+        if (!proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_append_byte(buffer, length, capacity, (unsigned char)op) ||
+            !proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_parse_evaluate_multiplicative(parser,
+                                                 buffer,
+                                                 length,
+                                                 capacity,
+                                                 out_error_detail)) {
+            if (out_error_detail != NULL && *out_error_detail == NULL) {
+                proxy_set_error_detail_printf(out_error_detail,
+                                              "out of memory rewriting evaluate expression");
+            }
+            return false;
+        }
+    }
+}
+
+/* Parse one comparison expression built from additive subexpressions. */
+static bool proxy_parse_evaluate_comparison(FengDapEvaluateParser *parser,
+                                            char **buffer,
+                                            size_t *length,
+                                            size_t *capacity,
+                                            char **out_error_detail) {
+    if (!proxy_parse_evaluate_additive(parser,
+                                       buffer,
+                                       length,
+                                       capacity,
+                                       out_error_detail)) {
+        return false;
+    }
+    for (;;) {
+        const char *op = NULL;
+        size_t op_length = 0U;
+
+        proxy_evaluate_skip_whitespace(parser);
+        if (parser->position >= parser->length) {
+            return true;
+        }
+        if (parser->expression[parser->position] == '=' &&
+            (parser->position + 1U >= parser->length ||
+             parser->expression[parser->position + 1U] != '=')) {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "assignment is not supported in Feng watch expressions");
+            return false;
+        }
+        if (parser->position + 1U < parser->length) {
+            if (parser->expression[parser->position] == '=' &&
+                parser->expression[parser->position + 1U] == '=') {
+                op = "==";
+                op_length = 2U;
+            } else if (parser->expression[parser->position] == '!' &&
+                       parser->expression[parser->position + 1U] == '=') {
+                op = "!=";
+                op_length = 2U;
+            } else if (parser->expression[parser->position] == '<' &&
+                       parser->expression[parser->position + 1U] == '=') {
+                op = "<=";
+                op_length = 2U;
+            } else if (parser->expression[parser->position] == '>' &&
+                       parser->expression[parser->position + 1U] == '=') {
+                op = ">=";
+                op_length = 2U;
+            }
+        }
+        if (op == NULL && parser->expression[parser->position] == '<') {
+            op = "<";
+            op_length = 1U;
+        } else if (op == NULL && parser->expression[parser->position] == '>') {
+            op = ">";
+            op_length = 1U;
+        }
+        if (op == NULL) {
+            return true;
+        }
+        parser->position += op_length;
+        if (!proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_append_bytes(buffer, length, capacity, op, op_length) ||
+            !proxy_append_bytes(buffer, length, capacity, " ", 1U) ||
+            !proxy_parse_evaluate_additive(parser,
+                                           buffer,
+                                           length,
+                                           capacity,
+                                           out_error_detail)) {
+            if (out_error_detail != NULL && *out_error_detail == NULL) {
+                proxy_set_error_detail_printf(out_error_detail,
+                                              "out of memory rewriting evaluate expression");
+            }
+            return false;
+        }
+    }
+}
+
+/* Rewrite one supported Feng watch expression into a backend evaluate expression. */
+static bool proxy_rewrite_evaluate_expression(const FengDebugArtifact *artifact,
+                                              const char *frame_backend_symbol,
+                                              const char *expression,
+                                              char **out_backend_expression,
+                                              char **out_error_detail) {
+    FengDapEvaluateParser parser = {0};
+    char *buffer = NULL;
+    size_t length = 0U;
+    size_t capacity = 0U;
+    bool ok = false;
+
+    *out_backend_expression = NULL;
+    if (out_error_detail != NULL) {
+        free(*out_error_detail);
+        *out_error_detail = NULL;
+    }
+    if (expression == NULL || expression[0] == '\0') {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "evaluate arguments.expression must not be empty");
+        return false;
+    }
+    parser.artifact = artifact;
+    parser.frame_backend_symbol = frame_backend_symbol;
+    parser.expression = expression;
+    parser.length = strlen(expression);
+    parser.position = 0U;
+    if (!proxy_parse_evaluate_comparison(&parser,
+                                         &buffer,
+                                         &length,
+                                         &capacity,
+                                         out_error_detail)) {
+        goto cleanup;
+    }
+    proxy_evaluate_skip_whitespace(&parser);
+    if (parser.position != parser.length) {
+        if (parser.expression[parser.position] == '=') {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "assignment is not supported in Feng watch expressions");
+        } else {
+            proxy_set_error_detail_printf(out_error_detail,
+                                          "unsupported Feng watch expression syntax near '%c'",
+                                          parser.expression[parser.position]);
+        }
+        goto cleanup;
+    }
+    if (!proxy_append_byte(&buffer, &length, &capacity, '\0')) {
+        proxy_set_error_detail_printf(out_error_detail,
+                                      "out of memory rewriting evaluate expression");
+        goto cleanup;
+    }
+    buffer[length - 1U] = '\0';
+    *out_backend_expression = buffer;
+    buffer = NULL;
+    ok = true;
+
+cleanup:
+    free(buffer);
+    return ok;
 }
 
 /* Resolve one Feng identifier to a unique backend evaluate expression. */
@@ -2231,7 +2799,7 @@ static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
     return true;
 }
 
-/* Rewrite evaluate.arguments.expression for the Phase 4 identifier subset. */
+/* Rewrite evaluate.arguments.expression for the supported read-only watch subset. */
 static bool proxy_rewrite_evaluate_request_payload(const char *json,
                                                    size_t json_length,
                                                    const FengDebugArtifact *artifact,
@@ -2278,11 +2846,7 @@ static bool proxy_rewrite_evaluate_request_payload(const char *json,
         }
         return false;
     }
-    if (!proxy_is_identifier_expression(expression)) {
-        ok = true;
-        goto cleanup;
-    }
-    if (!proxy_resolve_evaluate_identifier(artifact,
+    if (!proxy_rewrite_evaluate_expression(artifact,
                                            frame_backend_symbol,
                                            expression,
                                            &backend_expression,

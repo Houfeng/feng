@@ -526,11 +526,12 @@ VARS:
 #### `evaluate`
 
 - 仅支持第一阶段允许的只读子集。
-- 当前最小实现只覆盖 identifier 子集，不复用完整编译器 parser。
+- `feng dap` 自带一套极小表达式解析器，只覆盖只读 watch 子集，不复用完整编译器 parser。
+- 当前支持的表达式形态为：identifier、成员访问、常量整数字面量索引，以及这些叶子值上的简单算术 / 比较组合。
 - 标识符优先在 **LLDB 当前可见变量集合** 上做解析，再用 `.fd.variables` 做显示名与 backend 名之间的双向对照。
 - 如果某个标识符在当前可见集合上无法唯一落到一个 backend 变量，直接报歧义错误，而不是退化为猜测。
-- 成员访问、索引访问以及标量算术 / 比较继续留在后续只读 watch 子项中扩展。
-- 只有遇到特殊 carrier时，才使用 `.fd.variables.read_expr` 参与后端读取；该路径本轮尚未展开。
+- 叶子标识符若对应普通 backend 变量，则直接改写为 backend 名；若对应特殊 carrier，则改写为 `.fd.variables.read_expr` 提供的后端读取表达式。
+- 不在支持子集内的表达式类型，例如函数调用、赋值、非常量索引或其他未列出的语法，必须由 `feng dap` 本地明确拒绝，不能静默透传为错误值。
 
 ### 6.4 值显示策略
 
@@ -613,7 +614,7 @@ VARS:
 
 ## 8. 分步任务 TODO
 
-- [ ] Phase 1：规范与边界收敛
+- [x] Phase 1：规范与边界收敛
   - [x] 收敛本方案文档。
   - [x] 同步更新 `docs/feng-build.md`。
   - [x] 同步更新 `docs/feng-cli.md`。
@@ -633,25 +634,25 @@ VARS:
   - [x] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
   - [x] 明确并实现最终 `META` 重写规则。
 
-- [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
+- [x] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
   - [x] 新增 `feng dap`，启动并代理 `lldb-dap`。
   - [x] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
   - [x] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
   - [x] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
   - [x] 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
 
-- [ ] Phase 5：只读 watch 子集
+- [x] Phase 5：只读 watch 子集
   - [x] 支持 identifier。
-  - [ ] 支持成员访问。
-  - [ ] 支持常量整数字面量索引。
-  - [ ] 支持标量值上的简单算术 / 比较。
-  - [ ] 明确拒绝其他表达式类型。
+  - [x] 支持成员访问。
+  - [x] 支持常量整数字面量索引。
+  - [x] 支持标量值上的简单算术 / 比较。
+  - [x] 明确拒绝其他表达式类型。
 
 - [ ] Phase 6：测试与回归
   - [ ] 补齐 codegen / 抽象调试信息 / `.fd` 的 golden tests。
-  - [ ] 补齐 adapter 协议测试。
+  - [x] 补齐 adapter 协议测试。
   - [ ] 补齐 VS Code + macOS + LLDB smoke 测试。
-  - [ ] 执行现有 LSP 与编译器测试回归。
+  - [x] 执行现有 LSP 与编译器测试回归。
 - codegen / `.fd` golden tests
 - adapter 协议测试
 - VS Code + macOS + LLDB smoke 测试
