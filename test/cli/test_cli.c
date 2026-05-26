@@ -17,6 +17,7 @@
 #include "cli/lsp/server.h"
 #include "cli/project/common.h"
 #include "cli/project/manifest.h"
+#include "debug/debug.h"
 #include "symbol/ft_internal.h"
 #include "symbol/imported_module.h"
 
@@ -106,6 +107,17 @@ static void write_text_file(const char *path, const char *content) {
     file = fopen(path, "wb");
     ASSERT(file != NULL);
     ASSERT(fwrite(content, 1U, strlen(content), file) == strlen(content));
+    fclose(file);
+}
+
+static void write_binary_file(const char *path,
+                              const unsigned char *bytes,
+                              size_t length) {
+    FILE *file;
+
+    file = fopen(path, "wb");
+    ASSERT(file != NULL);
+    ASSERT(fwrite(bytes, 1U, length, file) == length);
     fclose(file);
 }
 
@@ -924,6 +936,10 @@ static char *json_escape_text(const char *text) {
 
 static void write_lsp_message(FILE *input, const char *json) {
     ASSERT(fprintf(input, "Content-Length: %zu\r\n\r\n%s", strlen(json), json) >= 0);
+}
+
+static char *build_dap_message_text(const char *json) {
+    return dup_printf("Content-Length: %zu\r\n\r\n%s", strlen(json), json);
 }
 
 static char *run_lsp_server_capture(FILE *input) {
@@ -3292,27 +3308,69 @@ static void test_dap_rejects_unknown_option(void) {
     ASSERT(run_dap_quiet_stderr(1, argv) != 0);
 }
 
-/* Ensure the first DAP slice transparently proxies stdio to `lldb-dap`. */
-static void test_dap_proxies_stdio_to_backend(void) {
-    char template_path[] = "/tmp/feng_cli_dap_proxy_XXXXXX";
+/* Ensure a validated launch starts the backend only after `.fd` verification. */
+static void test_dap_validated_launch_starts_backend(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x11U};
+    char template_path[] = "/tmp/feng_cli_dap_launch_ok_XXXXXX";
     char *workspace_dir;
+    char *binary_path;
+    char *fd_path;
     char *backend_path;
+    char *marker_path;
+    char *backend_script;
     char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *initialize_text;
+    char *launch_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *input_text;
     char *stdout_text;
     char *stderr_text = NULL;
+    char *fd_error = NULL;
     char *remove_error = NULL;
     char *argv[] = { "--stdio" };
-    const char *input_text = "Content-Length: 0\r\n\r\n";
+    FengCodegenMapingInfo info = {0};
     int rc;
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
     backend_path = path_join(workspace_dir, "lldb-dap");
-    write_executable_text_file(backend_path, "#!/bin/sh\ncat\n");
+    marker_path = path_join(workspace_dir, "spawned.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               NULL,
+                               0U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = dup_printf("Content-Length: %zu\\r\\n\\r\\n%s",
+                                         strlen(backend_initialize_json),
+                                         backend_initialize_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\ncat >/dev/null\n",
+                                marker_path,
+                                backend_initialize_text);
+    write_executable_text_file(backend_path, backend_script);
+
     path_value = dup_printf("%s:%s",
                             workspace_dir,
                             getenv("PATH") != NULL ? getenv("PATH") : "");
-    ASSERT(path_value != NULL);
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    input_text = dup_printf("%s%s", initialize_text, launch_text);
 
     stdout_text = run_dap_capture_stdout_with_path(1,
                                                    argv,
@@ -3321,42 +3379,204 @@ static void test_dap_proxies_stdio_to_backend(void) {
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
-    ASSERT(strcmp(stdout_text, input_text) == 0);
+    ASSERT(strstr(stdout_text, "\"command\":\"initialize\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"success\":true") != NULL);
+    ASSERT(path_exists(marker_path));
     ASSERT(strcmp(stderr_text, "") == 0);
 
     free(stderr_text);
     free(stdout_text);
+    free(input_text);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(launch_text);
+    free(initialize_text);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
     free(path_value);
+    free(backend_script);
+    free(marker_path);
     free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
 }
 
-/* Ensure `feng dap` reports a clear backend launch failure. */
-static void test_dap_reports_missing_backend(void) {
-    char template_path[] = "/tmp/feng_cli_dap_missing_backend_XXXXXX";
+/* Ensure launch fails locally when the `.fd` fingerprint no longer matches the binary. */
+static void test_dap_rejects_fingerprint_mismatch_before_backend_spawn(void) {
+    static const unsigned char kOriginalBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x21U};
+    static const unsigned char kModifiedBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x22U};
+    char template_path[] = "/tmp/feng_cli_dap_launch_mismatch_XXXXXX";
     char *workspace_dir;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *marker_path;
+    char *backend_script;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *initialize_text;
+    char *launch_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *input_text;
     char *stdout_text;
     char *stderr_text = NULL;
+    char *fd_error = NULL;
     char *remove_error = NULL;
     char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
     int rc;
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    marker_path = path_join(workspace_dir, "spawned.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kOriginalBinaryBytes, sizeof(kOriginalBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               NULL,
+                               0U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+    write_binary_file(binary_path, kModifiedBinaryBytes, sizeof(kModifiedBinaryBytes));
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = dup_printf("Content-Length: %zu\\r\\n\\r\\n%s",
+                                         strlen(backend_initialize_json),
+                                         backend_initialize_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\ncat >/dev/null\n",
+                                marker_path,
+                                backend_initialize_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    input_text = dup_printf("%s%s", initialize_text, launch_text);
 
     stdout_text = run_dap_capture_stdout_with_path(1,
                                                    argv,
-                                                   "",
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc != 0);
+    ASSERT(strstr(stdout_text, "\"command\":\"initialize\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"command\":\"launch\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text, "fingerprint mismatch") != NULL);
+    ASSERT(!path_exists(marker_path));
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(launch_text);
+    free(initialize_text);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(marker_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure launch surfaces backend startup failures after local validation succeeds. */
+static void test_dap_reports_missing_backend_after_launch_validation(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x31U};
+    char template_path[] = "/tmp/feng_cli_dap_missing_backend_XXXXXX";
+    char *workspace_dir;
+    char *binary_path;
+    char *fd_path;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *initialize_text;
+    char *launch_text;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               NULL,
+                               0U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    input_text = dup_printf("%s%s", initialize_text, launch_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
                                                    workspace_dir,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc != 0);
-    ASSERT(strcmp(stdout_text, "") == 0);
-    ASSERT(strstr(stderr_text, "failed to exec lldb-dap") != NULL);
+    ASSERT(strstr(stdout_text, "\"command\":\"initialize\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"command\":\"launch\"") != NULL);
+    ASSERT(strstr(stdout_text, "failed to exec lldb-dap") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
 
     free(stderr_text);
     free(stdout_text);
+    free(input_text);
+    free(launch_text);
+    free(initialize_text);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(fd_path);
+    free(binary_path);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
 }
@@ -8579,8 +8799,9 @@ int main(void) {
     test_lsp_rejects_unknown_option();
     test_dap_help_returns_success();
     test_dap_rejects_unknown_option();
-    test_dap_proxies_stdio_to_backend();
-    test_dap_reports_missing_backend();
+    test_dap_validated_launch_starts_backend();
+    test_dap_rejects_fingerprint_mismatch_before_backend_spawn();
+    test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();

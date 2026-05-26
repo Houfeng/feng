@@ -42,7 +42,7 @@
 - [x] 收敛调试方案、实施边界与文档约束。
 - [x] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
 - [x] 在 `src/debug/` 中生成并汇总 `.fd`。
-- [ ] 新增 `feng dap` 代理层并消费 `.fd`。
+- [x] 新增 `feng dap` 代理层并消费 `.fd`。
 - [ ] 补齐 VS Code 集成与回归验证。
 
 ### 1.3 本次实施硬约束
@@ -498,7 +498,7 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- Phase 4 的首个落地切面先交付透明 stdio proxy 骨架与后端进程生命周期控制，确保 `editor -> feng dap -> lldb-dap` 主链先可运行；`launch` 拦截、`.fd` 校验与语义重写继续在后续子项叠加，不在同一切面里摊大。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；stackTrace / variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
 
 #### `setBreakpoints`
 
