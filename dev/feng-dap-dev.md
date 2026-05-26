@@ -37,13 +37,20 @@
 - 独立 `target=lib` 调试会话
 - 把调试协议并入 `feng lsp`
 
-### 1.2 分步完成项
+### 1.2 里程碑 TODO
 
-- [ ] 1：先收敛调试方案与边界文档，形成单一开发方案。
-- [ ] 2：补齐 codegen 的源码映射输出，让 LLDB 能直接停在 `.ff` 源码行。
-- [ ] 3：新增独立调试 sidecar 产物 `.fd`，只承载 frame / variable 重写所需的最小元数据。
-- [ ] 4：新增独立 `feng dap` 代理层，转发到 `lldb-dap` 并完成 Feng 语义重写。
-- [ ] 5：补齐 VS Code 启动集成，以及断点、单步、堆栈、变量和只读 watch 的回归验证。
+- [ ] 收敛调试方案、实施边界与文档约束。
+- [ ] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
+- [ ] 在 `src/debug/` 中生成并汇总 `.fd`。
+- [ ] 新增 `feng dap` 代理层并消费 `.fd`。
+- [ ] 补齐 VS Code 集成与回归验证。
+
+### 1.3 本次实施硬约束
+
+- 本次 DAP 支持禁止改动核心编译器的**词法、语法、语义**层；允许的编译器改动只限非 `release` 发码链路中补充稳定 `#line` 与导出生成 `.fd` 所需的抽象调试信息。
+- codegen 不直接感知、命名或生成 `.fd`；它只输出与容器格式解耦的抽象调试信息结构，这些结构的命名也不应直接绑定 `.fd`。
+- `src/debug/` 负责基于 codegen 输出的抽象调试信息生成与汇总最终 `.fd`；`src/dap/` / `feng dap` 只消费 `.fd`，不把 `.fd` 容器细节反向渗入 codegen。
+- 其他不相关代码本次不得直接变动；若确实需要扩大修改面，必须由开发者决策后再继续。
 
 ## 2. 已确认决策
 
@@ -59,7 +66,7 @@
 - 保持当前 **Feng -> C -> 主机编译器 -> 原生二进制** 的主链不变。
 - 不新建解释执行模式，也不要求引入第二套运行时。
 - 不要求编译器直接写 DWARF；DWARF 仍由主机 C 编译器读取 `#line` 与 `-g` 后生成。
-- 核心编译器首版新增职责原则上只限非 `release` 构建下的两件事：发出稳定 `#line`，并导出当前产物所需的最小调试元数据；编译驱动只做最小的 debug 选项透传与产物编排。
+- 核心编译器首版新增职责原则上只限非 `release` 构建下的两件事：发出稳定 `#line`，并导出当前产物所需的抽象调试信息；编译驱动只做最小的 debug 选项透传与产物编排。
 - 第一阶段即引入独立 `feng dap`，由它启动并代理 `lldb-dap`；原生单步、线程、断点命中与底层变量读取仍由 `lldb-dap` 负责。
 - stack、variable、watch 与 frame 语义重写统一在 `feng dap` 完成；编辑器只负责 launch 配置、task 串接和调试 UI。
 - 长期链路明确为 `editor -> feng dap -> lldb-dap -> LLDB`；VS Code 只是首个接入方，后续 Zed 等编辑器复用同一层。
@@ -134,7 +141,7 @@
 
 - **编译层**
 - Feng parser / semantic 产生 AST、token、type facts。
-- codegen 在非 `release` 构建下生成带稳定 `#line` 的 C 源码，并同时导出可汇总的最小调试记录；本地 `target=lib` 依赖构建也直接产出普通 `.fd` 作为中间输入，顶层可调试 `target=bin` 构建再把主项目与递归本地依赖的 `.fd` 汇总成最终 binary 对应的单个 `.fd`。
+- codegen 在非 `release` 构建下生成带稳定 `#line` 的 C 源码，并同时导出与 `.fd` 容器解耦的抽象调试信息；`src/debug/` 再基于这些抽象信息为当前产物生成 `.fd`，并在顶层可调试 `target=bin` 构建中把主项目与递归本地依赖的 `.fd` 汇总成最终 binary 对应的单个 `.fd`。
 
 - **主机调试信息层**
 - 主机 C 编译器在非 `release` 构建中，基于 `#line` 与 `-g` 生成原生调试信息。
@@ -200,13 +207,13 @@
 
 首版建议采用以下规则：
 
-- `target=bin` 且非 `release` 时，编译结果除二进制外，默认并排生成 `.fd`。
+- 非 `release` 的 `target=bin` 与 `target=lib` 都生成 `.fd`。
 - 这个最终 `.fd` 必须覆盖当前 `target=bin` 工程以及其递归本地路径依赖项目中会进入最终 binary 的 Feng 代码，从而支持 monorepo / workspace 内跨项目单步进入。
 - 本地 `target=lib` 依赖在非 `release` 构建下也直接产出普通 `.fd`，但该 `.fd` 属于构建内部中间产物，不是 `feng dap` 直接消费的首版 launch artifact。
 - 扩展名仍然直接使用 `.fd`，不为本地依赖中间产物再发明新的专有扩展名。
 - 产物路径形态：
-  - 二进制：`build/bin/<artifact>`
-  - 调试 sidecar：`build/bin/<artifact>.fd`
+  - `target=bin`：`build/bin/<artifact>` 与 `build/bin/<artifact>.fd`
+  - `target=lib`：库产物与同级 `.fd`
 - `release` 默认不生成 `.fd`，也不额外要求保留调试态插桩。
 - 首版不提供“单独启动一个 `target=lib` 项目”的调试入口；`target=lib` 在首版只承担“为顶层 `target=bin` 调试闭包产出可合并中间 `.fd`”的职责。
 - `feng pack` 不打包 `.fd`。
@@ -221,11 +228,11 @@
 
 建议的汇总流程如下：
 
-1. 主项目与每个递归本地 `target=lib` 依赖在各自 codegen / 编译阶段写出普通 `.fd`。
-2. 对本地 `target=lib` 来说，这个 `.fd` 仍采用与最终 `.fd` 相同的容器布局；只是它在首版不会被 `feng dap` 直接作为 launch sidecar 消费。
-3. 顶层 `target=bin` 构建在链接完成后收集整条本地依赖图中的 `.fd`，重新做 string interning，并合并 `PKGS` / `FRMS` / `VARS`。
+1. 主项目与每个递归本地 `target=lib` 依赖在各自 codegen / 编译阶段先导出抽象调试信息。
+2. `src/debug/` 基于这些抽象调试信息为当前产物写出普通 `.fd`；对本地 `target=lib` 来说，这个 `.fd` 与 `target=bin` 使用同一容器布局，只是首版不会被 `feng dap` 直接作为 launch sidecar 消费。
+3. 顶层 `target=bin` 构建在生成自身 `.fd` 时，收集整条本地依赖图中的依赖 `.fd`，提取其中可合并的 `PKGS` / `FRMS` / `VARS` section，重新做 string interning 后并入自己的 `.fd`。
 4. 汇总器对冲突做显式校验：若两个输入 `.fd` 给同一 `frame_backend_symbol + backend_name` 提供不一致映射，或给同一 `PKG_NAME` 提供不一致的本地包根，构建立即报错，不把歧义留到运行期。
-5. 汇总完成后，仅由顶层构建写出最终 `.fd`，再重写 `META.binary_path_strid` 与 `META.content_fingerprint`。
+5. 依赖 `.fd` 的 `META` 不参与合并；最终只保留顶层 `target=bin` 自身的 `META.binary_path_strid` 与 `META.content_fingerprint`。
 
 这样做的原因是：
 
@@ -540,10 +547,10 @@ VARS:
   - 保留并正式启用 `FengCodegenOptions.emit_line_directives` 控制面。
 - `src/codegen/codegen.c`
   - 真正消费 `emit_line_directives`。
-  - 为 frame / variable 生成稳定调试元数据。
-  - 为主项目与本地 `target=lib` 依赖统一产出可被顶层 `target=bin` 调试构建汇总的 `.fd`。
+  - 为 frame / variable 生成稳定、与 `.fd` 容器解耦的抽象调试信息。
+  - 不直接感知、命名或写出 `.fd`。
 - `src/cli/compile/direct.c`
-  - 直编路径要显式把 debug-aware codegen options 传给 codegen。
+  - 直编路径要显式把 debug-aware codegen options 传给 codegen，并在非 `release` 时把 codegen 输出的抽象调试信息交给 `src/debug/`。
 - `src/cli/compile/legacy.c`
   - legacy 路径保持相同传参约束。
 
@@ -552,7 +559,7 @@ VARS:
 建议新增独立模块承载 `.fd` 数据模型与写盘逻辑，例如：
 
 - `src/debug/`
-  - 调试元数据结构
+  - 与 `.fd` 容器解耦的抽象调试信息结构
   - `.fd` binary writer
   - 中间 `.fd` / 最终 `.fd` reader / writer
   - string table / section directory 编码
@@ -564,12 +571,13 @@ VARS:
 - `.fd` 的职责不同于 `.ft`。
 - 不应把 `.fd` writer 混入 `src/symbol/`。
 - 也不应把所有序列化细节堆进 `src/codegen/codegen.c`。
+- codegen 只负责输出抽象调试信息，`.fd` 容器化与汇总应由 `src/debug/` 负责。
 
 ### 7.3 `feng dap` 与编辑器集成侧
 
 以下改动属于首版前置条件：
 
-- `feng dap`
+- `src/dap/` / `feng dap`
   - 新增统一 DAP proxy 入口，负责启动 / 代理 `lldb-dap`、读取 `.fd`、完成 frame / variable 重写。
 - `editors/feng-vscode/package.json`
   - 新增 debugger contribution、配置 schema 与 launch 类型。
@@ -582,48 +590,59 @@ VARS:
 
 以下部分不应为了首版 DAP 被改造成新的耦合中心：
 
+- `src/lexer/`、`src/parser/`、`src/semantic/`
+  - 原因：本次实施明确禁止改动词法、语法、语义层；DAP 支持不应借机扩大到前端核心语义面。
+
 - `src/cli/lsp/runtime.c`
   - 原因：LSP 与 DAP 是不同协议，不应把调试职责塞进语言服务实现。
 - `src/symbol/ft_write.c`
   - 原因：`.ft` 边界不应被扩大为局部变量和帧数据库。
 - `src/runtime/`
   - 第一阶段只复用既有类型描述与显示基础，不以前置新增专用调试 runtime 为条件。
+- 其他与本次 DAP 方案无直接关系的代码
+  - 原因：若确需扩大修改面，必须由开发者先行决策，不能在本次实施中顺手改动。
 
-## 8. 分阶段实施建议
+## 8. 分步任务 TODO
 
-### 8.1 Phase 1：规范与边界收敛
+- [ ] Phase 1：规范与边界收敛
+  - [ ] 收敛本方案文档。
+  - [ ] 同步更新 `docs/feng-build.md`。
+  - [ ] 同步更新 `docs/feng-cli.md`。
+  - [ ] 同步更新 `docs/feng-symbol-table.md`。
+  - [ ] 明确 `.fd` 的产物语义、生命周期与 `.ft` 边界。
+  - [ ] 把“禁止改动词法 / 语法 / 语义层、禁止顺手改 unrelated 代码”的实施约束写死。
 
-- 收敛本方案文档。
-- 后续同步更新：
-  - `docs/feng-build.md`
-  - `docs/feng-cli.md`
-  - `docs/feng-symbol-table.md`
-- 明确 `.fd` 的产物语义、生命周期与 `.ft` 边界。
+- [ ] Phase 2：编译器非 `release` 发码链路
+  - [ ] 落实基于 `PKG_NAME://<package-relative path>` 的 `#line` 输出。
+  - [ ] 定义与 `.fd` 容器解耦的抽象调试信息结构。
+  - [ ] 仅在 codegen 中输出抽象调试信息，不直接写 `.fd`。
+  - [ ] 为变量和 callable 后端命名建立稳定约束。
 
-### 8.2 Phase 2：编译器源码映射与 `.fd`
+- [ ] Phase 3：`src/debug/` 生成与汇总 `.fd`
+  - [ ] 基于 codegen 输出的抽象调试信息生成当前产物 `.fd`。
+  - [ ] 支持本地 `target=lib` 的非 `release` `.fd` 写出。
+  - [ ] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
+  - [ ] 明确并实现最终 `META` 重写规则。
 
-- 落实基于 `PKG_NAME://<package-relative path>` 的 `#line` 输出。
-- 明确调试可见 callable / scope / variable 的选择规则。
-- 生成并汇总 `.fd`。
-- 为变量和 callable 后端命名建立稳定约束。
+- [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
+  - [ ] 新增 `feng dap`，启动并代理 `lldb-dap`。
+  - [ ] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
+  - [ ] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
+  - [ ] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
+  - [ ] 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
 
-### 8.3 Phase 3：`feng dap` 统一适配层与 VS Code 接入
+- [ ] Phase 5：只读 watch 子集
+  - [ ] 支持 identifier。
+  - [ ] 支持成员访问。
+  - [ ] 支持常量整数字面量索引。
+  - [ ] 支持标量值上的简单算术 / 比较。
+  - [ ] 明确拒绝其他表达式类型。
 
-- 新增 `feng dap`，启动并代理 `lldb-dap`。
-- 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
-- VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
-- 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
-
-### 8.4 Phase 4：只读 watch 子集
-
-- 支持 identifier。
-- 支持成员访问。
-- 支持常量整数字面量索引。
-- 支持标量值上的简单算术 / 比较。
-- 明确拒绝其他表达式类型。
-
-### 8.5 Phase 5：测试与回归
-
+- [ ] Phase 6：测试与回归
+  - [ ] 补齐 codegen / 抽象调试信息 / `.fd` 的 golden tests。
+  - [ ] 补齐 adapter 协议测试。
+  - [ ] 补齐 VS Code + macOS + LLDB smoke 测试。
+  - [ ] 执行现有 LSP 与编译器测试回归。
 - codegen / `.fd` golden tests
 - adapter 协议测试
 - VS Code + macOS + LLDB smoke 测试
