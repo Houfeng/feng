@@ -45,6 +45,7 @@ function createMockVscode(options = {}) {
                 }
             },
             DebugConfigurationProviderTriggerKind: {
+                Initial: 1,
                 Dynamic: 2
             },
             ProcessExecution: class ProcessExecution {
@@ -204,7 +205,7 @@ async function run() {
 
     try {
         {
-            const { mockVscode } = createMockVscode({
+            const { mockVscode, recorder } = createMockVscode({
                 workspaceRoot: tempRoot,
                 activeTextEditor: createActiveEditor(projectSourcePath),
                 findFilesResults: [
@@ -306,7 +307,44 @@ async function run() {
 
             context = { subscriptions: [] };
             registerDebuggingSupport(context, mockVscode);
-            assert.strictEqual(context.subscriptions.length, 3);
+            assert.strictEqual(context.subscriptions.length, 4);
+            assert.deepStrictEqual(recorder.configurationProviders.map(entry => entry.triggerKind), [1, 2]);
+        }
+
+        {
+            const { mockVscode } = createMockVscode({
+                workspaceRoot: tempRoot,
+                activeTextEditor: null,
+                findFilesResults: [
+                    { fsPath: projectManifestPath },
+                    { fsPath: libManifestPath }
+                ]
+            });
+            const extension = loadExtensionModule(mockVscode);
+            const provider = extension.__test__.createFengDebugConfigurationProvider(mockVscode);
+            const workspaceFolder = createWorkspaceFolder(tempRoot);
+            const providedConfigurations = await provider.provideDebugConfigurations(workspaceFolder);
+            const resolved = await provider.resolveDebugConfiguration(workspaceFolder, {
+                type: 'feng',
+                request: 'launch'
+            });
+
+            assert.deepStrictEqual(providedConfigurations, [{
+                type: 'feng',
+                request: 'launch',
+                name: 'Debug hello_world',
+                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
+                cwd: projectRoot,
+                preLaunchTask: 'feng: build examples/hello_world'
+            }]);
+            assert.deepStrictEqual(resolved, {
+                type: 'feng',
+                request: 'launch',
+                name: 'Debug hello_world',
+                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
+                cwd: projectRoot,
+                preLaunchTask: 'feng: build examples/hello_world'
+            });
         }
 
         {

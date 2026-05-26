@@ -7,7 +7,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 - Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
 - Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, references, rename, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
-- Debugger integration: The extension contributes a Feng debug type that launches `feng dap --stdio`, derives the default `program` from the nearest `target: "bin"` project manifest when possible, and wires a Feng build task as the default `preLaunchTask`.
+- Debugger integration: The extension contributes a Feng debug type that launches `feng dap --stdio`, derives the default `program` from the nearest `target: "bin"` project manifest when possible, falls back to scanned workspace `target: "bin"` manifests when generating `launch.json` without an active Feng source file, and wires a Feng build task as the default `preLaunchTask`.
 - Language Server restart: The command palette command `Feng: Restart Language Server` and the Feng LSP status bar item both stop the current language server and start a fresh `feng lsp` process using the latest `feng.executablePath` setting.
 - Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
 - Icon support: The extension logo and the built-in `.feng`/`.ff`, `.fm`, `.fb`, and `.ft` file icons all use the latest Feng document icon family when your current file icon theme does not provide a Feng-specific icon.
@@ -25,7 +25,7 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 2. Open any Feng source file and syntax highlighting will be enabled automatically.
 3. When you want to clean up code, run VS Code's Format Document command.
 4. If you already have the Feng CLI installed, the extension will start `feng lsp` automatically for Feng source files. Language features are then provided by the LSP capabilities exposed by that CLI build.
-5. Open Run and Debug, create a Feng launch configuration, and start debugging. When the active file belongs to a `target: "bin"` Feng project, the extension derives the default launch binary and build task from the nearest `feng.fm`.
+5. Open Run and Debug, create a Feng launch configuration, and start debugging. When the active file belongs to a `target: "bin"` Feng project, the extension derives the default launch binary and build task from the nearest `feng.fm`; when you create `launch.json` from the Run and Debug view without an active Feng source file, it falls back to the workspace's discovered `target: "bin"` manifests.
 6. If your current CLI build still exposes an empty LSP capability set, the extension will temporarily keep open/save diagnostics through the legacy `check` path until the server side is filled in.
 
 ## Optional Configuration
@@ -75,7 +75,7 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 ## Debugging
 
 - The extension contributes a `feng` debug type that starts `feng dap --stdio`.
-- When a launch configuration omits `program`, the extension tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/bin/<name>`.
+- When a launch configuration omits `program`, the extension first tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/bin/<name>`, then falls back to the unique discovered workspace `target: "bin"` project when no active Feng file is available.
 - When a launch configuration omits `preLaunchTask`, the extension binds it to the generated Feng build task for that project.
 - The current debug surface targets macOS + `lldb-dap` and the non-`release` local `target=bin` build path.
 - `evaluate` currently covers the read-only subset exposed by `feng dap`: identifiers, member access, constant integer indexing, and simple arithmetic/comparison expressions. Function calls, assignments, and other unsupported watch expressions are rejected explicitly.

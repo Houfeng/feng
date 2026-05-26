@@ -468,6 +468,27 @@ async function findWorkspaceManifestPaths(vscodeApi = vscode) {
     return Array.from(manifestPaths).sort();
 }
 
+function isPathInsideWorkspace(filePath, workspaceFolder) {
+    const workspaceRoot = getWorkspaceFolderPath(workspaceFolder);
+    const resolvedFilePath = typeof filePath === 'string' ? path.resolve(filePath) : null;
+    const resolvedWorkspaceRoot = typeof workspaceRoot === 'string' ? path.resolve(workspaceRoot) : null;
+
+    if (resolvedFilePath == null || resolvedWorkspaceRoot == null) {
+        return true;
+    }
+    return resolvedFilePath === resolvedWorkspaceRoot ||
+        resolvedFilePath.startsWith(resolvedWorkspaceRoot + path.sep);
+}
+
+async function findWorkspaceDebugSettings(workspaceFolder, vscodeApi = vscode) {
+    const manifestPaths = await findWorkspaceManifestPaths(vscodeApi);
+
+    return manifestPaths
+        .filter(manifestPath => isPathInsideWorkspace(manifestPath, workspaceFolder))
+        .map(manifestPath => getProjectDebugSettings(manifestPath))
+        .filter(settings => settings != null && settings.target === 'bin');
+}
+
 function createFengTaskProvider(vscodeApi = vscode) {
     return {
         async provideTasks() {
@@ -540,16 +561,31 @@ function createFengDebugConfigurationProvider(vscodeApi = vscode) {
     return {
         async provideDebugConfigurations(workspaceFolder) {
             const manifestPath = findDebugManifestPath({}, workspaceFolder, vscodeApi);
-            const configuration = manifestPath != null
-                ? createDefaultDebugConfiguration(manifestPath, workspaceFolder, vscodeApi)
-                : null;
+            const workspaceSettings = manifestPath == null
+                ? await findWorkspaceDebugSettings(workspaceFolder, vscodeApi)
+                : [];
+            const configurations = manifestPath != null
+                ? [createDefaultDebugConfiguration(manifestPath, workspaceFolder, vscodeApi)]
+                : workspaceSettings.map(settings => createDefaultDebugConfiguration(settings.manifestPath,
+                                                                                   workspaceFolder || getWorkspaceFolderForPath(settings.projectRoot,
+                                                                                                                                vscodeApi),
+                                                                                   vscodeApi));
 
-            return configuration == null ? [] : [configuration];
+            return configurations.filter(configuration => configuration != null);
         },
 
         async resolveDebugConfiguration(workspaceFolder, config) {
             const resolved = config != null ? { ...config } : {};
-            const manifestPath = findDebugManifestPath(resolved, workspaceFolder, vscodeApi);
+            let manifestPath = findDebugManifestPath(resolved, workspaceFolder, vscodeApi);
+
+            if (manifestPath == null && !resolved.program) {
+                const workspaceSettings = await findWorkspaceDebugSettings(workspaceFolder, vscodeApi);
+
+                if (workspaceSettings.length === 1) {
+                    manifestPath = workspaceSettings[0].manifestPath;
+                }
+            }
+
             const settings = manifestPath != null ? getProjectDebugSettings(manifestPath) : null;
             const taskWorkspaceFolder = settings != null
                 ? (workspaceFolder || getWorkspaceFolderForPath(settings.projectRoot, vscodeApi))
@@ -621,15 +657,28 @@ function registerDebuggingSupport(context, vscodeApi = vscode) {
         );
     }
     if (vscodeApi.debug != null && typeof vscodeApi.debug.registerDebugConfigurationProvider === 'function') {
-        const triggerKind = vscodeApi.DebugConfigurationProviderTriggerKind != null
-            ? vscodeApi.DebugConfigurationProviderTriggerKind.Dynamic
-            : undefined;
+        const provider = createFengDebugConfigurationProvider(vscodeApi);
+        const triggerKinds = [];
 
-        disposables.push(
-            vscodeApi.debug.registerDebugConfigurationProvider(FENG_DEBUG_TYPE,
-                                                               createFengDebugConfigurationProvider(vscodeApi),
-                                                               triggerKind)
-        );
+        if (vscodeApi.DebugConfigurationProviderTriggerKind != null) {
+            if (vscodeApi.DebugConfigurationProviderTriggerKind.Initial !== undefined) {
+                triggerKinds.push(vscodeApi.DebugConfigurationProviderTriggerKind.Initial);
+            }
+            if (vscodeApi.DebugConfigurationProviderTriggerKind.Dynamic !== undefined) {
+                triggerKinds.push(vscodeApi.DebugConfigurationProviderTriggerKind.Dynamic);
+            }
+        }
+        if (triggerKinds.length === 0) {
+            triggerKinds.push(undefined);
+        }
+
+        for (const triggerKind of triggerKinds) {
+            disposables.push(
+                vscodeApi.debug.registerDebugConfigurationProvider(FENG_DEBUG_TYPE,
+                                                                   provider,
+                                                                   triggerKind)
+            );
+        }
     }
     if (vscodeApi.tasks != null && typeof vscodeApi.tasks.registerTaskProvider === 'function') {
         disposables.push(
@@ -1029,6 +1078,7 @@ module.exports = {
         createFengBuildTask,
         createFengDebugConfigurationProvider,
         createFengTaskProvider,
+        findWorkspaceDebugSettings,
         registerLanguageServerRestartCommand,
         registerLegacyDiagnostics,
         registerDebuggingSupport,
