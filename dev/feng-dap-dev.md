@@ -19,7 +19,7 @@
 - 平台只覆盖 **macOS**。
 - 原生调试器后端只覆盖 **LLDB**，优先使用 `lldb-dap`。
 - IDE 只覆盖 **VS Code**。
-- 编译目标只覆盖 **`target=bin`**。
+- launch 入口只覆盖 **`target=bin`**，但允许单步进入同一调试闭包内的本地路径依赖源码。
 - 功能范围覆盖：
   - Feng 源码断点
   - step in / step over / step out
@@ -34,7 +34,7 @@
 - time-travel 或 reverse debugging
 - 任意 Feng 表达式求值
 - 具有副作用的 watch / evaluate
-- `target=lib` 的首版调试闭环
+- 独立 `target=lib` 调试会话
 - 把调试协议并入 `feng lsp`
 
 ### 1.2 分步完成项
@@ -59,22 +59,27 @@
 - 保持当前 **Feng -> C -> 主机编译器 -> 原生二进制** 的主链不变。
 - 不新建解释执行模式，也不要求引入第二套运行时。
 - 不要求编译器直接写 DWARF；DWARF 仍由主机 C 编译器读取 `#line` 与 `-g` 后生成。
-- 核心编译器首版新增职责原则上只限非 `release` 构建下的两件事：发出稳定 `#line`，并导出与 binary 同级的最小 `.fd` 调试 sidecar；编译驱动只做最小的 debug 选项透传与产物编排。
+- 核心编译器首版新增职责原则上只限非 `release` 构建下的两件事：发出稳定 `#line`，并导出当前产物所需的最小调试元数据；编译驱动只做最小的 debug 选项透传与产物编排。
 - 第一阶段即引入独立 `feng dap`，由它启动并代理 `lldb-dap`；原生单步、线程、断点命中与底层变量读取仍由 `lldb-dap` 负责。
 - stack、variable、watch 与 frame 语义重写统一在 `feng dap` 完成；编辑器只负责 launch 配置、task 串接和调试 UI。
 - 长期链路明确为 `editor -> feng dap -> lldb-dap -> LLDB`；VS Code 只是首个接入方，后续 Zed 等编辑器复用同一层。
+- 对本地路径依赖场景，`feng dap` 仍只读取“被 launch 的最终 binary 对应的单个 `.fd`”；主项目与递归本地依赖的调试元数据汇总由构建阶段完成，不把多 sidecar 追踪逻辑下放到编辑器或运行期适配层。
 
 ### 2.3 数据边界
 
 - `build/obj/symbols/**/*.ft` 继续是**声明级 workspace cache**。
 - `.ft` 中已有的 span 仍只服务于声明级定位、hover、definition、completion 等语言服务消费场景。
 - 局部变量、词法作用域、帧重写、调试显示提示等调试专用信息，统一落入新的 **artifact-scoped sidecar**：`.fd`。
+- 对 `target=bin` 调试会话而言，这个 artifact-scoped `.fd` 描述的是**最终被 launch binary 的本地调试闭包**，可覆盖主项目与递归本地路径依赖，但仍只服务当前本地构建结果。
 - `.fd` 不进入 `.fb` 分发包，不作为跨包公共接口。
 
 ### 2.4 源码映射权威来源
 
 - 断点绑定、step 行号和 stack line 的**第一权威来源**是主机编译器生成的原生调试信息。
 - 这些原生调试信息必须来自 Feng codegen 输出的稳定 `#line` 映射。
+- `#line` 中的文件名参数不应写宿主磁盘路径，而应固定写成逻辑源码 URI：`PKG_NAME://<package-relative path>`。
+- `PKG_NAME` 取源码所属包的 `feng.fm` 中 `name` 字段；`<package-relative path>` 相对包根目录计算，统一使用 `/`，例如 `std://src/foo/bar.ff`。
+- 这样做的直接原因是：monorepo / 本地路径依赖调试时，宿主磁盘路径会随工作树、缓存位置或依赖展开方式漂移；固定使用逻辑源码 URI，才能把 LLDB 看到的源码标识从宿主路径解耦出来，保留可移植性与后续 editor-neutral 转换空间。
 - `.fd` 只补充 frame 名称重写、变量显示名映射以及少量特殊 carrier 的读取提示，不承担“逐地址反查源码行”的主要职责，也不复制 LLDB 已能给出的 scope / type / children 信息。
 - 设计约束进一步明确为：**凡是 LLDB 已能正确决定的事，`feng dap` 不重复求解；但只要 LLDB 给出的当前 frame / 可见变量集合是正确的，`feng dap` 的重写结果也必须确定且正确，不能再靠猜测。**
 
@@ -118,6 +123,7 @@
 - 编译器当前没有 artifact-scoped 的调试 sidecar 输出。
 - 当前没有稳定的“用户可见 Feng 局部变量 -> 生成 C lvalue / symbol”映射协议，尤其缺少 capture / `self` / 特殊 carrier 的统一读取约束。
 - 当前没有 `feng dap`，也没有 editor 侧 debugger contribution / launch configuration provider。
+- 当前没有“主项目 + 本地路径依赖项目”的统一调试闭包产物编排。
 - 当前 `.ft` span 只覆盖声明，不覆盖局部变量或词法作用域。
 
 ## 4. 总体方案
@@ -128,7 +134,7 @@
 
 - **编译层**
 - Feng parser / semantic 产生 AST、token、type facts。
-- codegen 在非 `release` 构建下生成带稳定 `#line` 的 C 源码，并同时导出最小 `.fd` 元数据。
+- codegen 在非 `release` 构建下生成带稳定 `#line` 的 C 源码，并同时导出可汇总的最小调试记录；本地 `target=lib` 依赖构建也直接产出普通 `.fd` 作为中间输入，顶层可调试 `target=bin` 构建再把主项目与递归本地依赖的 `.fd` 汇总成最终 binary 对应的单个 `.fd`。
 
 - **主机调试信息层**
 - 主机 C 编译器在非 `release` 构建中，基于 `#line` 与 `-g` 生成原生调试信息。
@@ -195,13 +201,39 @@
 首版建议采用以下规则：
 
 - `target=bin` 且非 `release` 时，编译结果除二进制外，默认并排生成 `.fd`。
+- 这个最终 `.fd` 必须覆盖当前 `target=bin` 工程以及其递归本地路径依赖项目中会进入最终 binary 的 Feng 代码，从而支持 monorepo / workspace 内跨项目单步进入。
+- 本地 `target=lib` 依赖在非 `release` 构建下也直接产出普通 `.fd`，但该 `.fd` 属于构建内部中间产物，不是 `feng dap` 直接消费的首版 launch artifact。
+- 扩展名仍然直接使用 `.fd`，不为本地依赖中间产物再发明新的专有扩展名。
 - 产物路径形态：
   - 二进制：`build/bin/<artifact>`
   - 调试 sidecar：`build/bin/<artifact>.fd`
 - `release` 默认不生成 `.fd`，也不额外要求保留调试态插桩。
-- `target=lib` 第一阶段不生成 `.fd`。
+- 首版不提供“单独启动一个 `target=lib` 项目”的调试入口；`target=lib` 在首版只承担“为顶层 `target=bin` 调试闭包产出可合并中间 `.fd`”的职责。
 - `feng pack` 不打包 `.fd`。
 - `.fd` 属于本地调试产物，可在 clean 时与其他 build 产物一并清除。
+
+#### 5.1.1 本地依赖 `.fd` 汇总
+
+建议把“单个 `.fd` 覆盖本地依赖”拆成两层产物语义：
+
+- **最终 `.fd`**：只在非 `release` 的 `target=bin` 构建完成后生成，位于最终 binary 同级，供 `feng dap` 独占消费。
+- **中间 `.fd`**：本地 `target=lib` 依赖在非 `release` 构建下生成的普通 `.fd`，只用于被上层构建汇总，不直接暴露为首版调试入口契约。
+
+建议的汇总流程如下：
+
+1. 主项目与每个递归本地 `target=lib` 依赖在各自 codegen / 编译阶段写出普通 `.fd`。
+2. 对本地 `target=lib` 来说，这个 `.fd` 仍采用与最终 `.fd` 相同的容器布局；只是它在首版不会被 `feng dap` 直接作为 launch sidecar 消费。
+3. 顶层 `target=bin` 构建在链接完成后收集整条本地依赖图中的 `.fd`，重新做 string interning，并合并 `PKGS` / `FRMS` / `VARS`。
+4. 汇总器对冲突做显式校验：若两个输入 `.fd` 给同一 `frame_backend_symbol + backend_name` 提供不一致映射，或给同一 `PKG_NAME` 提供不一致的本地包根，构建立即报错，不把歧义留到运行期。
+5. 汇总完成后，仅由顶层构建写出最终 `.fd`，再重写 `META.binary_path_strid` 与 `META.content_fingerprint`。
+
+这样做的原因是：
+
+- `feng dap` 继续只读一个 sidecar，运行时复杂度最低。
+- 不需要再定义第二种“调试片段专用扩展名”或第二套 reader / writer；实现上直接复用同一个 `.fd` 容器更简单。
+- 子 `.fd` 的 `META` 可以绑定它自己的库产物；顶层汇总时丢弃这些子 `META` 并重写最终 binary 的 `META` 即可，不会把“库产物指纹”错误冒充成“最终可执行文件指纹”。
+- 不应把这些内容做成完整 `.fb`：`.fb` 是分发包接口，而 `PKGS` 本地包根、frame 重写和局部变量映射都属于本地调试态私有信息，不应进入发布工件。
+- 合并发生在构建期，错误能尽早暴露，不需要把冲突处理推迟到调试会话里。
 
 ### 5.2 文件格式
 
@@ -226,8 +258,11 @@
 `.fd` 的设计目标是：**只保存 LLDB 不知道、但 Feng 语义重写必须知道的最小事实**。
 
 - `.fd` 以“名称映射 + 少量特殊读取提示”为主。
+- `.fd` 对编辑器与 `feng dap` 始终表现为“当前 launch binary 的单一 sidecar”，不要求运行期再递归发现或拼接多个依赖 sidecar。
+- 若构建阶段采用“本地依赖中间 `.fd` -> 最终 `.fd`”两层模型，`.fd` reader 不需要感知来源层级；汇总后的结果必须与“单项目直接产出的 `.fd`”具有同一消费语义。
 - `.fd` 不复用、也不扩展 `feng.fm` 文本格式；`feng.fm` 继续只承担项目 / 包清单职责。
 - `.fd` 不复制源码映射表；源码定位继续以 `#line` + DWARF 为准。
+- `.fd` 可以包含极小的 `PKG_NAME -> local package root` 映射，但这只服务编辑器路径转换，不等于复制 line table。
 - `.fd` 不复制词法作用域树；当前激活 scope 继续以 LLDB 返回结果为准。
 - `.fd` 不复制完整类型图、显示规则库或成员布局数据库；首版优先复用 LLDB 已有值摘要与 children 枚举。
 - `.fd` 不是独立的变量解析器；它只对 **LLDB 当前已经判定为可见** 的 backend variable 做确定性重写。
@@ -249,6 +284,8 @@
   - binary 绑定信息
 - `STRS`
   - 字符串表
+- `PKGS`
+  - package URI 到本地包根的最小映射
 - `FRMS`
   - frame 重写记录
 - `VARS`
@@ -258,6 +295,7 @@
 
 - `META`
 - `STRS`
+- `PKGS`
 - `FRMS`
 - `VARS`
 
@@ -268,6 +306,8 @@
 - `binary_path_strid`
 - `content_fingerprint`
   - 首版固定为对目标 binary 完整文件字节做 `FNV-1a 64` 计算；version 1 不单独保留算法字段
+- 每个实际落盘的 `.fd` 都带自己的 `META`，并绑定它同级的本地产物。
+- 顶层 `target=bin` 汇总时只保留最终 binary 的 `META` 语义；子 `target=lib` `.fd` 的 `META` 只用于中间产物自描述，不参与最终 `.fd` 的绑定语义。
 
 #### `STRS`
 
@@ -275,16 +315,37 @@
 - section 内部按 `u32 length + raw bytes` 顺序顺排，不要求 NUL 结尾。
 - string id `0` 保留为“空值 / 缺失”。
 
+#### `PKGS`
+
+每个 package root 至少记录：
+
+- `package_name_strid`
+  - 对应 `#line` 逻辑 URI 中的 `PKG_NAME`。
+- `local_root_path_strid`
+  - 当前本地调试闭包内该包的实际包根目录；用于把 `PKG_NAME://<package-relative path>` 还原成编辑器可打开的本地路径。
+
+补充约束：
+
+- `local_root_path_strid` 允许只出现在最终 `.fd` 或中间 `.fd` 这样的本地调试构建产物里；`feng pack` 不分发这一信息。
+- 同一最终 `.fd` 中，`package_name_strid` 必须唯一。
+
 #### `FRMS`
 
 每个 frame 至少记录：
 
 - `backend_symbol_strid`
   - 最终进入链接层、可被 `lldb-dap` 报出的稳定符号名。
+  - 当前应直接记录 codegen 产出的 callable C 符号本体，例如模块名参与 mangle 后的函数名；若该 callable 还带 overload / 参数签名后缀，也必须记录 LLDB 实际看到的完整符号。
 - `display_name_strid`
   - 需要呈现给用户的 Feng callable 名称。
 - `frame_policy`
   - `visible` / `hidden` / `collapse`。
+
+补充约束：
+
+- `frame_backend_symbol` 是对“正式代码生成符号”的引用，不再额外人为补一个仅供 debug 使用的包名前缀。
+- 在当前规则下，最终依赖图中的模块名冲突会在编译器 / 构建阶段直接报错，因此基于模块 mangle 的 callable C 符号应在同一调试闭包内保持唯一。
+- 若未来语言层允许不同包中同模块名并存，则需要调整 codegen 的正式符号 mangle 规则；`.fd` 继续跟随 LLDB 实际看到的符号，而不是单独引入另一套 debug-only 命名。
 
 #### `VARS`
 
@@ -314,36 +375,42 @@ Header:
   magic = "FD01"
   version = 1
   flags = 0
-  section_count = 4
+  section_count = 5
 
 Section Directory:
   META offset=0x40 size=... records=1
-  STRS offset=0x60 size=... records=9
-  FRMS offset=0xA0 size=... records=2
-  VARS offset=0xD0 size=... records=2
+  STRS offset=0x60 size=... records=11
+  PKGS offset=0xA0 size=... records=1
+  FRMS offset=0xC0 size=... records=2
+  VARS offset=0xF0 size=... records=2
 
 STRS:
   1 -> "build/bin/demo"
-  2 -> "feng_demo_main"
-  3 -> "main"
-  4 -> "feng_runtime_dispatch_1"
-  5 -> "_l_message_1"
-  6 -> "message"
-  7 -> "_l_count_cell_2"
-  8 -> "count"
-  9 -> "(_l_count_cell_2->value)"
+  2 -> "demo"
+  3 -> "/workspace/demo"
+  4 -> "feng_demo_main"
+  5 -> "main"
+  6 -> "feng_runtime_dispatch_1"
+  7 -> "_l_message_1"
+  8 -> "message"
+  9 -> "_l_count_cell_2"
+  10 -> "count"
+  11 -> "(_l_count_cell_2->value)"
 
 META:
   binary_path_strid = 1
   content_fingerprint = 0x7f23d91ab4c60218
 
+PKGS:
+  [package_name_strid=2, local_root_path_strid=3]
+
 FRMS:
-  [backend_symbol_strid=2, display_name_strid=3, frame_policy=visible]
-  [backend_symbol_strid=4, display_name_strid=0, frame_policy=hidden]
+  [backend_symbol_strid=4, display_name_strid=5, frame_policy=visible]
+  [backend_symbol_strid=6, display_name_strid=0, frame_policy=hidden]
 
 VARS:
-  [frame_backend_symbol_strid=2, backend_name_strid=5, display_name_strid=6, kind=local,   read_expr_strid=0]
-  [frame_backend_symbol_strid=2, backend_name_strid=7, display_name_strid=8, kind=capture, read_expr_strid=9]
+  [frame_backend_symbol_strid=4, backend_name_strid=7, display_name_strid=8, kind=local,   read_expr_strid=0]
+  [frame_backend_symbol_strid=4, backend_name_strid=9, display_name_strid=10, kind=capture, read_expr_strid=11]
 ```
 
 这个示例表达的重点不是字节偏移本身，而是：**`.fd`` 只保留 string table + 最小记录表，不引入通用对象树或通用文本语法。**
@@ -385,10 +452,12 @@ VARS:
 源码映射采用“**原生调试信息为主，`.fd` 为辅**”的策略：
 
 - 可停点、step line、stack line 依赖 `#line` + `-g`。
+- `#line` 的文件名参数固定写成 `PKG_NAME://<package-relative path>`，不写宿主磁盘路径。
+- `feng dap` 通过 `.fd.PKGS` 把这些逻辑 URI 还原成本地文件路径，再交给编辑器展示与断点绑定。
 - `.fd` 不维护“每个生成 C 行 -> Feng 行”的完整冗余表。
-- `.fd` 只记录 frame 重写和变量映射最小信息。
+- `.fd` 只记录 package-root 映射、frame 重写和变量映射这些最小信息。
 - 若原生后端出现个别 frame 噪声，`feng dap` 再依据 `frames.frame_policy` 做折叠或过滤。
-- `.fd` 的 reader 只需要顺序读取 `META` / `STRS` / `FRMS` / `VARS` 四类 section，不需要实现通用对象反序列化器。
+- `.fd` 的 reader 只需要顺序读取 `META` / `STRS` / `PKGS` / `FRMS` / `VARS` 五类 section，不需要实现通用对象反序列化器。
 
 ## 6. `feng dap` 与 `lldb-dap` 适配层
 
@@ -399,6 +468,7 @@ VARS:
 - 定位目标 binary 与其 `.fd`
 - 启动 `lldb-dap`
 - 向编辑器暴露统一 DAP 入口，并把请求转发给 `lldb-dap`
+- 在编辑器本地文件路径与 `#line` 使用的 `PKG_NAME://...` 逻辑源码 URI 之间做双向转换
 - 读取 `.fd`，把 stack / variable / evaluate 结果重写成 Feng 视角
 - 隐藏或折叠对用户无意义的 runtime / generated helper frame 与内部 carrier 变量
 
@@ -417,17 +487,19 @@ VARS:
 #### `launch`
 
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
-- `feng dap` 校验 `.fd` 中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
+- `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
 
 #### `setBreakpoints`
 
-- 优先直接把 `.ff` 文件断点交给 `lldb-dap`，让其利用原生调试信息绑定。
+- 编辑器仍以本地 `.ff` 文件路径下断点；`feng dap` 先依据 `.fd.PKGS` 把该路径转换成对应的 `PKG_NAME://<package-relative path>`，再交给 `lldb-dap` 利用原生调试信息绑定。
+- 若某个本地文件路径无法唯一落到当前调试闭包中的一个 package URI，`feng dap` 立即报配置错误，不做猜测性绑定。
 - 若遇到个别绑定不稳定情形，再用 `.fd.frames` 仅做诊断与命中后重写，不把 `.fd` 变成主断点数据库。
 
 #### `stackTrace`
 
 - 先拿到 `lldb-dap` 的原生 frame 列表。
+- 若 frame source 来自 `PKG_NAME://...` 逻辑 URI，先依据 `.fd.PKGS` 还原为本地文件路径，再返回给编辑器。
 - 再用 `.fd.frames` 的 `backend_symbol` 与 `frame_policy` 重写为 Feng callable 名称。
 - 对纯 runtime / generated helper frame 默认隐藏，必要时可提供开发者模式开关显示原生 frame。
 
@@ -469,7 +541,7 @@ VARS:
 - `src/codegen/codegen.c`
   - 真正消费 `emit_line_directives`。
   - 为 frame / variable 生成稳定调试元数据。
-  - 产出 `.fd` 所需的中间调试记录。
+  - 为主项目与本地 `target=lib` 依赖统一产出可被顶层 `target=bin` 调试构建汇总的 `.fd`。
 - `src/cli/compile/direct.c`
   - 直编路径要显式把 debug-aware codegen options 传给 codegen。
 - `src/cli/compile/legacy.c`
@@ -482,8 +554,10 @@ VARS:
 - `src/debug/`
   - 调试元数据结构
   - `.fd` binary writer
+  - 中间 `.fd` / 最终 `.fd` reader / writer
   - string table / section directory 编码
   - 编译产物与 `.fd` 的指纹绑定
+  - 本地路径依赖 `.fd` 到最终 `.fd` 的汇总
 
 原因：
 
@@ -528,9 +602,9 @@ VARS:
 
 ### 8.2 Phase 2：编译器源码映射与 `.fd`
 
-- 落实 `#line` 输出。
+- 落实基于 `PKG_NAME://<package-relative path>` 的 `#line` 输出。
 - 明确调试可见 callable / scope / variable 的选择规则。
-- 生成 `.fd`。
+- 生成并汇总 `.fd`。
 - 为变量和 callable 后端命名建立稳定约束。
 
 ### 8.3 Phase 3：`feng dap` 统一适配层与 VS Code 接入
@@ -564,7 +638,9 @@ VARS:
 3. locals / params 以 Feng 名称显示，shadowing 情况下作用域选择正确。
 4. 对 string / array / enum / object 的值显示符合 Feng 语义预期。
 5. watch 子集中的 identifier / member / index / simple arithmetic 能稳定工作；不支持的表达式给出明确错误，而不是静默返回错误值。
-6. release 构建行为不受影响，不额外产出 `.fd`。
+6. 本地路径依赖（例如 `feng.fm` 中的相对路径依赖）在同一非 `release` 调试会话中可被正常 step into，stack / locals 仍展示 Feng 语义名称，而不是退回裸 C 名称。
+7. 生成的原生调试信息中，`#line` 文件名使用 `PKG_NAME://<package-relative path>` 逻辑 URI，而不是宿主磁盘路径；同时编辑器对本地文件下的断点仍能正常命中。
+8. release 构建行为不受影响，不额外产出 `.fd`。
 
 ## 10. 风险与缓解
 
@@ -620,8 +696,9 @@ VARS:
 Feng 的首版源码级调试，最现实、风险最低的路径是：
 
 - **继续复用现有 Feng -> C -> clang/LLDB 主链**；
-- **用 `#line` + 主机编译器原生调试信息解决断点 / step / stack line**；
+- **用带 `PKG_NAME://<package-relative path>` 逻辑源码 URI 的 `#line` + 主机编译器原生调试信息解决断点 / step / stack line**；
 - **用最小独立二进制 `.fd` sidecar 解决 frame 名称重写、变量名称映射与少量特殊 carrier 读取提示**；
+- **让最终 binary 对应的单个 `.fd` 覆盖本地路径依赖调试闭包，从而支持 monorepo 场景跨项目单步进入**；
 - **用 `feng dap` 统一代理 `lldb-dap`，把 editor 看到的调试对象重写为 Feng 语义体验**；
 - **让 VS Code 等编辑器只负责 launch / task / UI，而不承载核心映射逻辑**。
 
