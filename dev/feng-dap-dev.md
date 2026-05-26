@@ -498,7 +498,7 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换；stack frame 名称、variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成首个 backend frame 名称到 Feng callable 名称的重写子切片；`frame_policy` 的隐藏/折叠控制以及 variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
 
 #### `setBreakpoints`
 
@@ -510,7 +510,8 @@ VARS:
 
 - 先拿到 `lldb-dap` 的原生 frame 列表。
 - 若 frame source 来自 `PKG_NAME://...` 逻辑 URI，`feng dap` 现已先依据 `.fd.PKGS` 还原为本地文件路径，再返回给编辑器。
-- 后续再用 `.fd.frames` 的 `backend_symbol` 与 `frame_policy` 重写为 Feng callable 名称。
+- `feng dap` 现已以 `stackFrames[].name` 作为 `backend_symbol` 匹配键，用 `.fd.frames` 把 backend frame 名称重写为 Feng callable 名称。
+- `frame_policy` 的隐藏与折叠控制继续在后续子项叠加，不在本子切片中同时展开。
 - 对纯 runtime / generated helper frame 默认隐藏，必要时可提供开发者模式开关显示原生 frame。
 
 #### `scopes` / `variables`

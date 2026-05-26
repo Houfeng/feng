@@ -3836,7 +3836,7 @@ static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
     free(remove_error);
 }
 
-/* Ensure stackTrace responses rewrite package URIs back to local file paths. */
+/* Ensure stackTrace responses rewrite backend frame names and package URIs to editor-facing values. */
 static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x43U};
     static const char *kSourceText =
@@ -3892,6 +3892,10 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
     sources[0].source_path = source_path;
     sources[0].package_name = "demo.pkg";
     sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
                                sources,
@@ -3902,7 +3906,7 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
 
     backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
     backend_initialize_text = build_dap_message_text(backend_initialize_json);
-    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo.pkg.main\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
     backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\nprintf '%%b' '%s'\n",
                                 backend_initialize_text,
@@ -3933,6 +3937,8 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
     requests_text = read_text_file(requests_path);
     ASSERT(strstr(requests_text, "\"command\":\"stackTrace\"") != NULL);
     ASSERT(strstr(stdout_text, source_path) != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"demo.pkg.main\"") != NULL);
+    ASSERT(strstr(stdout_text, "demo_pkg_main_backend") == NULL);
     ASSERT(strstr(stdout_text, "demo.pkg://main.ff") == NULL);
     ASSERT(strcmp(stderr_text, "") == 0);
 

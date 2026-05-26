@@ -1438,8 +1438,8 @@ static void proxy_json_string_replacements_dispose(FengDapJsonStringReplacement 
     free(replacements);
 }
 
-/* Append one JSON string replacement entry. */
-static bool proxy_append_json_string_replacement(FengDapJsonStringReplacement **replacements,
+/* Insert one JSON replacement entry while keeping the list ordered by offset. */
+static bool proxy_insert_json_string_replacement(FengDapJsonStringReplacement **replacements,
                                                  size_t *replacement_count,
                                                  size_t *replacement_capacity,
                                                  size_t start_offset,
@@ -1447,6 +1447,7 @@ static bool proxy_append_json_string_replacement(FengDapJsonStringReplacement **
                                                  char *replacement) {
     FengDapJsonStringReplacement *grown;
     size_t new_capacity;
+    size_t insert_at;
 
     if (*replacement_count == *replacement_capacity) {
         new_capacity = *replacement_capacity == 0U ? 4U : (*replacement_capacity * 2U);
@@ -1458,11 +1459,33 @@ static bool proxy_append_json_string_replacement(FengDapJsonStringReplacement **
         *replacements = grown;
         *replacement_capacity = new_capacity;
     }
-    (*replacements)[*replacement_count].start_offset = start_offset;
-    (*replacements)[*replacement_count].end_offset = end_offset;
-    (*replacements)[*replacement_count].replacement = replacement;
+
+    insert_at = *replacement_count;
+    while (insert_at > 0U && (*replacements)[insert_at - 1U].start_offset > start_offset) {
+        (*replacements)[insert_at] = (*replacements)[insert_at - 1U];
+        --insert_at;
+    }
+    (*replacements)[insert_at].start_offset = start_offset;
+    (*replacements)[insert_at].end_offset = end_offset;
+    (*replacements)[insert_at].replacement = replacement;
     *replacement_count += 1U;
     return true;
+}
+
+/* Find one frame mapping by backend symbol inside the loaded debug artifact. */
+static const FengCodegenMapingFrameRecord *proxy_find_frame_record(const FengDebugArtifact *artifact,
+                                                                   const char *backend_symbol) {
+    size_t index;
+
+    if (artifact == NULL || backend_symbol == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < artifact->info.frame_count; ++index) {
+        if (strcmp(artifact->info.frames[index].backend_symbol, backend_symbol) == 0) {
+            return artifact->info.frames + index;
+        }
+    }
+    return NULL;
 }
 
 /* Materialize a new JSON payload after applying one or more string-literal replacements. */
@@ -1652,7 +1675,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
     bool ok = false;
 
     *out_json = NULL;
-    if (artifact == NULL || artifact->package_count == 0U) {
+    if (artifact == NULL) {
         return true;
     }
     if (!proxy_json_find_object_member_loose(json,
@@ -1676,17 +1699,52 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
     while (cursor < frames_end && *cursor != ']') {
         const char *frame_start = cursor;
         const char *frame_end;
+        const char *name_start;
+        const char *name_end;
         const char *source_start;
         const char *source_end;
         const char *path_start;
         const char *path_end;
         const char *after_string;
+        const FengCodegenMapingFrameRecord *frame_record = NULL;
+        char *backend_symbol = NULL;
         char *package_uri = NULL;
         char *local_path = NULL;
 
         if (!proxy_json_skip_value(frame_start, frames_end, &frame_end)) {
             ok = true;
             goto cleanup;
+        }
+        if (proxy_json_find_object_member_loose(frame_start,
+                                                (size_t)(frame_end - frame_start),
+                                                "name",
+                                                &name_start,
+                                                &name_end) &&
+            proxy_json_parse_string_copy(name_start, name_end, &backend_symbol, &after_string) &&
+            proxy_json_skip_whitespace(after_string, name_end) == name_end) {
+            frame_record = proxy_find_frame_record(artifact, backend_symbol);
+            if (frame_record != NULL &&
+                frame_record->display_name != NULL &&
+                strcmp(frame_record->display_name, backend_symbol) != 0) {
+                char *display_name = proxy_dup_printf("%s", frame_record->display_name);
+
+                if (display_name == NULL ||
+                    !proxy_insert_json_string_replacement(&replacements,
+                                                          &replacement_count,
+                                                          &replacement_capacity,
+                                                          (size_t)(name_start - json),
+                                                          (size_t)(name_end - json),
+                                                          display_name)) {
+                    free(display_name);
+                    free(backend_symbol);
+                    free(package_uri);
+                    free(local_path);
+                    proxy_report_error(error_fd,
+                                       "failed to rewrite stackTrace source paths",
+                                       "out of memory");
+                    goto cleanup;
+                }
+            }
         }
         if (proxy_json_find_object_member_loose(frame_start,
                                                 (size_t)(frame_end - frame_start),
@@ -1701,13 +1759,14 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
             proxy_json_parse_string_copy(path_start, path_end, &package_uri, &after_string) &&
             proxy_json_skip_whitespace(after_string, path_end) == path_end &&
             proxy_package_uri_to_local_path(artifact, package_uri, &local_path)) {
-            if (!proxy_append_json_string_replacement(&replacements,
+            if (!proxy_insert_json_string_replacement(&replacements,
                                                       &replacement_count,
                                                       &replacement_capacity,
                                                       (size_t)(path_start - json),
                                                       (size_t)(path_end - json),
                                                       local_path)) {
                 free(local_path);
+                free(backend_symbol);
                 free(package_uri);
                 proxy_report_error(error_fd,
                                    "failed to rewrite stackTrace source paths",
@@ -1716,6 +1775,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
             }
             local_path = NULL;
         }
+        free(backend_symbol);
         free(local_path);
         free(package_uri);
 
