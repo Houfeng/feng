@@ -173,6 +173,33 @@ static const FengCodegenMapingVariableRecord *find_variable(const FengCodegenMap
     return NULL;
 }
 
+static const char *find_package_root(const FengDebugArtifact *artifact,
+                                     const char *package_name) {
+    for (size_t i = 0U; i < artifact->package_count; ++i) {
+        if (strcmp(artifact->packages[i].package_name, package_name) == 0) {
+            return artifact->packages[i].local_root_path;
+        }
+    }
+    return NULL;
+}
+
+static void write_fd_or_die(const char *fd_path,
+                            const char *binary_path,
+                            const FengCodegenMapingSourceMapping *mappings,
+                            size_t mapping_count,
+                            const FengCodegenMapingInfo *info) {
+    char *fd_error = NULL;
+
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               mappings,
+                               mapping_count,
+                               info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+    free(fd_error);
+}
+
 static void test_resolve_source_builds_logical_uri(void) {
     FengCodegenMapingSourceMapping mappings[1] = {
         {
@@ -320,6 +347,336 @@ static void test_debug_fd_round_trip(void) {
     free(tmp_dir);
 }
 
+static void test_debug_fd_merge_dependencies(void) {
+    static const unsigned char kRootBytes[] = {0x01U, 0x02U, 0x03U, 0x04U};
+    static const unsigned char kDepBytes[] = {0x11U, 0x12U, 0x13U, 0x14U};
+    char *tmp_dir = make_temp_dir();
+    char root_binary_path[1024];
+    char root_fd_path[1024];
+    char dep_one_binary_path[1024];
+    char dep_one_fd_path[1024];
+    char dep_two_binary_path[1024];
+    char dep_two_fd_path[1024];
+    const char *dependency_fd_paths[2];
+    char *merge_error = NULL;
+    char *fingerprint_error = NULL;
+    uint64_t fingerprint;
+    FengCodegenMapingSourceMapping root_mappings[1] = {
+        {
+            .source_path = "/tmp/app/src/main.ff",
+            .package_name = "app",
+            .package_root = "/tmp/app/src",
+        },
+    };
+    FengCodegenMapingSourceMapping dep_one_mappings[1] = {
+        {
+            .source_path = "/tmp/std/src/io.ff",
+            .package_name = "std",
+            .package_root = "/tmp/std/src",
+        },
+    };
+    FengCodegenMapingSourceMapping dep_two_mappings[1] = {
+        {
+            .source_path = "/tmp/util/src/help.ff",
+            .package_name = "util",
+            .package_root = "/tmp/util/src",
+        },
+    };
+    FengCodegenMapingInfo root_info = {0};
+    FengCodegenMapingInfo dep_one_info = {0};
+    FengCodegenMapingInfo dep_two_info = {0};
+    FengDebugArtifact artifact = {0};
+
+    ASSERT(snprintf(root_binary_path, sizeof(root_binary_path), "%s/app.bin", tmp_dir) > 0);
+    ASSERT(snprintf(root_fd_path, sizeof(root_fd_path), "%s/app.bin.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_binary_path, sizeof(dep_one_binary_path), "%s/std.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_fd_path, sizeof(dep_one_fd_path), "%s/std.a.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_binary_path, sizeof(dep_two_binary_path), "%s/util.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_fd_path, sizeof(dep_two_fd_path), "%s/util.a.fd", tmp_dir) > 0);
+
+    write_binary_file_or_die(root_binary_path, kRootBytes, sizeof(kRootBytes));
+    write_binary_file_or_die(dep_one_binary_path, kDepBytes, sizeof(kDepBytes));
+    write_binary_file_or_die(dep_two_binary_path, kDepBytes, sizeof(kDepBytes));
+
+    feng_codegen_maping_info_init(&root_info);
+    feng_codegen_maping_info_init(&dep_one_info);
+    feng_codegen_maping_info_init(&dep_two_info);
+
+    ASSERT(feng_codegen_maping_info_add_frame(&root_info,
+                                              "feng__app__main",
+                                              "main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&root_info,
+                                                 "feng__app__main",
+                                                 "args",
+                                                 "args",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_one_info,
+                                              "feng__std__io__print",
+                                              "std.io.print",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&dep_one_info,
+                                                 "feng__std__io__print",
+                                                 "text",
+                                                 "text",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_two_info,
+                                              "feng__util__help",
+                                              "util.help",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&dep_two_info,
+                                                 "feng__util__help",
+                                                 "value",
+                                                 "value",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+
+    write_fd_or_die(dep_one_fd_path,
+                    dep_one_binary_path,
+                    dep_one_mappings,
+                    1U,
+                    &dep_one_info);
+    write_fd_or_die(dep_two_fd_path,
+                    dep_two_binary_path,
+                    dep_two_mappings,
+                    1U,
+                    &dep_two_info);
+
+    dependency_fd_paths[0] = dep_one_fd_path;
+    dependency_fd_paths[1] = dep_two_fd_path;
+    ASSERT(feng_debug_write_merged_fd(root_fd_path,
+                                      root_binary_path,
+                                      root_mappings,
+                                      1U,
+                                      &root_info,
+                                      dependency_fd_paths,
+                                      2U,
+                                      &merge_error));
+    ASSERT(merge_error == NULL);
+    ASSERT(feng_debug_read_fd(root_fd_path, &artifact, &merge_error));
+    ASSERT(merge_error == NULL);
+
+    fingerprint = feng_debug_fnv1a64_file(root_binary_path, &fingerprint_error);
+    ASSERT(fingerprint_error == NULL);
+    ASSERT(strcmp(artifact.binary_path, root_binary_path) == 0);
+    ASSERT(artifact.binary_fingerprint == fingerprint);
+    ASSERT(artifact.package_count == 3U);
+    ASSERT(strcmp(find_package_root(&artifact, "app"), "/tmp/app/src") == 0);
+    ASSERT(strcmp(find_package_root(&artifact, "std"), "/tmp/std/src") == 0);
+    ASSERT(strcmp(find_package_root(&artifact, "util"), "/tmp/util/src") == 0);
+    ASSERT(find_frame(&artifact.info, "main", FENG_CODEGEN_MAPING_FRAME_VISIBLE) != NULL);
+    ASSERT(find_frame(&artifact.info, "std.io.print", FENG_CODEGEN_MAPING_FRAME_VISIBLE) != NULL);
+    ASSERT(find_frame(&artifact.info, "util.help", FENG_CODEGEN_MAPING_FRAME_VISIBLE) != NULL);
+    ASSERT(find_variable(&artifact.info, "args", FENG_CODEGEN_MAPING_VARIABLE_PARAM, NULL) != NULL);
+    ASSERT(find_variable(&artifact.info, "text", FENG_CODEGEN_MAPING_VARIABLE_PARAM, NULL) != NULL);
+    ASSERT(find_variable(&artifact.info, "value", FENG_CODEGEN_MAPING_VARIABLE_PARAM, NULL) != NULL);
+
+    free(fingerprint_error);
+    free(merge_error);
+    feng_debug_artifact_dispose(&artifact);
+    feng_codegen_maping_info_dispose(&root_info);
+    feng_codegen_maping_info_dispose(&dep_one_info);
+    feng_codegen_maping_info_dispose(&dep_two_info);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
+static void test_debug_fd_merge_rejects_conflicting_package_roots(void) {
+    static const unsigned char kBinaryBytes[] = {0x21U, 0x22U, 0x23U, 0x24U};
+    char *tmp_dir = make_temp_dir();
+    char root_binary_path[1024];
+    char root_fd_path[1024];
+    char dep_one_binary_path[1024];
+    char dep_one_fd_path[1024];
+    char dep_two_binary_path[1024];
+    char dep_two_fd_path[1024];
+    const char *dependency_fd_paths[2];
+    char *merge_error = NULL;
+    FengCodegenMapingSourceMapping root_mappings[1] = {
+        {
+            .source_path = "/tmp/app/src/main.ff",
+            .package_name = "app",
+            .package_root = "/tmp/app/src",
+        },
+    };
+    FengCodegenMapingSourceMapping dep_one_mappings[1] = {
+        {
+            .source_path = "/tmp/std-a/src/io.ff",
+            .package_name = "std",
+            .package_root = "/tmp/std-a/src",
+        },
+    };
+    FengCodegenMapingSourceMapping dep_two_mappings[1] = {
+        {
+            .source_path = "/tmp/std-b/src/io.ff",
+            .package_name = "std",
+            .package_root = "/tmp/std-b/src",
+        },
+    };
+    FengCodegenMapingInfo root_info = {0};
+    FengCodegenMapingInfo dep_one_info = {0};
+    FengCodegenMapingInfo dep_two_info = {0};
+
+    ASSERT(snprintf(root_binary_path, sizeof(root_binary_path), "%s/app.bin", tmp_dir) > 0);
+    ASSERT(snprintf(root_fd_path, sizeof(root_fd_path), "%s/app.bin.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_binary_path, sizeof(dep_one_binary_path), "%s/std-a.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_fd_path, sizeof(dep_one_fd_path), "%s/std-a.a.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_binary_path, sizeof(dep_two_binary_path), "%s/std-b.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_fd_path, sizeof(dep_two_fd_path), "%s/std-b.a.fd", tmp_dir) > 0);
+
+    write_binary_file_or_die(root_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    write_binary_file_or_die(dep_one_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    write_binary_file_or_die(dep_two_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+
+    feng_codegen_maping_info_init(&root_info);
+    feng_codegen_maping_info_init(&dep_one_info);
+    feng_codegen_maping_info_init(&dep_two_info);
+
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_one_info,
+                                              "feng__std__io",
+                                              "std.io",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_two_info,
+                                              "feng__std__io",
+                                              "std.io",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+
+    write_fd_or_die(dep_one_fd_path,
+                    dep_one_binary_path,
+                    dep_one_mappings,
+                    1U,
+                    &dep_one_info);
+    write_fd_or_die(dep_two_fd_path,
+                    dep_two_binary_path,
+                    dep_two_mappings,
+                    1U,
+                    &dep_two_info);
+
+    dependency_fd_paths[0] = dep_one_fd_path;
+    dependency_fd_paths[1] = dep_two_fd_path;
+    ASSERT(!feng_debug_write_merged_fd(root_fd_path,
+                                       root_binary_path,
+                                       root_mappings,
+                                       1U,
+                                       &root_info,
+                                       dependency_fd_paths,
+                                       2U,
+                                       &merge_error));
+    ASSERT(merge_error != NULL);
+    ASSERT(strstr(merge_error, "maps package 'std'") != NULL);
+    ASSERT(access(root_fd_path, F_OK) != 0);
+
+    free(merge_error);
+    feng_codegen_maping_info_dispose(&root_info);
+    feng_codegen_maping_info_dispose(&dep_one_info);
+    feng_codegen_maping_info_dispose(&dep_two_info);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
+static void test_debug_fd_merge_rejects_conflicting_variable_mappings(void) {
+    static const unsigned char kBinaryBytes[] = {0x31U, 0x32U, 0x33U, 0x34U};
+    char *tmp_dir = make_temp_dir();
+    char root_binary_path[1024];
+    char root_fd_path[1024];
+    char dep_one_binary_path[1024];
+    char dep_one_fd_path[1024];
+    char dep_two_binary_path[1024];
+    char dep_two_fd_path[1024];
+    const char *dependency_fd_paths[2];
+    char *merge_error = NULL;
+    FengCodegenMapingSourceMapping root_mappings[1] = {
+        {
+            .source_path = "/tmp/app/src/main.ff",
+            .package_name = "app",
+            .package_root = "/tmp/app/src",
+        },
+    };
+    FengCodegenMapingSourceMapping dep_mappings[1] = {
+        {
+            .source_path = "/tmp/dep/src/lib.ff",
+            .package_name = "dep",
+            .package_root = "/tmp/dep/src",
+        },
+    };
+    FengCodegenMapingInfo root_info = {0};
+    FengCodegenMapingInfo dep_one_info = {0};
+    FengCodegenMapingInfo dep_two_info = {0};
+
+    ASSERT(snprintf(root_binary_path, sizeof(root_binary_path), "%s/app.bin", tmp_dir) > 0);
+    ASSERT(snprintf(root_fd_path, sizeof(root_fd_path), "%s/app.bin.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_binary_path, sizeof(dep_one_binary_path), "%s/dep-one.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_one_fd_path, sizeof(dep_one_fd_path), "%s/dep-one.a.fd", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_binary_path, sizeof(dep_two_binary_path), "%s/dep-two.a", tmp_dir) > 0);
+    ASSERT(snprintf(dep_two_fd_path, sizeof(dep_two_fd_path), "%s/dep-two.a.fd", tmp_dir) > 0);
+
+    write_binary_file_or_die(root_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    write_binary_file_or_die(dep_one_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    write_binary_file_or_die(dep_two_binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+
+    feng_codegen_maping_info_init(&root_info);
+    feng_codegen_maping_info_init(&dep_one_info);
+    feng_codegen_maping_info_init(&dep_two_info);
+
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_one_info,
+                                              "feng__dep__helper",
+                                              "dep.helper",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_frame(&dep_two_info,
+                                              "feng__dep__helper",
+                                              "dep.helper",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&dep_one_info,
+                                                 "feng__dep__helper",
+                                                 "slot",
+                                                 "value",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable(&dep_two_info,
+                                                 "feng__dep__helper",
+                                                 "slot",
+                                                 "other",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+
+    write_fd_or_die(dep_one_fd_path,
+                    dep_one_binary_path,
+                    dep_mappings,
+                    1U,
+                    &dep_one_info);
+    write_fd_or_die(dep_two_fd_path,
+                    dep_two_binary_path,
+                    dep_mappings,
+                    1U,
+                    &dep_two_info);
+
+    dependency_fd_paths[0] = dep_one_fd_path;
+    dependency_fd_paths[1] = dep_two_fd_path;
+    ASSERT(!feng_debug_write_merged_fd(root_fd_path,
+                                       root_binary_path,
+                                       root_mappings,
+                                       1U,
+                                       &root_info,
+                                       dependency_fd_paths,
+                                       2U,
+                                       &merge_error));
+    ASSERT(merge_error != NULL);
+    ASSERT(strstr(merge_error, "remaps variable 'other'") != NULL ||
+           strstr(merge_error, "remaps variable 'value'") != NULL);
+    ASSERT(access(root_fd_path, F_OK) != 0);
+
+    free(merge_error);
+    feng_codegen_maping_info_dispose(&root_info);
+    feng_codegen_maping_info_dispose(&dep_one_info);
+    feng_codegen_maping_info_dispose(&dep_two_info);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
 static void test_codegen_records_capture_mappings(void) {
     const char *path = "/tmp/feng-debug-demo/src/capture.ff";
     FengCodegenMapingSourceMapping mappings[1] = {
@@ -373,6 +730,9 @@ static void test_codegen_records_capture_mappings(void) {
 int main(void) {
     test_resolve_source_builds_logical_uri();
     test_debug_fd_round_trip();
+    test_debug_fd_merge_dependencies();
+    test_debug_fd_merge_rejects_conflicting_package_roots();
+    test_debug_fd_merge_rejects_conflicting_variable_mappings();
     test_codegen_emits_line_directives_and_debug_info();
     test_codegen_records_capture_mappings();
     return 0;

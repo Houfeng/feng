@@ -12,7 +12,9 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          bool release,
                                                          size_t package_count,
-                                                         const char *const *package_paths) {
+                                                         const char *const *package_paths,
+                                                         size_t dependency_fd_count,
+                                                         const char *const *dependency_fd_paths) {
     FengCliDirectOptions options = {0};
     FengCliDirectDebugContext debug_context = {0};
     FengCodegenMapingSourceMapping *debug_sources = NULL;
@@ -65,6 +67,8 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
 
     debug_context.sources = debug_sources;
     debug_context.source_count = context->source_count;
+    debug_context.dependency_fd_paths = dependency_fd_paths;
+    debug_context.dependency_fd_count = dependency_fd_count;
     rc = feng_cli_direct_run(program,
                              &options,
                              release ? NULL : &debug_context);
@@ -85,6 +89,8 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 context,
                                                                 release,
                                                                 0U,
+                                                                NULL,
+                                                                0U,
                                                                 NULL);
 }
 
@@ -104,6 +110,8 @@ bool feng_cli_project_resolve_build_dependencies(const char *program,
 
     out_resolved->package_paths = NULL;
     out_resolved->package_count = 0U;
+    out_resolved->debug_fd_paths = NULL;
+    out_resolved->debug_fd_count = 0U;
     return feng_cli_deps_resolve_for_manifest(program,
                                               context->manifest_path,
                                               false,
@@ -131,6 +139,8 @@ bool feng_cli_project_prepare_build(const char *program,
 
     out_resolved->package_paths = NULL;
     out_resolved->package_count = 0U;
+    out_resolved->debug_fd_paths = NULL;
+    out_resolved->debug_fd_count = 0U;
     if (!feng_cli_project_open(path_arg, &context, out_error)) {
         return false;
     }
@@ -155,5 +165,7 @@ int feng_cli_project_compile_prepared(const char *program,
                                                                 context,
                                                                 release,
                                                                 resolved->package_count,
-                                                                (const char *const *)resolved->package_paths);
+                                                                (const char *const *)resolved->package_paths,
+                                                                resolved->debug_fd_count,
+                                                                (const char *const *)resolved->debug_fd_paths);
 }

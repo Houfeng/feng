@@ -9,6 +9,8 @@
 typedef struct FengCliDepsResolved {
     char **package_paths;
     size_t package_count;
+    char **debug_fd_paths;
+    size_t debug_fd_count;
 } FengCliDepsResolved;
 
 bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,

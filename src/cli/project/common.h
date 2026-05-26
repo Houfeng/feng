@@ -43,7 +43,9 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          bool release,
                                                          size_t package_count,
-                                                         const char *const *package_paths);
+                                                         const char *const *package_paths,
+                                                         size_t dependency_fd_count,
+                                                         const char *const *dependency_fd_paths);
 
 int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,

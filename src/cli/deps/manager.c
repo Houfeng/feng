@@ -27,6 +27,7 @@ typedef struct ResolvedNode {
     char *name;
     char *version;
     char *bundle_path;
+    char *debug_fd_path;
     bool visiting;
     bool resolved;
     FengCliDepsResolved subtree;
@@ -474,29 +475,48 @@ static bool copy_file(const char *source_path,
     return true;
 }
 
-static bool resolved_append_unique(FengCliDepsResolved *resolved,
-                                   const char *package_path,
-                                   FengCliProjectError *error) {
+static bool resolved_append_unique_path(char ***paths,
+                                        size_t *path_count,
+                                        const char *path,
+                                        FengCliProjectError *error) {
     char **resized;
     size_t index;
 
-    for (index = 0U; index < resolved->package_count; ++index) {
-        if (strcmp(resolved->package_paths[index], package_path) == 0) {
+    for (index = 0U; index < *path_count; ++index) {
+        if (strcmp((*paths)[index], path) == 0) {
             return true;
         }
     }
-    resized = (char **)realloc(resolved->package_paths,
-                               (resolved->package_count + 1U) * sizeof(*resolved->package_paths));
+    resized = (char **)realloc(*paths,
+                               (*path_count + 1U) * sizeof(**paths));
     if (resized == NULL) {
-        return set_errorf(error, package_path, 0U, "out of memory");
+        return set_errorf(error, path, 0U, "out of memory");
     }
-    resolved->package_paths = resized;
-    resolved->package_paths[resolved->package_count] = dup_cstr(package_path);
-    if (resolved->package_paths[resolved->package_count] == NULL) {
-        return set_errorf(error, package_path, 0U, "out of memory");
+    *paths = resized;
+    (*paths)[*path_count] = dup_cstr(path);
+    if ((*paths)[*path_count] == NULL) {
+        return set_errorf(error, path, 0U, "out of memory");
     }
-    resolved->package_count += 1U;
+    *path_count += 1U;
     return true;
+}
+
+static bool resolved_append_unique(FengCliDepsResolved *resolved,
+                                   const char *package_path,
+                                   FengCliProjectError *error) {
+    return resolved_append_unique_path(&resolved->package_paths,
+                                       &resolved->package_count,
+                                       package_path,
+                                       error);
+}
+
+static bool resolved_append_debug_fd_unique(FengCliDepsResolved *resolved,
+                                            const char *debug_fd_path,
+                                            FengCliProjectError *error) {
+    return resolved_append_unique_path(&resolved->debug_fd_paths,
+                                       &resolved->debug_fd_count,
+                                       debug_fd_path,
+                                       error);
 }
 
 static bool resolved_merge(FengCliDepsResolved *target,
@@ -506,6 +526,11 @@ static bool resolved_merge(FengCliDepsResolved *target,
 
     for (index = 0U; index < source->package_count; ++index) {
         if (!resolved_append_unique(target, source->package_paths[index], error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < source->debug_fd_count; ++index) {
+        if (!resolved_append_debug_fd_unique(target, source->debug_fd_paths[index], error)) {
             return false;
         }
     }
@@ -521,9 +546,15 @@ void feng_cli_deps_resolved_dispose(FengCliDepsResolved *resolved) {
     for (index = 0U; index < resolved->package_count; ++index) {
         free(resolved->package_paths[index]);
     }
+    for (index = 0U; index < resolved->debug_fd_count; ++index) {
+        free(resolved->debug_fd_paths[index]);
+    }
     free(resolved->package_paths);
+    free(resolved->debug_fd_paths);
     resolved->package_paths = NULL;
     resolved->package_count = 0U;
+    resolved->debug_fd_paths = NULL;
+    resolved->debug_fd_count = 0U;
 }
 
 void feng_cli_deps_manifest_dependency_list_dispose(
@@ -549,6 +580,7 @@ static void resolved_node_dispose(ResolvedNode *node) {
     free(node->name);
     free(node->version);
     free(node->bundle_path);
+    free(node->debug_fd_path);
     feng_cli_deps_resolved_dispose(&node->subtree);
     memset(node, 0, sizeof(*node));
 }
@@ -1571,6 +1603,7 @@ static bool build_local_project_bundle(const char *program,
                                        bool release,
                                        const FengCliDepsResolved *dependencies,
                                        char **out_bundle_path,
+                                       char **out_debug_fd_path,
                                        FengCliProjectError *error) {
     FengCliProjectContext context = {0};
     FengFbLibraryBundleSpec spec = {0};
@@ -1578,9 +1611,14 @@ static bool build_local_project_bundle(const char *program,
     size_t direct_dependency_count = 0U;
     char *host_library_name = NULL;
     char *library_path = NULL;
+    char *debug_fd_path = NULL;
     char *public_mod_root = NULL;
     char *fb_error = NULL;
     int rc;
+
+    if (out_debug_fd_path != NULL) {
+        *out_debug_fd_path = NULL;
+    }
 
     if (!feng_cli_project_open(manifest_path, &context, error)) {
         return false;
@@ -1598,7 +1636,9 @@ static bool build_local_project_bundle(const char *program,
                                                               &context,
                                                               release,
                                                               dependencies->package_count,
-                                                              (const char *const *)dependencies->package_paths);
+                                                              (const char *const *)dependencies->package_paths,
+                                                              0U,
+                                                              NULL);
     if (rc != 0) {
         feng_cli_project_context_dispose(&context);
         return set_errorf(error,
@@ -1624,19 +1664,36 @@ static bool build_local_project_bundle(const char *program,
         library_path = dup_printf("%s/lib/%s/%s", context.out_root, host_target, host_library_name);
         free(host_target);
     }
+    if (!release) {
+        debug_fd_path = dup_printf("%s.fd", library_path);
+    }
     public_mod_root = dup_printf("%s/mod", context.out_root);
-    if (library_path == NULL || public_mod_root == NULL) {
+    if (library_path == NULL || public_mod_root == NULL || (!release && debug_fd_path == NULL)) {
         free(host_library_name);
+        free(debug_fd_path);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
+    }
+    if (!release && access(debug_fd_path, F_OK) != 0) {
+        free(host_library_name);
+        free(debug_fd_path);
+        free(public_mod_root);
+        free(library_path);
+        feng_cli_project_context_dispose(&context);
+        return set_errorf(error,
+                          manifest_path,
+                          0U,
+                          "failed to locate local dependency debug sidecar");
     }
     if (!feng_cli_deps_normalize_direct_dependencies(context.manifest_path,
                                                      &context.manifest,
                                                      &direct_dependencies,
                                                      &direct_dependency_count,
                                                      error)) {
+        free(host_library_name);
+        free(debug_fd_path);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1660,6 +1717,7 @@ static bool build_local_project_bundle(const char *program,
         free(fb_error);
         feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
         free(host_library_name);
+        free(debug_fd_path);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1674,8 +1732,14 @@ static bool build_local_project_bundle(const char *program,
     free(library_path);
     feng_cli_project_context_dispose(&context);
     if (*out_bundle_path == NULL) {
+        free(debug_fd_path);
         return set_errorf(error, manifest_path, 0U, "out of memory");
     }
+    if (out_debug_fd_path != NULL) {
+        *out_debug_fd_path = debug_fd_path;
+        debug_fd_path = NULL;
+    }
+    free(debug_fd_path);
     return true;
 }
 
@@ -1854,6 +1918,7 @@ static bool resolve_project_dependencies(ResolveState *state,
                                                     state->release,
                                                     &state->nodes[child_slot].subtree,
                                                     &state->nodes[child_slot].bundle_path,
+                                                    &state->nodes[child_slot].debug_fd_path,
                                                     error)) {
                         state->nodes[child_slot].visiting = false;
                         feng_cli_project_manifest_dispose(&child_manifest);
@@ -1904,7 +1969,9 @@ static bool resolve_project_dependencies(ResolveState *state,
         if (child != NULL) {
             if (!resolved_merge(out_dependencies, &child->subtree, error) ||
                 (child->bundle_path != NULL &&
-                 !resolved_append_unique(out_dependencies, child->bundle_path, error))) {
+                 !resolved_append_unique(out_dependencies, child->bundle_path, error)) ||
+                (child->debug_fd_path != NULL &&
+                 !resolved_append_debug_fd_unique(out_dependencies, child->debug_fd_path, error))) {
                 free(project_registry);
                 return false;
             }
@@ -2110,6 +2177,8 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         FengCliProjectError *out_error) {
     out_resolved->package_paths = NULL;
     out_resolved->package_count = 0U;
+    out_resolved->debug_fd_paths = NULL;
+    out_resolved->debug_fd_count = 0U;
     return resolve_root_manifest(program,
                                  manifest_path,
                                  force_remote,

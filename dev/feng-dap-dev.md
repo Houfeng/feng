@@ -41,7 +41,7 @@
 
 - [x] 收敛调试方案、实施边界与文档约束。
 - [x] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
-- [ ] 在 `src/debug/` 中生成并汇总 `.fd`。
+- [x] 在 `src/debug/` 中生成并汇总 `.fd`。
 - [ ] 新增 `feng dap` 代理层并消费 `.fd`。
 - [ ] 补齐 VS Code 集成与回归验证。
 
@@ -233,6 +233,8 @@
 3. 顶层 `target=bin` 构建在生成自身 `.fd` 时，收集整条本地依赖图中的依赖 `.fd`，提取其中可合并的 `PKGS` / `FRMS` / `VARS` section，重新做 string interning 后并入自己的 `.fd`。
 4. 汇总器对冲突做显式校验：若两个输入 `.fd` 给同一 `frame_backend_symbol + backend_name` 提供不一致映射，或给同一 `PKG_NAME` 提供不一致的本地包根，构建立即报错，不把歧义留到运行期。
 5. 依赖 `.fd` 的 `META` 不参与合并；最终只保留顶层 `target=bin` 自身的 `META.binary_path_strid` 与 `META.content_fingerprint`。
+
+实现边界补充：构建链必须把递归本地依赖生成的 `.fd` 路径作为**独立输入**传给顶层 `target=bin` 的最终 sidecar 汇总步骤，不能试图从 `--pkg <.fb路径>` 或 `.fb` 内容反推依赖 `.fd`；`.fd` 不进入 `.fb`，而 `.fb` 也不承担本地调试 sidecar 的定位职责。
 
 这样做的原因是：
 
@@ -553,6 +555,8 @@ VARS:
   - 不直接感知、命名或写出 `.fd`。
 - `src/cli/compile/direct.c`
   - 直编路径要显式把 debug-aware codegen options 传给 codegen，并在非 `release` 时把 codegen 输出的抽象调试信息交给 `src/debug/`。
+- `src/cli/project/compile.c` / `src/cli/deps/manager.c`
+  - 项目构建链要把递归本地依赖的 `.fd` 路径与 `.fb` `package_paths` 分开传递；前者只服务最终 debug sidecar 汇总，后者继续只服务编译期包输入。
 - `src/cli/compile/legacy.c`
   - legacy 路径保持相同传参约束。
 
@@ -620,11 +624,11 @@ VARS:
   - [x] 仅在 codegen 中输出抽象调试信息，不直接写 `.fd`。
   - [x] 为变量和 callable 后端命名建立稳定约束。
 
-- [ ] Phase 3：`src/debug/` 生成与汇总 `.fd`
+- [x] Phase 3：`src/debug/` 生成与汇总 `.fd`
   - [x] 基于 codegen 输出的抽象调试信息生成当前产物 `.fd`。
   - [x] 支持本地 `target=lib` 的非 `release` `.fd` 写出。
-  - [ ] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
-  - [ ] 明确并实现最终 `META` 重写规则。
+  - [x] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
+  - [x] 明确并实现最终 `META` 重写规则。
 
 - [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
   - [ ] 新增 `feng dap`，启动并代理 `lldb-dap`。

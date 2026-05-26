@@ -37,6 +37,16 @@ bool feng_debug_write_fd(const char *fd_path,
                          const FengCodegenMapingInfo *info,
                          char **out_error_message);
 
+/* Writes one final `.fd` sidecar after merging local dependency sidecars. */
+bool feng_debug_write_merged_fd(const char *fd_path,
+                                const char *binary_path,
+                                const FengCodegenMapingSourceMapping *sources,
+                                size_t source_count,
+                                const FengCodegenMapingInfo *info,
+                                const char *const *dependency_fd_paths,
+                                size_t dependency_fd_count,
+                                char **out_error_message);
+
 /* Loads a `.fd` sidecar from disk. */
 bool feng_debug_read_fd(const char *fd_path,
                         FengDebugArtifact *out_artifact,

@@ -605,13 +605,29 @@ int feng_cli_direct_run(const char *program,
 
     if (drv_rc == 0 && active_codegen_options != NULL && fd_path != NULL) {
         char *fd_error = NULL;
+        bool write_ok;
 
-        if (!feng_debug_write_fd(fd_path,
-                                 artifact_path,
-                                 debug_context->sources,
-                                 debug_context->source_count,
-                                 &out.debug_info,
-                                 &fd_error)) {
+        if (opts.target == FENG_COMPILE_TARGET_BIN &&
+            debug_context->dependency_fd_paths != NULL &&
+            debug_context->dependency_fd_count > 0U) {
+            write_ok = feng_debug_write_merged_fd(fd_path,
+                                                  artifact_path,
+                                                  debug_context->sources,
+                                                  debug_context->source_count,
+                                                  &out.debug_info,
+                                                  debug_context->dependency_fd_paths,
+                                                  debug_context->dependency_fd_count,
+                                                  &fd_error);
+        } else {
+            write_ok = feng_debug_write_fd(fd_path,
+                                           artifact_path,
+                                           debug_context->sources,
+                                           debug_context->source_count,
+                                           &out.debug_info,
+                                           &fd_error);
+        }
+
+        if (!write_ok) {
             fprintf(stderr,
                     "failed to write %s: %s\n",
                     fd_path,

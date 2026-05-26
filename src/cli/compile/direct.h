@@ -10,6 +10,8 @@
 typedef struct FengCliDirectDebugContext {
     const FengCodegenMapingSourceMapping *sources;
     size_t source_count;
+    const char *const *dependency_fd_paths;
+    size_t dependency_fd_count;
 } FengCliDirectDebugContext;
 
 /* Internal direct-compile entry that consumes option arrays and optional debug context. */

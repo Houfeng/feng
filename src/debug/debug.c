@@ -211,12 +211,37 @@ static uint64_t debug_read_u64_le(const unsigned char *data) {
            ((uint64_t)data[7] << 56U);
 }
 
+/* Returns true when two optional strings are equal. */
+static bool debug_cstr_equals(const char *lhs, const char *rhs) {
+    if (lhs == rhs) {
+        return true;
+    }
+    if (lhs == NULL || rhs == NULL) {
+        return false;
+    }
+    return strcmp(lhs, rhs) == 0;
+}
+
 /* Releases one artifact package mapping. */
 static void debug_artifact_package_dispose(FengDebugArtifactPackage *package) {
     free(package->package_name);
     free(package->local_root_path);
     package->package_name = NULL;
     package->local_root_path = NULL;
+}
+
+/* Releases one heap-owned package mapping array. */
+static void debug_artifact_packages_dispose(FengDebugArtifactPackage *packages,
+                                            size_t package_count) {
+    size_t index;
+
+    if (packages == NULL) {
+        return;
+    }
+    for (index = 0U; index < package_count; ++index) {
+        debug_artifact_package_dispose(&packages[index]);
+    }
+    free(packages);
 }
 
 /* Releases all strings in the serialization string table. */
@@ -354,12 +379,162 @@ static bool debug_collect_packages(const FengCodegenMapingSourceMapping *sources
     return true;
 
 fail:
-    while (package_count > 0U) {
-        package_count--;
-        debug_artifact_package_dispose(&packages[package_count]);
-    }
-    free(packages);
+    debug_artifact_packages_dispose(packages, package_count);
     return false;
+}
+
+/* Appends one package mapping or validates it matches an existing entry. */
+static bool debug_append_package_mapping(FengDebugArtifactPackage **packages,
+                                         size_t *package_count,
+                                         size_t *package_capacity,
+                                         const char *package_name,
+                                         const char *local_root_path,
+                                         const char *input_label,
+                                         char **out_error_message) {
+    size_t index;
+    FengDebugArtifactPackage package_entry;
+
+    if (package_name == NULL || local_root_path == NULL) {
+        debug_set_error(out_error_message,
+                        "debug package mapping from %s is incomplete",
+                        input_label != NULL ? input_label : "(unknown)");
+        return false;
+    }
+    for (index = 0U; index < *package_count; ++index) {
+        if (strcmp((*packages)[index].package_name, package_name) != 0) {
+            continue;
+        }
+        if (strcmp((*packages)[index].local_root_path, local_root_path) == 0) {
+            return true;
+        }
+        debug_set_error(out_error_message,
+                        "%s maps package '%s' to '%s', expected '%s'",
+                        input_label != NULL ? input_label : "debug sidecar input",
+                        package_name,
+                        local_root_path,
+                        (*packages)[index].local_root_path);
+        return false;
+    }
+
+    package_entry.package_name = debug_dup_cstr(package_name);
+    package_entry.local_root_path = debug_dup_cstr(local_root_path);
+    if (package_entry.package_name == NULL ||
+        package_entry.local_root_path == NULL ||
+        !debug_append_raw((void **)packages,
+                          package_count,
+                          package_capacity,
+                          sizeof(package_entry),
+                          &package_entry)) {
+        debug_artifact_package_dispose(&package_entry);
+        debug_set_error(out_error_message, "out of memory collecting package mappings");
+        return false;
+    }
+    return true;
+}
+
+/* Merges one abstract frame mapping with explicit conflict detection. */
+static bool debug_merge_frame_record(FengCodegenMapingInfo *merged_info,
+                                     const FengCodegenMapingFrameRecord *frame,
+                                     const char *input_label,
+                                     char **out_error_message) {
+    size_t index;
+
+    for (index = 0U; index < merged_info->frame_count; ++index) {
+        if (strcmp(merged_info->frames[index].backend_symbol, frame->backend_symbol) != 0) {
+            continue;
+        }
+        if (strcmp(merged_info->frames[index].display_name, frame->display_name) == 0 &&
+            merged_info->frames[index].policy == frame->policy) {
+            return true;
+        }
+        debug_set_error(out_error_message,
+                        "%s remaps frame '%s' inconsistently",
+                        input_label != NULL ? input_label : "debug sidecar input",
+                        frame->backend_symbol);
+        return false;
+    }
+
+    if (!feng_codegen_maping_info_add_frame(merged_info,
+                                            frame->backend_symbol,
+                                            frame->display_name,
+                                            frame->policy)) {
+        debug_set_error(out_error_message, "out of memory merging debug frames");
+        return false;
+    }
+    return true;
+}
+
+/* Merges one abstract variable mapping with explicit conflict detection. */
+static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
+                                        const FengCodegenMapingVariableRecord *variable,
+                                        const char *input_label,
+                                        char **out_error_message) {
+    size_t index;
+
+    for (index = 0U; index < merged_info->variable_count; ++index) {
+        if (strcmp(merged_info->variables[index].frame_backend_symbol,
+                   variable->frame_backend_symbol) != 0 ||
+            !debug_cstr_equals(merged_info->variables[index].backend_name,
+                               variable->backend_name)) {
+            continue;
+        }
+        if (variable->backend_name == NULL &&
+            strcmp(merged_info->variables[index].display_name,
+                   variable->display_name) != 0) {
+            continue;
+        }
+        if (strcmp(merged_info->variables[index].display_name, variable->display_name) == 0 &&
+            debug_cstr_equals(merged_info->variables[index].read_expr, variable->read_expr) &&
+            merged_info->variables[index].kind == variable->kind) {
+            return true;
+        }
+        debug_set_error(out_error_message,
+                        "%s remaps variable '%s' in frame '%s' inconsistently",
+                        input_label != NULL ? input_label : "debug sidecar input",
+                        variable->display_name,
+                        variable->frame_backend_symbol);
+        return false;
+    }
+
+    if (!feng_codegen_maping_info_add_variable(merged_info,
+                                               variable->frame_backend_symbol,
+                                               variable->backend_name,
+                                               variable->display_name,
+                                               variable->read_expr,
+                                               variable->kind)) {
+        debug_set_error(out_error_message, "out of memory merging debug variables");
+        return false;
+    }
+    return true;
+}
+
+/* Merges one abstract mapping payload into the final output set. */
+static bool debug_merge_info(FengCodegenMapingInfo *merged_info,
+                             const FengCodegenMapingInfo *incoming_info,
+                             const char *input_label,
+                             char **out_error_message) {
+    size_t index;
+
+    if (incoming_info == NULL) {
+        return true;
+    }
+    for (index = 0U; index < incoming_info->frame_count; ++index) {
+        if (!debug_merge_frame_record(merged_info,
+                                      &incoming_info->frames[index],
+                                      input_label,
+                                      out_error_message)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < incoming_info->variable_count; ++index) {
+        if (!debug_merge_variable_record(merged_info,
+                                         &incoming_info->variables[index],
+                                         input_label,
+                                         out_error_message)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Serializes the fixed metadata section. */
@@ -1031,14 +1206,12 @@ uint64_t feng_debug_fnv1a64_file(const char *path, char **out_error_message) {
     return hash;
 }
 
-bool feng_debug_write_fd(const char *fd_path,
-                         const char *binary_path,
-                         const FengCodegenMapingSourceMapping *sources,
-                         size_t source_count,
-                         const FengCodegenMapingInfo *info,
-                         char **out_error_message) {
-    FengDebugArtifactPackage *packages = NULL;
-    size_t package_count = 0U;
+static bool debug_write_fd_with_packages(const char *fd_path,
+                                         const char *binary_path,
+                                         const FengDebugArtifactPackage *packages,
+                                         size_t package_count,
+                                         const FengCodegenMapingInfo *info,
+                                         char **out_error_message) {
     char *fingerprint_error = NULL;
     uint64_t fingerprint;
     FengDebugStringTable string_table = {0};
@@ -1057,13 +1230,6 @@ bool feng_debug_write_fd(const char *fd_path,
     }
     if (fd_path == NULL || binary_path == NULL) {
         debug_set_error(out_error_message, "debug sidecar path and binary path are required");
-        return false;
-    }
-    if (!debug_collect_packages(sources,
-                                source_count,
-                                &packages,
-                                &package_count,
-                                out_error_message)) {
         return false;
     }
 
@@ -1133,16 +1299,132 @@ cleanup:
         fclose(file);
         unlink(fd_path);
     }
-    for (size_t index = 0U; index < package_count; ++index) {
-        debug_artifact_package_dispose(&packages[index]);
-    }
-    free(packages);
     debug_string_table_dispose(&string_table);
     debug_buffer_dispose(&meta);
     debug_buffer_dispose(&strings);
     debug_buffer_dispose(&packages_buffer);
     debug_buffer_dispose(&frames);
     debug_buffer_dispose(&variables);
+    return ok;
+}
+
+bool feng_debug_write_fd(const char *fd_path,
+                         const char *binary_path,
+                         const FengCodegenMapingSourceMapping *sources,
+                         size_t source_count,
+                         const FengCodegenMapingInfo *info,
+                         char **out_error_message) {
+    FengDebugArtifactPackage *packages = NULL;
+    size_t package_count = 0U;
+    bool ok;
+
+    if (!debug_collect_packages(sources,
+                                source_count,
+                                &packages,
+                                &package_count,
+                                out_error_message)) {
+        return false;
+    }
+
+    ok = debug_write_fd_with_packages(fd_path,
+                                      binary_path,
+                                      packages,
+                                      package_count,
+                                      info,
+                                      out_error_message);
+    debug_artifact_packages_dispose(packages, package_count);
+    return ok;
+}
+
+bool feng_debug_write_merged_fd(const char *fd_path,
+                                const char *binary_path,
+                                const FengCodegenMapingSourceMapping *sources,
+                                size_t source_count,
+                                const FengCodegenMapingInfo *info,
+                                const char *const *dependency_fd_paths,
+                                size_t dependency_fd_count,
+                                char **out_error_message) {
+    FengDebugArtifactPackage *packages = NULL;
+    size_t package_count = 0U;
+    size_t package_capacity = 0U;
+    FengCodegenMapingInfo merged_info = {0};
+    bool ok = false;
+    size_t index;
+
+    if (dependency_fd_count == 0U || dependency_fd_paths == NULL) {
+        return feng_debug_write_fd(fd_path,
+                                   binary_path,
+                                   sources,
+                                   source_count,
+                                   info,
+                                   out_error_message);
+    }
+    if (!debug_collect_packages(sources,
+                                source_count,
+                                &packages,
+                                &package_count,
+                                out_error_message)) {
+        return false;
+    }
+    package_capacity = package_count;
+    feng_codegen_maping_info_init(&merged_info);
+    if (!debug_merge_info(&merged_info, info, "current build debug info", out_error_message)) {
+        goto cleanup;
+    }
+
+    for (index = 0U; index < dependency_fd_count; ++index) {
+        FengDebugArtifact dependency_artifact = {0};
+        char *dependency_error = NULL;
+        size_t package_index;
+
+        if (dependency_fd_paths[index] == NULL) {
+            debug_set_error(out_error_message, "dependency debug sidecar path is required");
+            goto cleanup;
+        }
+        if (!feng_debug_read_fd(dependency_fd_paths[index],
+                                &dependency_artifact,
+                                &dependency_error)) {
+            debug_set_error(out_error_message,
+                            "failed to read dependency debug sidecar %s: %s",
+                            dependency_fd_paths[index],
+                            dependency_error != NULL ? dependency_error : "(unknown)");
+            free(dependency_error);
+            goto cleanup;
+        }
+        for (package_index = 0U;
+             package_index < dependency_artifact.package_count;
+             ++package_index) {
+            if (!debug_append_package_mapping(&packages,
+                                              &package_count,
+                                              &package_capacity,
+                                              dependency_artifact.packages[package_index].package_name,
+                                              dependency_artifact.packages[package_index].local_root_path,
+                                              dependency_fd_paths[index],
+                                              out_error_message)) {
+                feng_debug_artifact_dispose(&dependency_artifact);
+                goto cleanup;
+            }
+        }
+        if (!debug_merge_info(&merged_info,
+                              &dependency_artifact.info,
+                              dependency_fd_paths[index],
+                              out_error_message)) {
+            feng_debug_artifact_dispose(&dependency_artifact);
+            goto cleanup;
+        }
+        feng_debug_artifact_dispose(&dependency_artifact);
+    }
+
+    ok = debug_write_fd_with_packages(fd_path,
+                                      binary_path,
+                                      packages,
+                                      package_count,
+                                      &merged_info,
+                                      out_error_message);
+
+cleanup:
+    debug_artifact_packages_dispose(packages, package_count);
+    feng_codegen_maping_info_dispose(&merged_info);
     return ok;
 }
 
