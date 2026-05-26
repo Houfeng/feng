@@ -56,8 +56,9 @@ static char *dup_printf(const char *fmt, ...) {
     return out;
 }
 
-void feng_cli_print_usage(const char *program) {
+void feng_cli_print_usage(const char *program, FILE *stream) {
     (void)program;
+    (void)stream;
 }
 
 static char *path_join(const char *lhs, const char *rhs) {
@@ -701,7 +702,60 @@ static int run_dap_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
+typedef int (*CliEntryFn)(const char *program, int argc, char **argv);
+
 static char *read_text_stream(FILE *file);
+
+static char *run_cli_entry_capture_stdout_and_stderr(CliEntryFn entry,
+                                                     int argc,
+                                                     char **argv,
+                                                     int *out_rc,
+                                                     char **out_stderr) {
+    int saved_stdout;
+    int saved_stderr;
+    FILE *output = tmpfile();
+    FILE *errors = tmpfile();
+    int rc;
+    char *captured_stdout;
+    char *captured_stderr;
+
+    ASSERT(output != NULL);
+    ASSERT(errors != NULL);
+
+    fflush(stdout);
+    fflush(stderr);
+    saved_stdout = dup(STDOUT_FILENO);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stdout >= 0);
+    ASSERT(saved_stderr >= 0);
+    ASSERT(dup2(fileno(output), STDOUT_FILENO) >= 0);
+    ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
+
+    rc = entry("feng", argc, argv);
+
+    fflush(stdout);
+    fflush(stderr);
+    ASSERT(dup2(saved_stdout, STDOUT_FILENO) >= 0);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stdout);
+    close(saved_stderr);
+
+    captured_stdout = read_text_stream(output);
+    captured_stderr = read_text_stream(errors);
+    fclose(output);
+    fclose(errors);
+
+    if (out_rc != NULL) {
+        *out_rc = rc;
+    }
+    if (out_stderr != NULL) {
+        *out_stderr = captured_stderr;
+    } else {
+        free(captured_stderr);
+    }
+
+    return captured_stdout;
+}
 
 /* Read an entire file descriptor into a newly allocated string. */
 static char *read_fd_to_string(int fd) {
@@ -3415,10 +3469,70 @@ static void test_init_rejects_non_empty_directory(void) {
     free(existing_path);
 }
 
+static void test_project_build_help_writes_stdout_and_returns_success(void) {
+    char *argv[] = { "--help" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_project_build_main,
+                                                          1,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "Usage:\n  feng build [<path>] [--release]\n") != NULL);
+    ASSERT(stderr_text[0] == '\0');
+
+    free(stderr_text);
+    free(stdout_text);
+}
+
+static void test_project_pack_help_writes_stdout_and_returns_success(void) {
+    char *argv[] = { "--help" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_project_pack_main,
+                                                          1,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "Usage:\n  feng pack [<path>]\n") != NULL);
+    ASSERT(stderr_text[0] == '\0');
+
+    free(stderr_text);
+    free(stdout_text);
+}
+
 static void test_lsp_help_returns_success(void) {
     char *argv[] = { "--help" };
 
     ASSERT(run_lsp_quiet_stderr(1, argv) == 0);
+}
+
+static void test_lsp_help_writes_stdout_not_stderr(void) {
+    char *argv[] = { "--help" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_lsp_main,
+                                                          1,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "Start Feng Language Server on stdio.\n") != NULL);
+    ASSERT(stderr_text[0] == '\0');
+
+    free(stderr_text);
+    free(stdout_text);
 }
 
 static void test_lsp_rejects_unknown_option(void) {
@@ -3427,12 +3541,74 @@ static void test_lsp_rejects_unknown_option(void) {
     ASSERT(run_lsp_quiet_stderr(1, argv) != 0);
 }
 
+static void test_lsp_unknown_option_stays_on_stderr(void) {
+    char *argv[] = { "--bogus" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_lsp_main,
+                                                          1,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc != 0);
+    ASSERT(stdout_text[0] == '\0');
+    ASSERT(strstr(stderr_text, "unknown option: --bogus\n") != NULL);
+    ASSERT(strstr(stderr_text, "Usage:\n  feng lsp [--stdio]\n") != NULL);
+
+    free(stderr_text);
+    free(stdout_text);
+}
+
 /* Ensure `feng dap --help` exits successfully. */
 static void test_dap_help_returns_success(void) {
     char *argv[] = { "--help" };
 
     ASSERT(run_dap_quiet_stderr(1, argv) == 0);
 }
+
+static void test_dap_help_writes_stdout_not_stderr(void) {
+    char *argv[] = { "--help" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_dap_main,
+                                                          1,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "Start Feng Debug Adapter Protocol proxy on stdio.\n") != NULL);
+    ASSERT(stderr_text[0] == '\0');
+
+    free(stderr_text);
+    free(stdout_text);
+}
+
+static void test_deps_add_help_writes_stdout_and_returns_success(void) {
+    char *argv[] = { "add", "--help" };
+    char *stdout_text;
+    char *stderr_text = NULL;
+    int rc;
+
+    stdout_text = run_cli_entry_capture_stdout_and_stderr(feng_cli_deps_main,
+                                                          2,
+                                                          argv,
+                                                          &rc,
+                                                          &stderr_text);
+
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "feng deps add <pkg-name> <version-or-path> [<path>]\n") != NULL);
+    ASSERT(stderr_text[0] == '\0');
+
+    free(stderr_text);
+    free(stdout_text);
+}
+
 
 /* Ensure `feng dap` rejects unsupported command-line options. */
 static void test_dap_rejects_unknown_option(void) {
@@ -10360,10 +10536,16 @@ int main(void) {
     test_init_rejects_space_separated_target_value();
     test_init_prefixes_keyword_package_name();
     test_init_rejects_non_empty_directory();
+    test_project_build_help_writes_stdout_and_returns_success();
+    test_project_pack_help_writes_stdout_and_returns_success();
     test_lsp_help_returns_success();
+    test_lsp_help_writes_stdout_not_stderr();
     test_lsp_rejects_unknown_option();
+    test_lsp_unknown_option_stays_on_stderr();
     test_dap_help_returns_success();
+    test_dap_help_writes_stdout_not_stderr();
     test_dap_rejects_unknown_option();
+    test_deps_add_help_writes_stdout_and_returns_success();
     test_dap_validated_launch_starts_backend();
     test_dap_rewrites_set_breakpoints_source_path_to_package_uri();
     test_dap_rejects_set_breakpoints_outside_debug_closure();

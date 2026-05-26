@@ -19,9 +19,9 @@ typedef struct JsonState {
     bool first;
 } JsonState;
 
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s check [<path>] [--format <text|json>]\n", program);
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s check [<path>] [--format <text|json>]\n", program);
 }
 
 static void fprint_json_string(FILE *stream, const char *text) {
@@ -170,11 +170,11 @@ static void on_json_semantic_info(void *user,
                        info->message);
 }
 
-static bool parse_args(const char *program,
-                       int argc,
-                       char **argv,
-                       const char **out_path,
-                       CheckOutputFormat *out_format) {
+static FengCliParseResult parse_args(const char *program,
+                                     int argc,
+                                     char **argv,
+                                     const char **out_path,
+                                     CheckOutputFormat *out_format) {
     int index;
 
     *out_path = NULL;
@@ -184,16 +184,16 @@ static bool parse_args(const char *program,
         const char *arg = argv[index];
 
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            print_usage(program);
-            return false;
+            print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
         }
         if (strcmp(arg, "--format") == 0) {
             const char *value;
 
             if (index + 1 >= argc) {
                 fprintf(stderr, "--format requires a value\n");
-                print_usage(program);
-                return false;
+                print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             value = argv[++index];
             if (strcmp(value, "text") == 0) {
@@ -202,8 +202,8 @@ static bool parse_args(const char *program,
                 *out_format = CHECK_OUTPUT_JSON;
             } else {
                 fprintf(stderr, "invalid --format value '%s'\n", value);
-                print_usage(program);
-                return false;
+                print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
@@ -215,30 +215,31 @@ static bool parse_args(const char *program,
                 *out_format = CHECK_OUTPUT_JSON;
             } else {
                 fprintf(stderr, "invalid --format value '%s'\n", value);
-                print_usage(program);
-                return false;
+                print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         if (*out_path != NULL) {
             fprintf(stderr, "check accepts at most one <path> argument\n");
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         *out_path = arg;
     }
 
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     const char *path_arg = NULL;
     CheckOutputFormat format = CHECK_OUTPUT_TEXT;
+    FengCliParseResult parse_result;
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
     FengCliDepsResolved resolved = {0};
@@ -248,8 +249,9 @@ int feng_cli_project_check_main(const char *program, int argc, char **argv) {
     JsonState json_state = { .first = true };
     int rc;
 
-    if (!parse_args(program, argc, argv, &path_arg, &format)) {
-        return 1;
+    parse_result = parse_args(program, argc, argv, &path_arg, &format);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
     if (!feng_cli_project_find_manifest_in_ancestors(path_arg, &manifest_path, &error)) {
         feng_cli_project_print_error(stderr, &error);

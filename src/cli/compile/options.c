@@ -7,13 +7,22 @@
 #include "cli/cli.h"
 #include "cli/common.h"
 
-bool feng_cli_legacy_compile_parse(const char *program,
-                                   int argc,
-                                   char **argv,
-                                   FengCliLegacyCompileOptions *out) {
+FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
+                                                 int argc,
+                                                 char **argv,
+                                                 FengCliLegacyCompileOptions *out) {
+    int index;
+
     out->target = FENG_COMPILE_TARGET_BIN;
     out->emit_c_path = NULL;
     out->input_path = NULL;
+
+    for (index = 0; index < argc; ++index) {
+        if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
+            feng_cli_print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
+        }
+    }
 
     int file_argc = argc;
     char **file_argv = argv;
@@ -21,27 +30,27 @@ bool feng_cli_legacy_compile_parse(const char *program,
     while (file_argc > 0 && strncmp(file_argv[0], "--", 2) == 0) {
         if (strncmp(file_argv[0], "--target", 8) == 0) {
             if (!feng_cli_parse_target_option(file_argv[0], &out->target)) {
-                feng_cli_print_usage(program);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
         } else if (strncmp(file_argv[0], "--emit-c=", 9) == 0) {
             out->emit_c_path = file_argv[0] + 9;
         } else {
             fprintf(stderr, "unknown option: %s\n", file_argv[0]);
-            feng_cli_print_usage(program);
-            return false;
+            feng_cli_print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         file_argc -= 1;
         file_argv += 1;
     }
 
     if (file_argc != 1) {
-        feng_cli_print_usage(program);
-        return false;
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
     }
 
     out->input_path = file_argv[0];
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 /* --- P4 direct mode option parser ----------------------------------------
@@ -55,10 +64,10 @@ bool feng_cli_legacy_compile_parse(const char *program,
  * Flags may appear before, between, or after file arguments. `--target`
  * defaults to bin.
  */
-bool feng_cli_direct_options_parse(const char *program,
-                                   int argc,
-                                   char **argv,
-                                   FengCliDirectOptions *out) {
+FengCliParseResult feng_cli_direct_options_parse(const char *program,
+                                                 int argc,
+                                                 char **argv,
+                                                 FengCliDirectOptions *out) {
     const char **inputs;
     const char **package_paths;
     const char **link_libs;
@@ -80,8 +89,8 @@ bool feng_cli_direct_options_parse(const char *program,
     out->link_libs = NULL;
 
     if (argc <= 0) {
-        feng_cli_print_usage(program);
-        return false;
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
     }
 
     inputs = calloc((size_t)argc, sizeof(*inputs));
@@ -92,7 +101,7 @@ bool feng_cli_direct_options_parse(const char *program,
         free(link_libs);
         free(package_paths);
         free(inputs);
-        return false;
+        return FENG_CLI_PARSE_ERROR;
     }
 
     for (index = 0; index < argc; ++index) {
@@ -105,16 +114,16 @@ bool feng_cli_direct_options_parse(const char *program,
             free(link_libs);
             free(package_paths);
             free(inputs);
-            feng_cli_print_usage(program);
-            return false;
+            feng_cli_print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
         }
         if (strncmp(arg, "--target", 8) == 0) {
             if (!feng_cli_parse_target_option(arg, &out->target)) {
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                feng_cli_print_usage(program);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
@@ -125,7 +134,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
@@ -144,7 +154,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
@@ -155,7 +166,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             package_paths[package_path_count++] = package_path;
             continue;
@@ -168,7 +180,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             package_path = argv[++index];
             package_paths[package_path_count++] = package_path;
@@ -182,7 +195,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             link_libs[link_lib_count++] = link_lib;
             continue;
@@ -195,7 +209,8 @@ bool feng_cli_direct_options_parse(const char *program,
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
-                return false;
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             link_lib = argv[++index];
             link_libs[link_lib_count++] = link_lib;
@@ -205,8 +220,8 @@ bool feng_cli_direct_options_parse(const char *program,
         free(link_libs);
         free(package_paths);
         free(inputs);
-        feng_cli_print_usage(program);
-        return false;
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
     }
 
     if (input_count == 0) {
@@ -214,16 +229,16 @@ bool feng_cli_direct_options_parse(const char *program,
         free(link_libs);
         free(package_paths);
         free(inputs);
-        feng_cli_print_usage(program);
-        return false;
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
     }
     if (out->out_dir == NULL) {
         fprintf(stderr, "--out=<dir> is required for direct compile mode\n");
         free(link_libs);
         free(package_paths);
         free(inputs);
-        feng_cli_print_usage(program);
-        return false;
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
     }
 
     out->input_count = input_count;
@@ -232,7 +247,7 @@ bool feng_cli_direct_options_parse(const char *program,
     out->package_paths = package_paths;
     out->link_lib_count = link_lib_count;
     out->link_libs = link_libs;
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 void feng_cli_direct_options_dispose(FengCliDirectOptions *opts) {

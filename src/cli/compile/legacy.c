@@ -87,9 +87,11 @@ cleanup:
 
 int feng_cli_legacy_compile_main(const char *program, int argc, char **argv) {
     FengCliLegacyCompileOptions opts;
+    FengCliParseResult parse_result;
 
-    if (!feng_cli_legacy_compile_parse(program, argc, argv, &opts)) {
-        return 1;
+    parse_result = feng_cli_legacy_compile_parse(program, argc, argv, &opts);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
     return run_legacy_compile(&opts);
 }

@@ -9,6 +9,10 @@
 #include "parser/parser.h"
 
 int feng_cli_tool_parse_main(const char *program, int argc, char **argv) {
+    if (argc == 1 && (strcmp(argv[0], "--help") == 0 || strcmp(argv[0], "-h") == 0)) {
+        feng_cli_tool_print_usage(program, stdout);
+        return 0;
+    }
     if (argc != 1) {
         feng_cli_tool_print_usage(program, stderr);
         return 1;

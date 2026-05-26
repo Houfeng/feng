@@ -18,8 +18,8 @@ feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名
 ```
 
 ```text
-feng <command> [options]
-feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+feng <command>  [<options>]
+feng <源文件列表> [<options>]
 
 命令:
   init       在当前目录初始化 Feng 项目
@@ -121,8 +121,12 @@ feng dap [--stdio]
 
 所有顶层命令支持以下全局选项:
 
-- `-h`, `--help`: 显示帮助,可用于 `feng` 或任意子命令。
+- `-h`, `--help`: 显示帮助,可用于 `feng` 或任意子命令; 用户显式请求帮助时,帮助文本输出到 stdout 并返回 0。
 - `-v`, `--version`: 显示版本信息。
+
+补充约定:
+
+- 当命令行参数、子命令或位置参数不合法时,CLI 应先输出错误原因,再把对应 usage 输出到 stderr,并以非 0 状态退出。
 
 ## 4 常用项目命令
 
@@ -353,17 +357,17 @@ feng tool check [--target=<bin|lib>] <file> [more files...]
 
 ```text
 Usage:
-  feng <files...> [options]
-  feng <command>  [options]
+  feng <command>  [<options>]
+  feng <files...> [<options>]
 
 Project:
-  feng init  [<name>] [--target=<bin|lib>]
-  feng build [<path>] [--release]
-  feng check [<path>] [--format=<text|json>]
-  feng run   [<path>] [--release] [-- <program-args>...]
-  feng clean [<path>]
-  feng pack  [<path>]
-  feng deps  <add|remove|install> ...
+  feng init       [<name>] [--target=<bin|lib>]
+  feng build      [<path>] [--release]
+  feng check      [<path>] [--format=<text|json>]
+  feng run        [<path>] [--release] [-- <program-args>...]
+  feng clean      [<path>]
+  feng pack       [<path>]
+  feng deps       <add|remove|install> ...
 
 Compile:
   feng <files...> [--target=<bin|lib>]
@@ -371,15 +375,20 @@ Compile:
                   [--name=<artifact>]
                   [--release]
                   [--keep-ir]
+                  [--pkg=<fb-path>...]
+                  [--lib=<lib-path>...]
 
 Global:
   -h, --help      Display this message.
   -v, --version   Display version information.
 
 Protocol:
-  feng lsp [--stdio]
-  feng dap [--stdio]
+  feng lsp        [--stdio]
+  feng dap        [--stdio]
 ```
+
+- 用户显式执行 `--help` 时,上述帮助文本输出到 stdout。
+- 当 CLI 因参数错误、未知命令或缺少必要参数而附带输出同类 usage 时,该文本输出到 stderr。
 
 ## 8 有意不提供的命令
 

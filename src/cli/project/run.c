@@ -12,18 +12,18 @@
 
 #include "cli/project/common.h"
 
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
 }
 
-static bool parse_args(const char *program,
-                       int argc,
-                       char **argv,
-                       const char **out_path,
-                       bool *out_release,
-                       int *out_program_argc,
-                       char ***out_program_argv) {
+static FengCliParseResult parse_args(const char *program,
+                                     int argc,
+                                     char **argv,
+                                     const char **out_path,
+                                     bool *out_release,
+                                     int *out_program_argc,
+                                     char ***out_program_argv) {
     int index;
 
     *out_path = NULL;
@@ -37,11 +37,11 @@ static bool parse_args(const char *program,
         if (strcmp(arg, "--") == 0) {
             *out_program_argc = argc - index - 1;
             *out_program_argv = argv + index + 1;
-            return true;
+            return FENG_CLI_PARSE_OK;
         }
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            print_usage(program);
-            return false;
+            print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
         }
         if (strcmp(arg, "--release") == 0) {
             *out_release = true;
@@ -49,18 +49,18 @@ static bool parse_args(const char *program,
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         if (*out_path != NULL) {
             fprintf(stderr, "run accepts at most one <path> argument before `--`\n");
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         *out_path = arg;
     }
 
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 static int execute_program(const char *binary_path, int argc, char **argv) {
@@ -111,13 +111,15 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     bool release = false;
     int program_argc = 0;
     char **program_argv = NULL;
+    FengCliParseResult parse_result;
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
     FengCliDepsResolved resolved = {0};
     int rc;
 
-    if (!parse_args(program, argc, argv, &path_arg, &release, &program_argc, &program_argv)) {
-        return 1;
+    parse_result = parse_args(program, argc, argv, &path_arg, &release, &program_argc, &program_argv);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
     if (!feng_cli_project_open(path_arg, &context, &error)) {
         feng_cli_project_print_error(stderr, &error);

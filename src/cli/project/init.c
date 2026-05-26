@@ -38,9 +38,9 @@ static const char *kLibTemplate =
     "  return 0;\n"
     "}\n";
 
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s init [<name>] [--target=<bin|lib>]\n", program);
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s init [<name>] [--target=<bin|lib>]\n", program);
 }
 
 static char *dup_n(const char *text, size_t length) {
@@ -253,7 +253,7 @@ static char *normalize_package_name(const char *raw_name) {
     return normalized;
 }
 
-static bool parse_args(const char *program, int argc, char **argv, InitOptions *out_options) {
+static FengCliParseResult parse_args(const char *program, int argc, char **argv, InitOptions *out_options) {
     int index;
 
     out_options->package_name = NULL;
@@ -263,36 +263,36 @@ static bool parse_args(const char *program, int argc, char **argv, InitOptions *
         const char *arg = argv[index];
 
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            print_usage(program);
-            return false;
+            print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
         }
         if (strncmp(arg, "--target=", 9) == 0) {
             if (!parse_target_value(arg + 9, &out_options->target_lib)) {
                 fprintf(stderr, "--target must be `bin` or `lib`\n");
-                print_usage(program);
-                return false;
+                print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
             }
             continue;
         }
         if (strcmp(arg, "--target") == 0) {
             fprintf(stderr, "--target requires `=<bin|lib>`\n");
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         if (out_options->package_name != NULL) {
             fprintf(stderr, "init accepts at most one <name> argument\n");
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         out_options->package_name = arg;
     }
 
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 static char *derive_default_package_name(void) {
@@ -400,6 +400,7 @@ cleanup:
 
 int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     InitOptions options = {0};
+    FengCliParseResult parse_result;
     InitDirectoryState directory_state;
     char *directory_error = NULL;
     char *derived_name = NULL;
@@ -414,8 +415,9 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     bool created_source = false;
     int rc = 1;
 
-    if (!parse_args(program, argc, argv, &options)) {
-        return 1;
+    parse_result = parse_args(program, argc, argv, &options);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
 
     directory_state = inspect_current_directory(&directory_error);

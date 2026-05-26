@@ -48,11 +48,15 @@ static bool write_text_file(const char *path, const char *content, char **out_er
     return true;
 }
 
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s deps add <pkg-name> <version-or-path> [<path>]\n", program);
-    fprintf(stderr, "  %s deps remove <pkg-name> [<path>]\n", program);
-    fprintf(stderr, "  %s deps install [<path>] [--force]\n", program);
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s deps add <pkg-name> <version-or-path> [<path>]\n", program);
+    fprintf(stream, "  %s deps remove <pkg-name> [<path>]\n", program);
+    fprintf(stream, "  %s deps install [<path>] [--force]\n", program);
+}
+
+static bool is_help_arg(const char *arg) {
+    return strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0;
 }
 
 static ssize_t find_dependency_index(const FengCliProjectManifest *manifest, const char *name) {
@@ -177,6 +181,7 @@ static int deps_add_main(const char *program, int argc, char **argv) {
     const char *value;
     const char *path_arg = NULL;
     bool local_value;
+    int index;
     char *manifest_path = NULL;
     char *original_source = NULL;
     char *write_error = NULL;
@@ -185,8 +190,16 @@ static int deps_add_main(const char *program, int argc, char **argv) {
     FengCliProjectError error = {0};
     int rc = 1;
 
+    for (index = 0; index < argc; ++index) {
+        if (is_help_arg(argv[index])) {
+            print_usage(program, stdout);
+            return 0;
+        }
+    }
+
     if (argc < 2 || argc > 3) {
-        print_usage(program);
+        fprintf(stderr, "deps add requires <pkg-name> <version-or-path> [<path>]\n");
+        print_usage(program, stderr);
         return 1;
     }
     name = argv[0];
@@ -234,6 +247,7 @@ done:
 static int deps_remove_main(const char *program, int argc, char **argv) {
     const char *name;
     const char *path_arg = NULL;
+    int index;
     char *manifest_path = NULL;
     char *original_source = NULL;
     char *write_error = NULL;
@@ -242,8 +256,16 @@ static int deps_remove_main(const char *program, int argc, char **argv) {
     FengCliProjectError error = {0};
     int rc = 1;
 
+    for (index = 0; index < argc; ++index) {
+        if (is_help_arg(argv[index])) {
+            print_usage(program, stdout);
+            return 0;
+        }
+    }
+
     if (argc < 1 || argc > 2) {
-        print_usage(program);
+        fprintf(stderr, "deps remove requires <pkg-name> [<path>]\n");
+        print_usage(program, stderr);
         return 1;
     }
     name = argv[0];
@@ -287,16 +309,23 @@ static int deps_install_main(const char *program, int argc, char **argv) {
     for (index = 0; index < argc; ++index) {
         const char *arg = argv[index];
 
+        if (is_help_arg(arg)) {
+            print_usage(program, stdout);
+            return 0;
+        }
+
         if (strcmp(arg, "--force") == 0) {
             force = true;
             continue;
         }
         if (strncmp(arg, "--", 2) == 0) {
-            print_usage(program);
+            fprintf(stderr, "unknown option: %s\n", arg);
+            print_usage(program, stderr);
             goto done;
         }
         if (path_arg != NULL) {
-            print_usage(program);
+            fprintf(stderr, "deps install accepts at most one <path> argument\n");
+            print_usage(program, stderr);
             goto done;
         }
         path_arg = arg;
@@ -321,8 +350,12 @@ done:
 
 int feng_cli_deps_main(const char *program, int argc, char **argv) {
     if (argc < 1) {
-        print_usage(program);
+        print_usage(program, stderr);
         return 1;
+    }
+    if (is_help_arg(argv[0])) {
+        print_usage(program, stdout);
+        return 0;
     }
     if (strcmp(argv[0], "add") == 0) {
         return deps_add_main(program, argc - 1, argv + 1);
@@ -333,11 +366,7 @@ int feng_cli_deps_main(const char *program, int argc, char **argv) {
     if (strcmp(argv[0], "install") == 0) {
         return deps_install_main(program, argc - 1, argv + 1);
     }
-    if (strcmp(argv[0], "--help") == 0 || strcmp(argv[0], "-h") == 0) {
-        print_usage(program);
-        return 0;
-    }
-
-    print_usage(program);
+    fprintf(stderr, "unknown deps subcommand: %s\n", argv[0]);
+    print_usage(program, stderr);
     return 1;
 }

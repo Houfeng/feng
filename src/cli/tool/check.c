@@ -98,6 +98,14 @@ int feng_cli_tool_check_main(const char *program, int argc, char **argv) {
     FengCompileTarget target = FENG_COMPILE_TARGET_BIN;
     int file_argc = argc;
     char **file_argv = argv;
+    int index;
+
+    for (index = 0; index < argc; ++index) {
+        if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
+            feng_cli_tool_print_usage(program, stdout);
+            return 0;
+        }
+    }
 
     if (file_argc > 0 && strncmp(file_argv[0], "--target", 8) == 0) {
         if (!feng_cli_parse_target_option(file_argv[0], &target)) {

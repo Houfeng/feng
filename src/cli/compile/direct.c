@@ -657,9 +657,11 @@ int feng_cli_direct_run(const char *program,
 
 int feng_cli_direct_main(const char *program, int argc, char **argv) {
     FengCliDirectOptions opts = {0};
+    FengCliParseResult parse_result;
 
-    if (!feng_cli_direct_options_parse(program, argc, argv, &opts)) {
-        return 1;
+    parse_result = feng_cli_direct_options_parse(program, argc, argv, &opts);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
     return feng_cli_direct_run(program, &opts, NULL);
 }

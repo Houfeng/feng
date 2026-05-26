@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "cli/cli.h"
 #include "semantic/semantic.h"
 
 /*
@@ -17,10 +18,10 @@ typedef struct FengCliLegacyCompileOptions {
     const char *input_path;
 } FengCliLegacyCompileOptions;
 
-bool feng_cli_legacy_compile_parse(const char *program,
-                                   int argc,
-                                   char **argv,
-                                   FengCliLegacyCompileOptions *out);
+FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
+                                                 int argc,
+                                                 char **argv,
+                                                 FengCliLegacyCompileOptions *out);
 
 /* P4 direct compile mode options.
  *
@@ -42,10 +43,10 @@ typedef struct FengCliDirectOptions {
     const char **link_libs;       /* heap-allocated array of borrowed argv ptrs */
 } FengCliDirectOptions;
 
-bool feng_cli_direct_options_parse(const char *program,
-                                   int argc,
-                                   char **argv,
-                                   FengCliDirectOptions *out);
+FengCliParseResult feng_cli_direct_options_parse(const char *program,
+                                                 int argc,
+                                                 char **argv,
+                                                 FengCliDirectOptions *out);
 void feng_cli_direct_options_dispose(FengCliDirectOptions *opts);
 
 #endif /* FENG_CLI_COMPILE_OPTIONS_H */

@@ -11,15 +11,15 @@
 #include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s pack [<path>]\n", program);
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s pack [<path>]\n", program);
 }
 
-static bool parse_args(const char *program,
-                       int argc,
-                       char **argv,
-                       const char **out_path) {
+static FengCliParseResult parse_args(const char *program,
+                                     int argc,
+                                     char **argv,
+                                     const char **out_path) {
     int index;
 
     *out_path = NULL;
@@ -28,23 +28,23 @@ static bool parse_args(const char *program,
         const char *arg = argv[index];
 
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            print_usage(program);
-            return false;
+            print_usage(program, stdout);
+            return FENG_CLI_PARSE_HELP;
         }
         if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "unknown option: %s\n", arg);
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         if (*out_path != NULL) {
             fprintf(stderr, "pack accepts at most one <path> argument\n");
-            print_usage(program);
-            return false;
+            print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
         }
         *out_path = arg;
     }
 
-    return true;
+    return FENG_CLI_PARSE_OK;
 }
 
 static char *dup_printf(const char *fmt, ...) {
@@ -145,6 +145,7 @@ static bool build_asset_entries(const FengCliProjectContext *context,
 int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     const char *path_arg = NULL;
     const bool release = true;
+    FengCliParseResult parse_result;
     FengCliProjectContext context = {0};
     FengCliProjectError project_error = {0};
     FengCliDepsResolved resolved = {0};
@@ -161,8 +162,9 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
     char *error_message = NULL;
     int rc = 1;
 
-    if (!parse_args(program, argc, argv, &path_arg)) {
-        return 1;
+    parse_result = parse_args(program, argc, argv, &path_arg);
+    if (parse_result != FENG_CLI_PARSE_OK) {
+        return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
     if (!feng_cli_project_prepare_build(program,
                                         path_arg,

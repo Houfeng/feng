@@ -24,6 +24,11 @@ int feng_cli_tool_main(const char *program, int argc, char **argv) {
     int sub_argc = argc - 1;
     char **sub_argv = argv + 1;
 
+    if (strcmp(sub, "--help") == 0 || strcmp(sub, "-h") == 0) {
+        feng_cli_tool_print_usage(program, stdout);
+        return 0;
+    }
+
     if (strcmp(sub, "lex") == 0) {
         return feng_cli_tool_lex_main(program, sub_argc, sub_argv);
     }

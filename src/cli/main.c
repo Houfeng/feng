@@ -12,39 +12,39 @@ static void feng_cli_print_version(const char *program, FILE *stream) {
     fprintf(stream, "%s %s\n", program, FENG_CLI_VERSION);
 }
 
-void feng_cli_print_usage(const char *program) {
+void feng_cli_print_usage(const char *program, FILE *stream) {
     int compile_indent = (int)(2U + strlen(program) + strlen(" <files...> "));
 
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s <command>  [<options>]\n", program);
-    fprintf(stderr, "  %s <files...> [<options>]\n", program);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Project:\n");
-    fprintf(stderr, "  %s init       [<name>] [--target=<bin|lib>]\n", program);
-    fprintf(stderr, "  %s build      [<path>] [--release]\n", program);
-    fprintf(stderr, "  %s check      [<path>] [--format=<text|json>]\n", program);
-    fprintf(stderr, "  %s run        [<path>] [--release] [-- <program-args>...]\n", program);
-    fprintf(stderr, "  %s clean      [<path>]\n", program);
-    fprintf(stderr, "  %s pack       [<path>]\n", program);
-    fprintf(stderr, "  %s deps       <add|remove|install> ...\n", program);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Compile:\n");
-    fprintf(stderr, "  %s <files...> [--target=<bin|lib>]\n", program);
-    fprintf(stderr, "%*s[--out=<dir>]\n", compile_indent, "");
-    fprintf(stderr, "%*s[--name=<artifact>]\n", compile_indent, "");
-    fprintf(stderr, "%*s[--release]\n", compile_indent, "");
-    fprintf(stderr, "%*s[--keep-ir]\n", compile_indent, "");
-    fprintf(stderr, "%*s[--pkg=<fb-path>...]\n", compile_indent, "");
-    fprintf(stderr, "%*s[--lib=<lib-path>...]\n", compile_indent, "");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Global:\n");
-    fprintf(stderr, "  -h, --help      Display this message.\n");
-    fprintf(stderr, "  -v, --version   Display version information.\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Protocol:\n");
-    fprintf(stderr, "  %s lsp        [--stdio]\n", program);
-    fprintf(stderr, "  %s dap        [--stdio]\n", program);
-    fprintf(stderr, "\n");
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s <command>  [<options>]\n", program);
+    fprintf(stream, "  %s <files...> [<options>]\n", program);
+    fprintf(stream, "\n");
+    fprintf(stream, "Project:\n");
+    fprintf(stream, "  %s init       [<name>] [--target=<bin|lib>]\n", program);
+    fprintf(stream, "  %s build      [<path>] [--release]\n", program);
+    fprintf(stream, "  %s check      [<path>] [--format=<text|json>]\n", program);
+    fprintf(stream, "  %s run        [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stream, "  %s clean      [<path>]\n", program);
+    fprintf(stream, "  %s pack       [<path>]\n", program);
+    fprintf(stream, "  %s deps       <add|remove|install> ...\n", program);
+    fprintf(stream, "\n");
+    fprintf(stream, "Compile:\n");
+    fprintf(stream, "  %s <files...> [--target=<bin|lib>]\n", program);
+    fprintf(stream, "%*s[--out=<dir>]\n", compile_indent, "");
+    fprintf(stream, "%*s[--name=<artifact>]\n", compile_indent, "");
+    fprintf(stream, "%*s[--release]\n", compile_indent, "");
+    fprintf(stream, "%*s[--keep-ir]\n", compile_indent, "");
+    fprintf(stream, "%*s[--pkg=<fb-path>...]\n", compile_indent, "");
+    fprintf(stream, "%*s[--lib=<lib-path>...]\n", compile_indent, "");
+    fprintf(stream, "\n");
+    fprintf(stream, "Global:\n");
+    fprintf(stream, "  -h, --help      Display this message.\n");
+    fprintf(stream, "  -v, --version   Display version information.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Protocol:\n");
+    fprintf(stream, "  %s lsp        [--stdio]\n", program);
+    fprintf(stream, "  %s dap        [--stdio]\n", program);
+    fprintf(stream, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
     // fprintf(stderr, "  %s tool parse <file>\n", program);
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
     }
 
     if (argc < 2) {
-        feng_cli_print_usage(program);
+        feng_cli_print_usage(program, stderr);
         return 1;
     }
 
@@ -111,12 +111,12 @@ int main(int argc, char **argv) {
         fprintf(stderr,
                 "`%s %s ...` is no longer a top-level command; use `%s tool %s ...` instead.\n",
                 program, cmd, program, cmd);
-        feng_cli_print_usage(program);
+        feng_cli_print_usage(program, stderr);
         return 1;
     }
 
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
-        feng_cli_print_usage(program);
+        feng_cli_print_usage(program, stdout);
         return 0;
     }
     if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-v") == 0) {

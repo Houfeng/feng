@@ -1,6 +1,8 @@
 #ifndef FENG_CLI_CLI_H
 #define FENG_CLI_CLI_H
 
+#include <stdio.h>
+
 /*
  * Top-level CLI entry/router declarations shared between
  * src/cli/main.c and the per-command translation units.
@@ -13,7 +15,13 @@
  *     implementation used by `feng tool compile`.
  */
 
-void feng_cli_print_usage(const char *program);
+typedef enum FengCliParseResult {
+	FENG_CLI_PARSE_OK = 0,
+	FENG_CLI_PARSE_HELP,
+	FENG_CLI_PARSE_ERROR
+} FengCliParseResult;
+
+void feng_cli_print_usage(const char *program, FILE *stream);
 
 int feng_cli_tool_main(const char *program, int argc, char **argv);
 

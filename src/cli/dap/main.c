@@ -7,11 +7,11 @@
 #include "dap/proxy.h"
 
 /* Print command usage for `feng dap`. */
-static void print_usage(const char *program) {
-    fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s dap [--stdio]\n", program);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Start Feng Debug Adapter Protocol proxy on stdio.\n");
+static void print_usage(const char *program, FILE *stream) {
+    fprintf(stream, "Usage:\n");
+    fprintf(stream, "  %s dap [--stdio]\n", program);
+    fprintf(stream, "\n");
+    fprintf(stream, "Start Feng Debug Adapter Protocol proxy on stdio.\n");
 }
 
 /* Parse `feng dap` arguments and start the transparent stdio proxy. */
@@ -22,7 +22,7 @@ int feng_cli_dap_main(const char *program, int argc, char **argv) {
         const char *arg = argv[index];
 
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            print_usage(program);
+            print_usage(program, stdout);
             return 0;
         }
         if (strcmp(arg, "--stdio") == 0) {
@@ -30,7 +30,7 @@ int feng_cli_dap_main(const char *program, int argc, char **argv) {
         }
 
         fprintf(stderr, "unknown option: %s\n", arg);
-        print_usage(program);
+        print_usage(program, stderr);
         return 1;
     }
 
