@@ -88,7 +88,11 @@ expect_fail() {
 }
 
 if expect_ok help "$FENG" --help; then
-    if ! grep -q ' init  \[<name>\] \[--target=<bin|lib>\]' "$WORK/help.err"; then
+    if [[ -s "$WORK/help.err" ]]; then
+        echo "FAIL[help] help command should not write stderr"
+        failures=$((failures + 1))
+    fi
+    if ! grep -q ' init       \[<name>\] \[--target=<bin|lib>\]' "$WORK/help.out"; then
         echo "FAIL[help] missing init usage line"
         failures=$((failures + 1))
     fi
