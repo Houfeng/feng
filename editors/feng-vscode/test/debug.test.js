@@ -282,10 +282,25 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
-                cwd: projectRoot,
+                program: '${workspaceFolder}/examples/hello_world/dist/bin/hello_world',
+                cwd: '${workspaceFolder}/examples/hello_world',
                 preLaunchTask: 'feng: build examples/hello_world'
             });
+
+            {
+                const resolvedTask = taskProvider.resolveTask({
+                    definition: {
+                        type: 'feng',
+                        task: 'build',
+                        cwd: '${workspaceFolder}/examples/hello_world'
+                    },
+                    scope: workspaceFolder
+                });
+
+                assert(resolvedTask, 'expected persisted Feng task to resolve');
+                assert.strictEqual(resolvedTask.label, 'feng: build examples/hello_world');
+                assert.deepStrictEqual(resolvedTask.execution.options, { cwd: projectRoot });
+            }
 
             resolvedConfiguration = await createFengDebugConfigurationProvider(mockVscode)
                 .resolveDebugConfiguration(workspaceFolder, {
@@ -324,6 +339,7 @@ async function run() {
             const provider = extension.__test__.createFengDebugConfigurationProvider(mockVscode);
             const workspaceFolder = createWorkspaceFolder(tempRoot);
             const providedConfigurations = await provider.provideDebugConfigurations(workspaceFolder);
+            const tasksPath = path.join(tempRoot, '.vscode', 'tasks.json');
             const resolved = await provider.resolveDebugConfiguration(workspaceFolder, {
                 type: 'feng',
                 request: 'launch'
@@ -333,8 +349,8 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
-                cwd: projectRoot,
+                program: '${workspaceFolder}/examples/hello_world/dist/bin/hello_world',
+                cwd: '${workspaceFolder}/examples/hello_world',
                 preLaunchTask: 'feng: build examples/hello_world'
             }]);
             assert.deepStrictEqual(resolved, {
@@ -344,6 +360,17 @@ async function run() {
                 program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
                 cwd: projectRoot,
                 preLaunchTask: 'feng: build examples/hello_world'
+            });
+            assert.deepStrictEqual(JSON.parse(fs.readFileSync(tasksPath, 'utf8')), {
+                version: '2.0.0',
+                tasks: [{
+                    label: 'feng: build examples/hello_world',
+                    type: 'feng',
+                    task: 'build',
+                    cwd: '${workspaceFolder}/examples/hello_world',
+                    group: 'build',
+                    problemMatcher: []
+                }]
             });
         }
 

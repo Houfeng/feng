@@ -266,6 +266,230 @@ function resolveProjectPath(projectRoot, maybeRelativePath) {
     return path.join(projectRoot, maybeRelativePath);
 }
 
+function createWorkspaceVariablePath(targetPath, workspaceFolder, vscodeApi = vscode) {
+    const workspaceRoot = getWorkspaceFolderPath(workspaceFolder) || getPrimaryWorkspaceRoot(vscodeApi);
+    const resolvedTargetPath = typeof targetPath === 'string' && targetPath.length > 0
+        ? path.resolve(targetPath)
+        : null;
+    const resolvedWorkspaceRoot = typeof workspaceRoot === 'string' && workspaceRoot.length > 0
+        ? path.resolve(workspaceRoot)
+        : null;
+    let relativePath;
+
+    if (resolvedTargetPath == null || resolvedWorkspaceRoot == null) {
+        return targetPath;
+    }
+    if (resolvedTargetPath === resolvedWorkspaceRoot) {
+        return '${workspaceFolder}';
+    }
+    if (!resolvedTargetPath.startsWith(resolvedWorkspaceRoot + path.sep)) {
+        return targetPath;
+    }
+
+    relativePath = path.relative(resolvedWorkspaceRoot, resolvedTargetPath);
+    if (relativePath.length === 0 || relativePath === '.') {
+        return '${workspaceFolder}';
+    }
+    return '${workspaceFolder}/' + relativePath.split(path.sep).join('/');
+}
+
+function resolveWorkspaceVariablePath(value, workspaceFolder, vscodeApi = vscode) {
+    const workspaceRoot = getWorkspaceFolderPath(workspaceFolder) || getPrimaryWorkspaceRoot(vscodeApi);
+    const workspaceVariable = '${workspaceFolder}';
+
+    if (typeof value !== 'string' || value.length === 0) {
+        return null;
+    }
+    if (path.isAbsolute(value)) {
+        return value;
+    }
+    if (typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
+        return containsVariableReference(value) ? null : value;
+    }
+    if (value === workspaceVariable) {
+        return workspaceRoot;
+    }
+    if (value.startsWith(workspaceVariable + '/')) {
+        return path.resolve(workspaceRoot, value.slice(workspaceVariable.length + 1));
+    }
+    if (value.startsWith(workspaceVariable + '\\')) {
+        return path.resolve(workspaceRoot, value.slice(workspaceVariable.length + 1));
+    }
+    return containsVariableReference(value)
+        ? null
+        : path.resolve(workspaceRoot, value);
+}
+
+function stripJsonComments(source) {
+    let output = '';
+    let inString = false;
+    let isEscaped = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+
+    for (let index = 0; index < source.length; index += 1) {
+        const current = source[index];
+        const next = source[index + 1];
+
+        if (inLineComment) {
+            if (current === '\n' || current === '\r') {
+                inLineComment = false;
+                output += current;
+            }
+            continue;
+        }
+        if (inBlockComment) {
+            if (current === '*' && next === '/') {
+                inBlockComment = false;
+                index += 1;
+                continue;
+            }
+            if (current === '\n' || current === '\r') {
+                output += current;
+            }
+            continue;
+        }
+        if (inString) {
+            output += current;
+            if (isEscaped) {
+                isEscaped = false;
+            } else if (current === '\\') {
+                isEscaped = true;
+            } else if (current === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (current === '"') {
+            inString = true;
+            output += current;
+            continue;
+        }
+        if (current === '/' && next === '/') {
+            inLineComment = true;
+            index += 1;
+            continue;
+        }
+        if (current === '/' && next === '*') {
+            inBlockComment = true;
+            index += 1;
+            continue;
+        }
+        output += current;
+    }
+
+    return output;
+}
+
+function stripTrailingJsonCommas(source) {
+    let output = '';
+    let inString = false;
+    let isEscaped = false;
+
+    for (let index = 0; index < source.length; index += 1) {
+        const current = source[index];
+
+        if (inString) {
+            output += current;
+            if (isEscaped) {
+                isEscaped = false;
+            } else if (current === '\\') {
+                isEscaped = true;
+            } else if (current === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (current === '"') {
+            inString = true;
+            output += current;
+            continue;
+        }
+        if (current === ',') {
+            let lookahead = index + 1;
+
+            while (lookahead < source.length && /\s/u.test(source[lookahead])) {
+                lookahead += 1;
+            }
+            if (source[lookahead] === '}' || source[lookahead] === ']') {
+                continue;
+            }
+        }
+        output += current;
+    }
+
+    return output;
+}
+
+function parseJsonDocument(source) {
+    return JSON.parse(stripTrailingJsonCommas(stripJsonComments(source)));
+}
+
+function createPersistedBuildTask(projectRoot, workspaceFolder, vscodeApi = vscode) {
+    return {
+        label: createBuildTaskLabel(projectRoot, workspaceFolder),
+        type: FENG_TASK_TYPE,
+        task: FENG_BUILD_TASK,
+        cwd: createWorkspaceVariablePath(projectRoot, workspaceFolder, vscodeApi),
+        group: 'build',
+        problemMatcher: []
+    };
+}
+
+function ensurePersistedBuildTask(projectRoot, workspaceFolder, vscodeApi = vscode) {
+    const workspaceRoot = getWorkspaceFolderPath(workspaceFolder);
+    const vscodeDir = typeof workspaceRoot === 'string' && workspaceRoot.length > 0
+        ? path.join(workspaceRoot, '.vscode')
+        : null;
+    const tasksPath = vscodeDir != null ? path.join(vscodeDir, 'tasks.json') : null;
+    let document = {
+        version: '2.0.0',
+        tasks: []
+    };
+    let tasks;
+    let taskIndex;
+    const persistedTask = createPersistedBuildTask(projectRoot, workspaceFolder, vscodeApi);
+
+    if (tasksPath == null) {
+        return false;
+    }
+
+    if (isExistingFile(tasksPath)) {
+        try {
+            document = parseJsonDocument(fs.readFileSync(tasksPath, 'utf8'));
+        } catch (_) {
+            return false;
+        }
+        if (document == null || typeof document !== 'object' || Array.isArray(document)) {
+            return false;
+        }
+    }
+
+    tasks = Array.isArray(document.tasks) ? [...document.tasks] : [];
+    taskIndex = tasks.findIndex(task => task != null && typeof task === 'object' && task.label === persistedTask.label);
+
+    if (taskIndex >= 0) {
+        tasks[taskIndex] = {
+            ...tasks[taskIndex],
+            ...persistedTask
+        };
+    } else {
+        tasks.push(persistedTask);
+    }
+
+    fs.mkdirSync(vscodeDir, { recursive: true });
+    fs.writeFileSync(tasksPath,
+                     JSON.stringify({
+                         ...document,
+                         version: typeof document.version === 'string' && document.version.length > 0
+                             ? document.version
+                             : '2.0.0',
+                         tasks
+                     }, null, 2) + '\n',
+                     'utf8');
+    return true;
+}
+
 function parseProjectManifestDebugSettings(manifestPath) {
     let source;
     let section = null;
@@ -341,9 +565,13 @@ function containsVariableReference(value) {
 
 function resolveLaunchConfigPath(value, workspaceFolder, vscodeApi = vscode) {
     const baseRoot = getWorkspaceFolderPath(workspaceFolder) || getPrimaryWorkspaceRoot(vscodeApi);
+    const resolvedVariablePath = resolveWorkspaceVariablePath(value, workspaceFolder, vscodeApi);
 
-    if (typeof value !== 'string' || value.length === 0 || containsVariableReference(value)) {
+    if (typeof value !== 'string' || value.length === 0) {
         return null;
+    }
+    if (resolvedVariablePath != null) {
+        return resolvedVariablePath;
     }
     if (path.isAbsolute(value) || baseRoot == null) {
         return value;
@@ -504,8 +732,11 @@ function createFengTaskProvider(vscodeApi = vscode) {
 
         resolveTask(task) {
             const definition = task != null ? task.definition : null;
-            const projectRoot = definition != null && typeof definition.cwd === 'string'
-                ? definition.cwd
+            const taskScope = task != null && task.scope != null && typeof task.scope === 'object'
+                ? task.scope
+                : undefined;
+            const projectRoot = definition != null
+                ? resolveWorkspaceVariablePath(definition.cwd, taskScope, vscodeApi)
                 : null;
 
             if (definition == null || definition.type !== FENG_TASK_TYPE || definition.task !== FENG_BUILD_TASK) {
@@ -549,8 +780,8 @@ function createDefaultDebugConfiguration(manifestPath, workspaceFolder, vscodeAp
         type: FENG_DEBUG_TYPE,
         request: 'launch',
         name: `Debug ${settings.packageName}`,
-        program: settings.programPath,
-        cwd: settings.projectRoot,
+        program: createWorkspaceVariablePath(settings.programPath, taskWorkspaceFolder, vscodeApi),
+        cwd: createWorkspaceVariablePath(settings.projectRoot, taskWorkspaceFolder, vscodeApi),
         preLaunchTask: taskWorkspaceFolder != null
             ? createBuildTaskLabel(settings.projectRoot, taskWorkspaceFolder)
             : undefined
@@ -564,14 +795,36 @@ function createFengDebugConfigurationProvider(vscodeApi = vscode) {
             const workspaceSettings = manifestPath == null
                 ? await findWorkspaceDebugSettings(workspaceFolder, vscodeApi)
                 : [];
-            const configurations = manifestPath != null
-                ? [createDefaultDebugConfiguration(manifestPath, workspaceFolder, vscodeApi)]
-                : workspaceSettings.map(settings => createDefaultDebugConfiguration(settings.manifestPath,
-                                                                                   workspaceFolder || getWorkspaceFolderForPath(settings.projectRoot,
-                                                                                                                                vscodeApi),
-                                                                                   vscodeApi));
+            const candidates = manifestPath != null
+                ? [{
+                    manifestPath,
+                    workspaceFolder
+                }]
+                : workspaceSettings.map(settings => ({
+                    manifestPath: settings.manifestPath,
+                    workspaceFolder: workspaceFolder || getWorkspaceFolderForPath(settings.projectRoot, vscodeApi)
+                }));
+            const configurations = [];
 
-            return configurations.filter(configuration => configuration != null);
+            for (const candidate of candidates) {
+                const configuration = createDefaultDebugConfiguration(candidate.manifestPath,
+                                                                     candidate.workspaceFolder,
+                                                                     vscodeApi);
+                const settings = getProjectDebugSettings(candidate.manifestPath);
+                const taskWorkspaceFolder = settings != null
+                    ? (candidate.workspaceFolder || getWorkspaceFolderForPath(settings.projectRoot, vscodeApi))
+                    : null;
+
+                if (configuration == null) {
+                    continue;
+                }
+                if (settings != null && taskWorkspaceFolder != null) {
+                    ensurePersistedBuildTask(settings.projectRoot, taskWorkspaceFolder, vscodeApi);
+                }
+                configurations.push(configuration);
+            }
+
+            return configurations;
         },
 
         async resolveDebugConfiguration(workspaceFolder, config) {
@@ -1073,15 +1326,20 @@ module.exports = {
         isCheckableFengDocument,
         createBuildTaskLabel,
         createBuildTaskName,
+        createPersistedBuildTask,
         createDebugAdapterExecutable,
         createDefaultDebugConfiguration,
         createFengBuildTask,
         createFengDebugConfigurationProvider,
         createFengTaskProvider,
+        createWorkspaceVariablePath,
+        ensurePersistedBuildTask,
         findWorkspaceDebugSettings,
+        parseJsonDocument,
         registerLanguageServerRestartCommand,
         registerLegacyDiagnostics,
         registerDebuggingSupport,
+        resolveWorkspaceVariablePath,
         updateLanguageServerStatusBar,
         FENG_BUILD_TASK,
         FENG_DEBUG_TYPE,
