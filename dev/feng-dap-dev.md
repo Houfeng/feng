@@ -648,10 +648,10 @@ VARS:
   - [x] 支持标量值上的简单算术 / 比较。
   - [x] 明确拒绝其他表达式类型。
 
-- [ ] Phase 6：测试与回归
-  - [ ] 补齐 codegen / 抽象调试信息 / `.fd` 的 golden tests。
+- [x] Phase 6：测试与回归
+  - [x] 补齐 codegen / 抽象调试信息 / `.fd` 的 golden tests。
   - [x] 补齐 adapter 协议测试。
-  - [ ] 补齐 VS Code + macOS + LLDB smoke 测试。
+  - [x] 补齐 VS Code + macOS + LLDB smoke 测试。
   - [x] 执行现有 LSP 与编译器测试回归。
 - codegen / `.fd` golden tests
 - adapter 协议测试

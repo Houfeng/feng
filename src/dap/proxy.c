@@ -1696,30 +1696,58 @@ static bool proxy_package_uri_to_local_path(const FengDebugArtifact *artifact,
     }
 
     scheme_separator = strstr(uri, "://");
-    if (scheme_separator == NULL || scheme_separator == uri || scheme_separator[3] == '\0') {
-        return false;
-    }
-    package_name = proxy_dup_bytes((const unsigned char *)uri,
-                                   (size_t)(scheme_separator - uri));
-    if (package_name == NULL) {
-        return false;
-    }
-    for (size_t index = 0U; index < artifact->package_count; ++index) {
-        if (strcmp(artifact->packages[index].package_name, package_name) != 0) {
-            continue;
-        }
-        local_path = proxy_path_join(artifact->packages[index].local_root_path,
-                                     scheme_separator + 3U);
-        if (local_path == NULL) {
-            free(package_name);
+    if (scheme_separator != NULL && scheme_separator != uri && scheme_separator[3] != '\0') {
+        package_name = proxy_dup_bytes((const unsigned char *)uri,
+                                       (size_t)(scheme_separator - uri));
+        if (package_name == NULL) {
             return false;
         }
-        *out_local_path = local_path;
-        ok = true;
-        break;
+        for (size_t index = 0U; index < artifact->package_count; ++index) {
+            if (strcmp(artifact->packages[index].package_name, package_name) != 0) {
+                continue;
+            }
+            local_path = proxy_path_join(artifact->packages[index].local_root_path,
+                                         scheme_separator + 3U);
+            if (local_path == NULL) {
+                free(package_name);
+                return false;
+            }
+            *out_local_path = local_path;
+            ok = true;
+            break;
+        }
+        free(package_name);
+        return ok;
     }
-    free(package_name);
-    return ok;
+
+    for (size_t index = 0U; index < artifact->package_count; ++index) {
+        const char *known_package_name = artifact->packages[index].package_name;
+        size_t package_name_length;
+        const char *match;
+
+        if (known_package_name == NULL || known_package_name[0] == '\0') {
+            continue;
+        }
+
+        package_name_length = strlen(known_package_name);
+        match = strstr(uri, known_package_name);
+        while (match != NULL) {
+            if ((match == uri || match[-1] == '/') &&
+                strncmp(match + package_name_length, ":/", 2U) == 0 &&
+                match[package_name_length + 2U] != '\0') {
+                local_path = proxy_path_join(artifact->packages[index].local_root_path,
+                                             match + package_name_length + 2U);
+                if (local_path == NULL) {
+                    return false;
+                }
+                *out_local_path = local_path;
+                return true;
+            }
+            match = strstr(match + package_name_length, known_package_name);
+        }
+    }
+
+    return false;
 }
 
 /* Release one owned JSON replacement entry. */
@@ -1976,14 +2004,11 @@ static bool proxy_json_get_string_member_loose(const char *json,
                                              json_length,
                                              key,
                                              &value_start,
-                                             &value_end)) {
+                                             &value_end) ||
+        !proxy_json_parse_string_copy(value_start, value_end, out_value, &after_string)) {
         return false;
     }
-    if (!proxy_json_parse_string_copy(value_start, value_end, out_value, &after_string)) {
-        return false;
-    }
-    after_string = proxy_json_skip_whitespace(after_string, value_end);
-    return after_string == value_end;
+    return true;
 }
 
 /* Parse one loose unsigned integer member from the current JSON object. */
