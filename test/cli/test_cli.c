@@ -3665,7 +3665,7 @@ static void test_dap_validated_launch_starts_backend(void) {
     backend_initialize_text = dup_printf("Content-Length: %zu\\r\\n\\r\\n%s",
                                          strlen(backend_initialize_json),
                                          backend_initialize_json);
-    backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\ncat >/dev/null\n",
+    backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\n/bin/cat >/dev/null\n",
                                 marker_path,
                                 backend_initialize_text);
     write_executable_text_file(backend_path, backend_script);
@@ -3706,6 +3706,110 @@ static void test_dap_validated_launch_starts_backend(void) {
     free(path_value);
     free(backend_script);
     free(marker_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure launch falls back to `xcrun -f lldb-dap` when PATH misses lldb-dap. */
+static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x12U};
+    char template_path[] = "/tmp/feng_cli_dap_launch_xcrun_XXXXXX";
+    char *workspace_dir;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *xcrun_path;
+    char *marker_path;
+    char *backend_script;
+    char *xcrun_script;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *initialize_text;
+    char *launch_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "resolved-lldb-dap");
+    xcrun_path = path_join(workspace_dir, "xcrun");
+    marker_path = path_join(workspace_dir, "spawned.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               NULL,
+                               0U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = dup_printf("Content-Length: %zu\\r\\n\\r\\n%s",
+                                         strlen(backend_initialize_json),
+                                         backend_initialize_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\ncat >/dev/null\n",
+                                marker_path,
+                                backend_initialize_text);
+    xcrun_script = dup_printf("#!/bin/sh\nif [ \"$1\" = \"-f\" ] && [ \"$2\" = \"lldb-dap\" ]; then\n  printf '%%s\\n' \"%s\"\n  exit 0\nfi\nexit 1\n",
+                              backend_path);
+    write_executable_text_file(backend_path, backend_script);
+    write_executable_text_file(xcrun_path, xcrun_script);
+    path_value = dup_printf("%s:/bin:/usr/bin:/usr/sbin:/sbin", workspace_dir);
+
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    input_text = dup_printf("%s%s", initialize_text, launch_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    ASSERT(strstr(stdout_text, "\"command\":\"initialize\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"success\":true") != NULL);
+    ASSERT(path_exists(marker_path));
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(launch_text);
+    free(initialize_text);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(xcrun_script);
+    free(backend_script);
+    free(marker_path);
+    free(xcrun_path);
     free(backend_path);
     free(fd_path);
     free(binary_path);
@@ -10547,6 +10651,7 @@ int main(void) {
     test_dap_rejects_unknown_option();
     test_deps_add_help_writes_stdout_and_returns_success();
     test_dap_validated_launch_starts_backend();
+    test_dap_resolves_backend_via_xcrun_when_path_misses();
     test_dap_rewrites_set_breakpoints_source_path_to_package_uri();
     test_dap_rejects_set_breakpoints_outside_debug_closure();
     test_dap_rewrites_stack_trace_source_path_to_local_path();
