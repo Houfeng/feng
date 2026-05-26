@@ -498,19 +498,19 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；stackTrace / variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换；stack frame 名称、variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
 
 #### `setBreakpoints`
 
-- 编辑器仍以本地 `.ff` 文件路径下断点；`feng dap` 先依据 `.fd.PKGS` 把该路径转换成对应的 `PKG_NAME://<package-relative path>`，再交给 `lldb-dap` 利用原生调试信息绑定。
+- 编辑器仍以本地 `.ff` 文件路径下断点；`feng dap` 现已依据 `.fd.PKGS` 把该路径转换成对应的 `PKG_NAME://<package-relative path>`，再交给 `lldb-dap` 利用原生调试信息绑定。
 - 若某个本地文件路径无法唯一落到当前调试闭包中的一个 package URI，`feng dap` 立即报配置错误，不做猜测性绑定。
 - 若遇到个别绑定不稳定情形，再用 `.fd.frames` 仅做诊断与命中后重写，不把 `.fd` 变成主断点数据库。
 
 #### `stackTrace`
 
 - 先拿到 `lldb-dap` 的原生 frame 列表。
-- 若 frame source 来自 `PKG_NAME://...` 逻辑 URI，先依据 `.fd.PKGS` 还原为本地文件路径，再返回给编辑器。
-- 再用 `.fd.frames` 的 `backend_symbol` 与 `frame_policy` 重写为 Feng callable 名称。
+- 若 frame source 来自 `PKG_NAME://...` 逻辑 URI，`feng dap` 现已先依据 `.fd.PKGS` 还原为本地文件路径，再返回给编辑器。
+- 后续再用 `.fd.frames` 的 `backend_symbol` 与 `frame_policy` 重写为 Feng callable 名称。
 - 对纯 runtime / generated helper frame 默认隐藏，必要时可提供开发者模式开关显示原生 frame。
 
 #### `scopes` / `variables`
@@ -634,7 +634,7 @@ VARS:
 - [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
   - [x] 新增 `feng dap`，启动并代理 `lldb-dap`。
   - [ ] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
-  - [ ] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
+  - [x] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
   - [ ] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
   - [ ] 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
 

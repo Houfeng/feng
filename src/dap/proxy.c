@@ -25,20 +25,8 @@ typedef enum FengDapReadStatus {
     FENG_DAP_READ_OK = 0,
     FENG_DAP_READ_EOF = 1,
     FENG_DAP_READ_ERROR = 2,
+    FENG_DAP_READ_PENDING = 3,
 } FengDapReadStatus;
-
-/* Track one half-duplex relay leg between two file descriptors. */
-typedef struct FengDapProxyPipe {
-    int read_fd;
-    int write_fd;
-    bool close_write_on_finish;
-    bool read_closed;
-    bool write_closed;
-    unsigned char *buffer;
-    size_t buffer_start;
-    size_t buffer_end;
-    size_t buffer_capacity;
-} FengDapProxyPipe;
 
 /* Incremental DAP reader that preserves unread bytes across message parsing. */
 typedef struct FengDapMessageReader {
@@ -57,6 +45,13 @@ typedef struct FengDapMessage {
     char *payload;
     size_t payload_length;
 } FengDapMessage;
+
+/* One pending JSON string-literal replacement inside a framed DAP payload. */
+typedef struct FengDapJsonStringReplacement {
+    size_t start_offset;
+    size_t end_offset;
+    char *replacement;
+} FengDapJsonStringReplacement;
 
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
 
@@ -129,6 +124,35 @@ static bool proxy_append_byte(char **buffer,
     }
     (*buffer)[*length] = (char)byte;
     *length += 1U;
+    return true;
+}
+
+/* Grow a dynamic byte buffer and append one byte range. */
+static bool proxy_append_bytes(char **buffer,
+                               size_t *length,
+                               size_t *capacity,
+                               const char *bytes,
+                               size_t byte_count) {
+    char *resized;
+
+    if (byte_count == 0U) {
+        return true;
+    }
+    if (*length + byte_count + 1U >= *capacity) {
+        size_t new_capacity = *capacity == 0U ? 64U : *capacity;
+
+        while (*length + byte_count + 1U >= new_capacity) {
+            new_capacity *= 2U;
+        }
+        resized = (char *)realloc(*buffer, new_capacity);
+        if (resized == NULL) {
+            return false;
+        }
+        *buffer = resized;
+        *capacity = new_capacity;
+    }
+    memcpy(*buffer + *length, bytes, byte_count);
+    *length += byte_count;
     return true;
 }
 
@@ -302,6 +326,22 @@ static bool proxy_write_message(int fd,
            proxy_write_all(fd,
                            (const unsigned char *)json_payload,
                            payload_length,
+                           error_fd,
+                           context);
+}
+
+/* Forward one existing framed DAP message without rewriting its payload. */
+static bool proxy_write_framed_message(int fd,
+                                       const FengDapMessage *message,
+                                       int error_fd,
+                                       const char *context) {
+    if (message == NULL || message->frame == NULL) {
+        proxy_report_error(error_fd, context, "missing DAP frame");
+        return false;
+    }
+    return proxy_write_all(fd,
+                           (const unsigned char *)message->frame,
+                           message->frame_length,
                            error_fd,
                            context);
 }
@@ -484,63 +524,80 @@ static bool proxy_parse_content_length(const unsigned char *header,
     return false;
 }
 
+/* Attempt to parse one complete buffered DAP message without reading more bytes. */
+static FengDapReadStatus proxy_reader_try_read_buffered_message(FengDapMessageReader *reader,
+                                                                FengDapMessage *out_message,
+                                                                int error_fd) {
+    size_t header_offset = 0U;
+    size_t separator_length = 0U;
+    size_t content_length = 0U;
+    size_t frame_length;
+
+    if (proxy_reader_find_header(reader, &header_offset, &separator_length)) {
+        const unsigned char *header = reader->buffer + reader->buffer_start;
+
+        if (!proxy_parse_content_length(header, header_offset, &content_length)) {
+            proxy_report_error(error_fd, "DAP protocol error", "missing Content-Length header");
+            return FENG_DAP_READ_ERROR;
+        }
+        frame_length = header_offset + separator_length + content_length;
+        if (reader->buffer_end - reader->buffer_start < frame_length) {
+            if (reader->reached_eof) {
+                proxy_report_error(error_fd,
+                                   "DAP protocol error",
+                                   "unexpected EOF while reading DAP payload");
+                return FENG_DAP_READ_ERROR;
+            }
+            return FENG_DAP_READ_PENDING;
+        }
+
+        {
+            size_t payload_offset = header_offset + separator_length;
+
+            out_message->frame = proxy_dup_bytes(reader->buffer + reader->buffer_start,
+                                                 frame_length);
+            out_message->payload = proxy_dup_bytes(reader->buffer + reader->buffer_start + payload_offset,
+                                                   content_length);
+            if (out_message->frame == NULL || out_message->payload == NULL) {
+                proxy_message_dispose(out_message);
+                proxy_report_error(error_fd,
+                                   "failed to allocate DAP message",
+                                   "out of memory");
+                return FENG_DAP_READ_ERROR;
+            }
+            out_message->frame_length = frame_length;
+            out_message->payload_length = content_length;
+            reader->buffer_start += frame_length;
+            if (reader->buffer_start == reader->buffer_end) {
+                reader->buffer_start = 0U;
+                reader->buffer_end = 0U;
+            }
+            return FENG_DAP_READ_OK;
+        }
+    }
+    if (reader->reached_eof) {
+        if (reader->buffer_end == reader->buffer_start) {
+            return FENG_DAP_READ_EOF;
+        }
+        proxy_report_error(error_fd,
+                           "DAP protocol error",
+                           "unexpected EOF while reading DAP headers");
+        return FENG_DAP_READ_ERROR;
+    }
+    return FENG_DAP_READ_PENDING;
+}
+
 /* Read the next framed DAP message from one reader. */
 static FengDapReadStatus proxy_reader_read_message(FengDapMessageReader *reader,
                                                    FengDapMessage *out_message,
                                                    int error_fd) {
     for (;;) {
-        size_t header_offset = 0U;
-        size_t separator_length = 0U;
-        size_t content_length = 0U;
-        size_t frame_length;
+        FengDapReadStatus status = proxy_reader_try_read_buffered_message(reader,
+                                                                          out_message,
+                                                                          error_fd);
 
-        if (proxy_reader_find_header(reader, &header_offset, &separator_length)) {
-            const unsigned char *header = reader->buffer + reader->buffer_start;
-
-            if (!proxy_parse_content_length(header, header_offset, &content_length)) {
-                proxy_report_error(error_fd, "DAP protocol error", "missing Content-Length header");
-                return FENG_DAP_READ_ERROR;
-            }
-            frame_length = header_offset + separator_length + content_length;
-            if (reader->buffer_end - reader->buffer_start < frame_length) {
-                if (reader->reached_eof) {
-                    proxy_report_error(error_fd,
-                                       "DAP protocol error",
-                                       "unexpected EOF while reading DAP payload");
-                    return FENG_DAP_READ_ERROR;
-                }
-            } else {
-                size_t payload_offset = header_offset + separator_length;
-
-                out_message->frame = proxy_dup_bytes(reader->buffer + reader->buffer_start,
-                                                     frame_length);
-                out_message->payload = proxy_dup_bytes(reader->buffer + reader->buffer_start + payload_offset,
-                                                       content_length);
-                if (out_message->frame == NULL || out_message->payload == NULL) {
-                    proxy_message_dispose(out_message);
-                    proxy_report_error(error_fd,
-                                       "failed to allocate DAP message",
-                                       "out of memory");
-                    return FENG_DAP_READ_ERROR;
-                }
-                out_message->frame_length = frame_length;
-                out_message->payload_length = content_length;
-                reader->buffer_start += frame_length;
-                if (reader->buffer_start == reader->buffer_end) {
-                    reader->buffer_start = 0U;
-                    reader->buffer_end = 0U;
-                }
-                return FENG_DAP_READ_OK;
-            }
-        }
-        if (reader->reached_eof) {
-            if (reader->buffer_end == reader->buffer_start) {
-                return FENG_DAP_READ_EOF;
-            }
-            proxy_report_error(error_fd,
-                               "DAP protocol error",
-                               "unexpected EOF while reading DAP headers");
-            return FENG_DAP_READ_ERROR;
+        if (status != FENG_DAP_READ_PENDING) {
+            return status;
         }
         if (!proxy_reader_fill(reader, error_fd)) {
             return FENG_DAP_READ_ERROR;
@@ -843,6 +900,74 @@ static bool proxy_json_find_object_member(const char *json,
     return false;
 }
 
+/* Fallback member lookup for small known object slices when structured lookup misses. */
+static bool proxy_json_find_object_member_fallback(const char *json,
+                                                   size_t json_length,
+                                                   const char *key,
+                                                   const char **out_value_start,
+                                                   const char **out_value_end) {
+    const char *cursor = json;
+    const char *end = json + json_length;
+    size_t key_length;
+
+    if (key == NULL) {
+        return false;
+    }
+    key_length = strlen(key);
+    while (cursor < end) {
+        const char *match = strstr(cursor, key);
+        const char *quoted_start;
+        const char *after_key;
+        const char *value_start;
+        const char *value_end;
+
+        if (match == NULL || match >= end) {
+            return false;
+        }
+        quoted_start = match - 1;
+        if (quoted_start < json || *quoted_start != '"') {
+            cursor = match + 1;
+            continue;
+        }
+        if (match + key_length >= end || match[key_length] != '"') {
+            cursor = match + 1;
+            continue;
+        }
+        after_key = proxy_json_skip_whitespace(match + key_length + 1U, end);
+        if (after_key >= end || *after_key != ':') {
+            cursor = match + 1;
+            continue;
+        }
+        value_start = proxy_json_skip_whitespace(after_key + 1U, end);
+        if (!proxy_json_skip_value(value_start, end, &value_end)) {
+            cursor = match + 1;
+            continue;
+        }
+        *out_value_start = value_start;
+        *out_value_end = value_end;
+        return true;
+    }
+    return false;
+}
+
+/* Find one named object member, falling back to a restricted raw key search when needed. */
+static bool proxy_json_find_object_member_loose(const char *json,
+                                                size_t json_length,
+                                                const char *key,
+                                                const char **out_value_start,
+                                                const char **out_value_end) {
+    return proxy_json_find_object_member(json,
+                                         json_length,
+                                         key,
+                                         out_value_start,
+                                         out_value_end) ||
+           proxy_json_find_object_member_fallback(json,
+                                                  json_length,
+                                                  key,
+                                                  out_value_start,
+                                                  out_value_end);
+}
+
 /* Parse one string member from the top-level object. */
 static bool proxy_json_get_string_member(const char *json,
                                          size_t json_length,
@@ -1025,8 +1150,9 @@ static bool proxy_send_request_failure_response(int output_fd,
     return ok;
 }
 
-/* Validate one launch request against the final `.fd` sidecar on disk. */
+/* Validate one launch request and optionally keep the loaded `.fd` artifact alive. */
 static bool proxy_validate_launch_request(const FengDapMessage *launch_message,
+                                          FengDebugArtifact *out_artifact,
                                           char **out_error_detail) {
     char *program_path = NULL;
     char *fd_path = NULL;
@@ -1039,6 +1165,10 @@ static bool proxy_validate_launch_request(const FengDapMessage *launch_message,
     if (out_error_detail != NULL) {
         free(*out_error_detail);
         *out_error_detail = NULL;
+    }
+    if (out_artifact != NULL) {
+        feng_debug_artifact_dispose(out_artifact);
+        memset(out_artifact, 0, sizeof(*out_artifact));
     }
     if (launch_message == NULL || launch_message->payload == NULL) {
         if (out_error_detail != NULL) {
@@ -1065,7 +1195,8 @@ static bool proxy_validate_launch_request(const FengDapMessage *launch_message,
     }
     if (!feng_debug_read_fd(fd_path, &artifact, &debug_error)) {
         if (out_error_detail != NULL) {
-            *out_error_detail = proxy_dup_printf("%s", debug_error != NULL ? debug_error : "failed to load debug sidecar");
+            *out_error_detail = proxy_dup_printf("%s",
+                                                 debug_error != NULL ? debug_error : "failed to load debug sidecar");
         }
         goto cleanup;
     }
@@ -1082,6 +1213,10 @@ static bool proxy_validate_launch_request(const FengDapMessage *launch_message,
         }
         goto cleanup;
     }
+    if (out_artifact != NULL) {
+        *out_artifact = artifact;
+        memset(&artifact, 0, sizeof(artifact));
+    }
     ok = true;
 
 cleanup:
@@ -1093,293 +1228,780 @@ cleanup:
     return ok;
 }
 
-/* Return whether the relay leg still has bytes buffered for output. */
-static bool proxy_pipe_has_pending_output(const FengDapProxyPipe *pipe_state) {
-    return pipe_state != NULL && pipe_state->buffer_start < pipe_state->buffer_end;
+/* Join two POSIX-style path segments. */
+static char *proxy_path_join(const char *lhs, const char *rhs) {
+    size_t lhs_length = strlen(lhs);
+    size_t rhs_length = strlen(rhs);
+    bool need_separator = lhs_length > 0U && lhs[lhs_length - 1U] != '/';
+
+    return proxy_dup_printf("%s%s%s",
+                            lhs,
+                            need_separator ? "/" : "",
+                            rhs_length > 0U ? rhs : "");
 }
 
-/* Ensure the relay pipe has enough writable space for more bytes. */
-static bool proxy_pipe_ensure_capacity(FengDapProxyPipe *pipe_state, size_t extra) {
-    size_t unread = pipe_state->buffer_end - pipe_state->buffer_start;
-    unsigned char *resized;
+/* Resolve one path relative to a root directory using the same boundary rules as codegen. */
+static bool proxy_path_relative_from_root(const char *root,
+                                          const char *path,
+                                          char **out_relative) {
+    size_t root_length;
+    const char *relative_start;
 
-    if (pipe_state->buffer_capacity - pipe_state->buffer_end >= extra) {
-        return true;
+    *out_relative = NULL;
+    if (root == NULL || path == NULL) {
+        return false;
     }
-    if (pipe_state->buffer_start > 0U) {
-        memmove(pipe_state->buffer,
-                pipe_state->buffer + pipe_state->buffer_start,
-                unread);
-        pipe_state->buffer_start = 0U;
-        pipe_state->buffer_end = unread;
-        if (pipe_state->buffer_capacity - pipe_state->buffer_end >= extra) {
-            return true;
-        }
-    }
-    {
-        size_t new_capacity = pipe_state->buffer_capacity == 0U
-                                  ? FENG_DAP_PROXY_BUFFER_CAPACITY
-                                  : pipe_state->buffer_capacity;
 
-        while (new_capacity - unread < extra) {
-            new_capacity *= 2U;
-        }
-        resized = (unsigned char *)realloc(pipe_state->buffer, new_capacity);
-        if (resized == NULL) {
+    root_length = strlen(root);
+    while (root_length > 1U && root[root_length - 1U] == '/') {
+        root_length--;
+    }
+    if (root_length == 0U) {
+        return false;
+    }
+    if (strncmp(path, root, root_length) != 0) {
+        return false;
+    }
+    if (root_length == 1U && root[0] == '/') {
+        relative_start = path[0] == '/' ? path + 1 : path;
+    } else {
+        if (path[root_length] != '/') {
             return false;
         }
-        pipe_state->buffer = resized;
-        pipe_state->buffer_capacity = new_capacity;
+        relative_start = path + root_length + 1U;
     }
-    return true;
+    while (*relative_start == '/') {
+        ++relative_start;
+    }
+    if (*relative_start == '\0') {
+        return false;
+    }
+
+    *out_relative = proxy_dup_printf("%s", relative_start);
+    return *out_relative != NULL;
 }
 
-/* Initialize one relay leg, optionally seeding buffered bytes. */
-static bool proxy_pipe_init(FengDapProxyPipe *pipe_state,
-                            int read_fd,
-                            int write_fd,
-                            bool close_write_on_finish,
-                            const unsigned char *initial_bytes,
-                            size_t initial_length,
-                            bool read_closed) {
-    memset(pipe_state, 0, sizeof(*pipe_state));
-    pipe_state->read_fd = read_fd;
-    pipe_state->write_fd = write_fd;
-    pipe_state->close_write_on_finish = close_write_on_finish;
-    pipe_state->read_closed = read_closed;
-    if (initial_length > 0U) {
-        if (!proxy_pipe_ensure_capacity(pipe_state, initial_length)) {
+/* Map one editor local file path to a package URI using `.fd.PKGS`. */
+static bool proxy_local_path_to_package_uri(const FengDebugArtifact *artifact,
+                                            const char *local_path,
+                                            char **out_uri,
+                                            char **out_error_detail) {
+    char *resolved_path = NULL;
+    char *candidate_uri = NULL;
+    size_t match_count = 0U;
+
+    if (out_uri != NULL) {
+        free(*out_uri);
+        *out_uri = NULL;
+    }
+    if (out_error_detail != NULL) {
+        free(*out_error_detail);
+        *out_error_detail = NULL;
+    }
+    if (artifact == NULL || local_path == NULL || out_uri == NULL) {
+        return false;
+    }
+
+    resolved_path = realpath(local_path, NULL);
+    if (resolved_path == NULL) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("failed to resolve breakpoint source path %s: %s",
+                                                 local_path,
+                                                 strerror(errno));
+        }
+        return false;
+    }
+
+    for (size_t index = 0U; index < artifact->package_count; ++index) {
+        char *relative_path = NULL;
+        char *uri = NULL;
+        char *resolved_root = NULL;
+        const char *package_root = artifact->packages[index].local_root_path;
+
+        resolved_root = realpath(package_root, NULL);
+        if (resolved_root != NULL) {
+            package_root = resolved_root;
+        }
+
+        if (!proxy_path_relative_from_root(package_root,
+                                           resolved_path,
+                                           &relative_path)) {
+            free(resolved_root);
+            continue;
+        }
+        uri = proxy_dup_printf("%s://%s",
+                               artifact->packages[index].package_name,
+                               relative_path);
+        free(relative_path);
+        free(resolved_root);
+        if (uri == NULL) {
+            free(resolved_path);
+            proxy_report_error(STDERR_FILENO,
+                               "failed to rewrite setBreakpoints path",
+                               "out of memory");
+            free(candidate_uri);
             return false;
         }
-        memcpy(pipe_state->buffer, initial_bytes, initial_length);
-        pipe_state->buffer_end = initial_length;
+        match_count += 1U;
+        if (match_count == 1U) {
+            candidate_uri = uri;
+            continue;
+        }
+        free(uri);
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("breakpoint source path %s matches multiple debug packages",
+                                                 resolved_path);
+        }
+        free(candidate_uri);
+        free(resolved_path);
+        return false;
     }
+
+    if (match_count == 0U) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("breakpoint source path %s is not part of the debug closure",
+                                                 resolved_path);
+        }
+        free(resolved_path);
+        return false;
+    }
+
+    *out_uri = candidate_uri;
+    free(resolved_path);
     return true;
 }
 
-/* Release heap storage owned by one relay leg. */
-static void proxy_pipe_dispose(FengDapProxyPipe *pipe_state) {
-    if (pipe_state == NULL) {
-        return;
-    }
-    free(pipe_state->buffer);
-    memset(pipe_state, 0, sizeof(*pipe_state));
-}
+/* Map one package URI back to a local file path using `.fd.PKGS`. */
+static bool proxy_package_uri_to_local_path(const FengDebugArtifact *artifact,
+                                            const char *uri,
+                                            char **out_local_path) {
+    const char *scheme_separator;
+    char *package_name = NULL;
+    char *local_path = NULL;
+    bool ok = false;
 
-/* Return whether the relay leg has fully drained and no longer needs polling. */
-static bool proxy_pipe_is_done(const FengDapProxyPipe *pipe_state) {
-    if (pipe_state == NULL) {
-        return true;
+    if (out_local_path != NULL) {
+        free(*out_local_path);
+        *out_local_path = NULL;
     }
-    if (!pipe_state->read_closed) {
+    if (artifact == NULL || uri == NULL || out_local_path == NULL) {
         return false;
     }
-    if (proxy_pipe_has_pending_output(pipe_state)) {
+
+    scheme_separator = strstr(uri, "://");
+    if (scheme_separator == NULL || scheme_separator == uri || scheme_separator[3] == '\0') {
         return false;
     }
-    return !pipe_state->close_write_on_finish || pipe_state->write_closed;
-}
-
-/* Close the downstream writer once upstream EOF has been fully drained. */
-static void proxy_pipe_finish_write(FengDapProxyPipe *pipe_state) {
-    if (pipe_state == NULL || pipe_state->write_closed || !pipe_state->close_write_on_finish) {
-        return;
-    }
-    if (!pipe_state->read_closed || proxy_pipe_has_pending_output(pipe_state)) {
-        return;
-    }
-    close(pipe_state->write_fd);
-    pipe_state->write_closed = true;
-}
-
-/* Read the next chunk from the upstream side into the relay buffer. */
-static bool proxy_pipe_read_into_buffer(FengDapProxyPipe *pipe_state, int error_fd) {
-    ssize_t read_size;
-
-    if (pipe_state == NULL || pipe_state->read_closed) {
-        return true;
-    }
-    if (!proxy_pipe_ensure_capacity(pipe_state, FENG_DAP_PROXY_BUFFER_CAPACITY)) {
-        proxy_report_error(error_fd, "failed to grow DAP relay buffer", "out of memory");
+    package_name = proxy_dup_bytes((const unsigned char *)uri,
+                                   (size_t)(scheme_separator - uri));
+    if (package_name == NULL) {
         return false;
     }
-    read_size = read(pipe_state->read_fd,
-                     pipe_state->buffer + pipe_state->buffer_end,
-                     pipe_state->buffer_capacity - pipe_state->buffer_end);
-    if (read_size == 0) {
-        pipe_state->read_closed = true;
-        proxy_pipe_finish_write(pipe_state);
-        return true;
-    }
-    if (read_size < 0) {
-        if (errno == EINTR || errno == EAGAIN) {
-            return true;
+    for (size_t index = 0U; index < artifact->package_count; ++index) {
+        if (strcmp(artifact->packages[index].package_name, package_name) != 0) {
+            continue;
         }
-        proxy_report_error(error_fd, "failed to read dap proxy stream", strerror(errno));
-        return false;
+        local_path = proxy_path_join(artifact->packages[index].local_root_path,
+                                     scheme_separator + 3U);
+        if (local_path == NULL) {
+            free(package_name);
+            return false;
+        }
+        *out_local_path = local_path;
+        ok = true;
+        break;
     }
+    free(package_name);
+    return ok;
+}
 
-    pipe_state->buffer_end += (size_t)read_size;
+/* Release one owned JSON replacement entry. */
+static void proxy_json_string_replacement_dispose(FengDapJsonStringReplacement *replacement) {
+    if (replacement == NULL) {
+        return;
+    }
+    free(replacement->replacement);
+    replacement->replacement = NULL;
+    replacement->start_offset = 0U;
+    replacement->end_offset = 0U;
+}
+
+/* Release one dynamic JSON replacement list. */
+static void proxy_json_string_replacements_dispose(FengDapJsonStringReplacement *replacements,
+                                                   size_t replacement_count) {
+    if (replacements == NULL) {
+        return;
+    }
+    for (size_t index = 0U; index < replacement_count; ++index) {
+        proxy_json_string_replacement_dispose(&replacements[index]);
+    }
+    free(replacements);
+}
+
+/* Append one JSON string replacement entry. */
+static bool proxy_append_json_string_replacement(FengDapJsonStringReplacement **replacements,
+                                                 size_t *replacement_count,
+                                                 size_t *replacement_capacity,
+                                                 size_t start_offset,
+                                                 size_t end_offset,
+                                                 char *replacement) {
+    FengDapJsonStringReplacement *grown;
+    size_t new_capacity;
+
+    if (*replacement_count == *replacement_capacity) {
+        new_capacity = *replacement_capacity == 0U ? 4U : (*replacement_capacity * 2U);
+        grown = (FengDapJsonStringReplacement *)realloc(*replacements,
+                                                        new_capacity * sizeof(**replacements));
+        if (grown == NULL) {
+            return false;
+        }
+        *replacements = grown;
+        *replacement_capacity = new_capacity;
+    }
+    (*replacements)[*replacement_count].start_offset = start_offset;
+    (*replacements)[*replacement_count].end_offset = end_offset;
+    (*replacements)[*replacement_count].replacement = replacement;
+    *replacement_count += 1U;
     return true;
 }
 
-/* Flush buffered bytes to the downstream side. */
-static bool proxy_pipe_write_from_buffer(FengDapProxyPipe *pipe_state, int error_fd) {
-    ssize_t written;
+/* Materialize a new JSON payload after applying one or more string-literal replacements. */
+static bool proxy_apply_json_string_replacements(const char *json,
+                                                 size_t json_length,
+                                                 const FengDapJsonStringReplacement *replacements,
+                                                 size_t replacement_count,
+                                                 char **out_json,
+                                                 int error_fd,
+                                                 const char *context) {
+    char *rewritten = NULL;
+    size_t rewritten_length = 0U;
+    size_t rewritten_capacity = 0U;
+    size_t cursor = 0U;
 
-    if (pipe_state == NULL || pipe_state->write_closed || !proxy_pipe_has_pending_output(pipe_state)) {
+    *out_json = NULL;
+    if (replacement_count == 0U) {
         return true;
     }
+    for (size_t index = 0U; index < replacement_count; ++index) {
+        char *escaped_replacement;
+        size_t escaped_length;
 
-    written = write(pipe_state->write_fd,
-                    pipe_state->buffer + pipe_state->buffer_start,
-                    pipe_state->buffer_end - pipe_state->buffer_start);
-    if (written < 0) {
-        if (errno == EINTR || errno == EAGAIN) {
-            return true;
+        if (replacements[index].start_offset < cursor ||
+            replacements[index].end_offset < replacements[index].start_offset ||
+            replacements[index].end_offset > json_length) {
+            free(rewritten);
+            proxy_report_error(error_fd, context, "invalid JSON replacement bounds");
+            return false;
         }
-        if (errno == EPIPE && pipe_state->close_write_on_finish) {
-            pipe_state->write_closed = true;
-            pipe_state->read_closed = true;
-            pipe_state->buffer_start = 0U;
-            pipe_state->buffer_end = 0U;
-            return true;
+        if (!proxy_append_bytes(&rewritten,
+                                &rewritten_length,
+                                &rewritten_capacity,
+                                json + cursor,
+                                replacements[index].start_offset - cursor)) {
+            free(rewritten);
+            proxy_report_error(error_fd, context, "out of memory");
+            return false;
         }
-        proxy_report_error(error_fd, "failed to write dap proxy stream", strerror(errno));
+        escaped_replacement = proxy_json_escape(replacements[index].replacement);
+        if (escaped_replacement == NULL) {
+            free(rewritten);
+            proxy_report_error(error_fd, context, "out of memory");
+            return false;
+        }
+        escaped_length = strlen(escaped_replacement);
+        if (!proxy_append_byte(&rewritten, &rewritten_length, &rewritten_capacity, '"') ||
+            !proxy_append_bytes(&rewritten,
+                                &rewritten_length,
+                                &rewritten_capacity,
+                                escaped_replacement,
+                                escaped_length) ||
+            !proxy_append_byte(&rewritten, &rewritten_length, &rewritten_capacity, '"')) {
+            free(escaped_replacement);
+            free(rewritten);
+            proxy_report_error(error_fd, context, "out of memory");
+            return false;
+        }
+        free(escaped_replacement);
+        cursor = replacements[index].end_offset;
+    }
+    if (!proxy_append_bytes(&rewritten,
+                            &rewritten_length,
+                            &rewritten_capacity,
+                            json + cursor,
+                            json_length - cursor) ||
+        !proxy_append_byte(&rewritten, &rewritten_length, &rewritten_capacity, '\0')) {
+        free(rewritten);
+        proxy_report_error(error_fd, context, "out of memory");
         return false;
     }
-
-    pipe_state->buffer_start += (size_t)written;
-    if (pipe_state->buffer_start == pipe_state->buffer_end) {
-        pipe_state->buffer_start = 0U;
-        pipe_state->buffer_end = 0U;
-        proxy_pipe_finish_write(pipe_state);
-    }
+    rewritten[rewritten_length - 1U] = '\0';
+    *out_json = rewritten;
     return true;
 }
 
-/* Relay bytes between the editor stdio and the native backend pipes. */
-static bool proxy_relay_streams(int input_fd,
-                                int output_fd,
-                                int child_stdin_fd,
-                                int child_stdout_fd,
-                                const unsigned char *initial_inbound,
-                                size_t initial_inbound_length,
-                                bool inbound_read_closed,
-                                const unsigned char *initial_outbound,
-                                size_t initial_outbound_length,
-                                bool outbound_read_closed,
-                                int error_fd) {
-    FengDapProxyPipe inbound;
-    FengDapProxyPipe outbound;
+/* Locate `arguments.source.path` inside one setBreakpoints request payload. */
+static bool proxy_json_get_set_breakpoints_path_range(const char *json,
+                                                      size_t json_length,
+                                                      const char **out_path_start,
+                                                      const char **out_path_end) {
+    const char *arguments_start;
+    const char *arguments_end;
+    const char *source_start;
+    const char *source_end;
 
-    if (!proxy_pipe_init(&inbound,
-                         input_fd,
-                         child_stdin_fd,
-                         true,
-                         initial_inbound,
-                         initial_inbound_length,
-                         inbound_read_closed) ||
-        !proxy_pipe_init(&outbound,
-                         child_stdout_fd,
-                         output_fd,
-                         false,
-                         initial_outbound,
-                         initial_outbound_length,
-                         outbound_read_closed)) {
-        proxy_pipe_dispose(&inbound);
-        proxy_pipe_dispose(&outbound);
-        proxy_report_error(error_fd, "failed to initialize DAP relay buffers", "out of memory");
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "arguments",
+                                             &arguments_start,
+                                             &arguments_end)) {
         return false;
     }
-    proxy_pipe_finish_write(&inbound);
-    proxy_pipe_finish_write(&outbound);
+    if (!proxy_json_find_object_member_loose(arguments_start,
+                                             (size_t)(arguments_end - arguments_start),
+                                             "source",
+                                             &source_start,
+                                             &source_end)) {
+        return false;
+    }
+    return proxy_json_find_object_member_loose(source_start,
+                                               (size_t)(source_end - source_start),
+                                               "path",
+                                               out_path_start,
+                                               out_path_end);
+}
 
-    while (!proxy_pipe_is_done(&inbound) || !proxy_pipe_is_done(&outbound)) {
-        struct pollfd poll_fds[4];
-        int inbound_read_slot = -1;
-        int inbound_write_slot = -1;
-        int outbound_read_slot = -1;
-        int outbound_write_slot = -1;
-        nfds_t poll_count = 0U;
-        int poll_rc;
+/* Rewrite `setBreakpoints.arguments.source.path` from local path to package URI. */
+static bool proxy_rewrite_set_breakpoints_request_payload(const char *json,
+                                                          size_t json_length,
+                                                          const FengDebugArtifact *artifact,
+                                                          char **out_json,
+                                                          char **out_error_detail,
+                                                          int error_fd) {
+    const char *path_start;
+    const char *path_end;
+    const char *after_string;
+    char *source_path = NULL;
+    char *package_uri = NULL;
+    FengDapJsonStringReplacement replacement = {0};
+    bool ok = false;
 
-        if (!inbound.read_closed) {
-            inbound_read_slot = (int)poll_count;
-            poll_fds[poll_count].fd = inbound.read_fd;
-            poll_fds[poll_count].events = POLLIN | POLLHUP;
-            poll_fds[poll_count].revents = 0;
-            poll_count += 1U;
+    *out_json = NULL;
+    if (out_error_detail != NULL) {
+        free(*out_error_detail);
+        *out_error_detail = NULL;
+    }
+    if (!proxy_json_get_set_breakpoints_path_range(json,
+                                                   json_length,
+                                                   &path_start,
+                                                   &path_end)) {
+        return true;
+    }
+    if (!proxy_json_parse_string_copy(path_start, path_end, &source_path, &after_string) ||
+        proxy_json_skip_whitespace(after_string, path_end) != path_end) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("setBreakpoints arguments.source.path must be a string");
         }
-        if (!inbound.write_closed && proxy_pipe_has_pending_output(&inbound)) {
-            inbound_write_slot = (int)poll_count;
-            poll_fds[poll_count].fd = inbound.write_fd;
-            poll_fds[poll_count].events = POLLOUT | POLLHUP;
-            poll_fds[poll_count].revents = 0;
-            poll_count += 1U;
+        return false;
+    }
+    if (strstr(source_path, "://") != NULL) {
+        ok = true;
+        goto cleanup;
+    }
+    if (!proxy_local_path_to_package_uri(artifact,
+                                         source_path,
+                                         &package_uri,
+                                         out_error_detail)) {
+        goto cleanup;
+    }
+    replacement.start_offset = (size_t)(path_start - json);
+    replacement.end_offset = (size_t)(path_end - json);
+    replacement.replacement = package_uri;
+    package_uri = NULL;
+    if (!proxy_apply_json_string_replacements(json,
+                                              json_length,
+                                              &replacement,
+                                              1U,
+                                              out_json,
+                                              error_fd,
+                                              "failed to rewrite setBreakpoints path")) {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    free(source_path);
+    free(package_uri);
+    proxy_json_string_replacement_dispose(&replacement);
+    return ok;
+}
+
+/* Rewrite stackTrace response source paths from package URI back to local file path. */
+static bool proxy_rewrite_stack_trace_response_payload(const char *json,
+                                                       size_t json_length,
+                                                       const FengDebugArtifact *artifact,
+                                                       char **out_json,
+                                                       int error_fd) {
+    const char *body_start;
+    const char *body_end;
+    const char *frames_start;
+    const char *frames_end;
+    const char *cursor;
+    FengDapJsonStringReplacement *replacements = NULL;
+    size_t replacement_count = 0U;
+    size_t replacement_capacity = 0U;
+    bool ok = false;
+
+    *out_json = NULL;
+    if (artifact == NULL || artifact->package_count == 0U) {
+        return true;
+    }
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "body",
+                                             &body_start,
+                                             &body_end) ||
+        !proxy_json_find_object_member_loose(body_start,
+                                             (size_t)(body_end - body_start),
+                                             "stackFrames",
+                                             &frames_start,
+                                             &frames_end)) {
+        return true;
+    }
+    cursor = proxy_json_skip_whitespace(frames_start, frames_end);
+    if (cursor >= frames_end || *cursor != '[') {
+        return true;
+    }
+
+    cursor = proxy_json_skip_whitespace(cursor + 1, frames_end);
+    while (cursor < frames_end && *cursor != ']') {
+        const char *frame_start = cursor;
+        const char *frame_end;
+        const char *source_start;
+        const char *source_end;
+        const char *path_start;
+        const char *path_end;
+        const char *after_string;
+        char *package_uri = NULL;
+        char *local_path = NULL;
+
+        if (!proxy_json_skip_value(frame_start, frames_end, &frame_end)) {
+            ok = true;
+            goto cleanup;
         }
-        if (!outbound.read_closed) {
-            outbound_read_slot = (int)poll_count;
-            poll_fds[poll_count].fd = outbound.read_fd;
-            poll_fds[poll_count].events = POLLIN | POLLHUP;
-            poll_fds[poll_count].revents = 0;
-            poll_count += 1U;
+        if (proxy_json_find_object_member_loose(frame_start,
+                                                (size_t)(frame_end - frame_start),
+                                                "source",
+                                                &source_start,
+                                                &source_end) &&
+            proxy_json_find_object_member_loose(source_start,
+                                                (size_t)(source_end - source_start),
+                                                "path",
+                                                &path_start,
+                                                &path_end) &&
+            proxy_json_parse_string_copy(path_start, path_end, &package_uri, &after_string) &&
+            proxy_json_skip_whitespace(after_string, path_end) == path_end &&
+            proxy_package_uri_to_local_path(artifact, package_uri, &local_path)) {
+            if (!proxy_append_json_string_replacement(&replacements,
+                                                      &replacement_count,
+                                                      &replacement_capacity,
+                                                      (size_t)(path_start - json),
+                                                      (size_t)(path_end - json),
+                                                      local_path)) {
+                free(local_path);
+                free(package_uri);
+                proxy_report_error(error_fd,
+                                   "failed to rewrite stackTrace source paths",
+                                   "out of memory");
+                goto cleanup;
+            }
+            local_path = NULL;
         }
-        if (proxy_pipe_has_pending_output(&outbound)) {
-            outbound_write_slot = (int)poll_count;
-            poll_fds[poll_count].fd = outbound.write_fd;
-            poll_fds[poll_count].events = POLLOUT | POLLHUP;
-            poll_fds[poll_count].revents = 0;
-            poll_count += 1U;
+        free(local_path);
+        free(package_uri);
+
+        cursor = proxy_json_skip_whitespace(frame_end, frames_end);
+        if (cursor < frames_end && *cursor == ',') {
+            cursor = proxy_json_skip_whitespace(cursor + 1, frames_end);
+            continue;
+        }
+        if (cursor < frames_end && *cursor == ']') {
+            break;
+        }
+        ok = true;
+        goto cleanup;
+    }
+
+    if (!proxy_apply_json_string_replacements(json,
+                                              json_length,
+                                              replacements,
+                                              replacement_count,
+                                              out_json,
+                                              error_fd,
+                                              "failed to rewrite stackTrace source paths")) {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    proxy_json_string_replacements_dispose(replacements, replacement_count);
+    return ok;
+}
+
+/* Forward one client message to lldb-dap, rewriting setBreakpoints paths when needed. */
+static bool proxy_process_client_relay_message(const FengDapMessage *message,
+                                               int backend_stdin_fd,
+                                               int output_fd,
+                                               const FengDebugArtifact *artifact,
+                                               uint64_t *next_seq,
+                                               int error_fd) {
+    char *type = NULL;
+    char *command = NULL;
+    char *rewritten_payload = NULL;
+    char *error_detail = NULL;
+    uint64_t request_seq = 0U;
+    bool is_set_breakpoints = false;
+    bool ok;
+
+    if (proxy_json_get_string_member(message->payload,
+                                     message->payload_length,
+                                     "type",
+                                     &type) &&
+        strcmp(type, "request") == 0 &&
+        proxy_json_get_string_member(message->payload,
+                                     message->payload_length,
+                                     "command",
+                                     &command) &&
+        strcmp(command, "setBreakpoints") == 0) {
+        is_set_breakpoints = true;
+    }
+    if (is_set_breakpoints) {
+        if (!proxy_rewrite_set_breakpoints_request_payload(message->payload,
+                                                           message->payload_length,
+                                                           artifact,
+                                                           &rewritten_payload,
+                                                           &error_detail,
+                                                           error_fd)) {
+            if (error_detail != NULL) {
+                if (!proxy_json_get_u64_member(message->payload,
+                                              message->payload_length,
+                                              "seq",
+                                              &request_seq)) {
+                    free(type);
+                    free(command);
+                    free(error_detail);
+                    free(rewritten_payload);
+                    proxy_report_error(error_fd,
+                                       "failed to rewrite setBreakpoints path",
+                                       "missing request sequence");
+                    return false;
+                }
+                ok = proxy_send_request_failure_response(output_fd,
+                                                         command,
+                                                         request_seq,
+                                                         error_detail,
+                                                         next_seq,
+                                                         error_fd);
+                free(type);
+                free(command);
+                free(error_detail);
+                free(rewritten_payload);
+                return ok;
+            }
+            free(type);
+            free(command);
+            return false;
+        }
+        if (rewritten_payload != NULL) {
+            ok = proxy_write_message(backend_stdin_fd,
+                                     rewritten_payload,
+                                     error_fd,
+                                     "failed to forward rewritten setBreakpoints request to lldb-dap");
+            free(type);
+            free(command);
+            free(error_detail);
+            free(rewritten_payload);
+            return ok;
+        }
+    }
+
+    ok = proxy_write_framed_message(backend_stdin_fd,
+                                    message,
+                                    error_fd,
+                                    "failed to forward DAP request to lldb-dap");
+    free(type);
+    free(command);
+    free(error_detail);
+    free(rewritten_payload);
+    return ok;
+}
+
+/* Forward one backend message to the editor, rewriting stackTrace source paths when needed. */
+static bool proxy_process_backend_relay_message(const FengDapMessage *message,
+                                                int output_fd,
+                                                const FengDebugArtifact *artifact,
+                                                int error_fd) {
+    char *type = NULL;
+    char *command = NULL;
+    char *rewritten_payload = NULL;
+    bool ok;
+
+    if (proxy_json_get_string_member(message->payload,
+                                     message->payload_length,
+                                     "type",
+                                     &type) &&
+        strcmp(type, "response") == 0 &&
+        proxy_json_get_string_member(message->payload,
+                                     message->payload_length,
+                                     "command",
+                                     &command) &&
+        strcmp(command, "stackTrace") == 0) {
+        if (!proxy_rewrite_stack_trace_response_payload(message->payload,
+                                                        message->payload_length,
+                                                        artifact,
+                                                        &rewritten_payload,
+                                                        error_fd)) {
+            free(type);
+            free(command);
+            return false;
+        }
+        if (rewritten_payload != NULL) {
+            ok = proxy_write_message(output_fd,
+                                     rewritten_payload,
+                                     error_fd,
+                                     "failed to forward rewritten stackTrace response to editor");
+            free(type);
+            free(command);
+            free(rewritten_payload);
+            return ok;
+        }
+    }
+
+    ok = proxy_write_framed_message(output_fd,
+                                    message,
+                                    error_fd,
+                                    "failed to write DAP message to editor");
+    free(type);
+    free(command);
+    free(rewritten_payload);
+    return ok;
+}
+
+/* Relay DAP messages bidirectionally after launch, with request/response rewriting hooks. */
+static bool proxy_relay_messages(FengDapMessageReader *client_reader,
+                                 FengDapMessageReader *backend_reader,
+                                 int backend_stdin_fd,
+                                 int output_fd,
+                                 const FengDebugArtifact *artifact,
+                                 uint64_t *next_seq,
+                                 int error_fd) {
+    bool backend_stdin_closed = false;
+
+    for (;;) {
+        FengDapMessage message = {0};
+        FengDapReadStatus client_status;
+        FengDapReadStatus backend_status;
+
+        client_status = proxy_reader_try_read_buffered_message(client_reader,
+                                                               &message,
+                                                               error_fd);
+        if (client_status == FENG_DAP_READ_OK) {
+            bool ok = proxy_process_client_relay_message(&message,
+                                                         backend_stdin_fd,
+                                                         output_fd,
+                                                         artifact,
+                                                         next_seq,
+                                                         error_fd);
+
+            proxy_message_dispose(&message);
+            if (!ok) {
+                if (!backend_stdin_closed) {
+                    close(backend_stdin_fd);
+                }
+                return false;
+            }
+            continue;
+        }
+        if (client_status == FENG_DAP_READ_ERROR) {
+            if (!backend_stdin_closed) {
+                close(backend_stdin_fd);
+            }
+            return false;
+        }
+        if (client_status == FENG_DAP_READ_EOF && !backend_stdin_closed) {
+            close(backend_stdin_fd);
+            backend_stdin_closed = true;
         }
 
-        if (poll_count == 0U) {
+        backend_status = proxy_reader_try_read_buffered_message(backend_reader,
+                                                                &message,
+                                                                error_fd);
+        if (backend_status == FENG_DAP_READ_OK) {
+            bool ok = proxy_process_backend_relay_message(&message,
+                                                          output_fd,
+                                                          artifact,
+                                                          error_fd);
+
+            proxy_message_dispose(&message);
+            if (!ok) {
+                return false;
+            }
+            continue;
+        }
+        if (backend_status == FENG_DAP_READ_ERROR) {
+            return false;
+        }
+
+        if (client_status == FENG_DAP_READ_EOF && backend_status == FENG_DAP_READ_EOF) {
             break;
         }
 
-        poll_rc = poll(poll_fds, poll_count, -1);
-        if (poll_rc < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            proxy_pipe_dispose(&inbound);
-            proxy_pipe_dispose(&outbound);
-            proxy_report_error(error_fd, "failed to poll dap proxy streams", strerror(errno));
-            return false;
-        }
+        {
+            struct pollfd poll_fds[2];
+            int client_slot = -1;
+            int backend_slot = -1;
+            nfds_t poll_count = 0U;
+            int poll_rc;
 
-        if (inbound_read_slot >= 0 && (poll_fds[inbound_read_slot].revents & (POLLIN | POLLHUP)) != 0) {
-            if (!proxy_pipe_read_into_buffer(&inbound, error_fd)) {
-                proxy_pipe_dispose(&inbound);
-                proxy_pipe_dispose(&outbound);
+            if (client_status == FENG_DAP_READ_PENDING) {
+                client_slot = (int)poll_count;
+                poll_fds[poll_count].fd = client_reader->fd;
+                poll_fds[poll_count].events = POLLIN | POLLHUP;
+                poll_fds[poll_count].revents = 0;
+                poll_count += 1U;
+            }
+            if (backend_status == FENG_DAP_READ_PENDING) {
+                backend_slot = (int)poll_count;
+                poll_fds[poll_count].fd = backend_reader->fd;
+                poll_fds[poll_count].events = POLLIN | POLLHUP;
+                poll_fds[poll_count].revents = 0;
+                poll_count += 1U;
+            }
+            if (poll_count == 0U) {
+                break;
+            }
+
+            poll_rc = poll(poll_fds, poll_count, -1);
+            if (poll_rc < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                proxy_report_error(error_fd, "failed to poll DAP messages", strerror(errno));
                 return false;
             }
-        }
-        if (outbound_read_slot >= 0 && (poll_fds[outbound_read_slot].revents & (POLLIN | POLLHUP)) != 0) {
-            if (!proxy_pipe_read_into_buffer(&outbound, error_fd)) {
-                proxy_pipe_dispose(&inbound);
-                proxy_pipe_dispose(&outbound);
-                return false;
+
+            if (client_slot >= 0 && (poll_fds[client_slot].revents & (POLLIN | POLLHUP)) != 0) {
+                if (!proxy_reader_fill(client_reader, error_fd)) {
+                    return false;
+                }
             }
-        }
-        if (inbound_write_slot >= 0 && (poll_fds[inbound_write_slot].revents & (POLLOUT | POLLHUP)) != 0) {
-            if (!proxy_pipe_write_from_buffer(&inbound, error_fd)) {
-                proxy_pipe_dispose(&inbound);
-                proxy_pipe_dispose(&outbound);
-                return false;
-            }
-        }
-        if (outbound_write_slot >= 0 && (poll_fds[outbound_write_slot].revents & (POLLOUT | POLLHUP)) != 0) {
-            if (!proxy_pipe_write_from_buffer(&outbound, error_fd)) {
-                proxy_pipe_dispose(&inbound);
-                proxy_pipe_dispose(&outbound);
-                return false;
+            if (backend_slot >= 0 && (poll_fds[backend_slot].revents & (POLLIN | POLLHUP)) != 0) {
+                if (!proxy_reader_fill(backend_reader, error_fd)) {
+                    return false;
+                }
             }
         }
     }
 
-    proxy_pipe_dispose(&inbound);
-    proxy_pipe_dispose(&outbound);
     return true;
 }
 
@@ -1535,6 +2157,7 @@ static int proxy_run_session(const char *backend_program,
     FengDapMessageReader backend_reader;
     FengDapMessage initialize_request = {0};
     FengDapMessage request = {0};
+    FengDebugArtifact launch_artifact = {0};
     bool have_initialize = false;
     uint64_t next_seq = 1U;
 
@@ -1559,6 +2182,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
         if (!proxy_json_get_string_member(request.payload,
@@ -1598,6 +2222,7 @@ static int proxy_run_session(const char *backend_program,
                 proxy_message_dispose(&initialize_request);
                 proxy_reader_dispose(&client_reader);
                 proxy_reader_dispose(&backend_reader);
+                feng_debug_artifact_dispose(&launch_artifact);
                 return 1;
             }
             if (!proxy_send_initialize_response(output_fd,
@@ -1607,6 +2232,7 @@ static int proxy_run_session(const char *backend_program,
                 proxy_message_dispose(&request);
                 proxy_reader_dispose(&client_reader);
                 proxy_reader_dispose(&backend_reader);
+                feng_debug_artifact_dispose(&launch_artifact);
                 return 1;
             }
             initialize_request = request;
@@ -1630,6 +2256,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
 
@@ -1646,9 +2273,10 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
-        if (!proxy_validate_launch_request(&request, &error_detail)) {
+        if (!proxy_validate_launch_request(&request, &launch_artifact, &error_detail)) {
             proxy_send_request_failure_response(output_fd,
                                                 "launch",
                                                 request_seq,
@@ -1660,6 +2288,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
         free(error_detail);
@@ -1683,6 +2312,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
         child = proxy_spawn_backend(backend_program,
@@ -1706,6 +2336,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return 1;
         }
         close(child_stdin[0]);
@@ -1739,43 +2370,38 @@ static int proxy_run_session(const char *backend_program,
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return exit_code != 0 ? exit_code : 1;
         }
 
         proxy_message_dispose(&initialize_request);
         proxy_message_dispose(&request);
-        if (!proxy_relay_streams(input_fd,
-                                 output_fd,
-                                 child_stdin[1],
-                                 child_stdout[0],
-                                 client_reader.buffer != NULL
-                                     ? client_reader.buffer + client_reader.buffer_start
-                                     : NULL,
-                                 client_reader.buffer_end - client_reader.buffer_start,
-                                 client_reader.reached_eof,
-                                 backend_reader.buffer != NULL
-                                     ? backend_reader.buffer + backend_reader.buffer_start
-                                     : NULL,
-                                 backend_reader.buffer_end - backend_reader.buffer_start,
-                                 backend_reader.reached_eof,
-                                 error_fd)) {
-            close(child_stdin[1]);
+        if (!proxy_relay_messages(&client_reader,
+                                  &backend_reader,
+                                  child_stdin[1],
+                                  output_fd,
+                                  &launch_artifact,
+                                  &next_seq,
+                                  error_fd)) {
             close(child_stdout[0]);
             exit_code = proxy_wait_for_child(child, error_fd, backend_program);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
             return exit_code != 0 ? exit_code : 1;
         }
         close(child_stdout[0]);
         exit_code = proxy_wait_for_child(child, error_fd, backend_program);
         proxy_reader_dispose(&client_reader);
         proxy_reader_dispose(&backend_reader);
+        feng_debug_artifact_dispose(&launch_artifact);
         return exit_code;
     }
 
     proxy_message_dispose(&initialize_request);
     proxy_reader_dispose(&client_reader);
     proxy_reader_dispose(&backend_reader);
+    feng_debug_artifact_dispose(&launch_artifact);
     return 0;
 }
 

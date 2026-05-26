@@ -3581,6 +3581,390 @@ static void test_dap_reports_missing_backend_after_launch_validation(void) {
     free(remove_error);
 }
 
+/* Ensure setBreakpoints rewrites local source paths to package URIs before forwarding. */
+static void test_dap_rewrites_set_breakpoints_source_path_to_package_uri(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x41U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_breakpoints_uri_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *escaped_source_path;
+    char *initialize_json;
+    char *launch_json;
+    char *set_breakpoints_json;
+    char *initialize_text;
+    char *launch_text;
+    char *set_breakpoints_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\n",
+                                backend_initialize_text,
+                                requests_path);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    escaped_source_path = json_escape_text(source_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    set_breakpoints_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"setBreakpoints\",\"arguments\":{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":1}]}}",
+                                      escaped_source_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    set_breakpoints_text = build_dap_message_text(set_breakpoints_json);
+    input_text = dup_printf("%s%s%s", initialize_text, launch_text, set_breakpoints_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"setBreakpoints\"") != NULL);
+    ASSERT(strstr(requests_text, "\"path\":\"demo.pkg://main.ff\"") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(set_breakpoints_text);
+    free(launch_text);
+    free(initialize_text);
+    free(set_breakpoints_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_source_path);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure setBreakpoints fails locally when the file is outside the debug closure. */
+static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x42U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_breakpoints_reject_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *other_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *escaped_other_path;
+    char *initialize_json;
+    char *launch_json;
+    char *set_breakpoints_json;
+    char *initialize_text;
+    char *launch_text;
+    char *set_breakpoints_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    other_path = path_join(workspace_dir, "other.ff");
+    write_text_file(source_path, kSourceText);
+    write_text_file(other_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\n",
+                                backend_initialize_text,
+                                requests_path);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    escaped_other_path = json_escape_text(other_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    set_breakpoints_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"setBreakpoints\",\"arguments\":{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":1}]}}",
+                                      escaped_other_path);
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    set_breakpoints_text = build_dap_message_text(set_breakpoints_json);
+    input_text = dup_printf("%s%s%s", initialize_text, launch_text, set_breakpoints_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(stdout_text, "\"command\":\"setBreakpoints\"") != NULL);
+    ASSERT(strstr(stdout_text, "not part of the debug closure") != NULL);
+    ASSERT(strstr(requests_text, "\"command\":\"setBreakpoints\"") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(set_breakpoints_text);
+    free(launch_text);
+    free(initialize_text);
+    free(set_breakpoints_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_other_path);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(other_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure stackTrace responses rewrite package URIs back to local file paths. */
+static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x43U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_stacktrace_path_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo.pkg.main\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\nprintf '%%b' '%s'\n",
+                                backend_initialize_text,
+                                requests_path,
+                                backend_stack_trace_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    input_text = dup_printf("%s%s%s", initialize_text, launch_text, stack_trace_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"stackTrace\"") != NULL);
+    ASSERT(strstr(stdout_text, source_path) != NULL);
+    ASSERT(strstr(stdout_text, "demo.pkg://main.ff") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     static const char *kBadSource =
         "mod test.lsp;\n"
@@ -8800,6 +9184,9 @@ int main(void) {
     test_dap_help_returns_success();
     test_dap_rejects_unknown_option();
     test_dap_validated_launch_starts_backend();
+    test_dap_rewrites_set_breakpoints_source_path_to_package_uri();
+    test_dap_rejects_set_breakpoints_outside_debug_closure();
+    test_dap_rewrites_stack_trace_source_path_to_local_path();
     test_dap_rejects_fingerprint_mismatch_before_backend_spawn();
     test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();

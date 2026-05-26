@@ -95,9 +95,9 @@ feng dap [--stdio]
 
 - `dap` 与 `lsp` 明确分层; `feng dap` 只负责调试协议代理,不承载语言服务能力。
 - 当前首版只支持 macOS 上的 `lldb-dap` 后端,并且 launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
-- 当前已交付的基线行为是: `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验,只有校验通过才会通过 `PATH` 查找并拉起 `lldb-dap`,之后再进入透明转发。
+- 当前已交付的基线行为是: `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验,只有校验通过才会通过 `PATH` 查找并拉起 `lldb-dap`; 进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径。
 - `feng dap` 在 DAP `launch` 请求中定位目标 binary 同级的 `.fd`,校验 sidecar 中记录的 binary 内容指纹与当前 binary 是否匹配; 校验失败必须直接拒绝会话。
-- `feng dap` 负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并基于 `.fd` 重写 stack frame、variables 与只读 watch 的展示名。
+- `feng dap` 当前已负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换; stack frame、variables 与只读 watch 的 Feng 语义展示名重写仍在后续子项中。
 - 当前首版不支持 attach、reverse debugging、任意 Feng 表达式求值以及具有副作用的 evaluate/watch。
 - 除 `--stdio` 之外不接受其他位置参数或命令选项;出现多余参数时应报错退出。
 
