@@ -1562,6 +1562,76 @@ static bool proxy_apply_json_string_replacements(const char *json,
     return true;
 }
 
+/* Replace one arbitrary JSON span with already-materialized JSON text. */
+static bool proxy_replace_json_span(const char *json,
+                                    size_t json_length,
+                                    size_t start_offset,
+                                    size_t end_offset,
+                                    const char *replacement,
+                                    char **out_json,
+                                    int error_fd,
+                                    const char *context) {
+    char *rewritten = NULL;
+    size_t rewritten_length = 0U;
+    size_t rewritten_capacity = 0U;
+
+    *out_json = NULL;
+    if (json == NULL || replacement == NULL || start_offset > end_offset || end_offset > json_length) {
+        proxy_report_error(error_fd, context, "invalid JSON span replacement");
+        return false;
+    }
+    if (!proxy_append_bytes(&rewritten,
+                            &rewritten_length,
+                            &rewritten_capacity,
+                            json,
+                            start_offset) ||
+        !proxy_append_bytes(&rewritten,
+                            &rewritten_length,
+                            &rewritten_capacity,
+                            replacement,
+                            strlen(replacement)) ||
+        !proxy_append_bytes(&rewritten,
+                            &rewritten_length,
+                            &rewritten_capacity,
+                            json + end_offset,
+                            json_length - end_offset) ||
+        !proxy_append_byte(&rewritten, &rewritten_length, &rewritten_capacity, '\0')) {
+        free(rewritten);
+        proxy_report_error(error_fd, context, "out of memory");
+        return false;
+    }
+    rewritten[rewritten_length - 1U] = '\0';
+    *out_json = rewritten;
+    return true;
+}
+
+/* Parse one unsigned integer from an already-located JSON value span. */
+static bool proxy_json_parse_u64_range(const char *value_start,
+                                       const char *value_end,
+                                       uint64_t *out_value) {
+    char number_buffer[32];
+    char *endptr = NULL;
+    size_t trimmed_length;
+    unsigned long long value;
+
+    value_start = proxy_json_skip_whitespace(value_start, value_end);
+    while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
+        --value_end;
+    }
+    trimmed_length = (size_t)(value_end - value_start);
+    if (trimmed_length == 0U || trimmed_length >= sizeof(number_buffer)) {
+        return false;
+    }
+    memcpy(number_buffer, value_start, trimmed_length);
+    number_buffer[trimmed_length] = '\0';
+    value = strtoull(number_buffer, &endptr, 10);
+    if (endptr == number_buffer || *endptr != '\0') {
+        return false;
+    }
+    *out_value = (uint64_t)value;
+    return true;
+}
+
 /* Locate `arguments.source.path` inside one setBreakpoints request payload. */
 static bool proxy_json_get_set_breakpoints_path_range(const char *json,
                                                       size_t json_length,
@@ -1658,7 +1728,114 @@ cleanup:
     return ok;
 }
 
-/* Rewrite stackTrace response source paths from package URI back to local file path. */
+/* Rewrite one stackTrace frame payload using .fd name/path mappings. */
+static bool proxy_rewrite_stack_trace_frame_payload(const char *frame_json,
+                                                    size_t frame_length,
+                                                    const FengDebugArtifact *artifact,
+                                                    const FengCodegenMapingFrameRecord **out_frame_record,
+                                                    char **out_json,
+                                                    int error_fd) {
+    const char *name_start;
+    const char *name_end;
+    const char *source_start;
+    const char *source_end;
+    const char *path_start;
+    const char *path_end;
+    const char *after_string;
+    const FengCodegenMapingFrameRecord *frame_record = NULL;
+    FengDapJsonStringReplacement *replacements = NULL;
+    size_t replacement_count = 0U;
+    size_t replacement_capacity = 0U;
+    char *backend_symbol = NULL;
+    char *package_uri = NULL;
+    char *local_path = NULL;
+    bool ok = false;
+
+    *out_json = NULL;
+    if (out_frame_record != NULL) {
+        *out_frame_record = NULL;
+    }
+    if (artifact == NULL) {
+        return true;
+    }
+
+    if (proxy_json_find_object_member_loose(frame_json,
+                                            frame_length,
+                                            "name",
+                                            &name_start,
+                                            &name_end) &&
+        proxy_json_parse_string_copy(name_start, name_end, &backend_symbol, &after_string) &&
+        proxy_json_skip_whitespace(after_string, name_end) == name_end) {
+        frame_record = proxy_find_frame_record(artifact, backend_symbol);
+        if (out_frame_record != NULL) {
+            *out_frame_record = frame_record;
+        }
+        if (frame_record != NULL &&
+            frame_record->display_name != NULL &&
+            strcmp(frame_record->display_name, backend_symbol) != 0) {
+            char *display_name = proxy_dup_printf("%s", frame_record->display_name);
+
+            if (display_name == NULL ||
+                !proxy_insert_json_string_replacement(&replacements,
+                                                      &replacement_count,
+                                                      &replacement_capacity,
+                                                      (size_t)(name_start - frame_json),
+                                                      (size_t)(name_end - frame_json),
+                                                      display_name)) {
+                free(display_name);
+                proxy_report_error(error_fd,
+                                   "failed to rewrite stackTrace frame",
+                                   "out of memory");
+                goto cleanup;
+            }
+        }
+    }
+    if (proxy_json_find_object_member_loose(frame_json,
+                                            frame_length,
+                                            "source",
+                                            &source_start,
+                                            &source_end) &&
+        proxy_json_find_object_member_loose(source_start,
+                                            (size_t)(source_end - source_start),
+                                            "path",
+                                            &path_start,
+                                            &path_end) &&
+        proxy_json_parse_string_copy(path_start, path_end, &package_uri, &after_string) &&
+        proxy_json_skip_whitespace(after_string, path_end) == path_end &&
+        proxy_package_uri_to_local_path(artifact, package_uri, &local_path)) {
+        if (!proxy_insert_json_string_replacement(&replacements,
+                                                  &replacement_count,
+                                                  &replacement_capacity,
+                                                  (size_t)(path_start - frame_json),
+                                                  (size_t)(path_end - frame_json),
+                                                  local_path)) {
+            proxy_report_error(error_fd,
+                               "failed to rewrite stackTrace frame",
+                               "out of memory");
+            goto cleanup;
+        }
+        local_path = NULL;
+    }
+    if (!proxy_apply_json_string_replacements(frame_json,
+                                              frame_length,
+                                              replacements,
+                                              replacement_count,
+                                              out_json,
+                                              error_fd,
+                                              "failed to rewrite stackTrace frame")) {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    free(backend_symbol);
+    free(package_uri);
+    free(local_path);
+    proxy_json_string_replacements_dispose(replacements, replacement_count);
+    return ok;
+}
+
+/* Rewrite stackTrace response source paths and frame names to editor-facing values. */
 static bool proxy_rewrite_stack_trace_response_payload(const char *json,
                                                        size_t json_length,
                                                        const FengDebugArtifact *artifact,
@@ -1668,10 +1845,17 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
     const char *body_end;
     const char *frames_start;
     const char *frames_end;
+    const char *total_frames_start;
+    const char *total_frames_end;
     const char *cursor;
-    FengDapJsonStringReplacement *replacements = NULL;
-    size_t replacement_count = 0U;
-    size_t replacement_capacity = 0U;
+    char *rewritten_frames = NULL;
+    size_t rewritten_frames_length = 0U;
+    size_t rewritten_frames_capacity = 0U;
+    char *payload_with_frames = NULL;
+    char *payload_with_total = NULL;
+    size_t original_frame_count = 0U;
+    size_t visible_frame_count = 0U;
+    bool frames_changed = false;
     bool ok = false;
 
     *out_json = NULL;
@@ -1694,90 +1878,91 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
     if (cursor >= frames_end || *cursor != '[') {
         return true;
     }
+    if (!proxy_append_byte(&rewritten_frames,
+                           &rewritten_frames_length,
+                           &rewritten_frames_capacity,
+                           '[')) {
+        proxy_report_error(error_fd,
+                           "failed to rewrite stackTrace response",
+                           "out of memory");
+        goto cleanup;
+    }
 
     cursor = proxy_json_skip_whitespace(cursor + 1, frames_end);
     while (cursor < frames_end && *cursor != ']') {
         const char *frame_start = cursor;
         const char *frame_end;
-        const char *name_start;
-        const char *name_end;
-        const char *source_start;
-        const char *source_end;
-        const char *path_start;
-        const char *path_end;
-        const char *after_string;
         const FengCodegenMapingFrameRecord *frame_record = NULL;
-        char *backend_symbol = NULL;
-        char *package_uri = NULL;
-        char *local_path = NULL;
+        char *frame_json = NULL;
+        char *rewritten_frame_json = NULL;
+        const char *visible_frame_json;
+        size_t frame_json_length;
 
         if (!proxy_json_skip_value(frame_start, frames_end, &frame_end)) {
             ok = true;
             goto cleanup;
         }
-        if (proxy_json_find_object_member_loose(frame_start,
-                                                (size_t)(frame_end - frame_start),
-                                                "name",
-                                                &name_start,
-                                                &name_end) &&
-            proxy_json_parse_string_copy(name_start, name_end, &backend_symbol, &after_string) &&
-            proxy_json_skip_whitespace(after_string, name_end) == name_end) {
-            frame_record = proxy_find_frame_record(artifact, backend_symbol);
-            if (frame_record != NULL &&
-                frame_record->display_name != NULL &&
-                strcmp(frame_record->display_name, backend_symbol) != 0) {
-                char *display_name = proxy_dup_printf("%s", frame_record->display_name);
+        frame_json_length = (size_t)(frame_end - frame_start);
+        frame_json = proxy_dup_bytes((const unsigned char *)frame_start, frame_json_length);
+        if (frame_json == NULL ||
+            !proxy_rewrite_stack_trace_frame_payload(frame_json,
+                                                     frame_json_length,
+                                                     artifact,
+                                                     &frame_record,
+                                                     &rewritten_frame_json,
+                                                     error_fd)) {
+            free(frame_json);
+            free(rewritten_frame_json);
+            goto cleanup;
+        }
+        original_frame_count += 1U;
+        if (rewritten_frame_json != NULL) {
+            frames_changed = true;
+        }
+        if (frame_record != NULL && frame_record->policy == FENG_CODEGEN_MAPING_FRAME_HIDDEN) {
+            frames_changed = true;
+            free(frame_json);
+            free(rewritten_frame_json);
+            cursor = proxy_json_skip_whitespace(frame_end, frames_end);
+            if (cursor < frames_end && *cursor == ',') {
+                cursor = proxy_json_skip_whitespace(cursor + 1, frames_end);
+                continue;
+            }
+            if (cursor < frames_end && *cursor == ']') {
+                break;
+            }
+            ok = true;
+            goto cleanup;
+        }
 
-                if (display_name == NULL ||
-                    !proxy_insert_json_string_replacement(&replacements,
-                                                          &replacement_count,
-                                                          &replacement_capacity,
-                                                          (size_t)(name_start - json),
-                                                          (size_t)(name_end - json),
-                                                          display_name)) {
-                    free(display_name);
-                    free(backend_symbol);
-                    free(package_uri);
-                    free(local_path);
-                    proxy_report_error(error_fd,
-                                       "failed to rewrite stackTrace source paths",
-                                       "out of memory");
-                    goto cleanup;
-                }
-            }
+        visible_frame_json = rewritten_frame_json != NULL ? rewritten_frame_json : frame_json;
+        if (visible_frame_count > 0U &&
+            !proxy_append_byte(&rewritten_frames,
+                               &rewritten_frames_length,
+                               &rewritten_frames_capacity,
+                               ',')) {
+            free(frame_json);
+            free(rewritten_frame_json);
+            proxy_report_error(error_fd,
+                               "failed to rewrite stackTrace response",
+                               "out of memory");
+            goto cleanup;
         }
-        if (proxy_json_find_object_member_loose(frame_start,
-                                                (size_t)(frame_end - frame_start),
-                                                "source",
-                                                &source_start,
-                                                &source_end) &&
-            proxy_json_find_object_member_loose(source_start,
-                                                (size_t)(source_end - source_start),
-                                                "path",
-                                                &path_start,
-                                                &path_end) &&
-            proxy_json_parse_string_copy(path_start, path_end, &package_uri, &after_string) &&
-            proxy_json_skip_whitespace(after_string, path_end) == path_end &&
-            proxy_package_uri_to_local_path(artifact, package_uri, &local_path)) {
-            if (!proxy_insert_json_string_replacement(&replacements,
-                                                      &replacement_count,
-                                                      &replacement_capacity,
-                                                      (size_t)(path_start - json),
-                                                      (size_t)(path_end - json),
-                                                      local_path)) {
-                free(local_path);
-                free(backend_symbol);
-                free(package_uri);
-                proxy_report_error(error_fd,
-                                   "failed to rewrite stackTrace source paths",
-                                   "out of memory");
-                goto cleanup;
-            }
-            local_path = NULL;
+        if (!proxy_append_bytes(&rewritten_frames,
+                                &rewritten_frames_length,
+                                &rewritten_frames_capacity,
+                                visible_frame_json,
+                                strlen(visible_frame_json))) {
+            free(frame_json);
+            free(rewritten_frame_json);
+            proxy_report_error(error_fd,
+                               "failed to rewrite stackTrace response",
+                               "out of memory");
+            goto cleanup;
         }
-        free(backend_symbol);
-        free(local_path);
-        free(package_uri);
+        visible_frame_count += 1U;
+        free(frame_json);
+        free(rewritten_frame_json);
 
         cursor = proxy_json_skip_whitespace(frame_end, frames_end);
         if (cursor < frames_end && *cursor == ',') {
@@ -1791,19 +1976,78 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         goto cleanup;
     }
 
-    if (!proxy_apply_json_string_replacements(json,
-                                              json_length,
-                                              replacements,
-                                              replacement_count,
-                                              out_json,
-                                              error_fd,
-                                              "failed to rewrite stackTrace source paths")) {
+    if (!proxy_append_byte(&rewritten_frames,
+                           &rewritten_frames_length,
+                           &rewritten_frames_capacity,
+                           ']') ||
+        !proxy_append_byte(&rewritten_frames,
+                           &rewritten_frames_length,
+                           &rewritten_frames_capacity,
+                           '\0')) {
+        proxy_report_error(error_fd,
+                           "failed to rewrite stackTrace response",
+                           "out of memory");
         goto cleanup;
     }
+    rewritten_frames[rewritten_frames_length - 1U] = '\0';
+
+    if (!frames_changed) {
+        ok = true;
+        goto cleanup;
+    }
+
+    if (!proxy_replace_json_span(json,
+                                 json_length,
+                                 (size_t)(frames_start - json),
+                                 (size_t)(frames_end - json),
+                                 rewritten_frames,
+                                 &payload_with_frames,
+                                 error_fd,
+                                 "failed to rewrite stackTrace response")) {
+        goto cleanup;
+    }
+
+    if (proxy_json_find_object_member_loose(payload_with_frames,
+                                            strlen(payload_with_frames),
+                                            "body",
+                                            &body_start,
+                                            &body_end) &&
+        proxy_json_find_object_member_loose(body_start,
+                                            (size_t)(body_end - body_start),
+                                            "totalFrames",
+                                            &total_frames_start,
+                                            &total_frames_end)) {
+        uint64_t total_frames = 0U;
+
+        if (proxy_json_parse_u64_range(total_frames_start, total_frames_end, &total_frames) &&
+            total_frames == (uint64_t)original_frame_count) {
+            char *visible_total = proxy_dup_printf("%zu", visible_frame_count);
+
+            if (visible_total == NULL ||
+                !proxy_replace_json_span(payload_with_frames,
+                                         strlen(payload_with_frames),
+                                         (size_t)(total_frames_start - payload_with_frames),
+                                         (size_t)(total_frames_end - payload_with_frames),
+                                         visible_total,
+                                         &payload_with_total,
+                                         error_fd,
+                                         "failed to rewrite stackTrace response")) {
+                free(visible_total);
+                goto cleanup;
+            }
+            free(visible_total);
+        }
+    }
+
+    *out_json = payload_with_total != NULL ? payload_with_total : payload_with_frames;
+    payload_with_total = NULL;
+    payload_with_frames = NULL;
     ok = true;
 
 cleanup:
-    proxy_json_string_replacements_dispose(replacements, replacement_count);
+    free(rewritten_frames);
+    free(payload_with_frames);
+    free(payload_with_total);
     return ok;
 }
 

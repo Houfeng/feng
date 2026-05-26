@@ -3,24 +3,27 @@ Usage:
   feng <command>  [options]
 
 Project:
-  feng init  [<name>] [--target=<bin|lib>]
-  feng build [<path>] [--release]
-  feng check [<path>] [--format=<text|json>]
-  feng run   [<path>] [--release] [-- <program-args>...]
-  feng clean [<path>]
-  feng pack  [<path>]
-  feng deps  <add|remove|install> ...
+  feng init       [<name>] [--target=<bin|lib>]
+  feng build      [<path>] [--release]
+  feng check      [<path>] [--format=<text|json>]
+  feng run        [<path>] [--release] [-- <program-args>...]
+  feng clean      [<path>]
+  feng pack       [<path>]
+  feng deps       <add|remove|install> ...
 
 Compile:
-  feng <files...> [--target=<bin|lib>] 
-                  [--out=<dir>] 
-                  [--name=<artifact>] 
-                  [--release] 
+  feng <files...> [--target=<bin|lib>]
+                  [--out=<dir>]
+                  [--name=<artifact>]
+                  [--release]
                   [--keep-ir]
+                  [--pkg=<fb-path>...]
+                  [--lib=<lib-path>...]
 
 Global:
   -h, --help      Display this message.
   -v, --version   Display version information.
 
 Protocol:
-  feng lsp [--stdio]
+  feng lsp        [--stdio]
+  feng dap        [--stdio]

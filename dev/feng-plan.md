@@ -15,7 +15,7 @@
 
 - [x] **第五阶段**：建立包管理机制。围绕 `feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存、`feng deps add/remove/install` 与 `feng build` 的依赖图展平规则完善构建工具；具体协议以 `docs/feng-deps.md` 与 `docs/feng-build.md` 为准。
 
-- [ ] **第六阶段**：细化 C ABI 兼容和互操作。把 `clib` 选择、`extern fn`、`@fixed`、调用约定、头文件生成、`string` 和数组桥接、异常不得越过 ABI 边界、C 侧长期持有对象的 retain/release 协议做成完整实现。这个阶段之前，不建议主动扩大 ABI 兼容集合。
+- [x] **第六阶段**：细化 C ABI 兼容和互操作。把 `clib` 选择、`extern fn`、`@fixed`、调用约定、头文件生成、`string` 和数组桥接、异常不得越过 ABI 边界、C 侧长期持有对象的 retain/release 协议做成完整实现。这个阶段之前，不建议主动扩大 ABI 兼容集合。
 
 - [ ] **第七阶段**：实现必需标准库。先做编译器和运行时真正依赖的最小标准库，再扩展给用户的基础库；标准库应建立在已经稳定的运行时、构建和包机制之上，而不是反向拖动前几阶段。
 
