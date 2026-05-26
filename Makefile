@@ -88,7 +88,7 @@ HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
 EXTLIB_DIR := extlib/$(HOST_TARGET)
 
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
-LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_libunwind$(STATIC_LIB_EXT)
+LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
 

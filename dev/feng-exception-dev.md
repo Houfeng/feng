@@ -27,7 +27,7 @@ Feng 采用基于静态 LSDA 表 + libunwind 的零开销异常机制：
 - 仓库内 `third_party/libunwind` 采用 **LLVM libunwind 20.1.8** 的最小源码闭包。该实现包含 `libunwind.cpp`，因此不是纯 C 依赖。
 - `https://github.com/libunwind/libunwind` 是 C 为主的 libunwind 实现，并提供 `_Unwind_*` API；但其 README 和源码布局主要面向 ELF。2026-05-24 在 macOS/arm64 上验证，默认构建因 Darwin 缺少 ELF/link.h 相关接口、GNU alias 与 ucontext 约束失败，不能作为当前 Darwin 后端的直接替换。
 - LLVM libunwind 源码包含 Windows/SEH 相关实现，主要可用于 MinGW/SEH 场景；Feng 当前生成 C 后端使用 GNU label address、DWARF/Mach-O/ELF unwind metadata 与 `_Unwind_*`，不能视为已支持 MSVC/Windows。Windows 仍需独立 SEH 后端设计与验证。
-- 构建上 `scripts/build_libunwind.sh` 先单独产出 `build/lib/libfeng_libunwind.a`；根 `Makefile` 再将该 archive 解包并合入 `build/lib/libfeng_runtime.a`。生成程序与 CLI driver 的稳定链接面仍只有 `libfeng_runtime`。
+- 构建上 `scripts/build_libunwind.sh` 先单独产出 `extlib/<host-target>/libfeng_unwind.a`；根 `Makefile` 再将该 archive 解包并合入 `build/lib/libfeng_runtime.a`。生成程序与 CLI driver 的稳定链接面仍只有 `libfeng_runtime`。
 
 **正常路径**：`try` 入口无任何代码，PC 区间在 LSDA 中隐式标记 try 范围，完全零开销。  
 **抛出路径**：`feng_throw` → `_Unwind_RaiseException` → libunwind 逐帧调用 personality → personality 读 LSDA 匹配类型 → 跳转 landing pad。

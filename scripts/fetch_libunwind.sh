@@ -126,7 +126,7 @@ Build:
 - \`make\` builds a static archive and stages it into \`../../build/lib\` by default.
 - \`make OUTPUT_DIR=<path>\` overrides the staging directory.
 - \`make install\` is an alias of the staging step.
-- default staged library name: \`libfeng_libunwind.a\`
+- default staged library name: \`libfeng_unwind.a\`
 - the root Makefile unpacks this archive and merges its object files into
   \`build/lib/libfeng_runtime.a\`; generated programs link only \`libfeng_runtime\`.
 
@@ -144,7 +144,7 @@ CFLAGS ?= -O2 -Wall -Wextra -fPIC
 CXXFLAGS ?= $(CFLAGS) -std=c++11 -fno-exceptions -fno-rtti
 CPPFLAGS ?= -I./include -I./src -DNDEBUG -D_LIBUNWIND_IS_NATIVE_ONLY -D_LIBUNWIND_DISABLE_VISIBILITY_ANNOTATIONS
 
-TARGET ?= libfeng_libunwind.a
+TARGET ?= libfeng_unwind.a
 OUTPUT_DIR ?= ../../build/lib
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)

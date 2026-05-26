@@ -5,7 +5,7 @@ CFLAGS ?= -O2 -Wall -Wextra -fPIC
 CXXFLAGS ?= $(CFLAGS) -std=c++11 -fno-exceptions -fno-rtti
 CPPFLAGS ?= -I./include -I./src -DNDEBUG -D_LIBUNWIND_IS_NATIVE_ONLY -D_LIBUNWIND_DISABLE_VISIBILITY_ANNOTATIONS
 
-TARGET ?= libfeng_libunwind.a
+TARGET ?= libfeng_unwind.a
 OUTPUT_DIR ?= ../../build/lib
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)

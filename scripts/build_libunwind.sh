@@ -48,4 +48,4 @@ fi
 
 echo "==> Building libunwind into ${OUTPUT_DIR}"
 "${MAKE_BIN}" -C "${TARGET_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" install
-echo "==> Built ${OUTPUT_DIR}/libfeng_libunwind.a"
+echo "==> Built ${OUTPUT_DIR}/libfeng_unwind.a"
