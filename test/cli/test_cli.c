@@ -667,7 +667,141 @@ static int run_lsp_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
+/* Run `feng dap` while suppressing stderr for option-level tests. */
+static int run_dap_quiet_stderr(int argc, char **argv) {
+    int saved_stderr;
+    int null_fd;
+    int rc;
+
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0);
+    null_fd = open("/dev/null", O_WRONLY);
+    ASSERT(null_fd >= 0);
+    ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+    close(null_fd);
+
+    rc = feng_cli_dap_main("feng", argc, argv);
+
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    return rc;
+}
+
 static char *read_text_stream(FILE *file);
+
+/* Read an entire file descriptor into a newly allocated string. */
+static char *read_fd_to_string(int fd) {
+    size_t capacity = 256U;
+    size_t length = 0U;
+    char *content = (char *)malloc(capacity);
+
+    ASSERT(content != NULL);
+    for (;;) {
+        ssize_t read_size;
+
+        if (length + 1U >= capacity) {
+            char *resized;
+
+            capacity *= 2U;
+            resized = (char *)realloc(content, capacity);
+            ASSERT(resized != NULL);
+            content = resized;
+        }
+
+        read_size = read(fd, content + length, capacity - length - 1U);
+        if (read_size == 0) {
+            break;
+        }
+        ASSERT(read_size >= 0);
+        length += (size_t)read_size;
+    }
+
+    content[length] = '\0';
+    return content;
+}
+
+/* Run `feng dap` with redirected stdio and a temporary PATH override. */
+static char *run_dap_capture_stdout_with_path(int argc,
+                                              char **argv,
+                                              const char *input_text,
+                                              const char *path_value,
+                                              int *out_rc,
+                                              char **out_stderr) {
+    int input_pipe[2];
+    int output_pipe[2];
+    int saved_stdin;
+    int saved_stdout;
+    int saved_stderr;
+    FILE *errors = tmpfile();
+    const char *existing_path = getenv("PATH");
+    char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    char *captured_stdout;
+    char *captured_stderr;
+    size_t input_length = input_text != NULL ? strlen(input_text) : 0U;
+    int rc;
+
+    ASSERT(errors != NULL);
+    ASSERT(pipe(input_pipe) == 0);
+    ASSERT(pipe(output_pipe) == 0);
+    if (path_value != NULL) {
+        ASSERT(setenv("PATH", path_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+    if (input_length > 0U) {
+        ASSERT(write(input_pipe[1], input_text, input_length) == (ssize_t)input_length);
+    }
+    close(input_pipe[1]);
+
+    fflush(stdout);
+    fflush(stderr);
+    saved_stdin = dup(STDIN_FILENO);
+    saved_stdout = dup(STDOUT_FILENO);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stdin >= 0);
+    ASSERT(saved_stdout >= 0);
+    ASSERT(saved_stderr >= 0);
+    ASSERT(dup2(input_pipe[0], STDIN_FILENO) >= 0);
+    ASSERT(dup2(output_pipe[1], STDOUT_FILENO) >= 0);
+    ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
+
+    rc = feng_cli_dap_main("feng", argc, argv);
+
+    fflush(stdout);
+    fflush(stderr);
+    ASSERT(dup2(saved_stdin, STDIN_FILENO) >= 0);
+    ASSERT(dup2(saved_stdout, STDOUT_FILENO) >= 0);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stdin);
+    close(saved_stdout);
+    close(saved_stderr);
+    close(input_pipe[0]);
+    close(output_pipe[1]);
+
+    captured_stdout = read_fd_to_string(output_pipe[0]);
+    close(output_pipe[0]);
+    captured_stderr = read_text_stream(errors);
+    fclose(errors);
+
+    if (saved_path != NULL) {
+        ASSERT(setenv("PATH", saved_path, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+    free(saved_path);
+
+    if (out_rc != NULL) {
+        *out_rc = rc;
+    }
+    if (out_stderr != NULL) {
+        *out_stderr = captured_stderr;
+    } else {
+        free(captured_stderr);
+    }
+    return captured_stdout;
+}
 
 static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
     int saved_stderr;
@@ -3142,6 +3276,89 @@ static void test_lsp_rejects_unknown_option(void) {
     char *argv[] = { "--bogus" };
 
     ASSERT(run_lsp_quiet_stderr(1, argv) != 0);
+}
+
+/* Ensure `feng dap --help` exits successfully. */
+static void test_dap_help_returns_success(void) {
+    char *argv[] = { "--help" };
+
+    ASSERT(run_dap_quiet_stderr(1, argv) == 0);
+}
+
+/* Ensure `feng dap` rejects unsupported command-line options. */
+static void test_dap_rejects_unknown_option(void) {
+    char *argv[] = { "--bogus" };
+
+    ASSERT(run_dap_quiet_stderr(1, argv) != 0);
+}
+
+/* Ensure the first DAP slice transparently proxies stdio to `lldb-dap`. */
+static void test_dap_proxies_stdio_to_backend(void) {
+    char template_path[] = "/tmp/feng_cli_dap_proxy_XXXXXX";
+    char *workspace_dir;
+    char *backend_path;
+    char *path_value;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    const char *input_text = "Content-Length: 0\r\n\r\n";
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    write_executable_text_file(backend_path, "#!/bin/sh\ncat\n");
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    ASSERT(path_value != NULL);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    ASSERT(strcmp(stdout_text, input_text) == 0);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(stderr_text);
+    free(stdout_text);
+    free(path_value);
+    free(backend_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure `feng dap` reports a clear backend launch failure. */
+static void test_dap_reports_missing_backend(void) {
+    char template_path[] = "/tmp/feng_cli_dap_missing_backend_XXXXXX";
+    char *workspace_dir;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   "",
+                                                   workspace_dir,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc != 0);
+    ASSERT(strcmp(stdout_text, "") == 0);
+    ASSERT(strstr(stderr_text, "failed to exec lldb-dap") != NULL);
+
+    free(stderr_text);
+    free(stdout_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
 }
 
 static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
@@ -8360,6 +8577,10 @@ int main(void) {
     test_init_rejects_non_empty_directory();
     test_lsp_help_returns_success();
     test_lsp_rejects_unknown_option();
+    test_dap_help_returns_success();
+    test_dap_rejects_unknown_option();
+    test_dap_proxies_stdio_to_backend();
+    test_dap_reports_missing_backend();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();

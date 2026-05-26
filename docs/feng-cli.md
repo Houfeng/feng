@@ -95,6 +95,7 @@ feng dap [--stdio]
 
 - `dap` 与 `lsp` 明确分层; `feng dap` 只负责调试协议代理,不承载语言服务能力。
 - 当前首版只支持 macOS 上的 `lldb-dap` 后端,并且 launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
+- 当前 Phase 4 的首个交付切面先建立透明 stdio proxy 骨架: `feng dap` 通过 `PATH` 查找并拉起 `lldb-dap`,先把 DAP 字节流双向转发跑通,后续再逐步叠加 `launch` 拦截、`.fd` 校验与 Feng 语义重写。
 - `feng dap` 在 DAP `launch` 请求中定位目标 binary 同级的 `.fd`,校验 sidecar 中记录的 binary 内容指纹与当前 binary 是否匹配; 校验失败必须直接拒绝会话。
 - `feng dap` 负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并基于 `.fd` 重写 stack frame、variables 与只读 watch 的展示名。
 - 当前首版不支持 attach、reverse debugging、任意 Feng 表达式求值以及具有副作用的 evaluate/watch。

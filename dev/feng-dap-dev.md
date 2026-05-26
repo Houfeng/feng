@@ -498,6 +498,7 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
+- Phase 4 的首个落地切面先交付透明 stdio proxy 骨架与后端进程生命周期控制，确保 `editor -> feng dap -> lldb-dap` 主链先可运行；`launch` 拦截、`.fd` 校验与语义重写继续在后续子项叠加，不在同一切面里摊大。
 
 #### `setBreakpoints`
 
@@ -631,7 +632,7 @@ VARS:
   - [x] 明确并实现最终 `META` 重写规则。
 
 - [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
-  - [ ] 新增 `feng dap`，启动并代理 `lldb-dap`。
+  - [x] 新增 `feng dap`，启动并代理 `lldb-dap`。
   - [ ] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
   - [ ] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
   - [ ] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。

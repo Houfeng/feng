@@ -43,6 +43,7 @@ void feng_cli_print_usage(const char *program) {
     fprintf(stderr, "\n");
     fprintf(stderr, "Protocol:\n");
     fprintf(stderr, "  %s lsp [--stdio]\n", program);
+    fprintf(stderr, "  %s dap [--stdio]\n", program);
     fprintf(stderr, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
@@ -98,6 +99,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "lsp") == 0) {
         return feng_cli_lsp_main(program, rest_argc, rest_argv);
+    }
+    if (strcmp(cmd, "dap") == 0) {
+        return feng_cli_dap_main(program, rest_argc, rest_argv);
     }
 
     if (strcmp(cmd, "compile") == 0

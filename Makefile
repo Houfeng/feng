@@ -16,6 +16,7 @@ PARSER_SRCS := $(wildcard src/parser/*.c)
 SEMANTIC_SRCS := $(wildcard src/semantic/*.c)
 CODEGEN_SRCS := $(wildcard src/codegen/*.c)
 DEBUG_SRCS := $(wildcard src/debug/*.c)
+DAP_SRCS := $(wildcard src/dap/*.c)
 SYMBOL_SRCS := $(wildcard src/symbol/*.c)
 RUNTIME_SRCS := $(wildcard src/runtime/*.c)
 ARCHIVE_SRCS := $(wildcard src/archive/*.c)
@@ -32,6 +33,7 @@ TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 	src/cli/lsp/server.c src/cli/lsp/runtime.c src/cli/lsp/main.c \
+	src/cli/dap/main.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/project/build.c \
 	src/cli/project/check.c \
@@ -42,7 +44,7 @@ TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 	src/cli/deps/main.c \
 	src/cli/compile/options.c src/cli/compile/direct.c src/cli/compile/driver.c
 
-CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))
+CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))
 RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS))
 TEST_ARCHIVE_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_ARCHIVE_SRCS))
 TEST_LEXER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(TEST_LEXER_SRCS))
@@ -51,7 +53,7 @@ TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS)
 TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIME_SRCS))
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
 TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
-TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
+TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
 TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
 DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
