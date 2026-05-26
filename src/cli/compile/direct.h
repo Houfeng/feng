@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 #include "cli/compile/options.h"
-#include "debug/debug.h"
+#include "codegen/mapping.h"
 
 /* Project/build-owned source mappings forwarded into direct compile. */
 typedef struct FengCliDirectDebugContext {

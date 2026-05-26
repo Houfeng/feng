@@ -43,7 +43,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "debug/debug.h"
+#include "codegen/mapping.h"
 #include "semantic/semantic.h"
 
 #ifdef __cplusplus

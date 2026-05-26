@@ -545,6 +545,8 @@ VARS:
 
 - `src/codegen/codegen.h`
   - 保留并正式启用 `FengCodegenOptions.emit_line_directives` 控制面。
+- `src/codegen/mapping.h`
+  - 承载与 `.fd` 容器解耦的抽象源码 / frame / variable 映射模型。
 - `src/codegen/codegen.c`
   - 真正消费 `emit_line_directives`。
   - 为 frame / variable 生成稳定、与 `.fd` 容器解耦的抽象调试信息。
@@ -559,7 +561,6 @@ VARS:
 建议新增独立模块承载 `.fd` 数据模型与写盘逻辑，例如：
 
 - `src/debug/`
-  - 与 `.fd` 容器解耦的抽象调试信息结构
   - `.fd` binary writer
   - 中间 `.fd` / 最终 `.fd` reader / writer
   - string table / section directory 编码
@@ -571,7 +572,8 @@ VARS:
 - `.fd` 的职责不同于 `.ft`。
 - 不应把 `.fd` writer 混入 `src/symbol/`。
 - 也不应把所有序列化细节堆进 `src/codegen/codegen.c`。
-- codegen 只负责输出抽象调试信息，`.fd` 容器化与汇总应由 `src/debug/` 负责。
+- codegen 只负责输出抽象映射模型，`.fd` 容器化与汇总应由 `src/debug/` 负责。
+- `src/debug/` 应单向依赖 `src/codegen/mapping.h`，而不是反过来让 codegen 依赖 `.fd` 侧头文件。
 
 ### 7.3 `feng dap` 与编辑器集成侧
 
