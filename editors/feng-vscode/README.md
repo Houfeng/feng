@@ -1,12 +1,13 @@
 # Feng VS Code Extension
 
-Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, dedicated Feng manifest support for `.fm`, and distinct Feng file icons for source, manifest, bundle, and symbol-table files.
+Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, Feng debugger integration through `feng dap`, dedicated Feng manifest support for `.fm`, and distinct Feng file icons for source, manifest, bundle, and symbol-table files.
 
 ## Features
 
 - Syntax highlighting: Covers common Feng keywords, strings, comments, assignment and compound operators, and basic language structures, and highlights Feng manifest sections and `#` comments in `.fm` files.
 - Document formatting: Normalizes indentation, whitespace, and common syntax spacing for day-to-day editing, including compound assignment and bitwise shift operators, and aligns manifest values inside `.fm` sections.
 - Language Server client: For Feng source files, the extension launches `feng lsp` through the configured Feng executable and connects it using VS Code's standard Language Client. Hover, completion, definition, references, rename, diagnostics, and later language features are now sourced from the Feng LSP capability set exposed by your installed CLI.
+- Debugger integration: The extension contributes a Feng debug type that launches `feng dap --stdio`, derives the default `program` from the nearest `target: "bin"` project manifest when possible, and wires a Feng build task as the default `preLaunchTask`.
 - Language Server restart: The command palette command `Feng: Restart Language Server` and the Feng LSP status bar item both stop the current language server and start a fresh `feng lsp` process using the latest `feng.executablePath` setting.
 - Diagnostics compatibility: If the current Feng CLI does not yet advertise any LSP capability, the extension keeps the existing check-based diagnostics path as a temporary compatibility fallback so open/save validation does not regress.
 - Icon support: The extension logo and the built-in `.feng`/`.ff`, `.fm`, `.fb`, and `.ft` file icons all use the latest Feng document icon family when your current file icon theme does not provide a Feng-specific icon.
@@ -24,7 +25,8 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 2. Open any Feng source file and syntax highlighting will be enabled automatically.
 3. When you want to clean up code, run VS Code's Format Document command.
 4. If you already have the Feng CLI installed, the extension will start `feng lsp` automatically for Feng source files. Language features are then provided by the LSP capabilities exposed by that CLI build.
-5. If your current CLI build still exposes an empty LSP capability set, the extension will temporarily keep open/save diagnostics through the legacy `check` path until the server side is filled in.
+5. Open Run and Debug, create a Feng launch configuration, and start debugging. When the active file belongs to a `target: "bin"` Feng project, the extension derives the default launch binary and build task from the nearest `feng.fm`.
+6. If your current CLI build still exposes an empty LSP capability set, the extension will temporarily keep open/save diagnostics through the legacy `check` path until the server side is filled in.
 
 ## Optional Configuration
 
@@ -39,6 +41,8 @@ If the `feng` executable is not available in your system `PATH`, you can configu
 This path can be either an absolute path or a path relative to the first workspace root.
 
 When `feng.executablePath` keeps its default value, the extension runs `feng` directly from your system `PATH`.
+
+The same executable setting is used for both `feng lsp` and `feng dap`.
 
 ## Formatting Behavior
 
@@ -67,3 +71,11 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 - Run `Feng: Restart Language Server` from the command palette, or click the Feng LSP status bar item, after rebuilding or changing the configured executable.
 - The extension keeps the built-in formatter and TextMate grammars; only language-service features move behind LSP.
 - If the installed CLI currently reports an empty LSP capability set, the extension temporarily preserves the previous open/save diagnostics path by running `feng check --format json <file>` for project files and `feng tool check <file>` for standalone files.
+
+## Debugging
+
+- The extension contributes a `feng` debug type that starts `feng dap --stdio`.
+- When a launch configuration omits `program`, the extension tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/bin/<name>`.
+- When a launch configuration omits `preLaunchTask`, the extension binds it to the generated Feng build task for that project.
+- The current debug surface targets macOS + `lldb-dap` and the non-`release` local `target=bin` build path.
+- `evaluate` currently only covers the identifier subset exposed by `feng dap`; richer watch expressions remain future work.

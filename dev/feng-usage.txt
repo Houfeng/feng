@@ -1,6 +1,6 @@
 Usage:
-  feng <files...> [options]
-  feng <command>  [options]
+  feng <command>  [<options>]
+  feng <files...> [<options>]
 
 Project:
   feng init       [<name>] [--target=<bin|lib>]

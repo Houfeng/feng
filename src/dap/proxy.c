@@ -53,7 +53,289 @@ typedef struct FengDapJsonStringReplacement {
     char *replacement;
 } FengDapJsonStringReplacement;
 
+/* Tracks one visible stack frame id to backend symbol binding. */
+typedef struct FengDapFrameBinding {
+    uint64_t frame_id;
+    char *backend_symbol;
+} FengDapFrameBinding;
+
+/* Remembers one in-flight scopes request until its response arrives. */
+typedef struct FengDapPendingScopeRequest {
+    uint64_t request_seq;
+    uint64_t frame_id;
+} FengDapPendingScopeRequest;
+
+/* Maps one scope variablesReference back to the owning frame id. */
+typedef struct FengDapScopeBinding {
+    uint64_t variables_reference;
+    uint64_t frame_id;
+} FengDapScopeBinding;
+
+/* Remembers one in-flight variables request until its response arrives. */
+typedef struct FengDapPendingVariablesRequest {
+    uint64_t request_seq;
+    uint64_t variables_reference;
+} FengDapPendingVariablesRequest;
+
+/* Session-scoped relay state used by stack/variables rewrites. */
+typedef struct FengDapRelayState {
+    FengDapFrameBinding *frame_bindings;
+    size_t frame_binding_count;
+    size_t frame_binding_capacity;
+    FengDapPendingScopeRequest *pending_scope_requests;
+    size_t pending_scope_request_count;
+    size_t pending_scope_request_capacity;
+    FengDapScopeBinding *scope_bindings;
+    size_t scope_binding_count;
+    size_t scope_binding_capacity;
+    FengDapPendingVariablesRequest *pending_variables_requests;
+    size_t pending_variables_request_count;
+    size_t pending_variables_request_capacity;
+} FengDapRelayState;
+
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
+static char *proxy_dup_printf(const char *fmt, ...);
+static bool proxy_process_backend_relay_message(const FengDapMessage *message,
+                                                int output_fd,
+                                                const FengDebugArtifact *artifact,
+                                                FengDapRelayState *state,
+                                                int error_fd);
+
+static void proxy_relay_state_dispose(FengDapRelayState *state) {
+    size_t index;
+
+    if (state == NULL) {
+        return;
+    }
+    for (index = 0U; index < state->frame_binding_count; ++index) {
+        free(state->frame_bindings[index].backend_symbol);
+    }
+    free(state->frame_bindings);
+    free(state->pending_scope_requests);
+    free(state->scope_bindings);
+    free(state->pending_variables_requests);
+    memset(state, 0, sizeof(*state));
+}
+
+static bool proxy_relay_state_set_frame_binding(FengDapRelayState *state,
+                                                uint64_t frame_id,
+                                                const char *backend_symbol) {
+    FengDapFrameBinding *grown;
+    size_t new_capacity;
+    size_t index;
+    char *backend_symbol_copy;
+
+    if (state == NULL || backend_symbol == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->frame_binding_count; ++index) {
+        if (state->frame_bindings[index].frame_id == frame_id) {
+            backend_symbol_copy = proxy_dup_printf("%s", backend_symbol);
+            if (backend_symbol_copy == NULL) {
+                return false;
+            }
+            free(state->frame_bindings[index].backend_symbol);
+            state->frame_bindings[index].backend_symbol = backend_symbol_copy;
+            return true;
+        }
+    }
+    if (state->frame_binding_count == state->frame_binding_capacity) {
+        new_capacity = state->frame_binding_capacity == 0U ? 8U : state->frame_binding_capacity * 2U;
+        grown = (FengDapFrameBinding *)realloc(state->frame_bindings,
+                                               new_capacity * sizeof(*state->frame_bindings));
+        if (grown == NULL) {
+            return false;
+        }
+        state->frame_bindings = grown;
+        state->frame_binding_capacity = new_capacity;
+    }
+    backend_symbol_copy = proxy_dup_printf("%s", backend_symbol);
+    if (backend_symbol_copy == NULL) {
+        return false;
+    }
+    state->frame_bindings[state->frame_binding_count].frame_id = frame_id;
+    state->frame_bindings[state->frame_binding_count].backend_symbol = backend_symbol_copy;
+    state->frame_binding_count += 1U;
+    return true;
+}
+
+static const char *proxy_relay_state_find_frame_binding(const FengDapRelayState *state,
+                                                        uint64_t frame_id) {
+    size_t index;
+
+    if (state == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < state->frame_binding_count; ++index) {
+        if (state->frame_bindings[index].frame_id == frame_id) {
+            return state->frame_bindings[index].backend_symbol;
+        }
+    }
+    return NULL;
+}
+
+static bool proxy_relay_state_record_pending_scope_request(FengDapRelayState *state,
+                                                           uint64_t request_seq,
+                                                           uint64_t frame_id) {
+    FengDapPendingScopeRequest *grown;
+    size_t new_capacity;
+    size_t index;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->pending_scope_request_count; ++index) {
+        if (state->pending_scope_requests[index].request_seq == request_seq) {
+            state->pending_scope_requests[index].frame_id = frame_id;
+            return true;
+        }
+    }
+    if (state->pending_scope_request_count == state->pending_scope_request_capacity) {
+        new_capacity = state->pending_scope_request_capacity == 0U
+                           ? 8U
+                           : state->pending_scope_request_capacity * 2U;
+        grown = (FengDapPendingScopeRequest *)realloc(
+            state->pending_scope_requests,
+            new_capacity * sizeof(*state->pending_scope_requests));
+        if (grown == NULL) {
+            return false;
+        }
+        state->pending_scope_requests = grown;
+        state->pending_scope_request_capacity = new_capacity;
+    }
+    state->pending_scope_requests[state->pending_scope_request_count].request_seq = request_seq;
+    state->pending_scope_requests[state->pending_scope_request_count].frame_id = frame_id;
+    state->pending_scope_request_count += 1U;
+    return true;
+}
+
+static bool proxy_relay_state_take_pending_scope_request(FengDapRelayState *state,
+                                                         uint64_t request_seq,
+                                                         uint64_t *out_frame_id) {
+    size_t index;
+
+    if (state == NULL || out_frame_id == NULL) {
+        return false;
+    }
+    for (index = 0U; index < state->pending_scope_request_count; ++index) {
+        if (state->pending_scope_requests[index].request_seq == request_seq) {
+            *out_frame_id = state->pending_scope_requests[index].frame_id;
+            state->pending_scope_request_count -= 1U;
+            if (index < state->pending_scope_request_count) {
+                state->pending_scope_requests[index] =
+                    state->pending_scope_requests[state->pending_scope_request_count];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proxy_relay_state_set_scope_binding(FengDapRelayState *state,
+                                                uint64_t variables_reference,
+                                                uint64_t frame_id) {
+    FengDapScopeBinding *grown;
+    size_t new_capacity;
+    size_t index;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->scope_binding_count; ++index) {
+        if (state->scope_bindings[index].variables_reference == variables_reference) {
+            state->scope_bindings[index].frame_id = frame_id;
+            return true;
+        }
+    }
+    if (state->scope_binding_count == state->scope_binding_capacity) {
+        new_capacity = state->scope_binding_capacity == 0U ? 8U : state->scope_binding_capacity * 2U;
+        grown = (FengDapScopeBinding *)realloc(state->scope_bindings,
+                                               new_capacity * sizeof(*state->scope_bindings));
+        if (grown == NULL) {
+            return false;
+        }
+        state->scope_bindings = grown;
+        state->scope_binding_capacity = new_capacity;
+    }
+    state->scope_bindings[state->scope_binding_count].variables_reference = variables_reference;
+    state->scope_bindings[state->scope_binding_count].frame_id = frame_id;
+    state->scope_binding_count += 1U;
+    return true;
+}
+
+static bool proxy_relay_state_find_scope_binding(const FengDapRelayState *state,
+                                                 uint64_t variables_reference,
+                                                 uint64_t *out_frame_id) {
+    size_t index;
+
+    if (state == NULL || out_frame_id == NULL) {
+        return false;
+    }
+    for (index = 0U; index < state->scope_binding_count; ++index) {
+        if (state->scope_bindings[index].variables_reference == variables_reference) {
+            *out_frame_id = state->scope_bindings[index].frame_id;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proxy_relay_state_record_pending_variables_request(FengDapRelayState *state,
+                                                               uint64_t request_seq,
+                                                               uint64_t variables_reference) {
+    FengDapPendingVariablesRequest *grown;
+    size_t new_capacity;
+    size_t index;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->pending_variables_request_count; ++index) {
+        if (state->pending_variables_requests[index].request_seq == request_seq) {
+            state->pending_variables_requests[index].variables_reference = variables_reference;
+            return true;
+        }
+    }
+    if (state->pending_variables_request_count == state->pending_variables_request_capacity) {
+        new_capacity = state->pending_variables_request_capacity == 0U
+                           ? 8U
+                           : state->pending_variables_request_capacity * 2U;
+        grown = (FengDapPendingVariablesRequest *)realloc(
+            state->pending_variables_requests,
+            new_capacity * sizeof(*state->pending_variables_requests));
+        if (grown == NULL) {
+            return false;
+        }
+        state->pending_variables_requests = grown;
+        state->pending_variables_request_capacity = new_capacity;
+    }
+    state->pending_variables_requests[state->pending_variables_request_count].request_seq = request_seq;
+    state->pending_variables_requests[state->pending_variables_request_count].variables_reference = variables_reference;
+    state->pending_variables_request_count += 1U;
+    return true;
+}
+
+static bool proxy_relay_state_take_pending_variables_request(FengDapRelayState *state,
+                                                             uint64_t request_seq,
+                                                             uint64_t *out_variables_reference) {
+    size_t index;
+
+    if (state == NULL || out_variables_reference == NULL) {
+        return false;
+    }
+    for (index = 0U; index < state->pending_variables_request_count; ++index) {
+        if (state->pending_variables_requests[index].request_seq == request_seq) {
+            *out_variables_reference = state->pending_variables_requests[index].variables_reference;
+            state->pending_variables_request_count -= 1U;
+            if (index < state->pending_variables_request_count) {
+                state->pending_variables_requests[index] =
+                    state->pending_variables_requests[state->pending_variables_request_count];
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 /* Emit a proxy error message to the selected stderr fd. */
 static void proxy_report_error(int error_fd,
@@ -435,6 +717,31 @@ static bool proxy_reader_fill(FengDapMessageReader *reader, int error_fd) {
     }
     reader->buffer_end += (size_t)read_size;
     return true;
+}
+
+/* Opportunistically pull already-ready backend bytes without blocking. */
+static bool proxy_reader_fill_if_ready(FengDapMessageReader *reader, int error_fd) {
+    struct pollfd pfd;
+    int poll_rc;
+
+    if (reader == NULL || reader->fd < 0 || reader->reached_eof) {
+        return true;
+    }
+    pfd.fd = reader->fd;
+    pfd.events = POLLIN | POLLHUP;
+    pfd.revents = 0;
+    poll_rc = poll(&pfd, 1U, 0);
+    if (poll_rc < 0) {
+        if (errno == EINTR) {
+            return true;
+        }
+        proxy_report_error(error_fd, "failed to poll DAP reader", strerror(errno));
+        return false;
+    }
+    if (poll_rc == 0 || (pfd.revents & (POLLIN | POLLHUP)) == 0) {
+        return true;
+    }
+    return proxy_reader_fill(reader, error_fd);
 }
 
 /* Locate the end of one DAP header block if it is already buffered. */
@@ -1488,6 +1795,30 @@ static const FengCodegenMapingFrameRecord *proxy_find_frame_record(const FengDeb
     return NULL;
 }
 
+/* Find one variable mapping by frame backend symbol and backend variable name. */
+static const FengCodegenMapingVariableRecord *proxy_find_variable_record(
+    const FengDebugArtifact *artifact,
+    const char *frame_backend_symbol,
+    const char *backend_name) {
+    size_t index;
+
+    if (artifact == NULL || frame_backend_symbol == NULL || backend_name == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < artifact->info.variable_count; ++index) {
+        const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
+
+        if (record->backend_name == NULL) {
+            continue;
+        }
+        if (strcmp(record->frame_backend_symbol, frame_backend_symbol) == 0 &&
+            strcmp(record->backend_name, backend_name) == 0) {
+            return record;
+        }
+    }
+    return NULL;
+}
+
 /* Materialize a new JSON payload after applying one or more string-literal replacements. */
 static bool proxy_apply_json_string_replacements(const char *json,
                                                  size_t json_length,
@@ -1632,6 +1963,95 @@ static bool proxy_json_parse_u64_range(const char *value_start,
     return true;
 }
 
+/* Parse one loose string member from the current JSON object. */
+static bool proxy_json_get_string_member_loose(const char *json,
+                                               size_t json_length,
+                                               const char *key,
+                                               char **out_value) {
+    const char *value_start;
+    const char *value_end;
+    const char *after_string;
+
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             key,
+                                             &value_start,
+                                             &value_end)) {
+        return false;
+    }
+    if (!proxy_json_parse_string_copy(value_start, value_end, out_value, &after_string)) {
+        return false;
+    }
+    after_string = proxy_json_skip_whitespace(after_string, value_end);
+    return after_string == value_end;
+}
+
+/* Parse one loose unsigned integer member from the current JSON object. */
+static bool proxy_json_get_u64_member_loose(const char *json,
+                                            size_t json_length,
+                                            const char *key,
+                                            uint64_t *out_value) {
+    const char *value_start;
+    const char *value_end;
+
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             key,
+                                             &value_start,
+                                             &value_end)) {
+        return false;
+    }
+    return proxy_json_parse_u64_range(value_start, value_end, out_value);
+}
+
+/* Parse one unsigned integer request argument from the top-level DAP payload. */
+static bool proxy_json_get_request_argument_u64_member(const char *json,
+                                                       size_t json_length,
+                                                       const char *key,
+                                                       uint64_t *out_value) {
+    const char *arguments_start;
+    const char *arguments_end;
+    const char *value_start;
+    const char *value_end;
+
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "arguments",
+                                             &arguments_start,
+                                             &arguments_end) ||
+        !proxy_json_find_object_member_loose(arguments_start,
+                                             (size_t)(arguments_end - arguments_start),
+                                             key,
+                                             &value_start,
+                                             &value_end)) {
+        return false;
+    }
+    return proxy_json_parse_u64_range(value_start, value_end, out_value);
+}
+
+/* Locate one string request argument from the top-level DAP payload. */
+static bool proxy_json_get_request_argument_string_range(const char *json,
+                                                         size_t json_length,
+                                                         const char *key,
+                                                         const char **out_value_start,
+                                                         const char **out_value_end) {
+    const char *arguments_start;
+    const char *arguments_end;
+
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "arguments",
+                                             &arguments_start,
+                                             &arguments_end)) {
+        return false;
+    }
+    return proxy_json_find_object_member_loose(arguments_start,
+                                               (size_t)(arguments_end - arguments_start),
+                                               key,
+                                               out_value_start,
+                                               out_value_end);
+}
+
 /* Locate `arguments.source.path` inside one setBreakpoints request payload. */
 static bool proxy_json_get_set_breakpoints_path_range(const char *json,
                                                       size_t json_length,
@@ -1724,6 +2144,173 @@ static bool proxy_rewrite_set_breakpoints_request_payload(const char *json,
 cleanup:
     free(source_path);
     free(package_uri);
+    proxy_json_string_replacement_dispose(&replacement);
+    return ok;
+}
+
+/* Accept only the Phase 4 minimal identifier evaluate subset. */
+static bool proxy_is_identifier_expression(const char *expression) {
+    size_t index;
+
+    if (expression == NULL || expression[0] == '\0') {
+        return false;
+    }
+    if (!(isalpha((unsigned char)expression[0]) || expression[0] == '_')) {
+        return false;
+    }
+    for (index = 1U; expression[index] != '\0'; ++index) {
+        if (!(isalnum((unsigned char)expression[index]) || expression[index] == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Resolve one Feng identifier to a unique backend evaluate expression. */
+static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
+                                              const char *frame_backend_symbol,
+                                              const char *identifier,
+                                              char **out_backend_expression,
+                                              char **out_error_detail) {
+    char *resolved_expression = NULL;
+    size_t match_count = 0U;
+    size_t index;
+
+    *out_backend_expression = NULL;
+    if (out_error_detail != NULL) {
+        free(*out_error_detail);
+        *out_error_detail = NULL;
+    }
+    if (artifact == NULL || frame_backend_symbol == NULL || identifier == NULL) {
+        return true;
+    }
+    for (index = 0U; index < artifact->info.variable_count; ++index) {
+        const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
+        const char *candidate_expression;
+
+        if (strcmp(record->frame_backend_symbol, frame_backend_symbol) != 0 ||
+            strcmp(record->display_name, identifier) != 0) {
+            continue;
+        }
+        candidate_expression = record->backend_name != NULL ? record->backend_name : record->read_expr;
+        if (candidate_expression == NULL || candidate_expression[0] == '\0') {
+            continue;
+        }
+        if (resolved_expression == NULL) {
+            resolved_expression = proxy_dup_printf("%s", candidate_expression);
+            if (resolved_expression == NULL) {
+                if (out_error_detail != NULL) {
+                    *out_error_detail = proxy_dup_printf("out of memory resolving evaluate expression");
+                }
+                return false;
+            }
+            match_count = 1U;
+            continue;
+        }
+        if (strcmp(resolved_expression, candidate_expression) != 0) {
+            match_count += 1U;
+        }
+    }
+    if (match_count == 0U) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("evaluate identifier '%s' is not available in the current Feng frame",
+                                                 identifier);
+        }
+        free(resolved_expression);
+        return false;
+    }
+    if (match_count > 1U) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("evaluate identifier '%s' is ambiguous in the current Feng frame",
+                                                 identifier);
+        }
+        free(resolved_expression);
+        return false;
+    }
+    *out_backend_expression = resolved_expression;
+    return true;
+}
+
+/* Rewrite evaluate.arguments.expression for the Phase 4 identifier subset. */
+static bool proxy_rewrite_evaluate_request_payload(const char *json,
+                                                   size_t json_length,
+                                                   const FengDebugArtifact *artifact,
+                                                   const FengDapRelayState *state,
+                                                   char **out_json,
+                                                   char **out_error_detail,
+                                                   int error_fd) {
+    const char *expression_start;
+    const char *expression_end;
+    const char *after_string;
+    const char *frame_backend_symbol;
+    uint64_t frame_id = 0U;
+    char *expression = NULL;
+    char *backend_expression = NULL;
+    FengDapJsonStringReplacement replacement = {0};
+    bool ok = false;
+
+    *out_json = NULL;
+    if (out_error_detail != NULL) {
+        free(*out_error_detail);
+        *out_error_detail = NULL;
+    }
+    if (artifact == NULL ||
+        !proxy_json_get_request_argument_u64_member(json,
+                                                    json_length,
+                                                    "frameId",
+                                                    &frame_id) ||
+        frame_id == 0U) {
+        return true;
+    }
+    frame_backend_symbol = proxy_relay_state_find_frame_binding(state, frame_id);
+    if (frame_backend_symbol == NULL ||
+        !proxy_json_get_request_argument_string_range(json,
+                                                      json_length,
+                                                      "expression",
+                                                      &expression_start,
+                                                      &expression_end)) {
+        return true;
+    }
+    if (!proxy_json_parse_string_copy(expression_start, expression_end, &expression, &after_string) ||
+        proxy_json_skip_whitespace(after_string, expression_end) != expression_end) {
+        if (out_error_detail != NULL) {
+            *out_error_detail = proxy_dup_printf("evaluate arguments.expression must be a string");
+        }
+        return false;
+    }
+    if (!proxy_is_identifier_expression(expression)) {
+        ok = true;
+        goto cleanup;
+    }
+    if (!proxy_resolve_evaluate_identifier(artifact,
+                                           frame_backend_symbol,
+                                           expression,
+                                           &backend_expression,
+                                           out_error_detail)) {
+        goto cleanup;
+    }
+    if (backend_expression == NULL || strcmp(backend_expression, expression) == 0) {
+        ok = true;
+        goto cleanup;
+    }
+    replacement.start_offset = (size_t)(expression_start - json);
+    replacement.end_offset = (size_t)(expression_end - json);
+    replacement.replacement = backend_expression;
+    backend_expression = NULL;
+    if (!proxy_apply_json_string_replacements(json,
+                                              json_length,
+                                              &replacement,
+                                              1U,
+                                              out_json,
+                                              error_fd,
+                                              "failed to rewrite evaluate expression")) {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    free(expression);
+    free(backend_expression);
     proxy_json_string_replacement_dispose(&replacement);
     return ok;
 }
@@ -1839,6 +2426,7 @@ cleanup:
 static bool proxy_rewrite_stack_trace_response_payload(const char *json,
                                                        size_t json_length,
                                                        const FengDebugArtifact *artifact,
+                                                       FengDapRelayState *state,
                                                        char **out_json,
                                                        int error_fd) {
     const char *body_start;
@@ -1893,7 +2481,9 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         const char *frame_start = cursor;
         const char *frame_end;
         const FengCodegenMapingFrameRecord *frame_record = NULL;
+        uint64_t frame_id = 0U;
         char *frame_json = NULL;
+        char *backend_symbol = NULL;
         char *rewritten_frame_json = NULL;
         const char *visible_frame_json;
         size_t frame_json_length;
@@ -1904,6 +2494,13 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         }
         frame_json_length = (size_t)(frame_end - frame_start);
         frame_json = proxy_dup_bytes((const unsigned char *)frame_start, frame_json_length);
+        if (frame_json != NULL) {
+            proxy_json_get_u64_member_loose(frame_json, frame_json_length, "id", &frame_id);
+            proxy_json_get_string_member_loose(frame_json,
+                                               frame_json_length,
+                                               "name",
+                                               &backend_symbol);
+        }
         if (frame_json == NULL ||
             !proxy_rewrite_stack_trace_frame_payload(frame_json,
                                                      frame_json_length,
@@ -1912,6 +2509,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
                                                      &rewritten_frame_json,
                                                      error_fd)) {
             free(frame_json);
+            free(backend_symbol);
             free(rewritten_frame_json);
             goto cleanup;
         }
@@ -1922,6 +2520,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         if (frame_record != NULL && frame_record->policy == FENG_CODEGEN_MAPING_FRAME_HIDDEN) {
             frames_changed = true;
             free(frame_json);
+            free(backend_symbol);
             free(rewritten_frame_json);
             cursor = proxy_json_skip_whitespace(frame_end, frames_end);
             if (cursor < frames_end && *cursor == ',') {
@@ -1932,6 +2531,17 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
                 break;
             }
             ok = true;
+            goto cleanup;
+        }
+
+        if (state != NULL && frame_id != 0U && backend_symbol != NULL &&
+            !proxy_relay_state_set_frame_binding(state, frame_id, backend_symbol)) {
+            free(frame_json);
+            free(backend_symbol);
+            free(rewritten_frame_json);
+            proxy_report_error(error_fd,
+                               "failed to rewrite stackTrace response",
+                               "out of memory");
             goto cleanup;
         }
 
@@ -1962,6 +2572,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         }
         visible_frame_count += 1U;
         free(frame_json);
+        free(backend_symbol);
         free(rewritten_frame_json);
 
         cursor = proxy_json_skip_whitespace(frame_end, frames_end);
@@ -2051,11 +2662,250 @@ cleanup:
     return ok;
 }
 
+/* Record scope variablesReference bindings for one scopes response. */
+static bool proxy_record_scopes_response_bindings(const char *json,
+                                                  size_t json_length,
+                                                  uint64_t frame_id,
+                                                  FengDapRelayState *state) {
+    const char *body_start;
+    const char *body_end;
+    const char *scopes_start;
+    const char *scopes_end;
+    const char *cursor;
+
+    if (state == NULL ||
+        !proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "body",
+                                             &body_start,
+                                             &body_end) ||
+        !proxy_json_find_object_member_loose(body_start,
+                                             (size_t)(body_end - body_start),
+                                             "scopes",
+                                             &scopes_start,
+                                             &scopes_end)) {
+        return true;
+    }
+    cursor = proxy_json_skip_whitespace(scopes_start, scopes_end);
+    if (cursor >= scopes_end || *cursor != '[') {
+        return true;
+    }
+
+    cursor = proxy_json_skip_whitespace(cursor + 1, scopes_end);
+    while (cursor < scopes_end && *cursor != ']') {
+        const char *scope_start = cursor;
+        const char *scope_end;
+        uint64_t variables_reference = 0U;
+
+        if (!proxy_json_skip_value(scope_start, scopes_end, &scope_end)) {
+            return true;
+        }
+        if (proxy_json_get_u64_member_loose(scope_start,
+                                            (size_t)(scope_end - scope_start),
+                                            "variablesReference",
+                                            &variables_reference) &&
+            variables_reference != 0U &&
+            !proxy_relay_state_set_scope_binding(state, variables_reference, frame_id)) {
+            return false;
+        }
+        cursor = proxy_json_skip_whitespace(scope_end, scopes_end);
+        if (cursor < scopes_end && *cursor == ',') {
+            cursor = proxy_json_skip_whitespace(cursor + 1, scopes_end);
+            continue;
+        }
+        if (cursor < scopes_end && *cursor == ']') {
+            break;
+        }
+        return true;
+    }
+    return true;
+}
+
+/* Rewrite variables response names using .fd backend_name -> display_name mappings. */
+static bool proxy_rewrite_variables_response_payload(const char *json,
+                                                     size_t json_length,
+                                                     const FengDebugArtifact *artifact,
+                                                     const char *frame_backend_symbol,
+                                                     char **out_json,
+                                                     int error_fd) {
+    const char *body_start;
+    const char *body_end;
+    const char *variables_start;
+    const char *variables_end;
+    const char *cursor;
+    FengDapJsonStringReplacement *replacements = NULL;
+    size_t replacement_count = 0U;
+    size_t replacement_capacity = 0U;
+    bool ok = false;
+
+    *out_json = NULL;
+    if (artifact == NULL || frame_backend_symbol == NULL) {
+        return true;
+    }
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "body",
+                                             &body_start,
+                                             &body_end) ||
+        !proxy_json_find_object_member_loose(body_start,
+                                             (size_t)(body_end - body_start),
+                                             "variables",
+                                             &variables_start,
+                                             &variables_end)) {
+        return true;
+    }
+    cursor = proxy_json_skip_whitespace(variables_start, variables_end);
+    if (cursor >= variables_end || *cursor != '[') {
+        return true;
+    }
+
+    cursor = proxy_json_skip_whitespace(cursor + 1, variables_end);
+    while (cursor < variables_end && *cursor != ']') {
+        const char *variable_start = cursor;
+        const char *variable_end;
+        const char *name_start;
+        const char *name_end;
+        const char *evaluate_name_start;
+        const char *evaluate_name_end;
+        const char *after_string;
+        const FengCodegenMapingVariableRecord *record = NULL;
+        char *backend_name = NULL;
+        char *evaluate_name = NULL;
+
+        if (!proxy_json_skip_value(variable_start, variables_end, &variable_end)) {
+            ok = true;
+            goto cleanup;
+        }
+        if (proxy_json_find_object_member_loose(variable_start,
+                                                (size_t)(variable_end - variable_start),
+                                                "name",
+                                                &name_start,
+                                                &name_end) &&
+            proxy_json_parse_string_copy(name_start, name_end, &backend_name, &after_string) &&
+            proxy_json_skip_whitespace(after_string, name_end) == name_end) {
+            record = proxy_find_variable_record(artifact, frame_backend_symbol, backend_name);
+            if (record != NULL &&
+                record->display_name != NULL &&
+                strcmp(record->display_name, backend_name) != 0) {
+                char *display_name = proxy_dup_printf("%s", record->display_name);
+
+                if (display_name == NULL ||
+                    !proxy_insert_json_string_replacement(&replacements,
+                                                          &replacement_count,
+                                                          &replacement_capacity,
+                                                          (size_t)(name_start - json),
+                                                          (size_t)(name_end - json),
+                                                          display_name)) {
+                    free(display_name);
+                    free(backend_name);
+                    free(evaluate_name);
+                    proxy_report_error(error_fd,
+                                       "failed to rewrite variables response",
+                                       "out of memory");
+                    goto cleanup;
+                }
+                if (proxy_json_find_object_member_loose(variable_start,
+                                                        (size_t)(variable_end - variable_start),
+                                                        "evaluateName",
+                                                        &evaluate_name_start,
+                                                        &evaluate_name_end) &&
+                    proxy_json_parse_string_copy(evaluate_name_start,
+                                                 evaluate_name_end,
+                                                 &evaluate_name,
+                                                 &after_string) &&
+                    proxy_json_skip_whitespace(after_string, evaluate_name_end) ==
+                        evaluate_name_end &&
+                    strcmp(evaluate_name, backend_name) == 0) {
+                    char *display_evaluate_name = proxy_dup_printf("%s", record->display_name);
+
+                    if (display_evaluate_name == NULL ||
+                        !proxy_insert_json_string_replacement(&replacements,
+                                                              &replacement_count,
+                                                              &replacement_capacity,
+                                                              (size_t)(evaluate_name_start - json),
+                                                              (size_t)(evaluate_name_end - json),
+                                                              display_evaluate_name)) {
+                        free(display_evaluate_name);
+                        free(backend_name);
+                        free(evaluate_name);
+                        proxy_report_error(error_fd,
+                                           "failed to rewrite variables response",
+                                           "out of memory");
+                        goto cleanup;
+                    }
+                }
+            }
+        }
+        free(backend_name);
+        free(evaluate_name);
+        cursor = proxy_json_skip_whitespace(variable_end, variables_end);
+        if (cursor < variables_end && *cursor == ',') {
+            cursor = proxy_json_skip_whitespace(cursor + 1, variables_end);
+            continue;
+        }
+        if (cursor < variables_end && *cursor == ']') {
+            break;
+        }
+        ok = true;
+        goto cleanup;
+    }
+
+    if (!proxy_apply_json_string_replacements(json,
+                                              json_length,
+                                              replacements,
+                                              replacement_count,
+                                              out_json,
+                                              error_fd,
+                                              "failed to rewrite variables response")) {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    proxy_json_string_replacements_dispose(replacements, replacement_count);
+    return ok;
+}
+
+/* Drain any already-ready backend messages so dependent client rewrites see fresh state. */
+static bool proxy_drain_ready_backend_messages(FengDapMessageReader *backend_reader,
+                                               int output_fd,
+                                               const FengDebugArtifact *artifact,
+                                               FengDapRelayState *state,
+                                               int error_fd) {
+    for (;;) {
+        FengDapMessage message = {0};
+        FengDapReadStatus status;
+        bool ok;
+
+        if (!proxy_reader_fill_if_ready(backend_reader, error_fd)) {
+            return false;
+        }
+        status = proxy_reader_try_read_buffered_message(backend_reader, &message, error_fd);
+        if (status == FENG_DAP_READ_PENDING || status == FENG_DAP_READ_EOF) {
+            return true;
+        }
+        if (status == FENG_DAP_READ_ERROR) {
+            return false;
+        }
+        ok = proxy_process_backend_relay_message(&message,
+                                                output_fd,
+                                                artifact,
+                                                state,
+                                                error_fd);
+        proxy_message_dispose(&message);
+        if (!ok) {
+            return false;
+        }
+    }
+}
+
 /* Forward one client message to lldb-dap, rewriting setBreakpoints paths when needed. */
 static bool proxy_process_client_relay_message(const FengDapMessage *message,
+                                               FengDapMessageReader *backend_reader,
                                                int backend_stdin_fd,
                                                int output_fd,
                                                const FengDebugArtifact *artifact,
+                                               FengDapRelayState *state,
                                                uint64_t *next_seq,
                                                int error_fd) {
     char *type = NULL;
@@ -2063,7 +2913,10 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
     char *rewritten_payload = NULL;
     char *error_detail = NULL;
     uint64_t request_seq = 0U;
+    uint64_t frame_id = 0U;
+    uint64_t variables_reference = 0U;
     bool is_set_breakpoints = false;
+    bool is_evaluate = false;
     bool ok;
 
     if (proxy_json_get_string_member(message->payload,
@@ -2075,8 +2928,45 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
                                      message->payload_length,
                                      "command",
                                      &command) &&
-        strcmp(command, "setBreakpoints") == 0) {
-        is_set_breakpoints = true;
+        (strcmp(command, "setBreakpoints") == 0 || strcmp(command, "evaluate") == 0)) {
+        is_set_breakpoints = strcmp(command, "setBreakpoints") == 0;
+        is_evaluate = strcmp(command, "evaluate") == 0;
+    }
+    if (type != NULL &&
+        strcmp(type, "request") == 0 &&
+        command != NULL &&
+        proxy_json_get_u64_member(message->payload,
+                                  message->payload_length,
+                                  "seq",
+                                  &request_seq)) {
+        if (strcmp(command, "scopes") == 0 &&
+            proxy_json_get_request_argument_u64_member(message->payload,
+                                                       message->payload_length,
+                                                       "frameId",
+                                                       &frame_id) &&
+            !proxy_relay_state_record_pending_scope_request(state, request_seq, frame_id)) {
+            free(type);
+            free(command);
+            proxy_report_error(error_fd,
+                               "failed to record scopes request",
+                               "out of memory");
+            return false;
+        }
+        if (strcmp(command, "variables") == 0 &&
+            proxy_json_get_request_argument_u64_member(message->payload,
+                                                       message->payload_length,
+                                                       "variablesReference",
+                                                       &variables_reference) &&
+            !proxy_relay_state_record_pending_variables_request(state,
+                                                                request_seq,
+                                                                variables_reference)) {
+            free(type);
+            free(command);
+            proxy_report_error(error_fd,
+                               "failed to record variables request",
+                               "out of memory");
+            return false;
+        }
     }
     if (is_set_breakpoints) {
         if (!proxy_rewrite_set_breakpoints_request_payload(message->payload,
@@ -2127,6 +3017,67 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
             return ok;
         }
     }
+    if (is_evaluate) {
+        if (!proxy_drain_ready_backend_messages(backend_reader,
+                                                output_fd,
+                                                artifact,
+                                                state,
+                                                error_fd)) {
+            free(type);
+            free(command);
+            free(error_detail);
+            free(rewritten_payload);
+            return false;
+        }
+        if (!proxy_rewrite_evaluate_request_payload(message->payload,
+                                                    message->payload_length,
+                                                    artifact,
+                                                    state,
+                                                    &rewritten_payload,
+                                                    &error_detail,
+                                                    error_fd)) {
+            if (error_detail != NULL) {
+                if (!proxy_json_get_u64_member(message->payload,
+                                              message->payload_length,
+                                              "seq",
+                                              &request_seq)) {
+                    free(type);
+                    free(command);
+                    free(error_detail);
+                    free(rewritten_payload);
+                    proxy_report_error(error_fd,
+                                       "failed to rewrite evaluate expression",
+                                       "missing request sequence");
+                    return false;
+                }
+                ok = proxy_send_request_failure_response(output_fd,
+                                                         command,
+                                                         request_seq,
+                                                         error_detail,
+                                                         next_seq,
+                                                         error_fd);
+                free(type);
+                free(command);
+                free(error_detail);
+                free(rewritten_payload);
+                return ok;
+            }
+            free(type);
+            free(command);
+            return false;
+        }
+        if (rewritten_payload != NULL) {
+            ok = proxy_write_message(backend_stdin_fd,
+                                     rewritten_payload,
+                                     error_fd,
+                                     "failed to forward rewritten evaluate request to lldb-dap");
+            free(type);
+            free(command);
+            free(error_detail);
+            free(rewritten_payload);
+            return ok;
+        }
+    }
 
     ok = proxy_write_framed_message(backend_stdin_fd,
                                     message,
@@ -2143,10 +3094,15 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
 static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                                                 int output_fd,
                                                 const FengDebugArtifact *artifact,
+                                                FengDapRelayState *state,
                                                 int error_fd) {
     char *type = NULL;
     char *command = NULL;
     char *rewritten_payload = NULL;
+    uint64_t request_seq = 0U;
+    uint64_t frame_id = 0U;
+    uint64_t variables_reference = 0U;
+    bool success = true;
     bool ok;
 
     if (proxy_json_get_string_member(message->payload,
@@ -2157,26 +3113,82 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
         proxy_json_get_string_member(message->payload,
                                      message->payload_length,
                                      "command",
-                                     &command) &&
-        strcmp(command, "stackTrace") == 0) {
-        if (!proxy_rewrite_stack_trace_response_payload(message->payload,
-                                                        message->payload_length,
-                                                        artifact,
-                                                        &rewritten_payload,
-                                                        error_fd)) {
+                                     &command)) {
+        proxy_json_get_u64_member(message->payload,
+                                  message->payload_length,
+                                  "request_seq",
+                                  &request_seq);
+        proxy_json_get_bool_member(message->payload,
+                                   message->payload_length,
+                                   "success",
+                                   &success);
+        if (strcmp(command, "stackTrace") == 0) {
+            if (!proxy_rewrite_stack_trace_response_payload(message->payload,
+                                                            message->payload_length,
+                                                            artifact,
+                                                            state,
+                                                            &rewritten_payload,
+                                                            error_fd)) {
+                free(type);
+                free(command);
+                return false;
+            }
+            if (rewritten_payload != NULL) {
+                ok = proxy_write_message(output_fd,
+                                         rewritten_payload,
+                                         error_fd,
+                                         "failed to forward rewritten stackTrace response to editor");
+                free(type);
+                free(command);
+                free(rewritten_payload);
+                return ok;
+            }
+        } else if (strcmp(command, "scopes") == 0 &&
+                   success &&
+                   proxy_relay_state_take_pending_scope_request(state,
+                                                                request_seq,
+                                                                &frame_id) &&
+                   !proxy_record_scopes_response_bindings(message->payload,
+                                                          message->payload_length,
+                                                          frame_id,
+                                                          state)) {
             free(type);
             free(command);
+            proxy_report_error(error_fd,
+                               "failed to record scopes response",
+                               "out of memory");
             return false;
-        }
-        if (rewritten_payload != NULL) {
-            ok = proxy_write_message(output_fd,
-                                     rewritten_payload,
-                                     error_fd,
-                                     "failed to forward rewritten stackTrace response to editor");
-            free(type);
-            free(command);
-            free(rewritten_payload);
-            return ok;
+        } else if (strcmp(command, "variables") == 0 &&
+                   proxy_relay_state_take_pending_variables_request(state,
+                                                                    request_seq,
+                                                                    &variables_reference) &&
+                   proxy_relay_state_find_scope_binding(state,
+                                                        variables_reference,
+                                                        &frame_id) &&
+                   success) {
+            const char *frame_backend_symbol = proxy_relay_state_find_frame_binding(state, frame_id);
+
+            if (frame_backend_symbol != NULL &&
+                !proxy_rewrite_variables_response_payload(message->payload,
+                                                          message->payload_length,
+                                                          artifact,
+                                                          frame_backend_symbol,
+                                                          &rewritten_payload,
+                                                          error_fd)) {
+                free(type);
+                free(command);
+                return false;
+            }
+            if (rewritten_payload != NULL) {
+                ok = proxy_write_message(output_fd,
+                                         rewritten_payload,
+                                         error_fd,
+                                         "failed to forward rewritten variables response to editor");
+                free(type);
+                free(command);
+                free(rewritten_payload);
+                return ok;
+            }
         }
     }
 
@@ -2196,6 +3208,7 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
                                  int backend_stdin_fd,
                                  int output_fd,
                                  const FengDebugArtifact *artifact,
+                                 FengDapRelayState *state,
                                  uint64_t *next_seq,
                                  int error_fd) {
     bool backend_stdin_closed = false;
@@ -2205,14 +3218,43 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
         FengDapReadStatus client_status;
         FengDapReadStatus backend_status;
 
+        if (!proxy_reader_fill_if_ready(backend_reader, error_fd)) {
+            if (!backend_stdin_closed) {
+                close(backend_stdin_fd);
+            }
+            return false;
+        }
+
+        backend_status = proxy_reader_try_read_buffered_message(backend_reader,
+                                                                &message,
+                                                                error_fd);
+        if (backend_status == FENG_DAP_READ_OK) {
+            bool ok = proxy_process_backend_relay_message(&message,
+                                                          output_fd,
+                                                          artifact,
+                                                          state,
+                                                          error_fd);
+
+            proxy_message_dispose(&message);
+            if (!ok) {
+                return false;
+            }
+            continue;
+        }
+        if (backend_status == FENG_DAP_READ_ERROR) {
+            return false;
+        }
+
         client_status = proxy_reader_try_read_buffered_message(client_reader,
                                                                &message,
                                                                error_fd);
         if (client_status == FENG_DAP_READ_OK) {
             bool ok = proxy_process_client_relay_message(&message,
+                                                         backend_reader,
                                                          backend_stdin_fd,
                                                          output_fd,
                                                          artifact,
+                                                         state,
                                                          next_seq,
                                                          error_fd);
 
@@ -2234,25 +3276,6 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
         if (client_status == FENG_DAP_READ_EOF && !backend_stdin_closed) {
             close(backend_stdin_fd);
             backend_stdin_closed = true;
-        }
-
-        backend_status = proxy_reader_try_read_buffered_message(backend_reader,
-                                                                &message,
-                                                                error_fd);
-        if (backend_status == FENG_DAP_READ_OK) {
-            bool ok = proxy_process_backend_relay_message(&message,
-                                                          output_fd,
-                                                          artifact,
-                                                          error_fd);
-
-            proxy_message_dispose(&message);
-            if (!ok) {
-                return false;
-            }
-            continue;
-        }
-        if (backend_status == FENG_DAP_READ_ERROR) {
-            return false;
         }
 
         if (client_status == FENG_DAP_READ_EOF && backend_status == FENG_DAP_READ_EOF) {
@@ -2462,6 +3485,7 @@ static int proxy_run_session(const char *backend_program,
     FengDapMessage initialize_request = {0};
     FengDapMessage request = {0};
     FengDebugArtifact launch_artifact = {0};
+    FengDapRelayState relay_state = {0};
     bool have_initialize = false;
     uint64_t next_seq = 1U;
 
@@ -2487,6 +3511,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return 1;
         }
         if (!proxy_json_get_string_member(request.payload,
@@ -2527,6 +3552,7 @@ static int proxy_run_session(const char *backend_program,
                 proxy_reader_dispose(&client_reader);
                 proxy_reader_dispose(&backend_reader);
                 feng_debug_artifact_dispose(&launch_artifact);
+                proxy_relay_state_dispose(&relay_state);
                 return 1;
             }
             if (!proxy_send_initialize_response(output_fd,
@@ -2537,6 +3563,7 @@ static int proxy_run_session(const char *backend_program,
                 proxy_reader_dispose(&client_reader);
                 proxy_reader_dispose(&backend_reader);
                 feng_debug_artifact_dispose(&launch_artifact);
+                proxy_relay_state_dispose(&relay_state);
                 return 1;
             }
             initialize_request = request;
@@ -2561,6 +3588,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return 1;
         }
 
@@ -2578,6 +3606,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return 1;
         }
         if (!proxy_validate_launch_request(&request, &launch_artifact, &error_detail)) {
@@ -2593,6 +3622,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return 1;
         }
         free(error_detail);
@@ -2617,6 +3647,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return 1;
         }
         child = proxy_spawn_backend(backend_program,
@@ -2675,6 +3706,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return exit_code != 0 ? exit_code : 1;
         }
 
@@ -2685,6 +3717,7 @@ static int proxy_run_session(const char *backend_program,
                                   child_stdin[1],
                                   output_fd,
                                   &launch_artifact,
+                                  &relay_state,
                                   &next_seq,
                                   error_fd)) {
             close(child_stdout[0]);
@@ -2692,6 +3725,7 @@ static int proxy_run_session(const char *backend_program,
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
             return exit_code != 0 ? exit_code : 1;
         }
         close(child_stdout[0]);
@@ -2699,6 +3733,7 @@ static int proxy_run_session(const char *backend_program,
         proxy_reader_dispose(&client_reader);
         proxy_reader_dispose(&backend_reader);
         feng_debug_artifact_dispose(&launch_artifact);
+        proxy_relay_state_dispose(&relay_state);
         return exit_code;
     }
 
@@ -2706,6 +3741,7 @@ static int proxy_run_session(const char *backend_program,
     proxy_reader_dispose(&client_reader);
     proxy_reader_dispose(&backend_reader);
     feng_debug_artifact_dispose(&launch_artifact);
+    proxy_relay_state_dispose(&relay_state);
     return 0;
 }
 

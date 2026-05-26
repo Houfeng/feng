@@ -97,8 +97,8 @@ feng dap [--stdio]
 - 当前首版只支持 macOS 上的 `lldb-dap` 后端,并且 launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
 - 当前已交付的基线行为是: `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验,只有校验通过才会通过 `PATH` 查找并拉起 `lldb-dap`; 进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径,并把 backend frame 名称重写为 Feng callable 名称,同时隐藏标记为 runtime / generated helper 的 frame。
 - `feng dap` 在 DAP `launch` 请求中定位目标 binary 同级的 `.fd`,校验 sidecar 中记录的 binary 内容指纹与当前 binary 是否匹配; 校验失败必须直接拒绝会话。
-- `feng dap` 当前已负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame 过滤; `frame_policy` 的折叠控制、variables 与只读 watch 的 Feng 语义展示名重写仍在后续子项中。
-- 当前首版不支持 attach、reverse debugging、任意 Feng 表达式求值以及具有副作用的 evaluate/watch。
+- `feng dap` 当前已负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame 过滤; `variables` 已支持基于当前 frame / scope 可见集合的 Feng 展示名重写,`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写; `frame_policy` 的 `COLLAPSE` 语义以及更完整的只读 watch 子集仍在后续子项中。
+- 当前首版不支持 attach、reverse debugging、具有副作用的 evaluate/watch,也不支持 identifier 之外的任意 Feng 表达式求值。
 - 除 `--stdio` 之外不接受其他位置参数或命令选项;出现多余参数时应报错退出。
 
 ## 2.3 --out 说明

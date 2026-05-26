@@ -734,6 +734,50 @@ static char *read_fd_to_string(int fd) {
     return content;
 }
 
+static char *concat_owned_strings(char *lhs, char *rhs) {
+    size_t lhs_len = lhs != NULL ? strlen(lhs) : 0U;
+    size_t rhs_len = rhs != NULL ? strlen(rhs) : 0U;
+    char *joined = (char *)malloc(lhs_len + rhs_len + 1U);
+
+    ASSERT(joined != NULL);
+    if (lhs_len > 0U) {
+        memcpy(joined, lhs, lhs_len);
+    }
+    if (rhs_len > 0U) {
+        memcpy(joined + lhs_len, rhs, rhs_len);
+    }
+    joined[lhs_len + rhs_len] = '\0';
+    free(lhs);
+    free(rhs);
+    return joined;
+}
+
+static char *read_fd_until_contains(int fd, const char *needle) {
+    size_t capacity = 256U;
+    size_t length = 0U;
+    char *content = (char *)malloc(capacity);
+
+    ASSERT(content != NULL);
+    content[0] = '\0';
+    while (strstr(content, needle) == NULL) {
+        ssize_t read_size;
+
+        if (length + 64U >= capacity) {
+            char *resized;
+
+            capacity *= 2U;
+            resized = (char *)realloc(content, capacity);
+            ASSERT(resized != NULL);
+            content = resized;
+        }
+        read_size = read(fd, content + length, capacity - length - 1U);
+        ASSERT(read_size > 0);
+        length += (size_t)read_size;
+        content[length] = '\0';
+    }
+    return content;
+}
+
 /* Run `feng dap` with redirected stdio and a temporary PATH override. */
 static char *run_dap_capture_stdout_with_path(int argc,
                                               char **argv,
@@ -806,6 +850,95 @@ static char *run_dap_capture_stdout_with_path(int argc,
 
     if (out_rc != NULL) {
         *out_rc = rc;
+    }
+    if (out_stderr != NULL) {
+        *out_stderr = captured_stderr;
+    } else {
+        free(captured_stderr);
+    }
+    return captured_stdout;
+}
+
+static char *run_dap_interactive_capture_stdout_with_path(int argc,
+                                                          char **argv,
+                                                          const char *initial_input,
+                                                          const char *wait_for_text,
+                                                          const char *followup_input,
+                                                          const char *path_value,
+                                                          int *out_rc,
+                                                          char **out_stderr) {
+    int input_pipe[2];
+    int output_pipe[2];
+    int error_pipe[2];
+    const char *existing_path = getenv("PATH");
+    char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    size_t initial_length = initial_input != NULL ? strlen(initial_input) : 0U;
+    size_t followup_length = followup_input != NULL ? strlen(followup_input) : 0U;
+    char *captured_prefix;
+    char *captured_suffix;
+    char *captured_stdout;
+    char *captured_stderr;
+    pid_t child;
+    int status;
+
+    ASSERT(pipe(input_pipe) == 0);
+    ASSERT(pipe(output_pipe) == 0);
+    ASSERT(pipe(error_pipe) == 0);
+    if (path_value != NULL) {
+        ASSERT(setenv("PATH", path_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+
+    child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        int rc;
+
+        ASSERT(dup2(input_pipe[0], STDIN_FILENO) >= 0);
+        ASSERT(dup2(output_pipe[1], STDOUT_FILENO) >= 0);
+        ASSERT(dup2(error_pipe[1], STDERR_FILENO) >= 0);
+        close(input_pipe[0]);
+        close(input_pipe[1]);
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        close(error_pipe[0]);
+        close(error_pipe[1]);
+        rc = feng_cli_dap_main("feng", argc, argv);
+        _exit(rc);
+    }
+
+    close(input_pipe[0]);
+    close(output_pipe[1]);
+    close(error_pipe[1]);
+    if (initial_length > 0U) {
+        ASSERT(write(input_pipe[1], initial_input, initial_length) == (ssize_t)initial_length);
+    }
+    captured_prefix = wait_for_text != NULL
+                          ? read_fd_until_contains(output_pipe[0], wait_for_text)
+                          : dup_cstr("");
+    if (followup_length > 0U) {
+        ASSERT(write(input_pipe[1], followup_input, followup_length) == (ssize_t)followup_length);
+    }
+    close(input_pipe[1]);
+
+    captured_suffix = read_fd_to_string(output_pipe[0]);
+    close(output_pipe[0]);
+    captured_stdout = concat_owned_strings(captured_prefix, captured_suffix);
+    captured_stderr = read_fd_to_string(error_pipe[0]);
+    close(error_pipe[0]);
+
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFEXITED(status));
+    if (saved_path != NULL) {
+        ASSERT(setenv("PATH", saved_path, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+    free(saved_path);
+
+    if (out_rc != NULL) {
+        *out_rc = WEXITSTATUS(status);
     }
     if (out_stderr != NULL) {
         *out_stderr = captured_stderr;
@@ -4095,6 +4228,390 @@ static void test_dap_hides_hidden_stack_trace_frames(void) {
     free(escaped_binary_path);
     free(path_value);
     free(backend_script);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure variables responses rewrite backend variable names to Feng names. */
+static void test_dap_rewrites_variables_to_feng_names(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x45U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "    let answer = 42;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_variables_names_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *scopes_json;
+    char *variables_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *scopes_text;
+    char *variables_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_scopes_json;
+    char *backend_scopes_text;
+    char *backend_variables_json;
+    char *backend_variables_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_param",
+                                                 "args",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
+    backend_scopes_text = build_dap_message_text(backend_scopes_json);
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"[]\",\"type\":\"string[]\",\"variablesReference\":0},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"42\",\"type\":\"int\",\"variablesReference\":0}]}}");
+    backend_variables_text = build_dap_message_text(backend_variables_json);
+    backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\nprintf '%%b' '%s'\nprintf '%%b' '%s'\nprintf '%%b' '%s'\n",
+                                backend_initialize_text,
+                                requests_path,
+                                backend_stack_trace_text,
+                                backend_scopes_text,
+                                backend_variables_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
+    variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    scopes_text = build_dap_message_text(scopes_json);
+    variables_text = build_dap_message_text(variables_json);
+    input_text = dup_printf("%s%s%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text,
+                            scopes_text,
+                            variables_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"stackTrace\"") != NULL);
+    ASSERT(strstr(requests_text, "\"command\":\"scopes\"") != NULL);
+    ASSERT(strstr(requests_text, "\"command\":\"variables\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"evaluateName\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"answer\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"evaluateName\":\"answer\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_param") == NULL);
+    ASSERT(strstr(stdout_text, "backend_local") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(variables_text);
+    free(scopes_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(variables_json);
+    free(scopes_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(backend_variables_text);
+    free(backend_variables_json);
+    free(backend_scopes_text);
+    free(backend_scopes_json);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure identifier evaluate requests rewrite Feng names to backend names. */
+static void test_dap_rewrites_identifier_evaluate_expression(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "    let answer = 42;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_evaluate_ident_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *evaluate_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *evaluate_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_evaluate_json;
+    char *backend_evaluate_text;
+    char *escaped_backend_initialize_text;
+    char *escaped_backend_stack_trace_text;
+    char *escaped_backend_evaluate_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"int\",\"variablesReference\":0}}");
+    backend_evaluate_text = build_dap_message_text(backend_evaluate_json);
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
+    escaped_backend_evaluate_text = json_escape_text(backend_evaluate_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const responses = {\n"
+                                "  initialize: \"%s\",\n"
+                                "  stackTrace: \"%s\",\n"
+                                "  evaluate: \"%s\"\n"
+                                "};\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "process.stdout.write(responses.initialize);\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') process.stdout.write(responses.stackTrace);\n"
+                                "    if (message.command === 'evaluate') process.stdout.write(responses.evaluate);\n"
+                                "  }\n"
+                                "});\n"
+                                "process.stdin.on('end', () => { fs.writeFileSync(requestsPath, requests); });\n",
+                                requests_path,
+                                escaped_backend_initialize_text,
+                                escaped_backend_stack_trace_text,
+                                escaped_backend_evaluate_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    evaluate_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"evaluate\",\"arguments\":{\"expression\":\"answer\",\"frameId\":7,\"context\":\"watch\"}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    evaluate_text = build_dap_message_text(evaluate_json);
+    input_text = dup_printf("%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text);
+
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"command\":\"stackTrace\"",
+                                                               evaluate_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"command\":\"evaluate\",\"arguments\":{\"expression\":\"backend_local\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"command\":\"evaluate\",\"arguments\":{\"expression\":\"answer\"") == NULL);
+    ASSERT(strstr(stdout_text, "\"command\":\"evaluate\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"result\":\"42\"") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(evaluate_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(evaluate_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(escaped_backend_evaluate_text);
+    free(escaped_backend_stack_trace_text);
+    free(escaped_backend_initialize_text);
+    free(backend_evaluate_text);
+    free(backend_evaluate_json);
     free(backend_stack_trace_text);
     free(backend_stack_trace_json);
     free(backend_initialize_text);
@@ -9334,6 +9851,8 @@ int main(void) {
     test_dap_rejects_set_breakpoints_outside_debug_closure();
     test_dap_rewrites_stack_trace_source_path_to_local_path();
     test_dap_hides_hidden_stack_trace_frames();
+    test_dap_rewrites_variables_to_feng_names();
+    test_dap_rewrites_identifier_evaluate_expression();
     test_dap_rejects_fingerprint_mismatch_before_backend_spawn();
     test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();

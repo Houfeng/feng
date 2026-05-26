@@ -43,7 +43,7 @@
 - [x] 在非 `release` 发码链路补齐 `#line` 与抽象调试信息输出。
 - [x] 在 `src/debug/` 中生成并汇总 `.fd`。
 - [x] 新增 `feng dap` 代理层并消费 `.fd`。
-- [ ] 补齐 VS Code 集成与回归验证。
+- [x] 补齐 VS Code 集成与回归验证。
 
 ### 1.3 本次实施硬约束
 
@@ -498,7 +498,7 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`frame_policy` 的折叠控制以及 variables / evaluate 的 Feng 语义重写继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `backend_name -> display_name` 最小重写，`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
 
 #### `setBreakpoints`
 
@@ -520,17 +520,17 @@ VARS:
 - 作用域激活关系以 `lldb-dap` 返回结果为准，`.fd` 不再维护独立 scope 树。
 - `feng dap` 先拿当前 scope 下 **LLDB 实际返回的可见变量集合**，再依据当前 frame 的 `backend_symbol` 在 `.fd.variables` 中查找可重写条目。
 - 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名，不自行补推隐藏绑定。
-- 遇到 `read_expr` 时，再基于 carrier 执行一次额外读取，把结果包装成用户看到的 Feng 变量。
+- 当前最小实现先覆盖普通 `backend_name -> display_name` 改名；遇到 `read_expr` 的特殊 carrier 仍作为后续子项补齐。
 - 若当前可见集合在重写后对某个标识符出现 0 个候选或多个候选，`feng dap` 必须报错，不做猜测性绑定。
 
 #### `evaluate`
 
 - 仅支持第一阶段允许的只读子集。
-- `feng dap` 自带一套极小表达式解析器，只覆盖 watch 子集，不复用完整编译器 parser。
+- 当前最小实现只覆盖 identifier 子集，不复用完整编译器 parser。
 - 标识符优先在 **LLDB 当前可见变量集合** 上做解析，再用 `.fd.variables` 做显示名与 backend 名之间的双向对照。
 - 如果某个标识符在当前可见集合上无法唯一落到一个 backend 变量，直接报歧义错误，而不是退化为猜测。
-- 成员访问和索引访问优先沿 LLDB 返回的 children 继续下钻。
-- 只有遇到特殊 carrier 时，才使用 `.fd.variables.read_expr` 参与后端读取。
+- 成员访问、索引访问以及标量算术 / 比较继续留在后续只读 watch 子项中扩展。
+- 只有遇到特殊 carrier时，才使用 `.fd.variables.read_expr` 参与后端读取；该路径本轮尚未展开。
 
 ### 6.4 值显示策略
 
@@ -635,13 +635,13 @@ VARS:
 
 - [ ] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
   - [x] 新增 `feng dap`，启动并代理 `lldb-dap`。
-  - [ ] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
+  - [x] 实现 stackTrace / variables / evaluate 的最小 Feng 语义重写。
   - [x] 实现本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换。
-  - [ ] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
-  - [ ] 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
+  - [x] VS Code 侧接入 debugger contribution、launch 和 preLaunchTask 联动。
+  - [x] 保持 editor-neutral 边界，为后续其他编辑器接入保留复用面。
 
 - [ ] Phase 5：只读 watch 子集
-  - [ ] 支持 identifier。
+  - [x] 支持 identifier。
   - [ ] 支持成员访问。
   - [ ] 支持常量整数字面量索引。
   - [ ] 支持标量值上的简单算术 / 比较。
