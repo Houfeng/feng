@@ -43,6 +43,11 @@
     "ft"
   ],
   "contributes": {
+    "breakpoints": [
+      {
+        "language": "feng"
+      }
+    ],
     "commands": [
       {
         "command": "feng.restartLanguageServer",
@@ -56,11 +61,6 @@
         "label": "Feng Debug",
         "languages": [
           "feng"
-        ],
-        "breakpoints": [
-          {
-            "language": "feng"
-          }
         ],
         "configurationAttributes": {
           "launch": {

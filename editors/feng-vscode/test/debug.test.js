@@ -400,13 +400,16 @@ async function run() {
             const debuggerContribution = Array.isArray(packageJson.contributes.debuggers)
                 ? packageJson.contributes.debuggers.find(entry => entry.type === 'feng')
                 : null;
+            const breakpointContribution = Array.isArray(packageJson.contributes.breakpoints)
+                ? packageJson.contributes.breakpoints
+                : null;
             const taskDefinition = Array.isArray(packageJson.contributes.taskDefinitions)
                 ? packageJson.contributes.taskDefinitions.find(entry => entry.type === 'feng')
                 : null;
 
             assert(debuggerContribution, 'expected Feng debugger contribution');
             assert.deepStrictEqual(debuggerContribution.languages, ['feng']);
-            assert.deepStrictEqual(debuggerContribution.breakpoints, [{ language: 'feng' }]);
+            assert.deepStrictEqual(breakpointContribution, [{ language: 'feng' }]);
             assert(taskDefinition, 'expected Feng task definition');
             assert.deepStrictEqual(taskDefinition.properties.task.enum, ['build']);
         }
