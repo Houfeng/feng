@@ -205,117 +205,148 @@
 
 ### 5.2 文件格式
 
-首版建议：`.fd` 采用 **UTF-8 JSON 文本格式**。
+首版建议：`.fd` 采用 **私有二进制容器格式**。
 
 原因：
 
-- 首版更容易联调、审查和 golden test 对比。
-- `.fd` 是本地产物，不是公开 ABI，也不进入 `.fb`。
-- 首版要先稳定“最小字段语义”，而不是提前设计大而全的调试数据库。
+- 当前工程没有现成的 JSON 序列化 / 反序列化模块，也不计划为 `.fd` 单独引入这一类依赖。
+- 现有 `feng.fm` 文本语法只服务于项目 / 包清单，不应被扩展成通用调试数据语言。
+- `.fd` 是编译器生成、`feng dap` 消费的私有 sidecar，不需要人工编辑，采用二进制更符合当前 C 实现习惯。
+- 仓库中已经存在 `.ft` 一类“header + section directory + section payload”的二进制写出经验，可直接复用设计方法。
 
-后续若体积或读取成本成为问题，可在保持字段语义的前提下演进到二进制容器，但这不属于第一阶段前置条件。
+格式约束：
+
+- 固定使用 little-endian。
+- 不允许直接把 C struct 原样写盘；必须逐字段显式序列化，避免宿主 ABI / 对齐差异渗入格式。
+- 采用 `header + section directory + sections` 的最小容器布局。
+- 未识别 section 在 reader 侧必须可忽略，为后续 append-only 演进保留空间。
 
 ### 5.3 设计原则
 
 `.fd` 的设计目标是：**只保存 LLDB 不知道、但 Feng 语义重写必须知道的最小事实**。
 
 - `.fd` 以“名称映射 + 少量特殊读取提示”为主。
+- `.fd` 不复用、也不扩展 `feng.fm` 文本格式；`feng.fm` 继续只承担项目 / 包清单职责。
 - `.fd` 不复制源码映射表；源码定位继续以 `#line` + DWARF 为准。
 - `.fd` 不复制词法作用域树；当前激活 scope 继续以 LLDB 返回结果为准。
 - `.fd` 不复制完整类型图、显示规则库或成员布局数据库；首版优先复用 LLDB 已有值摘要与 children 枚举。
 - `.fd` 不是独立的变量解析器；它只对 **LLDB 当前已经判定为可见** 的 backend variable 做确定性重写。
 - 若重写阶段出现 0 个候选或多个候选，`feng dap` 必须报错为“无法唯一确定绑定”，而不是猜一个继续执行。
 
-### 5.4 顶层结构
+### 5.4 容器布局
 
-`.fd` 顶层建议只保留以下部分：
+`.fd` 容器建议只保留以下最小布局：
 
-- `schema`
-  - 当前 `.fd` 格式版本。
-- `binary`
-  - 关联二进制路径与内容指纹。
-- `frames`
-  - `backend_symbol -> display_name` 映射，以及少量 frame 过滤策略。
-- `variables`
-  - `backend_name -> display_name` 映射，以及 capture / `self` / 特殊 carrier 所需的可选读取提示。
+- `header`
+  - `magic`
+  - `version`
+  - `flags`
+  - `section_count`
+  - `section_dir_offset`
+- `section directory`
+  - 每个 section 记录：`kind`、`offset`、`size`、`record_count`
+- `META`
+  - binary 绑定信息
+- `STRS`
+  - 字符串表
+- `FRMS`
+  - frame 重写记录
+- `VARS`
+  - variable 重写记录
 
-### 5.5 建议字段语义
+首版建议 section kind 固定为：
 
-#### `binary`
+- `META`
+- `STRS`
+- `FRMS`
+- `VARS`
 
-- `path`
-- `fingerprint`
+### 5.5 建议 section 语义
 
-#### `frames`
+#### `META`
+
+- `binary_path_strid`
+- `content_fingerprint`
+  - 首版固定为对目标 binary 完整文件字节做 `FNV-1a 64` 计算；version 1 不单独保留算法字段
+
+#### `STRS`
+
+- 采用 1-based string id。
+- section 内部按 `u32 length + raw bytes` 顺序顺排，不要求 NUL 结尾。
+- string id `0` 保留为“空值 / 缺失”。
+
+#### `FRMS`
 
 每个 frame 至少记录：
 
-- `backend_symbol`
+- `backend_symbol_strid`
   - 最终进入链接层、可被 `lldb-dap` 报出的稳定符号名。
-- `display_name`
+- `display_name_strid`
   - 需要呈现给用户的 Feng callable 名称。
 - `frame_policy`
   - `visible` / `hidden` / `collapse`。
 
-#### `variables`
+#### `VARS`
 
 每个变量至少记录：
 
-- `frame_backend_symbol`
+- `frame_backend_symbol_strid`
   - 该映射所属的 callable / frame。
-- `backend_name`
+- `backend_name_strid`
   - `lldb-dap` 可见的原始变量名。
-- `display_name`
+- `display_name_strid`
   - 用户在 Feng 源码中看到的名字。
 - `kind`
   - `param` / `local` / `capture` / `self`。
-- `read_expr`（可选）
-  - 当 `backend_name` 指向 carrier 而非最终用户值时，提供一个最小后端读取表达式。
+- `read_expr_strid`
+  - 可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供一个最小后端读取表达式。
 
 补充约束：
 
-- 唯一键是 `frame_backend_symbol + backend_name`，不是 `display_name`。
-- `display_name` 允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name`。
+- 唯一键是 `frame_backend_symbol_strid + backend_name_strid`，不是 `display_name_strid`。
+- `display_name_strid` 允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
 - `feng dap` 只对 LLDB 当前返回的可见变量集合做重写，因此当 LLDB 的可见性结果正确时，同名变量不会串到未激活绑定上。
 
 ### 5.6 一个最小示例
 
-```json
-{
-  "schema": 1,
-  "binary": {
-    "path": "build/bin/demo",
-    "fingerprint": "sha256:..."
-  },
-  "frames": [
-    {
-      "backend_symbol": "feng_demo_main",
-      "display_name": "main",
-      "frame_policy": "visible"
-    },
-    {
-      "backend_symbol": "feng_runtime_dispatch_1",
-      "display_name": "",
-      "frame_policy": "hidden"
-    }
-  ],
-  "variables": [
-    {
-      "frame_backend_symbol": "feng_demo_main",
-      "backend_name": "_l_message_1",
-      "display_name": "message",
-      "kind": "local"
-    },
-    {
-      "frame_backend_symbol": "feng_demo_main",
-      "backend_name": "_l_count_cell_2",
-      "display_name": "count",
-      "kind": "capture",
-      "read_expr": "(_l_count_cell_2->value)"
-    }
-  ]
-}
+```text
+Header:
+  magic = "FD01"
+  version = 1
+  flags = 0
+  section_count = 4
+
+Section Directory:
+  META offset=0x40 size=... records=1
+  STRS offset=0x60 size=... records=9
+  FRMS offset=0xA0 size=... records=2
+  VARS offset=0xD0 size=... records=2
+
+STRS:
+  1 -> "build/bin/demo"
+  2 -> "feng_demo_main"
+  3 -> "main"
+  4 -> "feng_runtime_dispatch_1"
+  5 -> "_l_message_1"
+  6 -> "message"
+  7 -> "_l_count_cell_2"
+  8 -> "count"
+  9 -> "(_l_count_cell_2->value)"
+
+META:
+  binary_path_strid = 1
+  content_fingerprint = 0x7f23d91ab4c60218
+
+FRMS:
+  [backend_symbol_strid=2, display_name_strid=3, frame_policy=visible]
+  [backend_symbol_strid=4, display_name_strid=0, frame_policy=hidden]
+
+VARS:
+  [frame_backend_symbol_strid=2, backend_name_strid=5, display_name_strid=6, kind=local,   read_expr_strid=0]
+  [frame_backend_symbol_strid=2, backend_name_strid=7, display_name_strid=8, kind=capture, read_expr_strid=9]
 ```
+
+这个示例表达的重点不是字节偏移本身，而是：**`.fd`` 只保留 string table + 最小记录表，不引入通用对象树或通用文本语法。**
 
 ### 5.7 为什么不是“只存名字映射”
 
@@ -328,6 +359,8 @@
 - 这类场景需要一个可选 `read_expr`，让 `feng dap` 能从 carrier 读出真正要展示的值。
 
 因此，首版结论不是“做成完整调试数据库”，而是“以名字映射为主，只为特殊 carrier 多保留一个可选读取提示”。
+
+采用二进制容器后，这个原则仍然不变：`.fd` 只是把这些最小映射记录编码成固定 section，而不是升级成更通用的数据语言。
 
 进一步说，首版对 shadowing 的处理原则也保持最小化：
 
@@ -355,6 +388,7 @@
 - `.fd` 不维护“每个生成 C 行 -> Feng 行”的完整冗余表。
 - `.fd` 只记录 frame 重写和变量映射最小信息。
 - 若原生后端出现个别 frame 噪声，`feng dap` 再依据 `frames.frame_policy` 做折叠或过滤。
+- `.fd` 的 reader 只需要顺序读取 `META` / `STRS` / `FRMS` / `VARS` 四类 section，不需要实现通用对象反序列化器。
 
 ## 6. `feng dap` 与 `lldb-dap` 适配层
 
@@ -383,7 +417,7 @@
 #### `launch`
 
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
-- `feng dap` 校验 `.fd.binary.fingerprint` 与当前 binary 是否匹配。
+- `feng dap` 校验 `.fd` 中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
 
 #### `setBreakpoints`
@@ -447,7 +481,8 @@
 
 - `src/debug/`
   - 调试元数据结构
-  - `.fd` writer
+  - `.fd` binary writer
+  - string table / section directory 编码
   - 编译产物与 `.fd` 的指纹绑定
 
 原因：
@@ -561,12 +596,13 @@
 
 风险：
 
-- 若把太多运行时细节直接写入 `.fd`，会导致调试产物膨胀与字段漂移。
+- 若把太多运行时细节直接写入 `.fd`，或让二进制 section 无节制扩张，会导致调试产物膨胀与格式漂移。
 
 缓解：
 
 - `.fd` 只记录“Feng 语义显示所需的最小闭环信息”。
 - 地址级源码映射继续交给原生调试信息。
+- 采用 versioned header 与 append-only section 规则；新增能力优先追加 section，而不是重写已有记录语义。
 
 ### 10.4 Watch 范围失控
 
@@ -585,7 +621,7 @@ Feng 的首版源码级调试，最现实、风险最低的路径是：
 
 - **继续复用现有 Feng -> C -> clang/LLDB 主链**；
 - **用 `#line` + 主机编译器原生调试信息解决断点 / step / stack line**；
-- **用最小独立 `.fd` sidecar 解决 frame 名称重写、变量名称映射与少量特殊 carrier 读取提示**；
+- **用最小独立二进制 `.fd` sidecar 解决 frame 名称重写、变量名称映射与少量特殊 carrier 读取提示**；
 - **用 `feng dap` 统一代理 `lldb-dap`，把 editor 看到的调试对象重写为 Feng 语义体验**；
 - **让 VS Code 等编辑器只负责 launch / task / UI，而不承载核心映射逻辑**。
 
