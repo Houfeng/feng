@@ -290,7 +290,7 @@ static bool debug_build_strings_section(const FengDebugStringTable *table,
 }
 
 /* Collects unique package-root mappings from source inputs. */
-static bool debug_collect_packages(const FengDebugSourceMapping *sources,
+static bool debug_collect_packages(const FengCodegenMapingSourceMapping *sources,
                                    size_t source_count,
                                    FengDebugArtifactPackage **out_packages,
                                    size_t *out_package_count,
@@ -394,7 +394,7 @@ static bool debug_build_packages_section(FengDebugBuffer *buffer,
 
 /* Serializes the frame mapping section. */
 static bool debug_build_frames_section(FengDebugBuffer *buffer,
-                                       const FengDebugInfo *info,
+                                       const FengCodegenMapingInfo *info,
                                        FengDebugStringTable *strings) {
     size_t index;
 
@@ -418,7 +418,7 @@ static bool debug_build_frames_section(FengDebugBuffer *buffer,
 
 /* Serializes the variable mapping section. */
 static bool debug_build_variables_section(FengDebugBuffer *buffer,
-                                          const FengDebugInfo *info,
+                                          const FengCodegenMapingInfo *info,
                                           FengDebugStringTable *strings) {
     size_t index;
 
@@ -484,7 +484,7 @@ static bool debug_collect_strings(FengDebugStringTable *strings,
                                   const char *binary_path,
                                   const FengDebugArtifactPackage *packages,
                                   size_t package_count,
-                                  const FengDebugInfo *info,
+                                  const FengCodegenMapingInfo *info,
                                   uint32_t *out_binary_path_id) {
     size_t index;
 
@@ -878,7 +878,7 @@ static bool debug_parse_packages_section(const FengDebugParsedSection *section,
 static bool debug_parse_frames_section(const FengDebugParsedSection *section,
                                        char **strings,
                                        size_t string_count,
-                                       FengDebugInfo *info,
+                                       FengCodegenMapingInfo *info,
                                        char **out_error_message) {
     const unsigned char *cursor;
     const unsigned char *end;
@@ -890,7 +890,7 @@ static bool debug_parse_frames_section(const FengDebugParsedSection *section,
         debug_set_error(out_error_message, "invalid debug FRMS section");
         return false;
     }
-    info->frames = (FengDebugFrameRecord *)calloc(section->record_count, sizeof(*info->frames));
+    info->frames = (FengCodegenMapingFrameRecord *)calloc(section->record_count, sizeof(*info->frames));
     if (info->frames == NULL) {
         debug_set_error(out_error_message, "out of memory reading debug frames");
         return false;
@@ -909,13 +909,13 @@ static bool debug_parse_frames_section(const FengDebugParsedSection *section,
         uint32_t policy = debug_read_u32_le(cursor + 8U);
 
         if (backend_symbol == NULL || display_name == NULL ||
-            policy > (uint32_t)FENG_DEBUG_FRAME_COLLAPSE) {
+            policy > (uint32_t)FENG_CODEGEN_MAPING_FRAME_COLLAPSE) {
             debug_set_error(out_error_message, "invalid debug frame record");
             return false;
         }
         info->frames[index].backend_symbol = debug_dup_cstr(backend_symbol);
         info->frames[index].display_name = debug_dup_cstr(display_name);
-        info->frames[index].policy = (FengDebugFramePolicy)policy;
+        info->frames[index].policy = (FengCodegenMapingFramePolicy)policy;
         if (info->frames[index].backend_symbol == NULL ||
             info->frames[index].display_name == NULL) {
             debug_set_error(out_error_message, "out of memory reading debug frame");
@@ -930,7 +930,7 @@ static bool debug_parse_frames_section(const FengDebugParsedSection *section,
 static bool debug_parse_variables_section(const FengDebugParsedSection *section,
                                           char **strings,
                                           size_t string_count,
-                                          FengDebugInfo *info,
+                                          FengCodegenMapingInfo *info,
                                           char **out_error_message) {
     const unsigned char *cursor;
     const unsigned char *end;
@@ -942,7 +942,7 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
         debug_set_error(out_error_message, "invalid debug VARS section");
         return false;
     }
-    info->variables = (FengDebugVariableRecord *)calloc(section->record_count,
+    info->variables = (FengCodegenMapingVariableRecord *)calloc(section->record_count,
                                                         sizeof(*info->variables));
     if (info->variables == NULL) {
         debug_set_error(out_error_message, "out of memory reading debug variables");
@@ -968,7 +968,7 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
         uint32_t kind = debug_read_u32_le(cursor + 16U);
 
         if (frame_backend_symbol == NULL || display_name == NULL ||
-            kind > (uint32_t)FENG_DEBUG_VARIABLE_SELF) {
+            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_SELF) {
             debug_set_error(out_error_message, "invalid debug variable record");
             return false;
         }
@@ -976,7 +976,7 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
         info->variables[index].backend_name = debug_dup_cstr(backend_name);
         info->variables[index].display_name = debug_dup_cstr(display_name);
         info->variables[index].read_expr = debug_dup_cstr(read_expr);
-        info->variables[index].kind = (FengDebugVariableKind)kind;
+        info->variables[index].kind = (FengCodegenMapingVariableKind)kind;
         if (info->variables[index].frame_backend_symbol == NULL ||
             info->variables[index].display_name == NULL) {
             debug_set_error(out_error_message, "out of memory reading debug variable");
@@ -1033,9 +1033,9 @@ uint64_t feng_debug_fnv1a64_file(const char *path, char **out_error_message) {
 
 bool feng_debug_write_fd(const char *fd_path,
                          const char *binary_path,
-                         const FengDebugSourceMapping *sources,
+                         const FengCodegenMapingSourceMapping *sources,
                          size_t source_count,
-                         const FengDebugInfo *info,
+                         const FengCodegenMapingInfo *info,
                          char **out_error_message) {
     FengDebugArtifactPackage *packages = NULL;
     size_t package_count = 0U;
@@ -1168,7 +1168,7 @@ bool feng_debug_read_fd(const char *fd_path,
         return false;
     }
     memset(out_artifact, 0, sizeof(*out_artifact));
-    feng_debug_info_init(&out_artifact->info);
+    feng_codegen_maping_info_init(&out_artifact->info);
 
     if (!debug_read_entire_file(fd_path, &data, &size, out_error_message) ||
         !debug_parse_sections(data,
@@ -1225,6 +1225,6 @@ void feng_debug_artifact_dispose(FengDebugArtifact *artifact) {
         debug_artifact_package_dispose(&artifact->packages[index]);
     }
     free(artifact->packages);
-    feng_debug_info_dispose(&artifact->info);
+    feng_codegen_maping_info_dispose(&artifact->info);
     memset(artifact, 0, sizeof(*artifact));
 }

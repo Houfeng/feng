@@ -118,14 +118,14 @@ static bool mapping_relative_path_from_root(const char *root,
     return *out_relative != NULL;
 }
 
-static void mapping_frame_record_dispose(FengDebugFrameRecord *frame) {
+static void mapping_frame_record_dispose(FengCodegenMapingFrameRecord *frame) {
     free(frame->backend_symbol);
     free(frame->display_name);
     frame->backend_symbol = NULL;
     frame->display_name = NULL;
 }
 
-static void mapping_variable_record_dispose(FengDebugVariableRecord *variable) {
+static void mapping_variable_record_dispose(FengCodegenMapingVariableRecord *variable) {
     free(variable->frame_backend_symbol);
     free(variable->backend_name);
     free(variable->display_name);
@@ -136,10 +136,10 @@ static void mapping_variable_record_dispose(FengDebugVariableRecord *variable) {
     variable->read_expr = NULL;
 }
 
-bool feng_debug_resolve_source(const FengDebugSourceMapping *sources,
+bool feng_codegen_maping_resolve_source(const FengCodegenMapingSourceMapping *sources,
                                size_t source_count,
                                const char *source_path,
-                               FengDebugResolvedSource *out_resolved) {
+                               FengCodegenMapingResolvedSource *out_resolved) {
     size_t index;
 
     if (out_resolved == NULL) {
@@ -174,7 +174,7 @@ bool feng_debug_resolve_source(const FengDebugSourceMapping *sources,
         if (out_resolved->package_name == NULL ||
             out_resolved->package_root == NULL ||
             out_resolved->logical_uri == NULL) {
-            feng_debug_resolved_source_dispose(out_resolved);
+            feng_codegen_maping_resolved_source_dispose(out_resolved);
             return false;
         }
         return true;
@@ -182,7 +182,7 @@ bool feng_debug_resolve_source(const FengDebugSourceMapping *sources,
     return false;
 }
 
-void feng_debug_resolved_source_dispose(FengDebugResolvedSource *resolved) {
+void feng_codegen_maping_resolved_source_dispose(FengCodegenMapingResolvedSource *resolved) {
     if (resolved == NULL) {
         return;
     }
@@ -196,13 +196,13 @@ void feng_debug_resolved_source_dispose(FengDebugResolvedSource *resolved) {
     resolved->logical_uri = NULL;
 }
 
-void feng_debug_info_init(FengDebugInfo *info) {
+void feng_codegen_maping_info_init(FengCodegenMapingInfo *info) {
     if (info != NULL) {
         memset(info, 0, sizeof(*info));
     }
 }
 
-void feng_debug_info_dispose(FengDebugInfo *info) {
+void feng_codegen_maping_info_dispose(FengCodegenMapingInfo *info) {
     size_t index;
 
     if (info == NULL) {
@@ -219,11 +219,11 @@ void feng_debug_info_dispose(FengDebugInfo *info) {
     memset(info, 0, sizeof(*info));
 }
 
-bool feng_debug_info_add_frame(FengDebugInfo *info,
+bool feng_codegen_maping_info_add_frame(FengCodegenMapingInfo *info,
                                const char *backend_symbol,
                                const char *display_name,
-                               FengDebugFramePolicy policy) {
-    FengDebugFrameRecord entry;
+                               FengCodegenMapingFramePolicy policy) {
+    FengCodegenMapingFrameRecord entry;
     size_t index;
 
     if (info == NULL || backend_symbol == NULL || display_name == NULL) {
@@ -253,13 +253,13 @@ bool feng_debug_info_add_frame(FengDebugInfo *info,
     return true;
 }
 
-bool feng_debug_info_add_variable(FengDebugInfo *info,
+bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
                                   const char *frame_backend_symbol,
                                   const char *backend_name,
                                   const char *display_name,
                                   const char *read_expr,
-                                  FengDebugVariableKind kind) {
-    FengDebugVariableRecord entry;
+                                  FengCodegenMapingVariableKind kind) {
+    FengCodegenMapingVariableRecord entry;
     size_t index;
 
     if (info == NULL || frame_backend_symbol == NULL || display_name == NULL) {

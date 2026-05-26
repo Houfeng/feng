@@ -1002,7 +1002,7 @@ typedef struct CG {
      * up Phase 1B cyclicity markers without re-running SCC. */
     const FengSemanticAnalysis *analysis;
     const FengCodegenOptions *options;
-    FengDebugInfo debug_info;
+    FengCodegenMapingInfo debug_info;
 
     /* Currently active source program for diagnostics and per-module
      * symbol resolution. Set/reset at the boundaries of every per-program
@@ -1184,7 +1184,7 @@ static bool cg_scope_bind_capture_cell(CG *cg,
                                        bool has_source,
                                        bool source_owns_ref,
                                        bool record_debug_variable,
-                                       FengDebugVariableKind debug_kind);
+                                       FengCodegenMapingVariableKind debug_kind);
 static void cg_free_cstr_array(char **items, size_t count);
 static void cg_free_const_cstr_array(const char **items, size_t count);
 static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl);
@@ -1337,12 +1337,12 @@ static char *cg_dup_slice(FengSlice slice) {
 static bool cg_debug_add_frame_record(CG *cg,
                                       const char *backend_symbol,
                                       const char *display_name,
-                                      FengDebugFramePolicy policy,
+                                      FengCodegenMapingFramePolicy policy,
                                       FengToken blame) {
     if (!cg_debug_enabled(cg)) {
         return true;
     }
-    if (!feng_debug_info_add_frame(&cg->debug_info,
+    if (!feng_codegen_maping_info_add_frame(&cg->debug_info,
                                    backend_symbol,
                                    display_name,
                                    policy)) {
@@ -1355,7 +1355,7 @@ static bool cg_debug_add_frame_record(CG *cg,
 static bool cg_debug_set_current_frame(CG *cg,
                                        const char *backend_symbol,
                                        const char *display_name,
-                                       FengDebugFramePolicy policy,
+                                       FengCodegenMapingFramePolicy policy,
                                        FengToken blame) {
     if (!cg_debug_add_frame_record(cg,
                                    backend_symbol,
@@ -1373,14 +1373,14 @@ static bool cg_debug_add_variable_record_cstr(CG *cg,
                                               const char *backend_name,
                                               const char *display_name,
                                               const char *read_expr,
-                                              FengDebugVariableKind kind,
+                                              FengCodegenMapingVariableKind kind,
                                               FengToken blame) {
     if (!cg_debug_enabled(cg) ||
         cg->current_frame_backend_symbol == NULL ||
         display_name == NULL) {
         return true;
     }
-    if (!feng_debug_info_add_variable(&cg->debug_info,
+    if (!feng_codegen_maping_info_add_variable(&cg->debug_info,
                                       cg->current_frame_backend_symbol,
                                       backend_name,
                                       display_name,
@@ -1396,7 +1396,7 @@ static bool cg_debug_add_variable_record_slice(CG *cg,
                                                const char *backend_name,
                                                FengSlice display_name,
                                                const char *read_expr,
-                                               FengDebugVariableKind kind,
+                                               FengCodegenMapingVariableKind kind,
                                                FengToken blame) {
     char *name = cg_dup_slice(display_name);
     bool ok;
@@ -1416,7 +1416,7 @@ static bool cg_debug_add_variable_record_slice(CG *cg,
 
 /* Resolves the current source file to its logical PKG_NAME:// URI. */
 static bool cg_debug_prepare_line_source(CG *cg) {
-    FengDebugResolvedSource resolved = {0};
+    FengCodegenMapingResolvedSource resolved = {0};
 
     if (cg == NULL ||
         cg->options == NULL ||
@@ -1434,7 +1434,7 @@ static bool cg_debug_prepare_line_source(CG *cg) {
     cg->debug_line_logical_uri = NULL;
     cg->debug_line_source_path = cg->cur_program->path;
     cg->last_emitted_line_directive = 0U;
-    if (!feng_debug_resolve_source(cg->options->debug_source_mappings,
+    if (!feng_codegen_maping_resolve_source(cg->options->debug_source_mappings,
                                    cg->options->debug_source_mapping_count,
                                    cg->cur_program->path,
                                    &resolved)) {
@@ -1447,7 +1447,7 @@ static bool cg_debug_prepare_line_source(CG *cg) {
 
     cg->debug_line_logical_uri = resolved.logical_uri;
     resolved.logical_uri = NULL;
-    feng_debug_resolved_source_dispose(&resolved);
+    feng_codegen_maping_resolved_source_dispose(&resolved);
     return true;
 }
 
@@ -2494,7 +2494,7 @@ static bool cg_scope_bind_capture_cell(CG *cg,
                                        bool has_source,
                                        bool source_owns_ref,
                                        bool record_debug_variable,
-                                       FengDebugVariableKind debug_kind) {
+                                       FengCodegenMapingVariableKind debug_kind) {
     char *cell_struct_name = NULL;
     char *cell_desc_name = NULL;
     char *cell_var = NULL;
@@ -9047,7 +9047,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             !cg_debug_set_current_frame(cg,
                                         invoke_name,
                                         frame_name.data,
-                                        FENG_DEBUG_FRAME_VISIBLE,
+                                        FENG_CODEGEN_MAPING_FRAME_VISIBLE,
                                         blame)) {
             buf_free(&frame_name);
             goto cleanup;
@@ -9081,8 +9081,8 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                                 value_expr.data,
                                                 cg_slice_equals(capture_names[i],
                                                                 (FengSlice){"self", 4U})
-                                                    ? FENG_DEBUG_VARIABLE_SELF
-                                                    : FENG_DEBUG_VARIABLE_CAPTURE,
+                                                    ? FENG_CODEGEN_MAPING_VARIABLE_SELF
+                                                    : FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
                                                 blame)) {
             buf_free(&cell_expr);
             buf_free(&value_expr);
@@ -9111,7 +9111,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_DEBUG_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
                 goto cleanup;
             }
             continue;
@@ -9129,7 +9129,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                                 arg_name,
                                                 param->name,
                                                 NULL,
-                                                FENG_DEBUG_VARIABLE_PARAM,
+                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                 param->token)) {
             free(param_name);
             goto cleanup;
@@ -14558,7 +14558,7 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
                                         true,
                                         false,
                                         false,
-                                        FENG_DEBUG_VARIABLE_SELF)) {
+                                        FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
             cgtype_free(self_t);
             goto cleanup;
         }
@@ -14647,7 +14647,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                             true,
                                             init.owns_ref,
                                             true,
-                                            FENG_DEBUG_VARIABLE_BINDING);
+                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING);
             er_free(&init);
         } else {
             ok = cg_scope_bind_capture_cell(cg,
@@ -14659,7 +14659,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                             false,
                                             false,
                                             true,
-                                            FENG_DEBUG_VARIABLE_BINDING);
+                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING);
         }
         cgtype_free(decl_type);
         return ok;
@@ -14749,7 +14749,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                             cname,
                                             b->name,
                                             NULL,
-                                            FENG_DEBUG_VARIABLE_BINDING,
+                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING,
                                             b->token)) {
         free(cname);
         return false;
@@ -17428,7 +17428,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         if (!cg_debug_set_current_frame(cg,
                                         gfn->c_name,
                                         gfn->feng_name,
-                                        FENG_DEBUG_FRAME_VISIBLE,
+                                        FENG_CODEGEN_MAPING_FRAME_VISIBLE,
                                         decl->token)) {
             cg->cur_scope = NULL;
             scope_pop_free(fn_scope);
@@ -17448,7 +17448,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                                    param_cnames[i],
                                                    param_fnames[i],
                                                    NULL,
-                                                   FENG_DEBUG_VARIABLE_PARAM,
+                                                   FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                    sig->params[i].token)) {
                 cg->cur_scope = NULL;
                 scope_pop_free(fn_scope);
@@ -18399,7 +18399,7 @@ static bool cg_emit_function(CG *cg,
     if (!cg_debug_set_current_frame(cg,
                                     fn->c_name,
                                     fn->feng_name,
-                                    FENG_DEBUG_FRAME_VISIBLE,
+                                    FENG_CODEGEN_MAPING_FRAME_VISIBLE,
                                     decl->token)) {
         goto cleanup;
     }
@@ -18431,7 +18431,7 @@ static bool cg_emit_function(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_DEBUG_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
                 goto cleanup;
             }
             continue;
@@ -18446,7 +18446,7 @@ static bool cg_emit_function(CG *cg,
                                                pn,
                                                pn,
                                                NULL,
-                                               FENG_DEBUG_VARIABLE_PARAM,
+                                               FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                decl->as.function_decl.params[i].token)) {
             goto cleanup;
         }
@@ -21311,7 +21311,7 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
     if (!cg_debug_add_frame_record(cg,
                                    "main",
                                    "main",
-                                   FENG_DEBUG_FRAME_HIDDEN,
+                                   FENG_CODEGEN_MAPING_FRAME_HIDDEN,
                                    main_fn->decl->token)) {
         return false;
     }
@@ -22663,7 +22663,7 @@ static bool cg_emit_user_method(CG *cg,
             !cg_debug_set_current_frame(cg,
                                         m->c_name,
                                         frame_name.data,
-                                        FENG_DEBUG_FRAME_VISIBLE,
+                                        FENG_CODEGEN_MAPING_FRAME_VISIBLE,
                                         m->member->token)) {
             buf_free(&frame_name);
             goto cleanup;
@@ -22715,7 +22715,7 @@ static bool cg_emit_user_method(CG *cg,
                                         true,
                                         false,
                                         true,
-                                        FENG_DEBUG_VARIABLE_SELF)) {
+                                        FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
             cgtype_free(self_t);
             goto cleanup;
         }
@@ -22736,7 +22736,7 @@ static bool cg_emit_user_method(CG *cg,
                                                "self",
                                                "self",
                                                NULL,
-                                               FENG_DEBUG_VARIABLE_SELF,
+                                               FENG_CODEGEN_MAPING_VARIABLE_SELF,
                                                m->member->token)) {
             goto cleanup;
         }
@@ -22754,7 +22754,7 @@ static bool cg_emit_user_method(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_DEBUG_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
                 goto cleanup;
             }
             continue;
@@ -22769,7 +22769,7 @@ static bool cg_emit_user_method(CG *cg,
                                                 pn,
                                                 m->member->as.callable.params[i].name,
                                                 NULL,
-                                                FENG_DEBUG_VARIABLE_PARAM,
+                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                 m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
@@ -22954,7 +22954,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                         true,
                                         false,
                                         true,
-                                        FENG_DEBUG_VARIABLE_SELF)) {
+                                        FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
             goto cleanup;
         }
     } else {
@@ -22972,7 +22972,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                                "self",
                                                "self",
                                                NULL,
-                                               FENG_DEBUG_VARIABLE_SELF,
+                                               FENG_CODEGEN_MAPING_VARIABLE_SELF,
                                                m->member->token)) {
             goto cleanup;
         }
@@ -22990,7 +22990,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_DEBUG_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
                 goto cleanup;
             }
             continue;
@@ -23005,7 +23005,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                                 pn,
                                                 m->member->as.callable.params[i].name,
                                                 NULL,
-                                                FENG_DEBUG_VARIABLE_PARAM,
+                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                 m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
@@ -23091,7 +23091,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
             !cg_debug_set_current_frame(cg,
                                         t->c_finalizer_name,
                                         frame_name.data,
-                                        FENG_DEBUG_FRAME_VISIBLE,
+                                        FENG_CODEGEN_MAPING_FRAME_VISIBLE,
                                         fm->token)) {
             buf_free(&frame_name);
             cgtype_free(void_t);
@@ -23124,7 +23124,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
                                            "self",
                                            "self",
                                            NULL,
-                                           FENG_DEBUG_VARIABLE_SELF,
+                                           FENG_CODEGEN_MAPING_VARIABLE_SELF,
                                            fm->token)) {
         cg->cur_scope = NULL; scope_pop_free(fn_scope);
         cgtype_free(void_t);
@@ -23198,7 +23198,7 @@ static char *cg_finalize(CG *cg) {
 }
 
 static void cg_dispose(CG *cg) {
-    feng_debug_info_dispose(&cg->debug_info);
+    feng_codegen_maping_info_dispose(&cg->debug_info);
     free(cg->debug_line_logical_uri);
     buf_free(&cg->headers);
     buf_free(&cg->type_defs);
@@ -23435,7 +23435,7 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     cg.error = out_error;
     cg.analysis = analysis;
     cg.options = options;
-    feng_debug_info_init(&cg.debug_info);
+    feng_codegen_maping_info_init(&cg.debug_info);
     if (local_program_total == 0) {
         cg_fail(&cg, (FengToken){0}, "codegen: no programs to compile");
         cg_dispose(&cg);
@@ -23504,7 +23504,7 @@ void feng_codegen_output_free(FengCodegenOutput *output) {
     free(output->c_source);
     output->c_source = NULL;
     output->c_source_length = 0;
-    feng_debug_info_dispose(&output->debug_info);
+    feng_codegen_maping_info_dispose(&output->debug_info);
 }
 
 void feng_codegen_error_free(FengCodegenError *error) {

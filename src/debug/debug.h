@@ -23,7 +23,7 @@ typedef struct FengDebugArtifact {
     uint64_t binary_fingerprint;
     FengDebugArtifactPackage *packages;
     size_t package_count;
-    FengDebugInfo info;
+    FengCodegenMapingInfo info;
 } FengDebugArtifact;
 
 /* Computes the stable FNV-1a fingerprint for a built binary on disk. */
@@ -32,9 +32,9 @@ uint64_t feng_debug_fnv1a64_file(const char *path, char **out_error_message);
 /* Writes a `.fd` sidecar for one built binary. */
 bool feng_debug_write_fd(const char *fd_path,
                          const char *binary_path,
-                         const FengDebugSourceMapping *sources,
+                         const FengCodegenMapingSourceMapping *sources,
                          size_t source_count,
-                         const FengDebugInfo *info,
+                         const FengCodegenMapingInfo *info,
                          char **out_error_message);
 
 /* Loads a `.fd` sidecar from disk. */

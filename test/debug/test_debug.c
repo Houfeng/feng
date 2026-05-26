@@ -138,9 +138,9 @@ static void compile_generated_c_or_die(const char *c_source) {
     free(tmp_dir);
 }
 
-static const FengDebugFrameRecord *find_frame(const FengDebugInfo *info,
+static const FengCodegenMapingFrameRecord *find_frame(const FengCodegenMapingInfo *info,
                                               const char *display_name,
-                                              FengDebugFramePolicy policy) {
+                                              FengCodegenMapingFramePolicy policy) {
     for (size_t i = 0U; i < info->frame_count; ++i) {
         if (strcmp(info->frames[i].display_name, display_name) == 0 &&
             info->frames[i].policy == policy) {
@@ -150,9 +150,9 @@ static const FengDebugFrameRecord *find_frame(const FengDebugInfo *info,
     return NULL;
 }
 
-static const FengDebugVariableRecord *find_variable(const FengDebugInfo *info,
+static const FengCodegenMapingVariableRecord *find_variable(const FengCodegenMapingInfo *info,
                                                     const char *display_name,
-                                                    FengDebugVariableKind kind,
+                                                    FengCodegenMapingVariableKind kind,
                                                     const char *read_expr_substr) {
     for (size_t i = 0U; i < info->variable_count; ++i) {
         if (strcmp(info->variables[i].display_name, display_name) != 0 ||
@@ -174,16 +174,16 @@ static const FengDebugVariableRecord *find_variable(const FengDebugInfo *info,
 }
 
 static void test_resolve_source_builds_logical_uri(void) {
-    FengDebugSourceMapping mappings[1] = {
+    FengCodegenMapingSourceMapping mappings[1] = {
         {
             .source_path = "/tmp/feng-debug/src/nested/main.ff",
             .package_name = "demo",
             .package_root = "/tmp/feng-debug/src",
         },
     };
-    FengDebugResolvedSource resolved = {0};
+    FengCodegenMapingResolvedSource resolved = {0};
 
-    ASSERT(feng_debug_resolve_source(mappings,
+    ASSERT(feng_codegen_maping_resolve_source(mappings,
                                      1U,
                                      "/tmp/feng-debug/src/nested/main.ff",
                                      &resolved));
@@ -191,12 +191,12 @@ static void test_resolve_source_builds_logical_uri(void) {
     ASSERT(strcmp(resolved.package_root, "/tmp/feng-debug/src") == 0);
     ASSERT(strcmp(resolved.relative_path, "nested/main.ff") == 0);
     ASSERT(strcmp(resolved.logical_uri, "demo://nested/main.ff") == 0);
-    feng_debug_resolved_source_dispose(&resolved);
+    feng_codegen_maping_resolved_source_dispose(&resolved);
 }
 
 static void test_codegen_emits_line_directives_and_debug_info(void) {
     const char *path = "/tmp/feng-debug-demo/src/main.ff";
-    FengDebugSourceMapping mappings[1] = {
+    FengCodegenMapingSourceMapping mappings[1] = {
         {
             .source_path = path,
             .package_name = "demo",
@@ -212,8 +212,8 @@ static void test_codegen_emits_line_directives_and_debug_info(void) {
     FengSemanticAnalysis *analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_BIN);
     FengCodegenOutput out = {0};
     FengCodegenError error = {0};
-    const FengDebugFrameRecord *main_frame;
-    const FengDebugFrameRecord *wrapper_frame;
+    const FengCodegenMapingFrameRecord *main_frame;
+    const FengCodegenMapingFrameRecord *wrapper_frame;
 
     ASSERT(feng_codegen_emit_program(analysis,
                                      FENG_COMPILE_TARGET_BIN,
@@ -225,14 +225,14 @@ static void test_codegen_emits_line_directives_and_debug_info(void) {
     ASSERT(strstr(out.c_source, "#line 4 \"demo://main.ff\"") != NULL);
     compile_generated_c_or_die(out.c_source);
 
-    main_frame = find_frame(&out.debug_info, "main", FENG_DEBUG_FRAME_VISIBLE);
-    wrapper_frame = find_frame(&out.debug_info, "main", FENG_DEBUG_FRAME_HIDDEN);
+    main_frame = find_frame(&out.debug_info, "main", FENG_CODEGEN_MAPING_FRAME_VISIBLE);
+    wrapper_frame = find_frame(&out.debug_info, "main", FENG_CODEGEN_MAPING_FRAME_HIDDEN);
     ASSERT(main_frame != NULL);
     ASSERT(wrapper_frame != NULL);
     ASSERT(strcmp(wrapper_frame->backend_symbol, "main") == 0);
-    ASSERT(find_variable(&out.debug_info, "args", FENG_DEBUG_VARIABLE_PARAM, NULL) != NULL);
-    ASSERT(find_variable(&out.debug_info, "count", FENG_DEBUG_VARIABLE_BINDING, NULL) != NULL);
-    ASSERT(find_variable(&out.debug_info, "plus", FENG_DEBUG_VARIABLE_BINDING, NULL) != NULL);
+    ASSERT(find_variable(&out.debug_info, "args", FENG_CODEGEN_MAPING_VARIABLE_PARAM, NULL) != NULL);
+    ASSERT(find_variable(&out.debug_info, "count", FENG_CODEGEN_MAPING_VARIABLE_BINDING, NULL) != NULL);
+    ASSERT(find_variable(&out.debug_info, "plus", FENG_CODEGEN_MAPING_VARIABLE_BINDING, NULL) != NULL);
 
     feng_codegen_output_free(&out);
     feng_codegen_error_free(&error);
@@ -248,7 +248,7 @@ static void test_debug_fd_round_trip(void) {
     char *fingerprint_error = NULL;
     char *fd_error = NULL;
     uint64_t fingerprint;
-    FengDebugSourceMapping mappings[2] = {
+    FengCodegenMapingSourceMapping mappings[2] = {
         {
             .source_path = "/tmp/demo/src/main.ff",
             .package_name = "demo",
@@ -260,34 +260,34 @@ static void test_debug_fd_round_trip(void) {
             .package_root = "/tmp/dep/src",
         },
     };
-    FengDebugInfo info = {0};
+    FengCodegenMapingInfo info = {0};
     FengDebugArtifact artifact = {0};
 
     ASSERT(snprintf(binary_path, sizeof(binary_path), "%s/demo.bin", tmp_dir) > 0);
     ASSERT(snprintf(fd_path, sizeof(fd_path), "%s/demo.bin.fd", tmp_dir) > 0);
     write_binary_file_or_die(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
 
-    feng_debug_info_init(&info);
-    ASSERT(feng_debug_info_add_frame(&info,
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
                                      "feng__demo__main",
                                      "main",
-                                     FENG_DEBUG_FRAME_VISIBLE));
-    ASSERT(feng_debug_info_add_frame(&info,
+                                     FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
                                      "main",
                                      "main",
-                                     FENG_DEBUG_FRAME_HIDDEN));
-    ASSERT(feng_debug_info_add_variable(&info,
+                                     FENG_CODEGEN_MAPING_FRAME_HIDDEN));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
                                         "feng__demo__main",
                                         "args",
                                         "args",
                                         NULL,
-                                        FENG_DEBUG_VARIABLE_PARAM));
-    ASSERT(feng_debug_info_add_variable(&info,
+                                        FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
                                         "feng__demo__main",
                                         NULL,
                                         "captured",
                                         "(_lambda->capture->value)",
-                                        FENG_DEBUG_VARIABLE_CAPTURE));
+                                        FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
 
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
@@ -306,23 +306,23 @@ static void test_debug_fd_round_trip(void) {
     ASSERT(artifact.package_count == 2U);
     ASSERT(artifact.info.frame_count == 2U);
     ASSERT(artifact.info.variable_count == 2U);
-    ASSERT(find_frame(&artifact.info, "main", FENG_DEBUG_FRAME_VISIBLE) != NULL);
+    ASSERT(find_frame(&artifact.info, "main", FENG_CODEGEN_MAPING_FRAME_VISIBLE) != NULL);
     ASSERT(find_variable(&artifact.info,
                          "captured",
-                         FENG_DEBUG_VARIABLE_CAPTURE,
+                         FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
                          "capture->value") != NULL);
 
     free(fingerprint_error);
     free(fd_error);
     feng_debug_artifact_dispose(&artifact);
-    feng_debug_info_dispose(&info);
+    feng_codegen_maping_info_dispose(&info);
     ASSERT(remove_dir_recursive(tmp_dir) == 0);
     free(tmp_dir);
 }
 
 static void test_codegen_records_capture_mappings(void) {
     const char *path = "/tmp/feng-debug-demo/src/capture.ff";
-    FengDebugSourceMapping mappings[1] = {
+    FengCodegenMapingSourceMapping mappings[1] = {
         {
             .source_path = path,
             .package_name = "demo",
@@ -350,11 +350,11 @@ static void test_codegen_records_capture_mappings(void) {
 
     ASSERT(find_variable(&out.debug_info,
                          "base",
-                         FENG_DEBUG_VARIABLE_BINDING,
+                         FENG_CODEGEN_MAPING_VARIABLE_BINDING,
                          "->value") != NULL);
     ASSERT(find_variable(&out.debug_info,
                          "base",
-                         FENG_DEBUG_VARIABLE_CAPTURE,
+                         FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
                          "_lambda->") != NULL);
     for (size_t i = 0U; i < out.debug_info.frame_count; ++i) {
         if (strncmp(out.debug_info.frames[i].display_name, "lambda@", 7U) == 0) {

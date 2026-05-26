@@ -52,14 +52,14 @@ extern "C" {
 
 typedef struct FengCodegenOptions {
     bool emit_line_directives;   /* if true, emit #line for source mapping */
-    const FengDebugSourceMapping *debug_source_mappings;
+    const FengCodegenMapingSourceMapping *debug_source_mappings;
     size_t debug_source_mapping_count;
 } FengCodegenOptions;
 
 typedef struct FengCodegenOutput {
     char  *c_source;             /* malloc'd, NUL-terminated */
     size_t c_source_length;      /* strlen(c_source) */
-    FengDebugInfo debug_info;    /* abstract frame/variable mappings */
+    FengCodegenMapingInfo debug_info;    /* abstract frame/variable mappings */
 } FengCodegenOutput;
 
 typedef struct FengCodegenError {

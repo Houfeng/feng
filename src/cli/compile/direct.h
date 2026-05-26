@@ -8,7 +8,7 @@
 
 /* Project/build-owned source mappings forwarded into direct compile. */
 typedef struct FengCliDirectDebugContext {
-    const FengDebugSourceMapping *sources;
+    const FengCodegenMapingSourceMapping *sources;
     size_t source_count;
 } FengCliDirectDebugContext;
 

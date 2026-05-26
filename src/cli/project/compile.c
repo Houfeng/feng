@@ -15,7 +15,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const char *const *package_paths) {
     FengCliDirectOptions options = {0};
     FengCliDirectDebugContext debug_context = {0};
-    FengDebugSourceMapping *debug_sources = NULL;
+    FengCodegenMapingSourceMapping *debug_sources = NULL;
     const char **inputs = NULL;
     const char **resolved_packages = NULL;
     size_t index;
@@ -33,7 +33,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
         ? (const char **)calloc(package_count, sizeof(*resolved_packages))
         : NULL;
     debug_sources = context->source_count > 0U
-        ? (FengDebugSourceMapping *)calloc(context->source_count, sizeof(*debug_sources))
+        ? (FengCodegenMapingSourceMapping *)calloc(context->source_count, sizeof(*debug_sources))
         : NULL;
     if ((context->source_count > 0U && (inputs == NULL || debug_sources == NULL)) ||
         (package_count > 0U && resolved_packages == NULL)) {
