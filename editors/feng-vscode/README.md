@@ -28,6 +28,8 @@ Feng Language provides an out-of-the-box editing experience for Feng in VS Code.
 5. Open Run and Debug, create a Feng launch configuration, and start debugging. When the active file belongs to a `target: "bin"` Feng project, the extension derives the default launch binary and build task from the nearest `feng.fm`; when you create `launch.json` from the Run and Debug view without an active Feng source file, it falls back to the workspace's discovered `target: "bin"` manifests.
 6. If your current CLI build still exposes an empty LSP capability set, the extension will temporarily keep open/save diagnostics through the legacy `check` path until the server side is filled in.
 
+To package the extension from this repository, run `bash ./scripts/build_editor_extentions.sh` at the repository root; the script enters `editors/feng-vscode` and runs `npm run pack`, which packages the extension through the repository-local `vsce` dependency.
+
 ## Optional Configuration
 
 If the `feng` executable is not available in your system `PATH`, you can configure it explicitly in VS Code settings:
