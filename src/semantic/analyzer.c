@@ -10114,6 +10114,23 @@ static ResolvedTypeTarget resolve_type_target_expr(const ResolveContext *context
     }
 }
 
+/* Returns the semantic type of one module-level binding, including inferred
+ * initializer facts recorded for bindings without an explicit type. */
+static InferredExprType infer_global_binding_decl_type(ResolveContext *context,
+                                                       const FengDecl *binding_decl) {
+    if (binding_decl == NULL || binding_decl->kind != FENG_DECL_GLOBAL_BINDING) {
+        return inferred_expr_type_unknown();
+    }
+    if (binding_decl->as.binding.type != NULL) {
+        return inferred_expr_type_from_type_ref(binding_decl->as.binding.type);
+    }
+    if (context != NULL && context->analysis != NULL) {
+        return inferred_expr_type_from_type_fact(
+            feng_semantic_lookup_type_fact(context->analysis, &binding_decl->as.binding));
+    }
+    return inferred_expr_type_unknown();
+}
+
 static InferredExprType infer_identifier_expr_type(ResolveContext *context, FengSlice name) {
     const LocalNameEntry *local_entry = resolver_find_local_name_entry(context, name);
 
@@ -10127,9 +10144,8 @@ static InferredExprType infer_identifier_expr_type(ResolveContext *context, Feng
 
         if (visible_value != NULL && !visible_value->is_function &&
             visible_value->decl != NULL &&
-            visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
-            visible_value->decl->as.binding.type != NULL) {
-            return inferred_expr_type_from_type_ref(visible_value->decl->as.binding.type);
+            visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING) {
+            return infer_global_binding_decl_type(context, visible_value->decl);
         }
     }
 
@@ -10152,9 +10168,8 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
             const FengDecl *binding_decl =
                 find_module_public_binding_decl(alias->target_module, expr->as.member.member);
 
-            if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
-                binding_decl->as.binding.type != NULL) {
-                return inferred_expr_type_from_type_ref(binding_decl->as.binding.type);
+            if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING) {
+                return infer_global_binding_decl_type(context, binding_decl);
             }
 
             return inferred_expr_type_unknown();

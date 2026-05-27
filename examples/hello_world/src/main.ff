@@ -2,7 +2,7 @@ mod hello_world;
 
 use std;
 
-let TEST_NAME:string = "hello_world";
+let TEST_NAME = "hello_world";
 
 fn main(args: string[]) {
   println("Running test: " + TEST_NAME);

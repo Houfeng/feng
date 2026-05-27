@@ -3113,6 +3113,35 @@ static void test_top_level_function_call_selects_overload_by_inferred_local_bind
     feng_program_free(program);
 }
 
+static void test_top_level_binding_inferred_type_is_used_by_identifier(void) {
+    const char *source =
+        "mod demo.main;\n"
+        "let TEST_NAME = \"hello_world\";\n"
+        "fn run(): string {\n"
+        "    return \"Running test: \" + TEST_NAME;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("top_binding_inferred_identifier_ok.f", source);
+    const FengProgram *programs[] = {program};
+    const FengDecl *binding_decl = program->declarations[0];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengSemanticTypeFact *fact = NULL;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    fact = feng_semantic_lookup_type_fact(analysis, &binding_decl->as.binding);
+    ASSERT(fact != NULL);
+    ASSERT(fact->kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN);
+    ASSERT(fact->builtin_name.length == strlen("string"));
+    ASSERT(memcmp(fact->builtin_name.data, "string", strlen("string")) == 0);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_top_level_function_call_reports_type_mismatch(void) {
     const char *source =
         "mod demo.main;\n"
@@ -13605,6 +13634,7 @@ int main(void) {
     test_valid_function_overload_by_parameter_type();
     test_top_level_function_call_selects_overload_by_literal_type();
     test_top_level_function_call_selects_overload_by_inferred_local_binding();
+    test_top_level_binding_inferred_type_is_used_by_identifier();
     test_top_level_function_call_reports_type_mismatch();
     test_generic_extern_call_accepts_wrapped_array_inference();
     test_generic_extern_call_accepts_bare_type_param_inference();
