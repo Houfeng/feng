@@ -110,6 +110,12 @@ runCase(
 );
 
 runCase(
+    'keeps generic array type suffix attached without spaces',
+    'fn main():void {\nlet entries:Map<string,int>[];\n}\n',
+    'fn main(): void {\n    let entries: Map<string, int>[];\n}\n'
+);
+
+runCase(
     'preserves comparison operators with spaces (not confused with generics)',
     'fn check(n:int):bool {\nreturn n<10;\n}\n',
     'fn check(n: int): bool {\n    return n < 10;\n}\n'

@@ -615,9 +615,9 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             lastEmittedWasGenericClose = false;
         } else {
             /* After generic open <: no space before first type arg.
-             * After generic close >: no space before ( (param list attaches directly). */
+             * After generic close >: no space before attached suffix delimiters. */
             const suppressSpace = lastEmittedWasGenericOpen ||
-                (lastEmittedWasGenericClose && token.value === '(');
+                (lastEmittedWasGenericClose && (token.value === '(' || token.value === '['));
 
             if (!suppressSpace && needsSpaceBetween(previousEmittedToken,
                 previousSignificantToken,
