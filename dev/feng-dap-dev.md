@@ -385,6 +385,10 @@
 - `display_name_strid` 允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
 - `display_type_strid` 为必填；首版 reader / writer 不再保留“缺失类型时额外走可选 section 补齐”的旁路。
 - `feng dap` 只对 LLDB 当前返回的可见变量集合做重写，因此当 LLDB 的可见性结果正确时，同名变量不会串到未激活绑定上。
+- 当前 frame 若可直接读取本模块的顶层 binding，则 `.fd.VARS` 也应为该 frame 记录对应的 module binding backend slot，这样 backend `Globals` scope 才能被重写成 Feng 名称，而不是因为缺失映射被整体过滤掉。
+- 同一个 Feng binding 若在 C lowering 中展开为多条物理语句（例如 module binding `ensure_init`、本地 slot 声明、managed cleanup node 注册），每一段都必须重新锚定回该 binding 的源码行，不能把下一条 Feng 语句的首个断点地址提前占走；否则后续 `for` body 等停点可能会落在词法作用域真正生效之前。
+- 同一个 Feng 表达式语句若在 C lowering 中引入临时局部、variadic 参数打包数组或 cleanup node，这些中间语句也必须持续锚定回该表达式语句自己的源码行；否则上一条 `println(...)` 一类语句就可能把下一条 `for` body 的首个断点地址提前占走，导致 loop 绑定在 LLDB 中暂时不可见。
+- `FengString *` 的顶层调试显示应优先回读实际 UTF-8 字符串值；`length=N` 摘要只用于数组值，不应用作字符串值的主显示格式。
 
 ### 5.6 一个最小示例
 

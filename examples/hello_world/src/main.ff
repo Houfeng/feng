@@ -5,7 +5,7 @@ use std;
 let TEST_NAME:string = "hello_world";
 
 fn main(args: string[]) {
-  // println("Running test: " + TEST_NAME);
+  println("Running test: " + TEST_NAME);
   for var i = 1; i <= 1000; i += 1 {
     println("Hello, world!");
   }

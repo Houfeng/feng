@@ -872,6 +872,7 @@ typedef struct ModuleBinding {
     bool     is_var;          /* false = let, true = var */
     bool     exports_public_surface;
     const FengBinding *binding;
+    const FengProgram *owner_program;
 } ModuleBinding;
 
 /* ---- Generic function registry (G6) ----
@@ -1025,6 +1026,8 @@ typedef struct CG {
     const char *debug_line_source_path;
     char *debug_line_logical_uri;
     unsigned int last_emitted_line_directive;
+    FengToken current_stmt_anchor_token;
+    bool current_stmt_anchor_active;
 
     /* Error state. */
     FengCodegenError *error;
@@ -1555,6 +1558,39 @@ static bool cg_debug_add_variable_record_slice_cgtype(CG *cg,
     return ok;
 }
 
+static bool cg_debug_add_current_frame_module_binding_records(CG *cg,
+                                                              FengToken blame) {
+    size_t index;
+
+    if (!cg_debug_enabled(cg) ||
+        cg->current_frame_backend_symbol == NULL ||
+        cg->cur_program == NULL) {
+        return true;
+    }
+
+    for (index = 0U; index < cg->module_binding_count; ++index) {
+        const ModuleBinding *binding = cg->module_bindings + index;
+        FengToken binding_token = binding->binding != NULL ? binding->binding->token : blame;
+
+        if (binding->owner_program != cg->cur_program ||
+            binding->c_name == NULL ||
+            binding->feng_name == NULL ||
+            binding->type == NULL) {
+            continue;
+        }
+        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
+                                                      binding->c_name,
+                                                      binding->feng_name,
+                                                      NULL,
+                                                      binding->type,
+                                                      FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+                                                      binding_token)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Resolves the current source file to its logical PKG_NAME:// URI. */
 static bool cg_debug_prepare_line_source(CG *cg) {
     FengCodegenMapingResolvedSource resolved = {0};
@@ -1632,6 +1668,13 @@ static bool cg_emit_line_directive_force(CG *cg, FengToken token) {
                    cg->debug_line_logical_uri);
     cg->last_emitted_line_directive = token.line;
     return true;
+}
+
+static void cg_emit_current_stmt_line_directive_force(CG *cg) {
+    if (cg == NULL || !cg->current_stmt_anchor_active) {
+        return;
+    }
+    (void)cg_emit_line_directive_force(cg, cg->current_stmt_anchor_token);
 }
 
 static bool cg_emit_scalar_box_support(CG *cg) {
@@ -8029,6 +8072,7 @@ static bool cg_register_module_binding(CG *cg,
     mb->is_var = (decl->as.binding.mutability == FENG_MUTABILITY_VAR);
     mb->exports_public_surface =
         target == FENG_COMPILE_TARGET_LIB && decl->visibility == FENG_VISIBILITY_PUBLIC;
+    mb->owner_program = cg->cur_program;
     mb->feng_name = strndup(decl->as.binding.name.data, decl->as.binding.name.length);
     if (!mb->feng_name) return false;
     char *san = cg_sanitize(decl->as.binding.name.data, decl->as.binding.name.length);
@@ -8290,6 +8334,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     char *tmp = cg_fresh_temp(cg, prefix);
     if (!tmp) return NULL;
     char *cty = cg_ctype_dup(r->type);
+    cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
     free(cty);
     if (cgtype_is_managed(r->type) && r->owns_ref) {
@@ -8315,6 +8360,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
         if (!r->owns_ref) {
             const char *desc = cg_aggregate_desc_name(r->type);
             if (desc) {
+                cg_emit_current_stmt_line_directive_force(cg);
                 buf_append_fmt(cg->cur_body,
                                "    feng_aggregate_retain(&%s, &%s);\n", tmp, desc);
             }
@@ -9256,7 +9302,8 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                         invoke_name,
                                         frame_name.data,
                                         FENG_CODEGEN_MAPING_FRAME_VISIBLE,
-                                        blame)) {
+                                        blame) ||
+            !cg_debug_add_current_frame_module_binding_records(cg, blame)) {
             buf_free(&frame_name);
             goto cleanup;
         }
@@ -10073,6 +10120,7 @@ static bool cg_pack_variadic_args(CG *cg,
 
     if (n == 0) {
         /* Empty variadic: produce a zero-length array. */
+        cg_emit_current_stmt_line_directive_force(cg);
         if (elem_aggregate) {
             buf_append_fmt(cg->cur_body,
                 "    FengArray *%s = feng_array_new_kinded("
@@ -10113,6 +10161,7 @@ static bool cg_pack_variadic_args(CG *cg,
     }
 
     /* Allocate the array and fill slots. */
+    cg_emit_current_stmt_line_directive_force(cg);
     if (elem_aggregate) {
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new_kinded("
@@ -10130,11 +10179,13 @@ static bool cg_pack_variadic_args(CG *cg,
         free(items); cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
         return cg_fail(cg, *tok, "codegen: out of memory");
     }
+    cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
         "    %s *%s = (%s *)feng_array_data(%s);\n",
         elem_cty, slots_tmp, elem_cty, arr_tmp);
 
     for (size_t i = 0; i < n; i++) {
+        cg_emit_current_stmt_line_directive_force(cg);
         if (elem_aggregate) {
             buf_append_fmt(cg->cur_body,
                 "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
@@ -14273,6 +14324,7 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
         const Local *l = &scope->items[i - 1];
         if (l->is_param) continue;
         if (cgtype_is_managed(l->type)) {
+            cg_emit_current_stmt_line_directive_force(cg);
             buf_append_fmt(cg->cur_body,
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
                            l->c_name, l->c_name);
@@ -14283,11 +14335,13 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
              * slots. */
             const char *desc = cg_aggregate_desc_name(l->type);
             if (!desc) {
+                cg_emit_current_stmt_line_directive_force(cg);
                 buf_append_fmt(cg->cur_body,
                     "    feng_panic(\"codegen: missing aggregate descriptor for %s\");\n",
                     l->c_name);
                 continue;
             }
+            cg_emit_current_stmt_line_directive_force(cg);
             buf_append_cstr(cg->cur_body, "    ");
             cg_emit_cleanup_pops_for_aggregate_local(cg->cur_body, l->type);
             buf_append_fmt(cg->cur_body,
@@ -14334,6 +14388,7 @@ static void cg_emit_return_control_cleanup(CG *cg) {
  * emitted by cg_release_scope. The companion node lives on the C stack right
  * next to the local so its lifetime matches. */
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
+    cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
                    "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
                    cname, cname, cname);
@@ -14367,6 +14422,7 @@ static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const CGType *type) {
     CGAggregateFacts facts;
     if (cg_aggregate_facts(type, &facts) && facts.emit_cleanup_push != NULL) {
+        cg_emit_current_stmt_line_directive_force(cg);
         facts.emit_cleanup_push(cg->cur_body, cname, type);
     }
 }
@@ -14878,6 +14934,11 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     if (!cname) { if (has_init) er_free(&init); cgtype_free(decl_type); return false; }
 
     char *cty = cg_ctype_dup(decl_type);
+    if (!cg_emit_line_directive_force(cg, b->token)) {
+        free(cname);
+        cgtype_free(decl_type);
+        return false;
+    }
     if (has_init) {
         if (cgtype_is_managed(decl_type)) {
             if (init.owns_ref) {
@@ -14966,8 +15027,16 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         return false;
     }
     if (cgtype_is_managed(decl_type)) {
+        if (!cg_emit_line_directive_force(cg, b->token)) {
+            free(cname);
+            return false;
+        }
         cg_emit_cleanup_push_for_managed_local(cg, cname);
     } else if (cgtype_is_aggregate(decl_type)) {
+        if (!cg_emit_line_directive_force(cg, b->token)) {
+            free(cname);
+            return false;
+        }
         cg_emit_cleanup_push_for_aggregate_local(cg, cname, decl_type);
     }
     free(cname);
@@ -16826,37 +16895,48 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
+    FengToken saved_stmt_anchor_token = cg->current_stmt_anchor_token;
+    bool saved_stmt_anchor_active = cg->current_stmt_anchor_active;
+    bool ok = false;
+
     if (cg->failed) return false;
     if (!cg_emit_line_directive(cg, stmt->token)) return false;
+    cg->current_stmt_anchor_token = stmt->token;
+    cg->current_stmt_anchor_active = true;
     switch (stmt->kind) {
         case FENG_STMT_BLOCK: {
             buf_append_cstr(cg->cur_body, "    {\n");
             Scope *s = scope_push(cg->cur_scope);
             if (!s) return cg_fail(cg, stmt->token, "codegen: out of memory");
             cg->cur_scope = s;
-            bool ok = cg_emit_block(cg, stmt->as.block);
+            ok = cg_emit_block(cg, stmt->as.block);
             cg_release_scope(cg, s);
             cg->cur_scope = s->parent;
             scope_pop_free(s);
             buf_append_cstr(cg->cur_body, "    }\n");
-            return ok;
+            break;
         }
-        case FENG_STMT_BINDING:  return cg_emit_binding(cg, stmt);
-        case FENG_STMT_ASSIGN:   return cg_emit_assign(cg, stmt);
-        case FENG_STMT_EXPR:     return cg_emit_expr_stmt(cg, stmt);
-        case FENG_STMT_TRY:      return cg_emit_try_stmt(cg, stmt);
-        case FENG_STMT_RETURN:   return cg_emit_return(cg, stmt);
-        case FENG_STMT_IF:       return cg_emit_if(cg, stmt);
-        case FENG_STMT_MATCH:    return cg_emit_match_stmt(cg, stmt);
-        case FENG_STMT_WHILE:    return cg_emit_while(cg, stmt);
-        case FENG_STMT_FOR:      return cg_emit_for(cg, stmt);
-        case FENG_STMT_BREAK:    return cg_emit_break_continue(cg, stmt, true);
-        case FENG_STMT_CONTINUE: return cg_emit_break_continue(cg, stmt, false);
-        case FENG_STMT_THROW:    return cg_emit_throw(cg, stmt);
+        case FENG_STMT_BINDING:  ok = cg_emit_binding(cg, stmt); break;
+        case FENG_STMT_ASSIGN:   ok = cg_emit_assign(cg, stmt); break;
+        case FENG_STMT_EXPR:     ok = cg_emit_expr_stmt(cg, stmt); break;
+        case FENG_STMT_TRY:      ok = cg_emit_try_stmt(cg, stmt); break;
+        case FENG_STMT_RETURN:   ok = cg_emit_return(cg, stmt); break;
+        case FENG_STMT_IF:       ok = cg_emit_if(cg, stmt); break;
+        case FENG_STMT_MATCH:    ok = cg_emit_match_stmt(cg, stmt); break;
+        case FENG_STMT_WHILE:    ok = cg_emit_while(cg, stmt); break;
+        case FENG_STMT_FOR:      ok = cg_emit_for(cg, stmt); break;
+        case FENG_STMT_BREAK:    ok = cg_emit_break_continue(cg, stmt, true); break;
+        case FENG_STMT_CONTINUE: ok = cg_emit_break_continue(cg, stmt, false); break;
+        case FENG_STMT_THROW:    ok = cg_emit_throw(cg, stmt); break;
         default:
-            return cg_fail(cg, stmt->token,
-                "codegen: statement kind not yet supported in this iteration");
+            ok = cg_fail(cg,
+                         stmt->token,
+                         "codegen: statement kind not yet supported in this iteration");
+            break;
     }
+    cg->current_stmt_anchor_token = saved_stmt_anchor_token;
+    cg->current_stmt_anchor_active = saved_stmt_anchor_active;
+    return ok;
 }
 
 static bool cg_emit_block(CG *cg, const FengBlock *block) {
@@ -17681,7 +17761,8 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                         gfn->c_name,
                                         gfn->feng_name,
                                         FENG_CODEGEN_MAPING_FRAME_VISIBLE,
-                                        decl->token)) {
+                                        decl->token) ||
+            !cg_debug_add_current_frame_module_binding_records(cg, decl->token)) {
             cg->cur_scope = NULL;
             scope_pop_free(fn_scope);
             goto cleanup_params;
@@ -18653,7 +18734,8 @@ static bool cg_emit_function(CG *cg,
                                     fn->c_name,
                                     fn->feng_name,
                                     FENG_CODEGEN_MAPING_FRAME_VISIBLE,
-                                    decl->token)) {
+                                    decl->token) ||
+        !cg_debug_add_current_frame_module_binding_records(cg, decl->token)) {
         goto cleanup;
     }
 
@@ -22919,7 +23001,8 @@ static bool cg_emit_user_method(CG *cg,
                                         m->c_name,
                                         frame_name.data,
                                         FENG_CODEGEN_MAPING_FRAME_VISIBLE,
-                                        m->member->token)) {
+                                        m->member->token) ||
+            !cg_debug_add_current_frame_module_binding_records(cg, m->member->token)) {
             buf_free(&frame_name);
             goto cleanup;
         }
@@ -23353,7 +23436,8 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
                                         t->c_finalizer_name,
                                         frame_name.data,
                                         FENG_CODEGEN_MAPING_FRAME_VISIBLE,
-                                        fm->token)) {
+                                        fm->token) ||
+            !cg_debug_add_current_frame_module_binding_records(cg, fm->token)) {
             buf_free(&frame_name);
             cgtype_free(void_t);
             cg->cur_body = NULL;

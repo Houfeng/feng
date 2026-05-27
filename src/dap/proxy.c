@@ -3683,10 +3683,112 @@ static char *proxy_build_runtime_pointer_summary_expr(const char *type_text,
     if (proxy_type_is_exact(type_text, "FengArray *")) {
         return proxy_dup_printf("(size_t)feng_array_length((const FengArray *)(%s))", read_expression);
     }
-    if (proxy_type_is_exact(type_text, "FengString *")) {
-        return proxy_dup_printf("(size_t)feng_string_length((const FengString *)(%s))", read_expression);
-    }
     return NULL;
+}
+
+static char *proxy_build_runtime_string_value_expr(const char *read_expression) {
+    if (read_expression == NULL || read_expression[0] == '\0') {
+        return NULL;
+    }
+    return proxy_dup_printf("(const char *)feng_string_data((const FengString *)(%s))",
+                            read_expression);
+}
+
+static char *proxy_dup_quoted_debug_string_value(const char *text) {
+    const char *cursor;
+    const char *best_start = NULL;
+    const char *best_end = NULL;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    cursor = text;
+    while (*cursor != '\0') {
+        const char *start;
+
+        if (*cursor != '"') {
+            ++cursor;
+            continue;
+        }
+        start = cursor++;
+        while (*cursor != '\0') {
+            if (*cursor == '\\' && cursor[1] != '\0') {
+                cursor += 2;
+                continue;
+            }
+            if (*cursor == '"') {
+                best_start = start;
+                best_end = cursor;
+                ++cursor;
+                break;
+            }
+            ++cursor;
+        }
+    }
+    if (best_start == NULL || best_end == NULL || best_end < best_start) {
+        return NULL;
+    }
+    return proxy_dup_bytes((const unsigned char *)best_start,
+                           (size_t)(best_end - best_start + 1U));
+}
+
+static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_reader,
+                                                int backend_stdin_fd,
+                                                int output_fd,
+                                                const FengDebugArtifact *artifact,
+                                                FengDapRelayState *state,
+                                                uint64_t frame_id,
+                                                const char *read_expression,
+                                                char **out_value,
+                                                int error_fd) {
+    char *value_expr = NULL;
+    FengDapEvaluatedVariable evaluated = {0};
+    uint64_t request_seq = 0U;
+    char *value = NULL;
+    bool ok = false;
+
+    if (out_value != NULL) {
+        *out_value = NULL;
+    }
+    if (frame_id == 0U || read_expression == NULL || read_expression[0] == '\0') {
+        return true;
+    }
+    value_expr = proxy_build_runtime_string_value_expr(read_expression);
+    if (value_expr == NULL) {
+        return true;
+    }
+    if (!proxy_send_internal_evaluate_request(backend_stdin_fd,
+                                              state,
+                                              frame_id,
+                                              value_expr,
+                                              &request_seq,
+                                              error_fd) ||
+        !proxy_collect_internal_evaluate_response(backend_reader,
+                                                  backend_stdin_fd,
+                                                  output_fd,
+                                                  artifact,
+                                                  state,
+                                                  request_seq,
+                                                  &evaluated,
+                                                  error_fd)) {
+        goto cleanup;
+    }
+    if (!evaluated.has_result || evaluated.result == NULL || evaluated.result[0] == '\0') {
+        ok = true;
+        goto cleanup;
+    }
+    value = proxy_dup_quoted_debug_string_value(evaluated.result);
+    if (value != NULL && out_value != NULL) {
+        *out_value = value;
+        value = NULL;
+    }
+    ok = true;
+
+cleanup:
+    free(value_expr);
+    free(value);
+    proxy_evaluated_variable_dispose(&evaluated);
+    return ok;
 }
 
 static char *proxy_array_summary_element_type(const FengCodegenMapingVariableRecord *record) {
@@ -3816,6 +3918,7 @@ static bool proxy_rewrite_one_variable_payload(const char *variable_json,
     char *evaluate_name = NULL;
     char *value_text = NULL;
     char *type_text = NULL;
+    char *string_value_text = NULL;
     char *summary_text = NULL;
     char *fallback_value = NULL;
     FengDapEvaluatedVariable evaluated = {0};
@@ -3942,6 +4045,31 @@ static bool proxy_rewrite_one_variable_payload(const char *variable_json,
                                            &type_text) &&
         type_text[0] != '\0' &&
         proxy_json_value_looks_pointer(value_text)) {
+        if (proxy_type_is_exact(type_text, "FengString *")) {
+            if (!proxy_try_read_runtime_string_value(backend_reader,
+                                                     backend_stdin_fd,
+                                                     output_fd,
+                                                     artifact,
+                                                     state,
+                                                     frame_id,
+                                                     read_expression,
+                                                     &string_value_text,
+                                                     error_fd)) {
+                goto cleanup;
+            }
+            if (string_value_text != NULL) {
+                if (!proxy_replace_object_string_member(&current_json,
+                                                        "value",
+                                                        string_value_text,
+                                                        &replaced,
+                                                        error_fd,
+                                                        "failed to rewrite variables response")) {
+                    goto cleanup;
+                }
+                changed = changed || replaced;
+                goto finish_pointer_summary;
+            }
+        }
         if (!proxy_try_summarize_runtime_pointer_value(backend_reader,
                                                        backend_stdin_fd,
                                                        output_fd,
@@ -4006,6 +4134,7 @@ cleanup:
     free(evaluate_name);
     free(value_text);
     free(type_text);
+    free(string_value_text);
     free(summary_text);
     free(fallback_value);
     proxy_evaluated_variable_dispose(&evaluated);
