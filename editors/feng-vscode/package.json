@@ -6,6 +6,10 @@
   "version": "0.1.15",
   "publisher": "houfeng",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:Houfeng/feng.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
