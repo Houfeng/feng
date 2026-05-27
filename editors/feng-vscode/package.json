@@ -26,14 +26,11 @@
   ],
   "scripts": {
     "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/debug.test.js && node ./test/debug-smoke.test.js && node ./test/icon.test.js && node ./test/syntax.test.js",
-    "pack": "vsce package --no-dependencies"
+    "pack": "vsce package"
   },
   "main": "./extension.js",
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
-  },
-  "devDependencies": {
-    "vsce": "^2.15.0"
   },
   "keywords": [
     "feng",
@@ -227,5 +224,8 @@
         }
       }
     ]
+  },
+  "devDependencies": {
+    "vsce": "^2.15.0"
   }
 }
