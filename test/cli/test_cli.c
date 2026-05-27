@@ -459,7 +459,8 @@ static int find_first_dwarfdump_address_for_line(const char *dump_text,
 
         cursor += 1;
         if (cursor[0] != '0' || cursor[1] != 'x') {
-            break;
+            cursor = strchr(cursor, '\n');
+            continue;
         }
         if (sscanf(cursor, "0x%llx %u %u %u", &address, &line, &column, &file_index) == 4 &&
             line == target_line) {
@@ -4750,6 +4751,10 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     char *backend_scopes_text;
     char *backend_variables_json;
     char *backend_variables_text;
+    char *escaped_backend_initialize_text;
+    char *escaped_backend_stack_trace_text;
+    char *escaped_backend_scopes_text;
+    char *escaped_backend_variables_text;
     char *backend_script;
     char *input_text;
     char *stdout_text;
@@ -4813,12 +4818,61 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     backend_scopes_text = build_dap_message_text(backend_scopes_json);
     backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"[]\",\"type\":\"string[]\",\"variablesReference\":0},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"42\",\"type\":\"int\",\"variablesReference\":0}]}}");
     backend_variables_text = build_dap_message_text(backend_variables_json);
-    backend_script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\nprintf '%%b' '%s'\nprintf '%%b' '%s'\nprintf '%%b' '%s'\n",
-                                backend_initialize_text,
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
+    escaped_backend_scopes_text = json_escape_text(backend_scopes_text);
+    escaped_backend_variables_text = json_escape_text(backend_variables_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const responses = {\n"
+                                "  initialize: \"%s\",\n"
+                                "  stackTrace: \"%s\",\n"
+                                "  scopes: \"%s\",\n"
+                                "  variables: \"%s\"\n"
+                                "};\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "let nextSeq = 10;\n"
+                                "function frame(payload) {\n"
+                                "  return `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\\r\\n\\r\\n${payload}`;\n"
+                                "}\n"
+                                "process.stdout.write(responses.initialize);\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') process.stdout.write(responses.stackTrace);\n"
+                                "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
+                                "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
+                                "    if (message.command === 'evaluate') {\n"
+                                "      const expression = message.arguments && message.arguments.expression;\n"
+                                "      let body = null;\n"
+                                "      if (expression === 'backend_param') body = { result: '[]', type: 'string[]', variablesReference: 0 };\n"
+                                "      if (expression === 'backend_local') body = { result: '42', type: 'int', variablesReference: 0 };\n"
+                                "      if (body !== null) {\n"
+                                "        process.stdout.write(frame(JSON.stringify({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'evaluate', body })));\n"
+                                "      }\n"
+                                "    }\n"
+                                "  }\n"
+                                "});\n"
+                                "process.stdin.on('end', () => { fs.writeFileSync(requestsPath, requests); });\n",
                                 requests_path,
-                                backend_stack_trace_text,
-                                backend_scopes_text,
-                                backend_variables_text);
+                                escaped_backend_initialize_text,
+                                escaped_backend_stack_trace_text,
+                                escaped_backend_scopes_text,
+                                escaped_backend_variables_text);
     write_executable_text_file(backend_path, backend_script);
 
     path_value = dup_printf("%s:%s",
@@ -4880,6 +4934,10 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     free(escaped_binary_path);
     free(path_value);
     free(backend_script);
+    free(escaped_backend_variables_text);
+    free(escaped_backend_scopes_text);
+    free(escaped_backend_stack_trace_text);
+    free(escaped_backend_initialize_text);
     free(backend_variables_text);
     free(backend_variables_json);
     free(backend_scopes_text);
