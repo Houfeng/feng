@@ -230,7 +230,7 @@
 
 1. 主项目与每个递归本地 `target=lib` 依赖在各自 codegen / 编译阶段先导出抽象调试信息。
 2. `src/debug/` 基于这些抽象调试信息为当前产物写出普通 `.fd`；对本地 `target=lib` 来说，这个 `.fd` 与 `target=bin` 使用同一容器布局，只是首版不会被 `feng dap` 直接作为 launch sidecar 消费。
-3. 顶层 `target=bin` 构建在生成自身 `.fd` 时，收集整条本地依赖图中的依赖 `.fd`，提取其中可合并的 `PKGS` / `FRMS` / `VARS` section，重新做 string interning 后并入自己的 `.fd`。
+3. 顶层 `target=bin` 构建在生成自身 `.fd` 时，收集整条本地依赖图中的依赖 `.fd`，提取其中可合并的 `PKGS` / `FRMS` / `ENTS` section，重新做 string interning 后并入自己的 `.fd`。
 4. 汇总器对冲突做显式校验：若两个输入 `.fd` 给同一 `frame_backend_symbol + backend_name` 提供不一致映射，或给同一 `PKG_NAME` 提供不一致的本地包根，构建立即报错，不把歧义留到运行期。
 5. 依赖 `.fd` 的 `META` 不参与合并；最终只保留顶层 `target=bin` 自身的 `META.binary_path_strid` 与 `META.content_fingerprint`。
 
@@ -297,8 +297,8 @@
   - package URI 到本地包根的最小映射
 - `FRMS`
   - frame 重写记录
-- `VARS`
-  - variable 重写记录
+- `ENTS`
+  - 实体记录（局部/全局绑定、参数、类型字段及其他 Feng 语义实体）
 
 首版建议 section kind 固定为：
 
@@ -306,7 +306,7 @@
 - `STRS`
 - `PKGS`
 - `FRMS`
-- `VARS`
+- `ENTS`
 
 ### 5.5 建议 section 语义
 
@@ -356,36 +356,46 @@
 - 在当前规则下，最终依赖图中的模块名冲突会在编译器 / 构建阶段直接报错，因此基于模块 mangle 的 callable C 符号应在同一调试闭包内保持唯一。
 - 若未来语言层允许不同包中同模块名并存，则需要调整 codegen 的正式符号 mangle 规则；`.fd` 继续跟随 LLDB 实际看到的符号，而不是单独引入另一套 debug-only 命名。
 
-#### `VARS`
+#### `ENTS`
 
-每个变量至少记录：
+每条实体记录至少包含以下字段：
 
 - `frame_backend_symbol_strid`
   - 该映射所属的 callable / frame。
+  - `kind = field` 的字段模板记录此项为 0（不属于任何具体 frame）。
 - `backend_name_strid`
   - `lldb-dap` 可见的原始变量名。
+  - `kind = field` 的字段模板记录此项为 0。
 - `display_name_strid`
-  - 用户在 Feng 源码中看到的名字。
+  - 用户在 Feng 源码中看到的名字；字段模板记录此项为字段的 Feng 显示名。
 - `display_type_strid`
-  - 用户可见的静态类型文本,为必填字段。
-  - 数组沿用 Feng 语法显示为 `T[]` 或 `T[!]`,不写运行时长度摘要。
+  - 用户可见的静态类型文本，为必填字段。
+  - 数组沿用 Feng 语法显示为 `T[]` 或 `T[!]`，不写运行时长度摘要。
 - `kind`
-  - `param` / `local` / `capture` / `self`。
+  - `param` / `local` / `capture` / `self` / `field`。
+  - `field`：字段模板记录，不属于任何具体 frame，描述某 Feng 用户类型的一个字段。
 - `read_expr_strid`
-  - 可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供一个最小后端读取表达式。
+  - 顶层变量：可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供最小后端读取表达式。
+  - 字段模板记录：必填；C 成员访问后缀（含点号或箭头），例如 `.feng_age`；代理层将其拼接到父 `read_expr` 后，构造子变量完整读取表达式：`"(" + parent_read_expr + ")" + field_read_expr`。
+- `parent_strid`
+  - 顶层变量：`0`（不属于任何父实体）。
+  - 字段模板记录：父类型 `display_type` 字符串的 STRS id；代理层按此值将字段归属到对应类型。
 
 补充运行时展示约束：
 
-- `variables` 响应只应保留当前 frame / scope 内 `.fd.VARS` 中声明过的用户变量；未映射的 backend 临时变量、carrier 变量和其他生成期名字默认不向编辑器暴露。
-- 若同一 backend variables 列表中某个变量命中了 `.fd.VARS` 记录，且该记录提供 `read_expr`，则 `feng dap` 应以 `evaluate` 回读该表达式的结果覆盖原始 `value` / `type` 摘要；回读失败时保留原始变量值，但不得因此把未映射 backend 变量一并泄露给编辑器。
+- `variables` 响应只应保留当前 frame / scope 内 `.fd.ENTS` 中声明过的用户变量；未映射的 backend 临时变量、carrier 变量和其他生成期名字默认不向编辑器暴露。
+- 若同一 backend variables 列表中某个变量命中了 `.fd.ENTS` 记录，且该记录提供 `read_expr`，则 `feng dap` 应以 `evaluate` 回读该表达式的结果覆盖原始 `value` / `type` 摘要；回读失败时保留原始变量值，但不得因此把未映射 backend 变量一并泄露给编辑器。
 
 补充约束：
 
-- 唯一键是 `frame_backend_symbol_strid + backend_name_strid`，不是 `display_name_strid`。
-- `display_name_strid` 允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
-- `display_type_strid` 为必填；首版 reader / writer 不再保留“缺失类型时额外走可选 section 补齐”的旁路。
+- 顶层变量的唯一键是 `frame_backend_symbol_strid + backend_name_strid`，不是 `display_name_strid`。
+- 字段模板记录的唯一键是 `parent_strid + display_name_strid`；同一类型下字段名不允许重复。
+- `display_name_strid` 对顶层变量允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
+- `display_type_strid` 为必填；首版 reader / writer 不再保留"缺失类型时额外走可选 section 补齐"的旁路。
+- `kind = field` 的记录不参与 per-frame 变量重写；proxy 仅在展开用户类型时按 `parent_strid` 查询字段模板列表。
+- `ENTS` 记录格式：version 1 为 6 个 u32（无 `parent_strid`，读为 0）；version 2 为 7 个 u32（含 `parent_strid`）；reader 按 header 中 `version` 字段区分两种记录尺寸，向前兼容。
 - `feng dap` 只对 LLDB 当前返回的可见变量集合做重写，因此当 LLDB 的可见性结果正确时，同名变量不会串到未激活绑定上。
-- 当前 frame 若可直接读取本模块的顶层 binding，则 `.fd.VARS` 也应为该 frame 记录对应的 module binding backend slot，这样 backend `Globals` scope 才能被重写成 Feng 名称，而不是因为缺失映射被整体过滤掉。
+- 当前 frame 若可直接读取本模块的顶层 binding，则 `.fd.ENTS` 也应为该 frame 记录对应的 module binding backend slot，这样 backend `Globals` scope 才能被重写成 Feng 名称，而不是因为缺失映射被整体过滤掉。
 - 同一个 Feng binding 若在 C lowering 中展开为多条物理语句（例如 module binding `ensure_init`、本地 slot 声明、managed cleanup node 注册），每一段都必须重新锚定回该 binding 的源码行，不能把下一条 Feng 语句的首个断点地址提前占走；否则后续 `for` body 等停点可能会落在词法作用域真正生效之前。
 - 同一个 Feng 表达式语句若在 C lowering 中引入临时局部、variadic 参数打包数组或 cleanup node，这些中间语句也必须持续锚定回该表达式语句自己的源码行；否则上一条 `println(...)` 一类语句就可能把下一条 `for` body 的首个断点地址提前占走，导致 loop 绑定在 LLDB 中暂时不可见。
 - `FengString *` 的顶层调试显示应优先回读实际 UTF-8 字符串值；`length=N` 摘要只用于数组值，不应用作字符串值的主显示格式。
@@ -404,7 +414,7 @@ Section Directory:
   STRS offset=0x60 size=... records=11
   PKGS offset=0xA0 size=... records=1
   FRMS offset=0xC0 size=... records=2
-  VARS offset=0xF0 size=... records=2
+  ENTS offset=0xF0 size=... records=2
 
 STRS:
   1 -> "build/bin/demo"
@@ -430,7 +440,7 @@ FRMS:
   [backend_symbol_strid=4, display_name_strid=5, frame_policy=visible]
   [backend_symbol_strid=6, display_name_strid=0, frame_policy=hidden]
 
-VARS:
+ENTS:
   [frame_backend_symbol_strid=4, backend_name_strid=7, display_name_strid=8, read_expr_strid=0,  display_type_strid=12, kind=local]
   [frame_backend_symbol_strid=4, backend_name_strid=9, display_name_strid=10, read_expr_strid=11, display_type_strid=13, kind=capture]
 ```
@@ -479,7 +489,84 @@ VARS:
 - `.fd` 不维护“每个生成 C 行 -> Feng 行”的完整冗余表。
 - `.fd` 只记录 package-root 映射、frame 重写和变量映射这些最小信息。
 - 若原生后端出现个别 frame 噪声，`feng dap` 再依据 `frames.frame_policy` 做折叠或过滤。
-- `.fd` 的 reader 只需要顺序读取 `META` / `STRS` / `PKGS` / `FRMS` / `VARS` 五类 section，不需要实现通用对象反序列化器。
+- `.fd` 的 reader 只需要顺序读取 `META` / `STRS` / `PKGS` / `FRMS` / `ENTS` 五类 section，不需要实现通用对象反序列化器。
+
+### 5.10 合成子变量展开设计
+
+#### 5.10.1 背景与原则
+
+LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内存布局，展开后看到的是 `header`、`refcount`、`data` 等内部字段，不是 Feng 语义层的成员。对用户定义的 spec 类型，情况相同。用户在断点停下时期望看到的是数组可按索引展开元素，用户类型可按字段名展开字段值。
+
+设计原则：
+
+- 对 DAP client（VS Code）完全透明，client 只认 DAP 协议，代理合成的 children 与 LLDB 原生 children 无法区分。
+- 代理层维护一个 **synthetic variablesReference** 注册表，拦截子变量请求，绕过 LLDB 直接返回合成 children 列表。
+- 数组元素展开完全在代理层动态合成，不写入 `.fd`；代理层利用 `display_type` 后缀和 `feng_array_data` 表达式生成。
+- 用户类型字段展开通过在 `ENTS` 中写入 `kind = field` 的字段模板记录实现；codegen 将每个 spec 类型的字段写为 `parent_strid = 父类型名 strid` 的 ENTS 记录，代理层按 `parent_strid` 查找字段列表，不新增 section。
+- string 不做字符级展开，顶层显示实际字符串值即可。
+
+#### 5.10.2 Synthetic variablesReference 机制
+
+- 代理层在 `FengDapRelayState` 中维护 `synthetic_refs[]` 动态数组（session 生命周期）。
+- Synthetic ref ID 从 `0x40000000` 起分配，远超 LLDB 顺序 ID 范围，避免冲突。宏 `PROXY_IS_SYNTHETIC_REF(r)` 判断 `r >= 0x40000000`。
+- 注册两种 kind：`FENG_DAP_SYNTHETIC_ARRAY`（数组）和 `FENG_DAP_SYNTHETIC_TYPE`（用户类型）。
+- 每条记录存储：`{ref_id, kind, frame_id, parent_read_expr, element_display_type, element_count}`（数组）或 `{ref_id, kind, frame_id, parent_read_expr, type_display_name}`（用户类型）。
+- 当 `proxy_rewrite_one_variable_payload` 发现变量可展开时，分配 synthetic ref 并写回 JSON 的 `variablesReference` 字段。
+- 当 client 发送 `variables` 请求且 `variablesReference` 命中 synthetic ref 时，`proxy_process_client_relay_message` 拦截该请求并直接合成响应，不转发给 LLDB。
+
+#### 5.10.3 数组元素展开
+
+数组元素数量运行时动态变化，不写入 `ENTS`；代理层根据 `display_type` 的元素类型后缀生成 `feng_array_data` 系列 evaluate 表达式：
+
+| Feng 元素类型 | evaluate 表达式模板（`PARENT` 替换为 parent_read_expr，`INDEX` 替换为下标） |
+|---|---|
+| `i64` | `((int64_t *)feng_array_data(PARENT))[INDEX]` |
+| `i32` | `((int32_t *)feng_array_data(PARENT))[INDEX]` |
+| `i16` | `((int16_t *)feng_array_data(PARENT))[INDEX]` |
+| `i8`  | `((int8_t *)feng_array_data(PARENT))[INDEX]` |
+| `u64` | `((uint64_t *)feng_array_data(PARENT))[INDEX]` |
+| `u32` | `((uint32_t *)feng_array_data(PARENT))[INDEX]` |
+| `u16` | `((uint16_t *)feng_array_data(PARENT))[INDEX]` |
+| `u8`  | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
+| `f64` | `((double *)feng_array_data(PARENT))[INDEX]` |
+| `f32` | `((float *)feng_array_data(PARENT))[INDEX]` |
+| `bool` | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
+| `string` | `((FengString **)feng_array_data(PARENT))[INDEX]` |
+| `T[]` / `T[!]`（嵌套数组）| `((FengArray **)feng_array_data(PARENT))[INDEX]` |
+| 用户类型元素 | 结合 `ENTS` 中 `parent_strid == 元素类型名 strid` 的字段模板记录展开子字段 |
+
+展开约束：
+
+- 每个数组最多展示 **256** 个元素；超出时在末尾追加一条 `name="…"` 的截断提示项，不直接截断。
+- 嵌套展开（数组的数组、用户类型内含数组字段）递归处理；最大嵌套深度 **3**，避免循环类型无限递归。
+
+#### 5.10.4 ENTS 中的字段模板记录
+
+用户类型的字段描述直接复用 `ENTS` section，通过 `parent_strid` 字段形成隐式父子树，不新增独立 section。
+
+字段模板记录格式（与顶层变量共用同一 ENTS 记录结构，`kind = field`）：
+
+| 字段 | 顶层变量 | 字段模板记录 |
+|---|---|---|
+| `frame_backend_symbol_strid` | callable C 符号的 strid | `0` |
+| `backend_name_strid` | LLDB 变量名的 strid | `0` |
+| `display_name_strid` | Feng 变量名的 strid | 字段 Feng 名称的 strid |
+| `display_type_strid` | Feng 类型名的 strid | 字段类型名的 strid |
+| `kind` | `param/local/capture/self` | `field` |
+| `read_expr_strid` | 可选：完整读取表达式 | 必填：C 访问后缀，如 `.feng_age` |
+| `parent_strid` | `0` | 父类型 display_type 的 strid |
+
+代理层展开逻辑：
+
+1. 对 `display_type = "Person"` 的变量，取 `strid("Person")`，在 ENTS 中筛选所有 `parent_strid == strid("Person")` 的记录。
+2. 对每条字段记录，构造子变量 `read_expr = "(" + parent_read_expr + ")" + field_read_expr`，通过 internal evaluate 获取值。
+3. 若字段的 `display_type` 在 ENTS 中也有对应字段模板（即字段本身是用户类型），递归展开；深度上限 3。
+
+补充约束：
+
+- 同一类型的所有变量共享同一份字段模板记录；codegen 按 `(parent_strid, display_name)` 去重，每种类型只写一次字段列表。
+- 字段模板记录与顶层变量记录在同一 ENTS section 中混排；proxy 区分方式：`kind == field`。
+- `.fd` header `version` 从 1 升至 2，标记 ENTS 记录从 6 u32 扩展为 7 u32（加 `parent_strid`）；version 1 reader 自动补 `parent_strid = 0`，向前兼容。
 
 ## 6. `feng dap` 与 `lldb-dap` 适配层
 
@@ -532,7 +619,7 @@ VARS:
 #### `scopes` / `variables`
 
 - 作用域激活关系以 `lldb-dap` 返回结果为准，`.fd` 不再维护独立 scope 树。
-- `feng dap` 先拿当前 scope 下 **LLDB 实际返回的可见变量集合**，再依据当前 frame 的 `backend_symbol` 在 `.fd.variables` 中查找可重写条目。
+- `feng dap` 先拿当前 scope 下 **LLDB 实际返回的可见变量集合**，再依据当前 frame 的 `backend_symbol` 在 `.fd.ENTS` 中查找可重写条目。
 - `variables` 只对白名单内命中的 backend 变量做重写并返回给编辑器，不自行补推隐藏绑定，也不把未映射 backend 临时变量继续透传。
 - 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名；若命中的记录提供 `read_expr`，则应优先用它回读用户值并覆盖 carrier 的原始 `value` / `type` 摘要；对普通 `PARAM` / `BINDING` / `SELF`，若未显式提供 `read_expr`，则默认以该 `backend_name` 自身作为只读回读表达式。
 - 若当前可见集合在重写后对某个标识符出现 0 个候选或多个候选，`feng dap` 必须报错，不做猜测性绑定。
@@ -542,9 +629,9 @@ VARS:
 - 仅支持第一阶段允许的只读子集。
 - `feng dap` 自带一套极小表达式解析器，只覆盖只读 watch 子集，不复用完整编译器 parser。
 - 当前支持的表达式形态为：identifier、成员访问、常量整数字面量索引，以及这些叶子值上的简单算术 / 比较组合。
-- 标识符优先在 **LLDB 当前可见变量集合** 上做解析，再用 `.fd.variables` 做显示名与 backend 名之间的双向对照。
+- 标识符优先在 **LLDB 当前可见变量集合** 上做解析，再用 `.fd.ENTS` 做显示名与 backend 名之间的双向对照。
 - 如果某个标识符在当前可见集合上无法唯一落到一个 backend 变量，直接报歧义错误，而不是退化为猜测。
-- 叶子标识符若对应普通 backend 变量，则直接改写为 backend 名；若对应特殊 carrier，则改写为 `.fd.variables.read_expr` 提供的后端读取表达式。
+- 叶子标识符若对应普通 backend 变量，则直接改写为 backend 名；若对应特殊 carrier，则改写为 `.fd.ENTS.read_expr` 提供的后端读取表达式。
 - 不在支持子集内的表达式类型，例如函数调用、赋值、非常量索引或其他未列出的语法，必须由 `feng dap` 本地明确拒绝，不能静默透传为错误值。
 
 ### 6.4 值显示策略
@@ -553,9 +640,13 @@ VARS:
 
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则先退回原始整数值。
-- string / array / object：优先复用 LLDB 已有 children；若 LLDB 顶层摘要仍只是 runtime carrier pointer，则 `feng dap` 负责把 string / array 收敛为基于 runtime `length` 字段的稳定摘要，而不是裸指针。
-- callable / spec：首版不引入独立 `.fd` 显示数据库，必要时只提供稳定标签重命名。
-- `.fd` 不新增 `types` / `display` 顶层区块；若后续确实发现 LLDB 信息不足，再单独评估增量字段。
+- builtin 标量：直接复用 `lldb-dap` 原始值。
+- string：顶层显示优先回读实际 UTF-8 字符串值（通过 `feng_string_data`），不展开子字符。
+- array：顶层显示格式为 `元素类型[length=N]`；`variablesReference` 替换为 synthetic ref，支持按索引展开每个元素；元素展开通过 `feng_array_data` 系列 evaluate 表达式实现（见 §5.10.3）。
+- 用户类型（spec / object）：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
+- enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则退回原始整数值。
+- callable / spec 顶层：必要时只提供稳定标签重命名。
+- 合成 children 展开约束：数组元素上限 256，嵌套深度上限 3 层；超限时追加截断提示项。
 
 ## 7. 必须改动的代码边界
 
@@ -645,7 +736,7 @@ VARS:
 - [x] Phase 3：`src/debug/` 生成与汇总 `.fd`
   - [x] 基于 codegen 输出的抽象调试信息生成当前产物 `.fd`。
   - [x] 支持本地 `target=lib` 的非 `release` `.fd` 写出。
-  - [x] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `VARS` section。
+  - [x] 支持顶层 `target=bin` 提取并合并依赖 `.fd` 的 `PKGS` / `FRMS` / `ENTS` section。
   - [x] 明确并实现最终 `META` 重写规则。
 
 - [x] Phase 4：`src/dap/` / `feng dap` 与 VS Code 接入
@@ -671,6 +762,37 @@ VARS:
 - adapter 协议测试
 - VS Code + macOS + LLDB smoke 测试
 - 现有 LSP 与编译器测试回归
+
+- [ ] Phase 7：合成子变量展开（数组元素 + 用户类型字段）
+
+  > 设计见 §5.10。对 DAP client 完全透明，所有合成 children 通过 synthetic variablesReference 机制在代理层生成，不依赖 Python/LLDB formatter，不改动语言前端。
+
+  **Layer 1 — 数组元素展开（proxy 层，不改 `.fd` schema）**
+
+  - [ ] P7-L1-1：在 `FengDapRelayState` 中增加 synthetic ref 注册表（`FengDapSyntheticRef[]`，`next_synthetic_ref` 初始值 `0x40000000`，`PROXY_IS_SYNTHETIC_REF` 宏）；更新 `proxy_relay_state_dispose` 释放堆字段
+  - [ ] P7-L1-2：实现 `proxy_build_array_element_expr(parent_read_expr, element_display_type, index) → char *`，覆盖 i64/i32/i16/i8/u64/u32/u16/u8/f64/f32/bool/string/嵌套数组的表达式模板
+  - [ ] P7-L1-3：修改 `proxy_rewrite_one_variable_payload`：数组类型变量在写摘要 value 的同时，分配 synthetic ref 并替换 JSON 中的 `variablesReference`
+  - [ ] P7-L1-4：在 `proxy_process_client_relay_message` 的 variables 分支中，若 `variablesReference` 命中 synthetic ref，直接调用合成响应函数并 return true（不转发 LLDB）
+  - [ ] P7-L1-5：实现 `proxy_send_synthetic_array_variables_response`：按 index 逐元素 internal evaluate，合成 DAP variables response JSON，写入 output_fd；元素上限 256，超出追加截断提示项
+  - [ ] P7-L1-6：嵌套处理：元素本身若为数组类型，在合成子变量时递归分配 array synthetic ref；深度计数器上限 3
+
+  **Layer 2 — 用户类型字段展开（ENTS 扩展 + codegen + proxy）**
+
+  - [ ] P7-L2-1：在 `FengCodegenMapingVariableKind` 中新增 `FENG_CODEGEN_MAPING_VARIABLE_KIND_FIELD` 枚举值；在 `FengCodegenMapingVariableRecord` 中新增 `parent_display_type` 字段（`const char *`，顶层变量为 NULL，字段模板记录为父类型的 display_type 字符串）
+  - [ ] P7-L2-2：在 `src/debug/debug.c` 中，ENTS 记录写出从 6 u32 扩展为 7 u32（末尾加 `parent_strid`）；`.fd` header `version` 从 1 改为 2；reader 按 version 兼容两种记录尺寸（version 1 时 `parent_strid` 读为 0）
+  - [ ] P7-L2-3：在 `src/codegen/codegen.c` 中，为用户 spec 类型的局部/参数/绑定变量写 debug 映射时，额外为该 spec 的每个字段写入一条 `kind = FIELD`、`parent_display_type = type_display_name`、`frame_backend_symbol = NULL`、`backend_name = NULL`、`read_expr = C 访问后缀` 的 ENTS 记录；按 `(parent_display_type, display_name)` 去重，每种类型只写一次字段列表
+  - [ ] P7-L2-4：在 `proxy.c` 中实现 `proxy_find_field_records(artifact, parent_display_type, out_count) → FengCodegenMapingVariableRecord **`，从 ENTS 中按 `parent_strid` 筛出字段模板列表
+  - [ ] P7-L2-5：修改 `proxy_rewrite_one_variable_payload`：非数组变量若 `display_type` 经 `proxy_find_field_records` 能找到字段模板记录，分配 `FENG_DAP_SYNTHETIC_TYPE` ref 并替换 `variablesReference`
+  - [ ] P7-L2-6：实现 `proxy_send_synthetic_type_variables_response`：遍历字段模板，per-field internal evaluate（`read_expr = "(" + parent_read_expr + ")" + field_read_expr`），合成 DAP variables response JSON；字段本身若为数组或用户类型，递归处理；深度计数器上限 3
+
+  **验证**
+
+  - [ ] P7-V1：`test_cli` 新增：`i64[]` 数组变量展开出正确的 `[0]`、`[1]`、... 子项，值与预期一致
+  - [ ] P7-V2：`test_cli` 新增：`string[]` 数组变量展开，每个元素显示实际字符串值
+  - [ ] P7-V3：`test_cli` 新增：用户 spec 变量展开出 Feng 字段名与字段值
+  - [ ] P7-V4：`test_cli` 新增：嵌套场景（数组的数组、spec 内含数组字段）深层展开正确
+  - [ ] P7-V5：`test_cli` 新增：超 256 元素的数组展开时末尾有截断提示项
+  - [ ] P7-V6：`make test` 全量回归通过
 
 ## 9. 验证要求
 
