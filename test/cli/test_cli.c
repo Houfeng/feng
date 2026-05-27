@@ -11618,6 +11618,33 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
     free(remove_error);
 }
 
+static void test_lsp_hover_uses_inferred_top_level_binding_type(void) {
+    static const char *kSource =
+        "mod test.lsp.inferred_binding;\n"
+        "\n"
+        "let TEST_NAME = \"hello_world\";\n"
+        "\n"
+        "fn message(): string {\n"
+        "    return \"Running test: \" + TEST_NAME;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let label: string = message();\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output = capture_lsp_hover_response(kSource,
+                                              kInitialize,
+                                              "let TEST_NAME = \"hello_world\";",
+                                              strlen("let "));
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "let TEST_NAME: string") != NULL);
+    ASSERT(strstr(output, "let TEST_NAME: void") == NULL);
+
+    free(output);
+}
+
 /* Tests that typing `use foo.bar.` in a project file triggers module-path
  * segment completion, offering the next path component of known source files.
  * Before the fix, the cursor-after-dot in a `use` statement was misidentified
@@ -12616,6 +12643,7 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
+    test_lsp_hover_uses_inferred_top_level_binding_type();
     test_lsp_member_completion_survives_incomplete_member_access();
         test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();

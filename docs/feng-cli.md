@@ -70,7 +70,7 @@ feng lsp [--stdio]
 - diagnostics / hover / completion / definition / references / rename 统一复用现有 parser / semantic / imported-module 能力; 当前项目不存在本地 workspace `.ft` 时,必须直接回退到源码分析,不得要求用户先手动生成缓存。
 - 若当前项目目录下存在合法 `feng.fm`,LSP 按项目上下文解析整个项目源码并解析依赖包; 若不存在 `feng.fm`,则按单文件模式分析当前文档。
 - 对当前项目内已保存且与磁盘一致的文档,若 `build/obj/symbols/**/*.ft` 可读,`hover` / `definition` / `completion` 可优先消费 workspace cache; 若缓存缺失、命中失败或当前文档存在未保存修改,则回退到源码分析。
-- `hover` 优先展示声明签名与文档注释; 文档注释只识别已绑定到声明的 `/** */`,外部依赖包公开 `.ft` 中已规范化保存的文档注释也必须在 hover 中展示; 服务端应按客户端在 initialize 中声明的 Hover `contentFormat` 能力协商返回 `markdown` 或 `plaintext`,支持 Markdown 时应将声明签名与文档注释格式化为标准 Markdown,其中 `@foo bar ...` 风格的文档标签应按结构化参数项显示; 客户端未声明 Markdown 能力时必须回退为纯文本 Hover,保证跨编辑器兼容。
+- `hover` 优先展示声明签名与文档注释; 绑定签名必须展示该绑定的静态类型,省略类型标注的绑定应使用 semantic 分析得到的初始化器推导类型,不得把缺失的语法类型误展示为 `void`; 文档注释只识别已绑定到声明的 `/** */`,外部依赖包公开 `.ft` 中已规范化保存的文档注释也必须在 hover 中展示; 服务端应按客户端在 initialize 中声明的 Hover `contentFormat` 能力协商返回 `markdown` 或 `plaintext`,支持 Markdown 时应将声明签名与文档注释格式化为标准 Markdown,其中 `@foo bar ...` 风格的文档标签应按结构化参数项显示; 客户端未声明 Markdown 能力时必须回退为纯文本 Hover,保证跨编辑器兼容。
 - `definition` 以源码声明位置为主; 当前项目内定义应返回对应源文件位置。
 - `references` 返回当前工作区源码中的所有引用位置; 对外部依赖包符号,可返回本地工作区中的使用点,但不要求返回包内只读定义位置。
 - `rename` 仅作用于当前工作区中的可写源码符号; 外部依赖包符号、只读缓存符号与非独立命名实体不参与重命名; 光标位于标识符内部或紧邻标识符末尾时,均应按该标识符处理。

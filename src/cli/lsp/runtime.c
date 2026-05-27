@@ -5120,6 +5120,60 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
     return false;
 }
 
+static bool semantic_type_fact_to_string(FengLspString *buffer,
+                                         const FengSemanticTypeFact *fact) {
+    if (fact == NULL) {
+        return false;
+    }
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            return string_append_bytes(buffer, fact->builtin_name.data, fact->builtin_name.length);
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return type_ref_to_string(buffer, fact->type_ref);
+        case FENG_SEMANTIC_TYPE_FACT_DECL: {
+            FengSlice name = decl_name(fact->type_decl);
+
+            return string_append_bytes(buffer, name.data, name.length);
+        }
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+            break;
+    }
+    return false;
+}
+
+static bool append_optional_static_type_annotation(FengLspString *buffer,
+                                                  const FengLspAnalysisSession *session,
+                                                  const void *site,
+                                                  const FengTypeRef *explicit_type) {
+    if (explicit_type != NULL) {
+        return string_append_cstr(buffer, ": ") && type_ref_to_string(buffer, explicit_type);
+    }
+    if (session != NULL && session->analysis != NULL) {
+        const FengSemanticTypeFact *fact = feng_semantic_lookup_type_fact(session->analysis, site);
+
+        if (fact != NULL) {
+            return string_append_cstr(buffer, ": ") && semantic_type_fact_to_string(buffer, fact);
+        }
+    }
+    return true;
+}
+
+static bool binding_signature_to_string(FengLspString *buffer,
+                                        const FengLspAnalysisSession *session,
+                                        const FengBinding *binding) {
+    return string_append_cstr(buffer,
+                              binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") &&
+           string_append_bytes(buffer, binding->name.data, binding->name.length) &&
+           append_optional_static_type_annotation(buffer, session, binding, binding->type);
+}
+
+static bool decl_signature_to_string_with_session(FengLspString *buffer,
+                                                  const FengLspAnalysisSession *session,
+                                                  const FengDecl *decl);
+static bool member_signature_to_string_with_session(FengLspString *buffer,
+                                                    const FengLspAnalysisSession *session,
+                                                    const FengTypeMember *member);
+
 static bool append_decl_type_params(FengLspString *buffer,
                                     const FengTypeParam *params,
                                     size_t count) {
@@ -5155,17 +5209,17 @@ static bool append_decl_type_params(FengLspString *buffer,
 }
 
 static bool decl_signature_to_string(FengLspString *buffer, const FengDecl *decl) {
+    return decl_signature_to_string_with_session(buffer, NULL, decl);
+}
+
+static bool decl_signature_to_string_with_session(FengLspString *buffer,
+                                                  const FengLspAnalysisSession *session,
+                                                  const FengDecl *decl) {
     size_t index;
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            return string_append_cstr(buffer,
-                                      decl->as.binding.mutability == FENG_MUTABILITY_VAR ? "var " : "let ") &&
-                   string_append_bytes(buffer,
-                                       decl->as.binding.name.data,
-                                       decl->as.binding.name.length) &&
-                   string_append_cstr(buffer, ": ") &&
-                   type_ref_to_string(buffer, decl->as.binding.type);
+            return binding_signature_to_string(buffer, session, &decl->as.binding);
         case FENG_DECL_ENUM:
             return string_append_cstr(buffer, "enum ") &&
                    string_append_bytes(buffer,
@@ -5209,6 +5263,12 @@ static bool decl_signature_to_string(FengLspString *buffer, const FengDecl *decl
 }
 
 static bool member_signature_to_string(FengLspString *buffer, const FengTypeMember *member) {
+    return member_signature_to_string_with_session(buffer, NULL, member);
+}
+
+static bool member_signature_to_string_with_session(FengLspString *buffer,
+                                                    const FengLspAnalysisSession *session,
+                                                    const FengTypeMember *member) {
     size_t index;
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -5217,8 +5277,7 @@ static bool member_signature_to_string(FengLspString *buffer, const FengTypeMemb
                string_append_bytes(buffer,
                                    member->as.field.name.data,
                                    member->as.field.name.length) &&
-               string_append_cstr(buffer, ": ") &&
-               type_ref_to_string(buffer, member->as.field.type);
+               append_optional_static_type_annotation(buffer, session, member, member->as.field.type);
     }
     if (!string_append_cstr(buffer,
                             member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "ctor " :
@@ -5469,14 +5528,14 @@ static char *hover_text_for_target(const FengLspAnalysisSession *session,
 
     switch (target->kind) {
         case FENG_LSP_RESOLVED_DECL:
-            if (!decl_signature_to_string(&signature, target->decl)) {
+            if (!decl_signature_to_string_with_session(&signature, session, target->decl)) {
                 string_dispose(&signature);
                 return NULL;
             }
             doc = normalize_doc_comment(target->decl->doc_comment);
             break;
         case FENG_LSP_RESOLVED_MEMBER:
-            if (!member_signature_to_string(&signature, target->member)) {
+            if (!member_signature_to_string_with_session(&signature, session, target->member)) {
                 string_dispose(&signature);
                 return NULL;
             }
@@ -5494,34 +5553,10 @@ static char *hover_text_for_target(const FengLspAnalysisSession *session,
             }
             break;
         case FENG_LSP_RESOLVED_BINDING:
-            if (!string_append_cstr(&signature,
-                                    target->binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") ||
-                !string_append_bytes(&signature,
-                                     target->binding->name.data,
-                                     target->binding->name.length)) {
+            (void)program;
+            if (!binding_signature_to_string(&signature, session, target->binding)) {
                 string_dispose(&signature);
                 return NULL;
-            }
-            if (target->binding->type != NULL) {
-                if (!string_append_cstr(&signature, ": ") ||
-                    !type_ref_to_string(&signature, target->binding->type)) {
-                    string_dispose(&signature);
-                    return NULL;
-                }
-            } else {
-                /* Inferred type — resolve via the semantic type fact recorded
-                 * for the binding itself (keyed by FengBinding*). */
-                const FengDecl *inferred = owner_decl_from_binding(session, program, target->binding);
-
-                if (inferred != NULL) {
-                    FengSlice type_name = decl_name(inferred);
-
-                    if (!string_append_cstr(&signature, ": ") ||
-                        !string_append_bytes(&signature, type_name.data, type_name.length)) {
-                        string_dispose(&signature);
-                        return NULL;
-                    }
-                }
             }
             break;
         case FENG_LSP_RESOLVED_SELF:
