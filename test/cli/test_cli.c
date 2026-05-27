@@ -4786,19 +4786,20 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     stack_trace_text = build_dap_message_text(stack_trace_json);
     scopes_text = build_dap_message_text(scopes_json);
     variables_text = build_dap_message_text(variables_json);
-    input_text = dup_printf("%s%s%s%s%s",
+    input_text = dup_printf("%s%s%s%s",
                             initialize_text,
                             launch_text,
                             stack_trace_text,
-                            scopes_text,
-                            variables_text);
+                            scopes_text);
 
-    stdout_text = run_dap_capture_stdout_with_path(1,
-                                                   argv,
-                                                   input_text,
-                                                   path_value,
-                                                   &rc,
-                                                   &stderr_text);
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"command\":\"scopes\"",
+                                                               variables_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
     ASSERT(rc == 0);
     requests_text = read_text_file(requests_path);
     ASSERT(strstr(requests_text, "\"command\":\"stackTrace\"") != NULL);
@@ -4829,6 +4830,258 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     free(escaped_binary_path);
     free(path_value);
     free(backend_script);
+    free(backend_variables_text);
+    free(backend_variables_json);
+    free(backend_scopes_text);
+    free(backend_scopes_json);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Ensure top-level variables keep only user mappings and surface user-facing values. */
+static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x48U};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "    let answer = 42;\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_variables_filter_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *scopes_json;
+    char *variables_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *scopes_text;
+    char *variables_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_scopes_json;
+    char *backend_scopes_text;
+    char *backend_variables_json;
+    char *backend_variables_text;
+    char *escaped_backend_initialize_text;
+    char *escaped_backend_stack_trace_text;
+    char *escaped_backend_scopes_text;
+    char *escaped_backend_variables_text;
+    char *backend_script;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_param",
+                                                 "args",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "capture_cell",
+                                                 "captured",
+                                                 "(capture_cell->value)",
+                                                 FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
+    ASSERT(feng_codegen_maping_info_add_variable(&info,
+                                                 "demo_pkg_main_backend",
+                                                 "backend_local",
+                                                 "answer",
+                                                 NULL,
+                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
+    backend_scopes_text = build_dap_message_text(backend_scopes_json);
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"0x1000\",\"type\":\"string[]\",\"variablesReference\":23},{\"name\":\"capture_cell\",\"evaluateName\":\"capture_cell\",\"value\":\"0x2000\",\"type\":\"FengCaptureCell *\",\"variablesReference\":24},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"42\",\"type\":\"int\",\"variablesReference\":0},{\"name\":\"_old4\",\"evaluateName\":\"_old4\",\"value\":\"22\",\"type\":\"int\",\"variablesReference\":0}]}}");
+    backend_variables_text = build_dap_message_text(backend_variables_json);
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
+    escaped_backend_scopes_text = json_escape_text(backend_scopes_text);
+    escaped_backend_variables_text = json_escape_text(backend_variables_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const responses = {\n"
+                                "  initialize: \"%s\",\n"
+                                "  stackTrace: \"%s\",\n"
+                                "  scopes: \"%s\",\n"
+                                "  variables: \"%s\"\n"
+                                "};\n"
+                                "function frame(payload) {\n"
+                                "  return `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\\r\\n\\r\\n${payload}`;\n"
+                                "}\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "process.stdout.write(responses.initialize);\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  fs.writeFileSync(requestsPath, requests);\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') process.stdout.write(responses.stackTrace);\n"
+                                "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
+                                "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
+                                "    if (message.command === 'evaluate') {\n"
+                                "      const response = {\n"
+                                "        seq: 5,\n"
+                                "        type: 'response',\n"
+                                "        request_seq: message.seq,\n"
+                                "        success: true,\n"
+                                "        command: 'evaluate',\n"
+                                "        body: { result: 'captured-value', type: 'string', variablesReference: 0 }\n"
+                                "      };\n"
+                                "      process.stdout.write(frame(JSON.stringify(response)));\n"
+                                "      fs.writeFileSync(requestsPath, requests);\n"
+                                "      process.exit(0);\n"
+                                "    }\n"
+                                "  }\n"
+                                "});\n",
+                                requests_path,
+                                escaped_backend_initialize_text,
+                                escaped_backend_stack_trace_text,
+                                escaped_backend_scopes_text,
+                                escaped_backend_variables_text);
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
+    variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    scopes_text = build_dap_message_text(scopes_json);
+    variables_text = build_dap_message_text(variables_json);
+    input_text = dup_printf("%s%s%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text,
+                            scopes_text,
+                            variables_text);
+
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   path_value,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"variables\"") != NULL);
+    ASSERT(strstr(requests_text, "\"command\":\"evaluate\"") != NULL);
+    ASSERT(strstr(requests_text, "\"expression\":\"(capture_cell->value)\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"string[]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"captured\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"captured-value\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"type\":\"string\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"answer\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_param") == NULL);
+    ASSERT(strstr(stdout_text, "capture_cell") == NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"_old4\"") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(variables_text);
+    free(scopes_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(variables_json);
+    free(scopes_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(escaped_backend_variables_text);
+    free(escaped_backend_scopes_text);
+    free(escaped_backend_stack_trace_text);
+    free(escaped_backend_initialize_text);
     free(backend_variables_text);
     free(backend_variables_json);
     free(backend_scopes_text);
@@ -10658,6 +10911,7 @@ int main(void) {
     test_dap_rewrites_stack_trace_compiler_normalized_source_path();
     test_dap_hides_hidden_stack_trace_frames();
     test_dap_rewrites_variables_to_feng_names();
+    test_dap_filters_backend_variables_and_rewrites_user_values();
     test_dap_rewrites_identifier_evaluate_expression();
     test_dap_rewrites_phase5_evaluate_expression();
     test_dap_rejects_nonconstant_index_evaluate_expression();

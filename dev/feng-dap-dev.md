@@ -273,7 +273,7 @@
 - `.fd` 不复制源码映射表；源码定位继续以 `#line` + DWARF 为准。
 - `.fd` 可以包含极小的 `PKG_NAME -> local package root` 映射，但这只服务编辑器路径转换，不等于复制 line table。
 - `.fd` 不复制词法作用域树；当前激活 scope 继续以 LLDB 返回结果为准。
-- `.fd` 不复制完整类型图、显示规则库或成员布局数据库；首版优先复用 LLDB 已有值摘要与 children 枚举。
+- `.fd` 不复制完整类型图、显示规则库或成员布局数据库；首版仍优先复用 LLDB 已有 type / children 枚举,但当变量记录提供 `read_expr` 时,`feng dap` 必须优先使用该表达式回读展示值,而不是直接暴露 carrier 的原始值摘要。
 - `.fd` 不是独立的变量解析器；它只对 **LLDB 当前已经判定为可见** 的 backend variable 做确定性重写。
 - 若重写阶段出现 0 个候选或多个候选，`feng dap` 必须报错为“无法唯一确定绑定”，而不是猜一个继续执行。
 
@@ -370,6 +370,11 @@
   - `param` / `local` / `capture` / `self`。
 - `read_expr_strid`
   - 可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供一个最小后端读取表达式。
+
+补充运行时展示约束：
+
+- `variables` 响应只应保留当前 frame / scope 内 `.fd.VARS` 中声明过的用户变量；未映射的 backend 临时变量、carrier 变量和其他生成期名字默认不向编辑器暴露。
+- 若同一 backend variables 列表中某个变量命中了 `.fd.VARS` 记录，且该记录提供 `read_expr`，则 `feng dap` 应以 `evaluate` 回读该表达式的结果覆盖原始 `value` / `type` 摘要；回读失败时保留原始变量值，但不得因此把未映射 backend 变量一并泄露给编辑器。
 
 补充约束：
 
@@ -498,7 +503,7 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `backend_name -> display_name` 最小重写，`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `.fd` 白名单过滤与 `backend_name -> display_name` 重写，并在记录携带 `read_expr` 时优先以该表达式回读用户值，避免把 capture / self / 其他 carrier pointer 直接暴露给编辑器；`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
 
 #### `setBreakpoints`
 
@@ -519,8 +524,8 @@ VARS:
 
 - 作用域激活关系以 `lldb-dap` 返回结果为准，`.fd` 不再维护独立 scope 树。
 - `feng dap` 先拿当前 scope 下 **LLDB 实际返回的可见变量集合**，再依据当前 frame 的 `backend_symbol` 在 `.fd.variables` 中查找可重写条目。
-- 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名，不自行补推隐藏绑定。
-- 当前最小实现先覆盖普通 `backend_name -> display_name` 改名；遇到 `read_expr` 的特殊 carrier 仍作为后续子项补齐。
+- `variables` 只对白名单内命中的 backend 变量做重写并返回给编辑器，不自行补推隐藏绑定，也不把未映射 backend 临时变量继续透传。
+- 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名；若命中的记录提供 `read_expr`，则应优先用它回读用户值并覆盖 carrier 的原始 `value` / `type` 摘要。
 - 若当前可见集合在重写后对某个标识符出现 0 个候选或多个候选，`feng dap` 必须报错，不做猜测性绑定。
 
 #### `evaluate`

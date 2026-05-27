@@ -20,6 +20,7 @@
 #include "debug/debug.h"
 
 #define FENG_DAP_PROXY_BUFFER_CAPACITY 4096U
+#define FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE UINT64_C(1000000)
 
 typedef enum FengDapReadStatus {
     FENG_DAP_READ_OK = 0,
@@ -77,6 +78,16 @@ typedef struct FengDapPendingVariablesRequest {
     uint64_t variables_reference;
 } FengDapPendingVariablesRequest;
 
+/* One internally-evaluated user variable value override. */
+typedef struct FengDapEvaluatedVariable {
+    char *result;
+    char *type;
+    uint64_t variables_reference;
+    bool has_result;
+    bool has_type;
+    bool has_variables_reference;
+} FengDapEvaluatedVariable;
+
 /* Session-scoped relay state used by stack/variables rewrites. */
 typedef struct FengDapRelayState {
     FengDapFrameBinding *frame_bindings;
@@ -91,15 +102,27 @@ typedef struct FengDapRelayState {
     FengDapPendingVariablesRequest *pending_variables_requests;
     size_t pending_variables_request_count;
     size_t pending_variables_request_capacity;
+    uint64_t next_internal_request_seq;
 } FengDapRelayState;
 
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
 static char *proxy_dup_printf(const char *fmt, ...);
 static bool proxy_process_backend_relay_message(const FengDapMessage *message,
+                                                FengDapMessageReader *backend_reader,
+                                                int backend_stdin_fd,
                                                 int output_fd,
                                                 const FengDebugArtifact *artifact,
                                                 FengDapRelayState *state,
                                                 int error_fd);
+
+static void proxy_evaluated_variable_dispose(FengDapEvaluatedVariable *value) {
+    if (value == NULL) {
+        return;
+    }
+    free(value->result);
+    free(value->type);
+    memset(value, 0, sizeof(*value));
+}
 
 static void proxy_relay_state_dispose(FengDapRelayState *state) {
     size_t index;
@@ -335,6 +358,23 @@ static bool proxy_relay_state_take_pending_variables_request(FengDapRelayState *
         }
     }
     return false;
+}
+
+static uint64_t proxy_relay_state_next_internal_request_seq(FengDapRelayState *state) {
+    uint64_t next_seq;
+
+    if (state == NULL) {
+        return FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE;
+    }
+    if (state->next_internal_request_seq < FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE) {
+        state->next_internal_request_seq = FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE;
+    }
+    next_seq = state->next_internal_request_seq;
+    state->next_internal_request_seq += 1U;
+    if (state->next_internal_request_seq == 0U) {
+        state->next_internal_request_seq = FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE;
+    }
+    return next_seq;
 }
 
 /* Emit a proxy error message to the selected stderr fd. */
@@ -3310,10 +3350,482 @@ static bool proxy_record_scopes_response_bindings(const char *json,
     return true;
 }
 
-/* Rewrite variables response names using .fd backend_name -> display_name mappings. */
+static bool proxy_json_value_looks_pointer(const char *value) {
+    size_t index;
+
+    if (value == NULL || value[0] != '0' || (value[1] != 'x' && value[1] != 'X') || value[2] == '\0') {
+        return false;
+    }
+    for (index = 2U; value[index] != '\0'; ++index) {
+        if (!isxdigit((unsigned char)value[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool proxy_replace_object_string_member(char **json,
+                                               const char *key,
+                                               const char *replacement,
+                                               bool *out_replaced,
+                                               int error_fd,
+                                               const char *context) {
+    const char *value_start;
+    const char *value_end;
+    FengDapJsonStringReplacement span = {0};
+    char *replacement_copy = NULL;
+    char *rewritten = NULL;
+    size_t json_length;
+
+    if (out_replaced != NULL) {
+        *out_replaced = false;
+    }
+    if (json == NULL || *json == NULL || key == NULL || replacement == NULL) {
+        proxy_report_error(error_fd, context, "invalid JSON string member replacement");
+        return false;
+    }
+    json_length = strlen(*json);
+    if (!proxy_json_find_object_member_loose(*json, json_length, key, &value_start, &value_end)) {
+        return true;
+    }
+    replacement_copy = proxy_dup_printf("%s", replacement);
+    if (replacement_copy == NULL) {
+        proxy_report_error(error_fd, context, "out of memory");
+        return false;
+    }
+    span.start_offset = (size_t)(value_start - *json);
+    span.end_offset = (size_t)(value_end - *json);
+    span.replacement = replacement_copy;
+    if (!proxy_apply_json_string_replacements(*json,
+                                              json_length,
+                                              &span,
+                                              1U,
+                                              &rewritten,
+                                              error_fd,
+                                              context)) {
+        free(replacement_copy);
+        return false;
+    }
+    free(replacement_copy);
+    free(*json);
+    *json = rewritten;
+    if (out_replaced != NULL) {
+        *out_replaced = true;
+    }
+    return true;
+}
+
+static bool proxy_replace_object_u64_member(char **json,
+                                            const char *key,
+                                            uint64_t replacement,
+                                            bool *out_replaced,
+                                            int error_fd,
+                                            const char *context) {
+    const char *value_start;
+    const char *value_end;
+    char *replacement_text = NULL;
+    char *rewritten = NULL;
+    size_t json_length;
+
+    if (out_replaced != NULL) {
+        *out_replaced = false;
+    }
+    if (json == NULL || *json == NULL || key == NULL) {
+        proxy_report_error(error_fd, context, "invalid JSON number member replacement");
+        return false;
+    }
+    json_length = strlen(*json);
+    if (!proxy_json_find_object_member_loose(*json, json_length, key, &value_start, &value_end)) {
+        return true;
+    }
+    replacement_text = proxy_dup_printf("%llu", (unsigned long long)replacement);
+    if (replacement_text == NULL) {
+        proxy_report_error(error_fd, context, "out of memory");
+        return false;
+    }
+    if (!proxy_replace_json_span(*json,
+                                 json_length,
+                                 (size_t)(value_start - *json),
+                                 (size_t)(value_end - *json),
+                                 replacement_text,
+                                 &rewritten,
+                                 error_fd,
+                                 context)) {
+        free(replacement_text);
+        return false;
+    }
+    free(replacement_text);
+    free(*json);
+    *json = rewritten;
+    if (out_replaced != NULL) {
+        *out_replaced = true;
+    }
+    return true;
+}
+
+static bool proxy_parse_evaluated_variable_response_payload(const char *json,
+                                                            size_t json_length,
+                                                            FengDapEvaluatedVariable *out_value) {
+    const char *body_start;
+    const char *body_end;
+    const char *result_start;
+    const char *result_end;
+    const char *type_start;
+    const char *type_end;
+    const char *after_string;
+
+    if (out_value == NULL) {
+        return false;
+    }
+    proxy_evaluated_variable_dispose(out_value);
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "body",
+                                             &body_start,
+                                             &body_end)) {
+        return true;
+    }
+    if (proxy_json_find_object_member_loose(body_start,
+                                            (size_t)(body_end - body_start),
+                                            "result",
+                                            &result_start,
+                                            &result_end)) {
+        if (!proxy_json_parse_string_copy(result_start, result_end, &out_value->result, &after_string) ||
+            proxy_json_skip_whitespace(after_string, result_end) != result_end) {
+            return false;
+        }
+        out_value->has_result = true;
+    }
+    if (proxy_json_find_object_member_loose(body_start,
+                                            (size_t)(body_end - body_start),
+                                            "type",
+                                            &type_start,
+                                            &type_end)) {
+        if (!proxy_json_parse_string_copy(type_start, type_end, &out_value->type, &after_string) ||
+            proxy_json_skip_whitespace(after_string, type_end) != type_end) {
+            return false;
+        }
+        out_value->has_type = true;
+    }
+    if (proxy_json_get_u64_member_loose(body_start,
+                                        (size_t)(body_end - body_start),
+                                        "variablesReference",
+                                        &out_value->variables_reference)) {
+        out_value->has_variables_reference = true;
+    }
+    return true;
+}
+
+static bool proxy_send_internal_evaluate_request(int backend_stdin_fd,
+                                                 FengDapRelayState *state,
+                                                 uint64_t frame_id,
+                                                 const char *expression,
+                                                 uint64_t *out_request_seq,
+                                                 int error_fd) {
+    uint64_t request_seq;
+    char *escaped_expression = NULL;
+    char *payload = NULL;
+    bool ok;
+
+    if (backend_stdin_fd < 0 || expression == NULL || out_request_seq == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal evaluate request",
+                           "invalid evaluate request arguments");
+        return false;
+    }
+    request_seq = proxy_relay_state_next_internal_request_seq(state);
+    escaped_expression = proxy_json_escape(expression);
+    if (escaped_expression == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal evaluate request",
+                           "out of memory");
+        return false;
+    }
+    payload = proxy_dup_printf(
+        "{\"seq\":%llu,\"type\":\"request\",\"command\":\"evaluate\",\"arguments\":{\"expression\":\"%s\",\"frameId\":%llu,\"context\":\"variables\"}}",
+        (unsigned long long)request_seq,
+        escaped_expression,
+        (unsigned long long)frame_id);
+    free(escaped_expression);
+    if (payload == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal evaluate request",
+                           "out of memory");
+        return false;
+    }
+    ok = proxy_write_message(backend_stdin_fd,
+                             payload,
+                             error_fd,
+                             "failed to send internal evaluate request to lldb-dap");
+    free(payload);
+    if (!ok) {
+        return false;
+    }
+    *out_request_seq = request_seq;
+    return true;
+}
+
+static bool proxy_collect_internal_evaluate_response(FengDapMessageReader *backend_reader,
+                                                     int backend_stdin_fd,
+                                                     int output_fd,
+                                                     const FengDebugArtifact *artifact,
+                                                     FengDapRelayState *state,
+                                                     uint64_t request_seq,
+                                                     FengDapEvaluatedVariable *out_value,
+                                                     int error_fd) {
+    for (;;) {
+        FengDapMessage message = {0};
+        FengDapReadStatus status;
+        char *type = NULL;
+        char *command = NULL;
+        uint64_t response_seq = 0U;
+        bool is_match = false;
+        bool success = false;
+        bool ok = true;
+
+        status = proxy_reader_read_message(backend_reader, &message, error_fd);
+        if (status != FENG_DAP_READ_OK) {
+            proxy_message_dispose(&message);
+            return false;
+        }
+
+        if (proxy_json_get_string_member(message.payload,
+                                         message.payload_length,
+                                         "type",
+                                         &type) &&
+            proxy_json_get_string_member(message.payload,
+                                         message.payload_length,
+                                         "command",
+                                         &command) &&
+            proxy_json_get_u64_member(message.payload,
+                                      message.payload_length,
+                                      "request_seq",
+                                      &response_seq) &&
+            strcmp(type, "response") == 0 &&
+            strcmp(command, "evaluate") == 0 &&
+            response_seq == request_seq) {
+            is_match = true;
+            if (proxy_json_get_bool_member(message.payload,
+                                           message.payload_length,
+                                           "success",
+                                           &success) &&
+                success) {
+                ok = proxy_parse_evaluated_variable_response_payload(message.payload,
+                                                                    message.payload_length,
+                                                                    out_value);
+            }
+        }
+
+        if (is_match) {
+            free(type);
+            free(command);
+            proxy_message_dispose(&message);
+            return ok;
+        }
+
+        ok = proxy_process_backend_relay_message(&message,
+                                                 backend_reader,
+                                                 backend_stdin_fd,
+                                                 output_fd,
+                                                 artifact,
+                                                 state,
+                                                 error_fd);
+        free(type);
+        free(command);
+        proxy_message_dispose(&message);
+        if (!ok) {
+            return false;
+        }
+    }
+}
+
+static bool proxy_rewrite_one_variable_payload(const char *variable_json,
+                                               size_t variable_json_length,
+                                               const char *backend_name,
+                                               const FengCodegenMapingVariableRecord *record,
+                                               FengDapMessageReader *backend_reader,
+                                               int backend_stdin_fd,
+                                               int output_fd,
+                                               const FengDebugArtifact *artifact,
+                                               FengDapRelayState *state,
+                                               uint64_t frame_id,
+                                               char **out_json,
+                                               bool *out_changed,
+                                               int error_fd) {
+    char *current_json = NULL;
+    char *evaluate_name = NULL;
+    char *value_text = NULL;
+    char *type_text = NULL;
+    FengDapEvaluatedVariable evaluated = {0};
+    uint64_t variables_reference = 0U;
+    bool changed = false;
+    bool replaced = false;
+    bool ok = false;
+
+    if (out_json != NULL) {
+        *out_json = NULL;
+    }
+    if (out_changed != NULL) {
+        *out_changed = false;
+    }
+    current_json = proxy_dup_bytes((const unsigned char *)variable_json, variable_json_length);
+    if (current_json == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to rewrite variables response",
+                           "out of memory");
+        goto cleanup;
+    }
+
+    if (record != NULL &&
+        record->display_name != NULL &&
+        backend_name != NULL &&
+        strcmp(record->display_name, backend_name) != 0) {
+        if (!proxy_replace_object_string_member(&current_json,
+                                                "name",
+                                                record->display_name,
+                                                &replaced,
+                                                error_fd,
+                                                "failed to rewrite variables response")) {
+            goto cleanup;
+        }
+        changed = changed || replaced;
+
+        if (proxy_json_get_string_member_loose(current_json,
+                                               strlen(current_json),
+                                               "evaluateName",
+                                               &evaluate_name) &&
+            strcmp(evaluate_name, backend_name) == 0) {
+            if (!proxy_replace_object_string_member(&current_json,
+                                                    "evaluateName",
+                                                    record->display_name,
+                                                    &replaced,
+                                                    error_fd,
+                                                    "failed to rewrite variables response")) {
+                goto cleanup;
+            }
+            changed = changed || replaced;
+        }
+        free(evaluate_name);
+        evaluate_name = NULL;
+    }
+
+    if (record != NULL &&
+        record->read_expr != NULL &&
+        record->read_expr[0] != '\0' &&
+        frame_id != 0U) {
+        uint64_t request_seq = 0U;
+
+        if (!proxy_send_internal_evaluate_request(backend_stdin_fd,
+                                                  state,
+                                                  frame_id,
+                                                  record->read_expr,
+                                                  &request_seq,
+                                                  error_fd) ||
+            !proxy_collect_internal_evaluate_response(backend_reader,
+                                                      backend_stdin_fd,
+                                                      output_fd,
+                                                      artifact,
+                                                      state,
+                                                      request_seq,
+                                                      &evaluated,
+                                                      error_fd)) {
+            goto cleanup;
+        }
+        if (evaluated.has_result) {
+            if (!proxy_replace_object_string_member(&current_json,
+                                                    "value",
+                                                    evaluated.result,
+                                                    &replaced,
+                                                    error_fd,
+                                                    "failed to rewrite variables response")) {
+                goto cleanup;
+            }
+            changed = changed || replaced;
+        }
+        if (evaluated.has_type) {
+            if (!proxy_replace_object_string_member(&current_json,
+                                                    "type",
+                                                    evaluated.type,
+                                                    &replaced,
+                                                    error_fd,
+                                                    "failed to rewrite variables response")) {
+                goto cleanup;
+            }
+            changed = changed || replaced;
+        }
+        if (evaluated.has_variables_reference) {
+            if (!proxy_replace_object_u64_member(&current_json,
+                                                 "variablesReference",
+                                                 evaluated.variables_reference,
+                                                 &replaced,
+                                                 error_fd,
+                                                 "failed to rewrite variables response")) {
+                goto cleanup;
+            }
+            changed = changed || replaced;
+        }
+    }
+
+    if (record != NULL &&
+        !evaluated.has_result &&
+        proxy_json_get_string_member_loose(current_json,
+                                           strlen(current_json),
+                                           "value",
+                                           &value_text) &&
+        proxy_json_get_u64_member_loose(current_json,
+                                        strlen(current_json),
+                                        "variablesReference",
+                                        &variables_reference) &&
+        variables_reference != 0U &&
+        proxy_json_get_string_member_loose(current_json,
+                                           strlen(current_json),
+                                           "type",
+                                           &type_text) &&
+        type_text[0] != '\0' &&
+        proxy_json_value_looks_pointer(value_text)) {
+        if (!proxy_replace_object_string_member(&current_json,
+                                                "value",
+                                                type_text,
+                                                &replaced,
+                                                error_fd,
+                                                "failed to rewrite variables response")) {
+            goto cleanup;
+        }
+        changed = changed || replaced;
+    }
+
+    if (!changed) {
+        ok = true;
+        goto cleanup;
+    }
+
+    if (out_json != NULL) {
+        *out_json = current_json;
+        current_json = NULL;
+    }
+    if (out_changed != NULL) {
+        *out_changed = true;
+    }
+    ok = true;
+
+cleanup:
+    free(current_json);
+    free(evaluate_name);
+    free(value_text);
+    free(type_text);
+    proxy_evaluated_variable_dispose(&evaluated);
+    return ok;
+}
+
+/* Rewrite top-level scope variables to keep only user mappings and surface user values. */
 static bool proxy_rewrite_variables_response_payload(const char *json,
                                                      size_t json_length,
+                                                     FengDapMessageReader *backend_reader,
+                                                     int backend_stdin_fd,
+                                                     int output_fd,
                                                      const FengDebugArtifact *artifact,
+                                                     FengDapRelayState *state,
+                                                     uint64_t frame_id,
                                                      const char *frame_backend_symbol,
                                                      char **out_json,
                                                      int error_fd) {
@@ -3322,9 +3834,12 @@ static bool proxy_rewrite_variables_response_payload(const char *json,
     const char *variables_start;
     const char *variables_end;
     const char *cursor;
-    FengDapJsonStringReplacement *replacements = NULL;
-    size_t replacement_count = 0U;
-    size_t replacement_capacity = 0U;
+    char *rewritten_variables = NULL;
+    size_t rewritten_variables_length = 0U;
+    size_t rewritten_variables_capacity = 0U;
+    size_t visible_variable_count = 0U;
+    bool variables_changed = false;
+    char *payload_with_variables = NULL;
     bool ok = false;
 
     *out_json = NULL;
@@ -3347,86 +3862,112 @@ static bool proxy_rewrite_variables_response_payload(const char *json,
     if (cursor >= variables_end || *cursor != '[') {
         return true;
     }
+    if (!proxy_append_byte(&rewritten_variables,
+                           &rewritten_variables_length,
+                           &rewritten_variables_capacity,
+                           '[')) {
+        proxy_report_error(error_fd,
+                           "failed to rewrite variables response",
+                           "out of memory");
+        goto cleanup;
+    }
 
     cursor = proxy_json_skip_whitespace(cursor + 1, variables_end);
     while (cursor < variables_end && *cursor != ']') {
         const char *variable_start = cursor;
         const char *variable_end;
-        const char *name_start;
-        const char *name_end;
-        const char *evaluate_name_start;
-        const char *evaluate_name_end;
-        const char *after_string;
         const FengCodegenMapingVariableRecord *record = NULL;
         char *backend_name = NULL;
-        char *evaluate_name = NULL;
+        char *variable_json = NULL;
+        char *rewritten_variable_json = NULL;
+        const char *visible_variable_json;
+        size_t variable_json_length;
+        bool variable_changed = false;
 
         if (!proxy_json_skip_value(variable_start, variables_end, &variable_end)) {
             ok = true;
             goto cleanup;
         }
-        if (proxy_json_find_object_member_loose(variable_start,
-                                                (size_t)(variable_end - variable_start),
-                                                "name",
-                                                &name_start,
-                                                &name_end) &&
-            proxy_json_parse_string_copy(name_start, name_end, &backend_name, &after_string) &&
-            proxy_json_skip_whitespace(after_string, name_end) == name_end) {
-            record = proxy_find_variable_record(artifact, frame_backend_symbol, backend_name);
-            if (record != NULL &&
-                record->display_name != NULL &&
-                strcmp(record->display_name, backend_name) != 0) {
-                char *display_name = proxy_dup_printf("%s", record->display_name);
-
-                if (display_name == NULL ||
-                    !proxy_insert_json_string_replacement(&replacements,
-                                                          &replacement_count,
-                                                          &replacement_capacity,
-                                                          (size_t)(name_start - json),
-                                                          (size_t)(name_end - json),
-                                                          display_name)) {
-                    free(display_name);
-                    free(backend_name);
-                    free(evaluate_name);
-                    proxy_report_error(error_fd,
-                                       "failed to rewrite variables response",
-                                       "out of memory");
-                    goto cleanup;
-                }
-                if (proxy_json_find_object_member_loose(variable_start,
-                                                        (size_t)(variable_end - variable_start),
-                                                        "evaluateName",
-                                                        &evaluate_name_start,
-                                                        &evaluate_name_end) &&
-                    proxy_json_parse_string_copy(evaluate_name_start,
-                                                 evaluate_name_end,
-                                                 &evaluate_name,
-                                                 &after_string) &&
-                    proxy_json_skip_whitespace(after_string, evaluate_name_end) ==
-                        evaluate_name_end &&
-                    strcmp(evaluate_name, backend_name) == 0) {
-                    char *display_evaluate_name = proxy_dup_printf("%s", record->display_name);
-
-                    if (display_evaluate_name == NULL ||
-                        !proxy_insert_json_string_replacement(&replacements,
-                                                              &replacement_count,
-                                                              &replacement_capacity,
-                                                              (size_t)(evaluate_name_start - json),
-                                                              (size_t)(evaluate_name_end - json),
-                                                              display_evaluate_name)) {
-                        free(display_evaluate_name);
-                        free(backend_name);
-                        free(evaluate_name);
-                        proxy_report_error(error_fd,
-                                           "failed to rewrite variables response",
-                                           "out of memory");
-                        goto cleanup;
-                    }
-                }
-            }
+        variable_json_length = (size_t)(variable_end - variable_start);
+        variable_json = proxy_dup_bytes((const unsigned char *)variable_start, variable_json_length);
+        if (variable_json == NULL) {
+            proxy_report_error(error_fd,
+                               "failed to rewrite variables response",
+                               "out of memory");
+            goto cleanup;
         }
+        if (proxy_json_get_string_member_loose(variable_json,
+                                               variable_json_length,
+                                               "name",
+                                               &backend_name)) {
+            record = proxy_find_variable_record(artifact, frame_backend_symbol, backend_name);
+        }
+        if (record == NULL) {
+            variables_changed = true;
+            free(variable_json);
+            free(backend_name);
+            cursor = proxy_json_skip_whitespace(variable_end, variables_end);
+            if (cursor < variables_end && *cursor == ',') {
+                cursor = proxy_json_skip_whitespace(cursor + 1, variables_end);
+                continue;
+            }
+            if (cursor < variables_end && *cursor == ']') {
+                break;
+            }
+            ok = true;
+            goto cleanup;
+        }
+        if (!proxy_rewrite_one_variable_payload(variable_start,
+                                                variable_json_length,
+                                                backend_name,
+                                                record,
+                                                backend_reader,
+                                                backend_stdin_fd,
+                                                output_fd,
+                                                artifact,
+                                                state,
+                                                frame_id,
+                                                &rewritten_variable_json,
+                                                &variable_changed,
+                                                error_fd)) {
+            free(variable_json);
+            free(backend_name);
+            free(rewritten_variable_json);
+            goto cleanup;
+        }
+        variables_changed = variables_changed || variable_changed;
+        visible_variable_json = rewritten_variable_json != NULL ? rewritten_variable_json : variable_json;
+        if (visible_variable_count > 0U &&
+            !proxy_append_byte(&rewritten_variables,
+                               &rewritten_variables_length,
+                               &rewritten_variables_capacity,
+                               ',')) {
+            free(variable_json);
+            free(backend_name);
+            free(rewritten_variable_json);
+            proxy_report_error(error_fd,
+                               "failed to rewrite variables response",
+                               "out of memory");
+            goto cleanup;
+        }
+        if (!proxy_append_bytes(&rewritten_variables,
+                                &rewritten_variables_length,
+                                &rewritten_variables_capacity,
+                                visible_variable_json,
+                                strlen(visible_variable_json))) {
+            free(variable_json);
+            free(backend_name);
+            free(rewritten_variable_json);
+            proxy_report_error(error_fd,
+                               "failed to rewrite variables response",
+                               "out of memory");
+            goto cleanup;
+        }
+        visible_variable_count += 1U;
+        free(variable_json);
         free(backend_name);
-        free(evaluate_name);
+        free(rewritten_variable_json);
+
         cursor = proxy_json_skip_whitespace(variable_end, variables_end);
         if (cursor < variables_end && *cursor == ',') {
             cursor = proxy_json_skip_whitespace(cursor + 1, variables_end);
@@ -3439,24 +3980,50 @@ static bool proxy_rewrite_variables_response_payload(const char *json,
         goto cleanup;
     }
 
-    if (!proxy_apply_json_string_replacements(json,
-                                              json_length,
-                                              replacements,
-                                              replacement_count,
-                                              out_json,
-                                              error_fd,
-                                              "failed to rewrite variables response")) {
+    if (!proxy_append_byte(&rewritten_variables,
+                           &rewritten_variables_length,
+                           &rewritten_variables_capacity,
+                           ']') ||
+        !proxy_append_byte(&rewritten_variables,
+                           &rewritten_variables_length,
+                           &rewritten_variables_capacity,
+                           '\0')) {
+        proxy_report_error(error_fd,
+                           "failed to rewrite variables response",
+                           "out of memory");
         goto cleanup;
     }
+    rewritten_variables[rewritten_variables_length - 1U] = '\0';
+
+    if (!variables_changed) {
+        ok = true;
+        goto cleanup;
+    }
+
+    if (!proxy_replace_json_span(json,
+                                 json_length,
+                                 (size_t)(variables_start - json),
+                                 (size_t)(variables_end - json),
+                                 rewritten_variables,
+                                 &payload_with_variables,
+                                 error_fd,
+                                 "failed to rewrite variables response")) {
+        goto cleanup;
+    }
+
+    *out_json = payload_with_variables;
+    payload_with_variables = NULL;
     ok = true;
 
 cleanup:
-    proxy_json_string_replacements_dispose(replacements, replacement_count);
+    free(rewritten_variables);
+    free(payload_with_variables);
     return ok;
 }
 
 /* Drain any already-ready backend messages so dependent client rewrites see fresh state. */
 static bool proxy_drain_ready_backend_messages(FengDapMessageReader *backend_reader,
+                                               int backend_stdin_fd,
                                                int output_fd,
                                                const FengDebugArtifact *artifact,
                                                FengDapRelayState *state,
@@ -3477,6 +4044,8 @@ static bool proxy_drain_ready_backend_messages(FengDapMessageReader *backend_rea
             return false;
         }
         ok = proxy_process_backend_relay_message(&message,
+                            backend_reader,
+                            backend_stdin_fd,
                                                 output_fd,
                                                 artifact,
                                                 state,
@@ -3608,6 +4177,7 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
     }
     if (is_evaluate) {
         if (!proxy_drain_ready_backend_messages(backend_reader,
+                                                backend_stdin_fd,
                                                 output_fd,
                                                 artifact,
                                                 state,
@@ -3681,6 +4251,8 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
 
 /* Forward one backend message to the editor, rewriting stackTrace source paths when needed. */
 static bool proxy_process_backend_relay_message(const FengDapMessage *message,
+                                                FengDapMessageReader *backend_reader,
+                                                int backend_stdin_fd,
                                                 int output_fd,
                                                 const FengDebugArtifact *artifact,
                                                 FengDapRelayState *state,
@@ -3760,7 +4332,12 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
             if (frame_backend_symbol != NULL &&
                 !proxy_rewrite_variables_response_payload(message->payload,
                                                           message->payload_length,
+                                                          backend_reader,
+                                                          backend_stdin_fd,
+                                                          output_fd,
                                                           artifact,
+                                                          state,
+                                                          frame_id,
                                                           frame_backend_symbol,
                                                           &rewritten_payload,
                                                           error_fd)) {
@@ -3819,6 +4396,8 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
                                                                 error_fd);
         if (backend_status == FENG_DAP_READ_OK) {
             bool ok = proxy_process_backend_relay_message(&message,
+                                                          backend_reader,
+                                                          backend_stdin_fd,
                                                           output_fd,
                                                           artifact,
                                                           state,
@@ -3827,6 +4406,12 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
             proxy_message_dispose(&message);
             if (!ok) {
                 return false;
+            }
+            if (!backend_stdin_closed &&
+                client_reader->reached_eof &&
+                (state == NULL || state->pending_variables_request_count == 0U)) {
+                close(backend_stdin_fd);
+                backend_stdin_closed = true;
             }
             continue;
         }
@@ -3862,7 +4447,9 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
             }
             return false;
         }
-        if (client_status == FENG_DAP_READ_EOF && !backend_stdin_closed) {
+        if (client_status == FENG_DAP_READ_EOF &&
+            !backend_stdin_closed &&
+            (state == NULL || state->pending_variables_request_count == 0U)) {
             close(backend_stdin_fd);
             backend_stdin_closed = true;
         }
