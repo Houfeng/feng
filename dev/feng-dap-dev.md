@@ -514,6 +514,8 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - 当 `proxy_rewrite_one_variable_payload` 发现变量可展开时，分配 synthetic ref 并写回 JSON 的 `variablesReference` 字段。
 - 当 client 发送 `variables` 请求且 `variablesReference` 命中 synthetic ref 时，`proxy_process_client_relay_message` 拦截该请求并直接合成响应，不转发给 LLDB。
 - 当 client 发送 `continue` / step 类会恢复执行的请求时，当前 stopped 上下文失效；代理层清理 frame bindings、scope bindings、pending variables 与 synthetic refs，旧 synthetic ref 后续请求返回本地失败响应，不再触发旧 frame 的 internal evaluate。`next_synthetic_ref` 保持单调递增，避免新旧 ref ID 复用。
+- 恢复执行后到新一轮 `scopes` response 建立 scope bindings 前，client 若复用上一轮的非 synthetic `variablesReference`（例如展开过的 Globals scope ref），代理层返回本地失败响应，不转发给 LLDB；恢复执行前已转发但未完成的旧 variables 请求会先向 client 返回失败，并记录 request seq，后续迟到的 LLDB variables response 直接吞掉，避免旧 stopped 数据污染新一轮停顿。
+- `variables` response 重写期间可能嵌套触发多个 proxy-internal `evaluate` 请求；代理层按 internal request seq 缓存乱序抵达的 evaluate response，确保外层等待者不会被内层 collect 消费掉响应。
 
 #### 5.10.3 数组元素展开
 

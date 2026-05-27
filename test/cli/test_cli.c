@@ -1051,6 +1051,108 @@ static char *run_dap_interactive_capture_stdout_with_path(int argc,
     return captured_stdout;
 }
 
+static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
+                                                                   char **argv,
+                                                                   const char *initial_input,
+                                                                   const char *first_wait_text,
+                                                                   const char *first_followup_input,
+                                                                   const char *second_wait_text,
+                                                                   const char *second_followup_input,
+                                                                   const char *path_value,
+                                                                   int *out_rc,
+                                                                   char **out_stderr) {
+    int input_pipe[2];
+    int output_pipe[2];
+    int error_pipe[2];
+    const char *existing_path = getenv("PATH");
+    char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    size_t initial_length = initial_input != NULL ? strlen(initial_input) : 0U;
+    size_t first_followup_length = first_followup_input != NULL ? strlen(first_followup_input) : 0U;
+    size_t second_followup_length = second_followup_input != NULL ? strlen(second_followup_input) : 0U;
+    char *captured_first;
+    char *captured_second;
+    char *captured_suffix;
+    char *captured_stdout;
+    char *captured_stderr;
+    pid_t child;
+    int status;
+
+    ASSERT(pipe(input_pipe) == 0);
+    ASSERT(pipe(output_pipe) == 0);
+    ASSERT(pipe(error_pipe) == 0);
+    if (path_value != NULL) {
+        ASSERT(setenv("PATH", path_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+
+    child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        int rc;
+
+        ASSERT(dup2(input_pipe[0], STDIN_FILENO) >= 0);
+        ASSERT(dup2(output_pipe[1], STDOUT_FILENO) >= 0);
+        ASSERT(dup2(error_pipe[1], STDERR_FILENO) >= 0);
+        close(input_pipe[0]);
+        close(input_pipe[1]);
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        close(error_pipe[0]);
+        close(error_pipe[1]);
+        rc = feng_cli_dap_main("feng", argc, argv);
+        _exit(rc);
+    }
+
+    close(input_pipe[0]);
+    close(output_pipe[1]);
+    close(error_pipe[1]);
+    if (initial_length > 0U) {
+        ASSERT(write(input_pipe[1], initial_input, initial_length) == (ssize_t)initial_length);
+    }
+    captured_first = first_wait_text != NULL
+                         ? read_fd_until_contains(output_pipe[0], first_wait_text)
+                         : dup_cstr("");
+    if (first_followup_length > 0U) {
+        ASSERT(write(input_pipe[1], first_followup_input, first_followup_length) ==
+               (ssize_t)first_followup_length);
+    }
+    captured_second = second_wait_text != NULL
+                          ? read_fd_until_contains(output_pipe[0], second_wait_text)
+                          : dup_cstr("");
+    if (second_followup_length > 0U) {
+        ASSERT(write(input_pipe[1], second_followup_input, second_followup_length) ==
+               (ssize_t)second_followup_length);
+    }
+    close(input_pipe[1]);
+
+    captured_suffix = read_fd_to_string(output_pipe[0]);
+    close(output_pipe[0]);
+    captured_stdout = concat_owned_strings(captured_first, captured_second);
+    captured_stdout = concat_owned_strings(captured_stdout, captured_suffix);
+    captured_stderr = read_fd_to_string(error_pipe[0]);
+    close(error_pipe[0]);
+
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFEXITED(status));
+    if (saved_path != NULL) {
+        ASSERT(setenv("PATH", saved_path, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+    free(saved_path);
+
+    if (out_rc != NULL) {
+        *out_rc = WEXITSTATUS(status);
+    }
+    if (out_stderr != NULL) {
+        *out_stderr = captured_stderr;
+    } else {
+        free(captured_stderr);
+    }
+    return captured_stdout;
+}
+
 static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
     int saved_stderr;
     FILE *errors = tmpfile();
@@ -4438,6 +4540,7 @@ static void test_dap_rewrites_stack_trace_compiler_normalized_source_path(void) 
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
     static const char *kSourceText =
         "mod demo.pkg;\n"
+        "let TEST_NAME: string = \"hello_world\";\n"
         "fn main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_stacktrace_uri_variant_XXXXXX";
@@ -5933,8 +6036,10 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     char *stack_trace_json;
     char *scopes_json;
     char *variables_json;
+    char *globals_json;
     char *continue_json;
     char *stale_synthetic_json;
+    char *stale_globals_json;
     char *second_stack_trace_json;
     char *second_scopes_json;
     char *second_variables_json;
@@ -5943,8 +6048,10 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     char *stack_trace_text;
     char *scopes_text;
     char *variables_text;
+    char *globals_text;
     char *continue_text;
     char *stale_synthetic_text;
+    char *stale_globals_text;
     char *second_stack_trace_text;
     char *second_scopes_text;
     char *second_variables_text;
@@ -5963,6 +6070,7 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     char *argv[] = { "--stdio" };
     FengCodegenMapingInfo info = {0};
     FengCodegenMapingSourceMapping sources[1];
+    const char *continue_pos;
     int rc;
 
     workspace_dir = mkdtemp(template_path);
@@ -5997,6 +6105,14 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
         &info,
         "demo_pkg_main_backend",
+        "backend_global",
+        "TEST_NAME",
+        NULL,
+        "string",
+        FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
         "backend_i",
         "i",
         NULL,
@@ -6028,7 +6144,9 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                 "function writeMessage(message) { process.stdout.write(frame(JSON.stringify(message))); }\n"
                                 "function writeVariables(message) {\n"
                                 "  const ref = message.arguments && message.arguments.variablesReference;\n"
-                                "  const variables = ref === 102 ? [\n"
+                                "  const variables = ref === 202 || ref === 204 ? [\n"
+                                "    { name: 'backend_global', evaluateName: 'backend_global', value: '0x3000', type: 'FengString *', variablesReference: 24 }\n"
+                                "  ] : ref === 102 ? [\n"
                                 "    { name: 'backend_param', evaluateName: 'backend_param', value: '0x1000', type: 'FengArray *', variablesReference: 23 },\n"
                                 "    { name: 'backend_i', evaluateName: 'backend_i', value: '1', type: 'int64_t', variablesReference: 0 }\n"
                                 "  ] : [\n"
@@ -6059,7 +6177,8 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                 "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'stackTrace', body: { stackFrames: [{ id: frameId, name: 'demo_pkg_main_backend', source: { name: 'main.ff', path: 'demo.pkg://main.ff' }, line, column: 1 }], totalFrames: 1 } });\n"
                                 "    } else if (message.command === 'scopes') {\n"
                                 "      const scopeRef = message.arguments && message.arguments.frameId === 8 ? 102 : 101;\n"
-                                "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'scopes', body: { scopes: [{ name: 'Locals', variablesReference: scopeRef, expensive: false }] } });\n"
+                                "      const globalsRef = message.arguments && message.arguments.frameId === 8 ? 204 : 202;\n"
+                                "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'scopes', body: { scopes: [{ name: 'Locals', variablesReference: scopeRef, expensive: false }, { name: 'Globals', variablesReference: globalsRef, expensive: false }] } });\n"
                                 "    } else if (message.command === 'variables') {\n"
                                 "      writeVariables(message);\n"
                                 "    } else if (message.command === 'continue') {\n"
@@ -6072,6 +6191,8 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                      "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                      "      if (expression === 'backend_param') {\n"
                                      "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
+                                     "      } else if (expression === 'backend_global') {\n"
+                                     "        body = { result: '0x3000', type: 'FengString *', variablesReference: 24 };\n"
                                      "      } else if (expression === 'backend_i') {\n"
                                      "        body = { result: '1', type: 'int64_t', variablesReference: 0 };\n"
                                      "      } else if (expression === '(size_t)feng_array_length((const FengArray *)(backend_param))') {\n"
@@ -6080,6 +6201,8 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                      "        body = { result: '0x2000', type: 'FengString *', variablesReference: 0 };\n"
                                      "      } else if (expression === '(const char *)feng_string_data((const FengString *)(((FengString * *)feng_array_data(backend_param))[0]))') {\n"
                                      "        body = { result: '\"stale\"', type: 'const char *', variablesReference: 0 };\n"
+                                     "      } else if (expression === '(const char *)feng_string_data((const FengString *)(backend_global))') {\n"
+                                     "        body = { result: '\"hello_world\"', type: 'const char *', variablesReference: 0 };\n"
                                      "      }\n"
                                      "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'evaluate', body });\n"
                                      "    }\n"
@@ -6100,53 +6223,67 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
     scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
     variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
-    continue_json = dup_printf("{\"seq\":6,\"type\":\"request\",\"command\":\"continue\",\"arguments\":{\"threadId\":1}}");
-    stale_synthetic_json = dup_printf("{\"seq\":7,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741824}}");
-    second_stack_trace_json = dup_printf("{\"seq\":8,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
-    second_scopes_json = dup_printf("{\"seq\":9,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":8}}");
-    second_variables_json = dup_printf("{\"seq\":10,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":102}}");
+    globals_json = dup_printf("{\"seq\":6,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":202}}");
+    continue_json = dup_printf("{\"seq\":7,\"type\":\"request\",\"command\":\"continue\",\"arguments\":{\"threadId\":1}}");
+    stale_synthetic_json = dup_printf("{\"seq\":8,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741824}}");
+    stale_globals_json = dup_printf("{\"seq\":9,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":202}}");
+    second_stack_trace_json = dup_printf("{\"seq\":10,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    second_scopes_json = dup_printf("{\"seq\":11,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":8}}");
+    second_variables_json = dup_printf("{\"seq\":12,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":102}}");
     initialize_text = build_dap_message_text(initialize_json);
     launch_text = build_dap_message_text(launch_json);
     stack_trace_text = build_dap_message_text(stack_trace_json);
     scopes_text = build_dap_message_text(scopes_json);
     variables_text = build_dap_message_text(variables_json);
+    globals_text = build_dap_message_text(globals_json);
+    stale_globals_text = build_dap_message_text(stale_globals_json);
     continue_text = build_dap_message_text(continue_json);
     stale_synthetic_text = build_dap_message_text(stale_synthetic_json);
     second_stack_trace_text = build_dap_message_text(second_stack_trace_json);
     second_scopes_text = build_dap_message_text(second_scopes_json);
     second_variables_text = build_dap_message_text(second_variables_json);
-    input_text = dup_printf("%s%s%s%s%s",
+    input_text = dup_printf("%s%s%s%s%s%s",
                             initialize_text,
                             launch_text,
                             stack_trace_text,
                             scopes_text,
-                            variables_text);
+                            variables_text,
+                            globals_text);
     followup_text = dup_printf("%s%s%s%s%s",
                                continue_text,
                                stale_synthetic_text,
+                               stale_globals_text,
                                second_stack_trace_text,
-                               second_scopes_text,
-                               second_variables_text);
+                               second_scopes_text);
 
-    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
-                                                               argv,
-                                                               input_text,
-                                                               "\"variablesReference\":1073741824",
-                                                               followup_text,
-                                                               path_value,
-                                                               &rc,
-                                                               &stderr_text);
+    stdout_text = run_dap_two_step_interactive_capture_stdout_with_path(1,
+                                                                        argv,
+                                                                        input_text,
+                                                                        "\"name\":\"TEST_NAME\"",
+                                                                        followup_text,
+                                                                        "\"request_seq\":11",
+                                                                        second_variables_text,
+                                                                        path_value,
+                                                                        &rc,
+                                                                        &stderr_text);
     ASSERT(rc == 0);
     requests_text = read_text_file(requests_path);
-    ASSERT(strstr(requests_text, "\"command\":\"continue\"") != NULL);
+    continue_pos = strstr(requests_text, "\"command\":\"continue\"");
+    ASSERT(continue_pos != NULL);
     ASSERT(strstr(requests_text, "\"variablesReference\":102") != NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":202") != NULL);
+    ASSERT(strstr(continue_pos, "\"variablesReference\":202") == NULL);
     ASSERT(strstr(requests_text,
                   "\"expression\":\"((FengString * *)feng_array_data(backend_param))[0]\"") == NULL);
     ASSERT(strstr(stdout_text, "unknown synthetic variablesReference") != NULL);
-    ASSERT(strstr(stdout_text, "\"request_seq\":7,\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text, "\"request_seq\":8,\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text, "\"request_seq\":9,\"success\":false") != NULL);
     ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "\"name\":\"TEST_NAME\",\"evaluateName\":\"TEST_NAME\",\"value\":\"\\\"hello_world\\\"\",\"type\":\"FengString *\",\"variablesReference\":0") != NULL);
     ASSERT(strstr(stdout_text, "\"name\":\"i\"") != NULL);
     ASSERT(strstr(stdout_text, "\"value\":\"1\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_global") == NULL);
     ASSERT(strstr(stdout_text, "backend_i") == NULL);
     ASSERT(strcmp(stderr_text, "") == 0);
 
@@ -6158,8 +6295,10 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     free(second_variables_text);
     free(second_scopes_text);
     free(second_stack_trace_text);
+    free(stale_globals_text);
     free(stale_synthetic_text);
     free(continue_text);
+    free(globals_text);
     free(variables_text);
     free(scopes_text);
     free(stack_trace_text);
@@ -6168,8 +6307,10 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
     free(second_variables_json);
     free(second_scopes_json);
     free(second_stack_trace_json);
+    free(stale_globals_json);
     free(stale_synthetic_json);
     free(continue_json);
+    free(globals_json);
     free(variables_json);
     free(scopes_json);
     free(stack_trace_json);

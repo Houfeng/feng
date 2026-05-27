@@ -92,6 +92,13 @@ typedef struct FengDapEvaluatedVariable {
     bool has_variables_reference;
 } FengDapEvaluatedVariable;
 
+/* Caches an out-of-order proxy-internal evaluate response for its original waiter. */
+typedef struct FengDapCachedInternalEvaluateResponse {
+    uint64_t request_seq;
+    bool ok;
+    FengDapEvaluatedVariable value;
+} FengDapCachedInternalEvaluateResponse;
+
 typedef enum FengDapSyntheticRefKind {
     FENG_DAP_SYNTHETIC_ARRAY = 1,
     FENG_DAP_SYNTHETIC_TYPE = 2,
@@ -123,11 +130,18 @@ typedef struct FengDapRelayState {
     FengDapPendingVariablesRequest *pending_variables_requests;
     size_t pending_variables_request_count;
     size_t pending_variables_request_capacity;
+    uint64_t *stale_variables_response_seqs;
+    size_t stale_variables_response_seq_count;
+    size_t stale_variables_response_seq_capacity;
+    FengDapCachedInternalEvaluateResponse *cached_internal_evaluate_responses;
+    size_t cached_internal_evaluate_response_count;
+    size_t cached_internal_evaluate_response_capacity;
     FengDapSyntheticRef *synthetic_refs;
     size_t synthetic_ref_count;
     size_t synthetic_ref_capacity;
     uint64_t next_synthetic_ref;
     uint64_t next_internal_request_seq;
+    bool reject_stale_variables_until_scopes;
 } FengDapRelayState;
 
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
@@ -171,10 +185,15 @@ static void proxy_relay_state_dispose(FengDapRelayState *state) {
     for (index = 0U; index < state->synthetic_ref_count; ++index) {
         proxy_synthetic_ref_dispose(&state->synthetic_refs[index]);
     }
+    for (index = 0U; index < state->cached_internal_evaluate_response_count; ++index) {
+        proxy_evaluated_variable_dispose(&state->cached_internal_evaluate_responses[index].value);
+    }
     free(state->frame_bindings);
     free(state->pending_scope_requests);
     free(state->scope_bindings);
     free(state->pending_variables_requests);
+    free(state->stale_variables_response_seqs);
+    free(state->cached_internal_evaluate_responses);
     free(state->synthetic_refs);
     memset(state, 0, sizeof(*state));
 }
@@ -197,6 +216,7 @@ static void proxy_relay_state_clear_stopped_context(FengDapRelayState *state) {
     state->scope_binding_count = 0U;
     state->pending_variables_request_count = 0U;
     state->synthetic_ref_count = 0U;
+    state->reject_stale_variables_until_scopes = true;
 }
 
 static bool proxy_command_resumes_execution(const char *command) {
@@ -426,6 +446,124 @@ static bool proxy_relay_state_take_pending_variables_request(FengDapRelayState *
             if (index < state->pending_variables_request_count) {
                 state->pending_variables_requests[index] =
                     state->pending_variables_requests[state->pending_variables_request_count];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proxy_relay_state_record_stale_variables_response(FengDapRelayState *state,
+                                                              uint64_t request_seq) {
+    uint64_t *grown;
+    size_t new_capacity;
+    size_t index;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->stale_variables_response_seq_count; ++index) {
+        if (state->stale_variables_response_seqs[index] == request_seq) {
+            return true;
+        }
+    }
+    if (state->stale_variables_response_seq_count == state->stale_variables_response_seq_capacity) {
+        new_capacity = state->stale_variables_response_seq_capacity == 0U
+                           ? 8U
+                           : state->stale_variables_response_seq_capacity * 2U;
+        grown = (uint64_t *)realloc(state->stale_variables_response_seqs,
+                                    new_capacity * sizeof(*state->stale_variables_response_seqs));
+        if (grown == NULL) {
+            return false;
+        }
+        state->stale_variables_response_seqs = grown;
+        state->stale_variables_response_seq_capacity = new_capacity;
+    }
+    state->stale_variables_response_seqs[state->stale_variables_response_seq_count] = request_seq;
+    state->stale_variables_response_seq_count += 1U;
+    return true;
+}
+
+static bool proxy_relay_state_take_stale_variables_response(FengDapRelayState *state,
+                                                            uint64_t request_seq) {
+    size_t index;
+
+    if (state == NULL) {
+        return false;
+    }
+    for (index = 0U; index < state->stale_variables_response_seq_count; ++index) {
+        if (state->stale_variables_response_seqs[index] == request_seq) {
+            state->stale_variables_response_seq_count -= 1U;
+            if (index < state->stale_variables_response_seq_count) {
+                state->stale_variables_response_seqs[index] =
+                    state->stale_variables_response_seqs[state->stale_variables_response_seq_count];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proxy_relay_state_cache_internal_evaluate_response(FengDapRelayState *state,
+                                                               uint64_t request_seq,
+                                                               bool ok,
+                                                               FengDapEvaluatedVariable *value) {
+    FengDapCachedInternalEvaluateResponse *grown;
+    size_t new_capacity;
+    size_t index;
+
+    if (state == NULL || value == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->cached_internal_evaluate_response_count; ++index) {
+        if (state->cached_internal_evaluate_responses[index].request_seq == request_seq) {
+            proxy_evaluated_variable_dispose(&state->cached_internal_evaluate_responses[index].value);
+            state->cached_internal_evaluate_responses[index].ok = ok;
+            state->cached_internal_evaluate_responses[index].value = *value;
+            memset(value, 0, sizeof(*value));
+            return true;
+        }
+    }
+    if (state->cached_internal_evaluate_response_count ==
+        state->cached_internal_evaluate_response_capacity) {
+        new_capacity = state->cached_internal_evaluate_response_capacity == 0U
+                           ? 8U
+                           : state->cached_internal_evaluate_response_capacity * 2U;
+        grown = (FengDapCachedInternalEvaluateResponse *)realloc(
+            state->cached_internal_evaluate_responses,
+            new_capacity * sizeof(*state->cached_internal_evaluate_responses));
+        if (grown == NULL) {
+            return false;
+        }
+        state->cached_internal_evaluate_responses = grown;
+        state->cached_internal_evaluate_response_capacity = new_capacity;
+    }
+    state->cached_internal_evaluate_responses[state->cached_internal_evaluate_response_count].request_seq =
+        request_seq;
+    state->cached_internal_evaluate_responses[state->cached_internal_evaluate_response_count].ok = ok;
+    state->cached_internal_evaluate_responses[state->cached_internal_evaluate_response_count].value = *value;
+    memset(value, 0, sizeof(*value));
+    state->cached_internal_evaluate_response_count += 1U;
+    return true;
+}
+
+static bool proxy_relay_state_take_cached_internal_evaluate_response(FengDapRelayState *state,
+                                                                     uint64_t request_seq,
+                                                                     FengDapEvaluatedVariable *out_value,
+                                                                     bool *out_ok) {
+    size_t index;
+
+    if (state == NULL || out_value == NULL || out_ok == NULL) {
+        return false;
+    }
+    for (index = 0U; index < state->cached_internal_evaluate_response_count; ++index) {
+        if (state->cached_internal_evaluate_responses[index].request_seq == request_seq) {
+            *out_value = state->cached_internal_evaluate_responses[index].value;
+            *out_ok = state->cached_internal_evaluate_responses[index].ok;
+            state->cached_internal_evaluate_response_count -= 1U;
+            if (index < state->cached_internal_evaluate_response_count) {
+                state->cached_internal_evaluate_responses[index] =
+                    state->cached_internal_evaluate_responses[state->cached_internal_evaluate_response_count];
             }
             return true;
         }
@@ -1684,6 +1822,32 @@ static bool proxy_send_request_failure_response(int output_fd,
                              "failed to write request failure response");
     free(json_payload);
     return ok;
+}
+
+static bool proxy_fail_pending_variables_requests_for_resume(FengDapRelayState *state,
+                                                             int output_fd,
+                                                             uint64_t *next_seq,
+                                                             int error_fd) {
+    size_t index;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (index = 0U; index < state->pending_variables_request_count; ++index) {
+        uint64_t request_seq = state->pending_variables_requests[index].request_seq;
+
+        if (!proxy_send_request_failure_response(output_fd,
+                                                 "variables",
+                                                 request_seq,
+                                                 "stale variablesReference after resume",
+                                                 next_seq,
+                                                 error_fd) ||
+            !proxy_relay_state_record_stale_variables_response(state, request_seq)) {
+            return false;
+        }
+    }
+    state->pending_variables_request_count = 0U;
+    return true;
 }
 
 /* Validate one launch request and optionally keep the loaded `.fd` artifact alive. */
@@ -3778,15 +3942,31 @@ static bool proxy_collect_internal_evaluate_response(FengDapMessageReader *backe
                                                      uint64_t request_seq,
                                                      FengDapEvaluatedVariable *out_value,
                                                      int error_fd) {
+    bool cached_ok = false;
+
+    if (proxy_relay_state_take_cached_internal_evaluate_response(state,
+                                                                 request_seq,
+                                                                 out_value,
+                                                                 &cached_ok)) {
+        return cached_ok;
+    }
     for (;;) {
         FengDapMessage message = {0};
         FengDapReadStatus status;
         char *type = NULL;
         char *command = NULL;
         uint64_t response_seq = 0U;
+        bool is_internal_evaluate_response = false;
         bool is_match = false;
         bool success = false;
         bool ok = true;
+
+        if (proxy_relay_state_take_cached_internal_evaluate_response(state,
+                                                                     request_seq,
+                                                                     out_value,
+                                                                     &cached_ok)) {
+            return cached_ok;
+        }
 
         status = proxy_reader_read_message(backend_reader, &message, error_fd);
         if (status != FENG_DAP_READ_OK) {
@@ -3807,17 +3987,51 @@ static bool proxy_collect_internal_evaluate_response(FengDapMessageReader *backe
                                       "request_seq",
                                       &response_seq) &&
             strcmp(type, "response") == 0 &&
-            strcmp(command, "evaluate") == 0 &&
-            response_seq == request_seq) {
-            is_match = true;
-            if (proxy_json_get_bool_member(message.payload,
-                                           message.payload_length,
-                                           "success",
-                                           &success) &&
-                success) {
-                ok = proxy_parse_evaluated_variable_response_payload(message.payload,
-                                                                    message.payload_length,
-                                                                    out_value);
+            strcmp(command, "evaluate") == 0) {
+            is_internal_evaluate_response = response_seq >= FENG_DAP_PROXY_INTERNAL_REQUEST_SEQ_BASE;
+            if (response_seq == request_seq) {
+                is_match = true;
+                if (proxy_json_get_bool_member(message.payload,
+                                               message.payload_length,
+                                               "success",
+                                               &success) &&
+                    success) {
+                    ok = proxy_parse_evaluated_variable_response_payload(message.payload,
+                                                                        message.payload_length,
+                                                                        out_value);
+                }
+            } else if (is_internal_evaluate_response) {
+                FengDapEvaluatedVariable cached_value = {0};
+                bool cached_response_ok = true;
+
+                if (proxy_json_get_bool_member(message.payload,
+                                               message.payload_length,
+                                               "success",
+                                               &success) &&
+                    success) {
+                    cached_response_ok = proxy_parse_evaluated_variable_response_payload(
+                        message.payload,
+                        message.payload_length,
+                        &cached_value);
+                }
+                if (cached_response_ok &&
+                    !proxy_relay_state_cache_internal_evaluate_response(state,
+                                                                        response_seq,
+                                                                        cached_response_ok,
+                                                                        &cached_value)) {
+                    proxy_report_error(error_fd,
+                                       "failed to cache internal evaluate response",
+                                       "out of memory");
+                    cached_response_ok = false;
+                }
+                free(type);
+                free(command);
+                proxy_message_dispose(&message);
+                proxy_evaluated_variable_dispose(&cached_value);
+                if (!cached_response_ok) {
+                    return false;
+                }
+                continue;
             }
         }
 
@@ -4961,6 +5175,15 @@ static bool proxy_rewrite_one_variable_payload(const char *variable_json,
                     goto cleanup;
                 }
                 changed = changed || replaced;
+                if (!proxy_replace_object_u64_member(&current_json,
+                                                     "variablesReference",
+                                                     0U,
+                                                     &replaced,
+                                                     error_fd,
+                                                     "failed to rewrite variables response")) {
+                    goto cleanup;
+                }
+                changed = changed || replaced;
                 goto finish_pointer_summary;
             }
         }
@@ -5362,6 +5585,14 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
                                   "seq",
                                   &request_seq)) {
         if (proxy_command_resumes_execution(command)) {
+            if (!proxy_fail_pending_variables_requests_for_resume(state,
+                                                                  output_fd,
+                                                                  next_seq,
+                                                                  error_fd)) {
+                free(type);
+                free(command);
+                return false;
+            }
             proxy_relay_state_clear_stopped_context(state);
         }
         if (strcmp(command, "scopes") == 0 &&
@@ -5407,6 +5638,25 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
                                                                    next_seq,
                                                                    error_fd);
             }
+            free(type);
+            free(command);
+            return ok;
+        }
+        if (strcmp(command, "variables") == 0 &&
+            proxy_json_get_request_argument_u64_member(message->payload,
+                                                       message->payload_length,
+                                                       "variablesReference",
+                                                       &variables_reference) &&
+            artifact != NULL &&
+            state != NULL &&
+            state->reject_stale_variables_until_scopes &&
+            state->scope_binding_count == 0U) {
+            ok = proxy_send_request_failure_response(output_fd,
+                                                     "variables",
+                                                     request_seq,
+                                                     "stale variablesReference",
+                                                     next_seq,
+                                                     error_fd);
             free(type);
             free(command);
             return ok;
@@ -5584,6 +5834,12 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                                    message->payload_length,
                                    "success",
                                    &success);
+        if (strcmp(command, "variables") == 0 &&
+            proxy_relay_state_take_stale_variables_response(state, request_seq)) {
+            free(type);
+            free(command);
+            return true;
+        }
         if (strcmp(command, "stackTrace") == 0) {
             if (!proxy_rewrite_stack_trace_response_payload(message->payload,
                                                             message->payload_length,
@@ -5609,17 +5865,21 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                    success &&
                    proxy_relay_state_take_pending_scope_request(state,
                                                                 request_seq,
-                                                                &frame_id) &&
-                   !proxy_record_scopes_response_bindings(message->payload,
-                                                          message->payload_length,
-                                                          frame_id,
-                                                          state)) {
-            free(type);
-            free(command);
-            proxy_report_error(error_fd,
-                               "failed to record scopes response",
-                               "out of memory");
-            return false;
+                                                                &frame_id)) {
+            if (!proxy_record_scopes_response_bindings(message->payload,
+                                                       message->payload_length,
+                                                       frame_id,
+                                                       state)) {
+                free(type);
+                free(command);
+                proxy_report_error(error_fd,
+                                   "failed to record scopes response",
+                                   "out of memory");
+                return false;
+            }
+            if (state != NULL) {
+                state->reject_stale_variables_until_scopes = false;
+            }
         } else if (strcmp(command, "variables") == 0 &&
                    proxy_relay_state_take_pending_variables_request(state,
                                                                     request_seq,
