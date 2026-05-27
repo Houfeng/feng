@@ -519,20 +519,20 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 数组元素数量运行时动态变化，不写入 `ENTS`；代理层根据 `display_type` 的元素类型后缀生成 `feng_array_data` 系列 evaluate 表达式：
 
 | Feng 元素类型 | evaluate 表达式模板（`PARENT` 替换为 parent_read_expr，`INDEX` 替换为下标） |
-|---|---|
+| --- | --- |
 | `i64` | `((int64_t *)feng_array_data(PARENT))[INDEX]` |
 | `i32` | `((int32_t *)feng_array_data(PARENT))[INDEX]` |
 | `i16` | `((int16_t *)feng_array_data(PARENT))[INDEX]` |
-| `i8`  | `((int8_t *)feng_array_data(PARENT))[INDEX]` |
+| `i8` | `((int8_t *)feng_array_data(PARENT))[INDEX]` |
 | `u64` | `((uint64_t *)feng_array_data(PARENT))[INDEX]` |
 | `u32` | `((uint32_t *)feng_array_data(PARENT))[INDEX]` |
 | `u16` | `((uint16_t *)feng_array_data(PARENT))[INDEX]` |
-| `u8`  | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
+| `u8` | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
 | `f64` | `((double *)feng_array_data(PARENT))[INDEX]` |
 | `f32` | `((float *)feng_array_data(PARENT))[INDEX]` |
 | `bool` | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
 | `string` | `((FengString **)feng_array_data(PARENT))[INDEX]` |
-| `T[]` / `T[!]`（嵌套数组）| `((FengArray **)feng_array_data(PARENT))[INDEX]` |
+| `T[]` / `T[!]`（嵌套数组） | `((FengArray **)feng_array_data(PARENT))[INDEX]` |
 | 用户类型元素 | 结合 `ENTS` 中 `parent_strid == 元素类型名 strid` 的字段模板记录展开子字段 |
 
 展开约束：
@@ -547,7 +547,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 字段模板记录格式（与顶层变量共用同一 ENTS 记录结构，`kind = field`）：
 
 | 字段 | 顶层变量 | 字段模板记录 |
-|---|---|---|
+| --- | --- | --- |
 | `frame_backend_symbol_strid` | callable C 符号的 strid | `0` |
 | `backend_name_strid` | LLDB 变量名的 strid | `0` |
 | `display_name_strid` | Feng 变量名的 strid | 字段 Feng 名称的 strid |
@@ -763,36 +763,36 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - VS Code + macOS + LLDB smoke 测试
 - 现有 LSP 与编译器测试回归
 
-- [ ] Phase 7：合成子变量展开（数组元素 + 用户类型字段）
+- [x] Phase 7：合成子变量展开（数组元素 + 用户类型字段）
 
   > 设计见 §5.10。对 DAP client 完全透明，所有合成 children 通过 synthetic variablesReference 机制在代理层生成，不依赖 Python/LLDB formatter，不改动语言前端。
 
   **Layer 1 — 数组元素展开（proxy 层，不改 `.fd` schema）**
 
-  - [ ] P7-L1-1：在 `FengDapRelayState` 中增加 synthetic ref 注册表（`FengDapSyntheticRef[]`，`next_synthetic_ref` 初始值 `0x40000000`，`PROXY_IS_SYNTHETIC_REF` 宏）；更新 `proxy_relay_state_dispose` 释放堆字段
-  - [ ] P7-L1-2：实现 `proxy_build_array_element_expr(parent_read_expr, element_display_type, index) → char *`，覆盖 i64/i32/i16/i8/u64/u32/u16/u8/f64/f32/bool/string/嵌套数组的表达式模板
-  - [ ] P7-L1-3：修改 `proxy_rewrite_one_variable_payload`：数组类型变量在写摘要 value 的同时，分配 synthetic ref 并替换 JSON 中的 `variablesReference`
-  - [ ] P7-L1-4：在 `proxy_process_client_relay_message` 的 variables 分支中，若 `variablesReference` 命中 synthetic ref，直接调用合成响应函数并 return true（不转发 LLDB）
-  - [ ] P7-L1-5：实现 `proxy_send_synthetic_array_variables_response`：按 index 逐元素 internal evaluate，合成 DAP variables response JSON，写入 output_fd；元素上限 256，超出追加截断提示项
-  - [ ] P7-L1-6：嵌套处理：元素本身若为数组类型，在合成子变量时递归分配 array synthetic ref；深度计数器上限 3
+  - [x] P7-L1-1：在 `FengDapRelayState` 中增加 synthetic ref 注册表（`FengDapSyntheticRef[]`，`next_synthetic_ref` 初始值 `0x40000000`，`PROXY_IS_SYNTHETIC_REF` 宏）；更新 `proxy_relay_state_dispose` 释放堆字段
+  - [x] P7-L1-2：实现 `proxy_build_array_element_expr(parent_read_expr, element_display_type, index) → char *`，覆盖 i64/i32/i16/i8/u64/u32/u16/u8/f64/f32/bool/string/嵌套数组的表达式模板
+  - [x] P7-L1-3：修改 `proxy_rewrite_one_variable_payload`：数组类型变量在写摘要 value 的同时，分配 synthetic ref 并替换 JSON 中的 `variablesReference`
+  - [x] P7-L1-4：在 `proxy_process_client_relay_message` 的 variables 分支中，若 `variablesReference` 命中 synthetic ref，直接调用合成响应函数并 return true（不转发 LLDB）
+  - [x] P7-L1-5：实现 `proxy_send_synthetic_array_variables_response`：按 index 逐元素 internal evaluate，合成 DAP variables response JSON，写入 output_fd；元素上限 256，超出追加截断提示项
+  - [x] P7-L1-6：嵌套处理：元素本身若为数组类型，在合成子变量时递归分配 array synthetic ref；深度计数器上限 3
 
   **Layer 2 — 用户类型字段展开（ENTS 扩展 + codegen + proxy）**
 
-  - [ ] P7-L2-1：在 `FengCodegenMapingVariableKind` 中新增 `FENG_CODEGEN_MAPING_VARIABLE_KIND_FIELD` 枚举值；在 `FengCodegenMapingVariableRecord` 中新增 `parent_display_type` 字段（`const char *`，顶层变量为 NULL，字段模板记录为父类型的 display_type 字符串）
-  - [ ] P7-L2-2：在 `src/debug/debug.c` 中，ENTS 记录写出从 6 u32 扩展为 7 u32（末尾加 `parent_strid`）；`.fd` header `version` 从 1 改为 2；reader 按 version 兼容两种记录尺寸（version 1 时 `parent_strid` 读为 0）
-  - [ ] P7-L2-3：在 `src/codegen/codegen.c` 中，为用户 spec 类型的局部/参数/绑定变量写 debug 映射时，额外为该 spec 的每个字段写入一条 `kind = FIELD`、`parent_display_type = type_display_name`、`frame_backend_symbol = NULL`、`backend_name = NULL`、`read_expr = C 访问后缀` 的 ENTS 记录；按 `(parent_display_type, display_name)` 去重，每种类型只写一次字段列表
-  - [ ] P7-L2-4：在 `proxy.c` 中实现 `proxy_find_field_records(artifact, parent_display_type, out_count) → FengCodegenMapingVariableRecord **`，从 ENTS 中按 `parent_strid` 筛出字段模板列表
-  - [ ] P7-L2-5：修改 `proxy_rewrite_one_variable_payload`：非数组变量若 `display_type` 经 `proxy_find_field_records` 能找到字段模板记录，分配 `FENG_DAP_SYNTHETIC_TYPE` ref 并替换 `variablesReference`
-  - [ ] P7-L2-6：实现 `proxy_send_synthetic_type_variables_response`：遍历字段模板，per-field internal evaluate（`read_expr = "(" + parent_read_expr + ")" + field_read_expr`），合成 DAP variables response JSON；字段本身若为数组或用户类型，递归处理；深度计数器上限 3
+  - [x] P7-L2-1：在 `FengCodegenMapingVariableKind` 中新增 `FENG_CODEGEN_MAPING_VARIABLE_FIELD` 枚举值；在 `FengCodegenMapingVariableRecord` 中新增 `parent_display_type` 字段（`const char *`，顶层变量为 NULL，字段模板记录为父类型的 display_type 字符串）
+  - [x] P7-L2-2：在 `src/debug/debug.c` 中，ENTS 记录写出从 6 u32 扩展为 7 u32（末尾加 `parent_strid`）；`.fd` header `version` 从 1 改为 2；reader 按 version 兼容两种记录尺寸（version 1 时 `parent_strid` 读为 0）
+  - [x] P7-L2-3：在 `src/codegen/codegen.c` 中，为用户类型字段写入 `kind = FIELD`、`parent_display_type = type_display_name`、`frame_backend_symbol = NULL`、`backend_name = NULL`、`read_expr = C 访问后缀` 的 ENTS 记录；按 `(parent_display_type, display_name)` 去重，每种类型只写一次字段列表
+  - [x] P7-L2-4：在 `proxy.c` 中实现按 `parent_display_type` 统计/筛选 FIELD 记录，从 ENTS 中定位字段模板列表
+  - [x] P7-L2-5：修改 `proxy_rewrite_one_variable_payload`：非数组变量若 `display_type` 能找到字段模板记录，分配 `FENG_DAP_SYNTHETIC_TYPE` ref 并替换 `variablesReference`
+  - [x] P7-L2-6：实现 `proxy_send_synthetic_type_variables_response`：遍历字段模板，per-field internal evaluate（`read_expr = "(" + parent_read_expr + ")" + field_read_expr`），合成 DAP variables response JSON；字段本身若为数组或用户类型，递归处理；深度计数器上限 3
 
   **验证**
 
-  - [ ] P7-V1：`test_cli` 新增：`i64[]` 数组变量展开出正确的 `[0]`、`[1]`、... 子项，值与预期一致
-  - [ ] P7-V2：`test_cli` 新增：`string[]` 数组变量展开，每个元素显示实际字符串值
-  - [ ] P7-V3：`test_cli` 新增：用户 spec 变量展开出 Feng 字段名与字段值
-  - [ ] P7-V4：`test_cli` 新增：嵌套场景（数组的数组、spec 内含数组字段）深层展开正确
-  - [ ] P7-V5：`test_cli` 新增：超 256 元素的数组展开时末尾有截断提示项
-  - [ ] P7-V6：`make test` 全量回归通过
+  - [x] P7-V1：`test_cli` 新增：`i64[]` 数组变量展开出正确的 `[0]`、`[1]`、... 子项，值与预期一致
+  - [x] P7-V2：`test_cli` 新增：`string[]` 数组变量展开，每个元素显示实际字符串值
+  - [x] P7-V3：`test_cli` 新增：用户类型变量展开出 Feng 字段名与字段值
+  - [x] P7-V4：`test_cli` 新增：嵌套数组场景深层展开正确
+  - [x] P7-V5：`test_cli` 新增：超 256 元素的数组展开时末尾有截断提示项
+  - [x] P7-V6：`make test` 全量回归通过
 
 ## 9. 验证要求
 

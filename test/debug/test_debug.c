@@ -35,6 +35,16 @@ static const char *kCaptureSource =
     "    return mapper(40);\n"
     "}\n";
 
+static const char *kFieldSource =
+    "mod feng.debug.fields;\n"
+    "type Point {\n"
+    "    let x: i32;\n"
+    "    let label: string;\n"
+    "}\n"
+    "fn main(args: string[]) {\n"
+    "    let point: Point = Point{x: 7, label: \"p\"};\n"
+    "}\n";
+
 static FengProgram *parse_or_die(const char *source, const char *path) {
     FengProgram *program = NULL;
     FengParseError error = {0};
@@ -197,6 +207,28 @@ static const FengCodegenMapingVariableRecord *find_variable(const FengCodegenMap
     return NULL;
 }
 
+static const FengCodegenMapingVariableRecord *find_field_entity(const FengCodegenMapingInfo *info,
+                                                                const char *parent_display_type,
+                                                                const char *display_name,
+                                                                const char *read_expr_substr) {
+    for (size_t i = 0U; i < info->variable_count; ++i) {
+        if (info->variables[i].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+            info->variables[i].parent_display_type == NULL ||
+            strcmp(info->variables[i].parent_display_type, parent_display_type) != 0 ||
+            strcmp(info->variables[i].display_name, display_name) != 0) {
+            continue;
+        }
+        if (read_expr_substr == NULL) {
+            return &info->variables[i];
+        }
+        if (info->variables[i].read_expr != NULL &&
+            strstr(info->variables[i].read_expr, read_expr_substr) != NULL) {
+            return &info->variables[i];
+        }
+    }
+    return NULL;
+}
+
 static const char *find_package_root(const FengDebugArtifact *artifact,
                                      const char *package_name) {
     for (size_t i = 0U; i < artifact->package_count; ++i) {
@@ -291,6 +323,54 @@ static void test_codegen_emits_line_directives_and_debug_info(void) {
     feng_program_free(program);
 }
 
+static void test_codegen_records_user_type_field_entities(void) {
+    const char *path = "/tmp/feng-debug-fields/src/main.ff";
+    FengCodegenMapingSourceMapping mappings[1] = {
+        {
+            .source_path = path,
+            .package_name = "demo",
+            .package_root = "/tmp/feng-debug-fields/src",
+        },
+    };
+    FengCodegenOptions options = {
+        .emit_line_directives = true,
+        .debug_source_mappings = mappings,
+        .debug_source_mapping_count = 1U,
+    };
+    FengProgram *program = parse_or_die(kFieldSource, path);
+    FengSemanticAnalysis *analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_BIN);
+    FengCodegenOutput out = {0};
+    FengCodegenError error = {0};
+    const FengCodegenMapingVariableRecord *point;
+    const FengCodegenMapingVariableRecord *x_field;
+    const FengCodegenMapingVariableRecord *label_field;
+
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_BIN,
+                                     &options,
+                                     &out,
+                                     &error));
+    point = find_variable(&out.debug_info,
+                          "point",
+                          FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+                          NULL);
+    x_field = find_field_entity(&out.debug_info, "Point", "x", "->x");
+    label_field = find_field_entity(&out.debug_info, "Point", "label", "->label");
+    ASSERT(point != NULL);
+    ASSERT(point->display_type != NULL && strcmp(point->display_type, "Point") == 0);
+    ASSERT(x_field != NULL);
+    ASSERT(x_field->frame_backend_symbol == NULL);
+    ASSERT(x_field->backend_name == NULL);
+    ASSERT(x_field->display_type != NULL && strcmp(x_field->display_type, "i32") == 0);
+    ASSERT(label_field != NULL);
+    ASSERT(label_field->display_type != NULL && strcmp(label_field->display_type, "string") == 0);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_debug_fd_round_trip(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x01U, 0x02U};
     char *tmp_dir = make_temp_dir();
@@ -341,6 +421,15 @@ static void test_debug_fd_round_trip(void) {
                                                            "(_lambda->capture->value)",
                                                            "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_parent_display_type(
+        &info,
+        NULL,
+        NULL,
+        "age",
+        ".age",
+        "i64",
+        "Person",
+        FENG_CODEGEN_MAPING_VARIABLE_FIELD));
 
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
@@ -358,12 +447,13 @@ static void test_debug_fd_round_trip(void) {
     ASSERT(artifact.binary_fingerprint == fingerprint);
     ASSERT(artifact.package_count == 2U);
     ASSERT(artifact.info.frame_count == 2U);
-    ASSERT(artifact.info.variable_count == 2U);
+    ASSERT(artifact.info.variable_count == 3U);
     ASSERT(find_frame(&artifact.info, "main", FENG_CODEGEN_MAPING_FRAME_VISIBLE) != NULL);
     ASSERT(find_variable(&artifact.info,
                          "captured",
                          FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
                          "capture->value") != NULL);
+    ASSERT(find_field_entity(&artifact.info, "Person", "age", ".age") != NULL);
 
     free(fingerprint_error);
     free(fd_error);
@@ -376,7 +466,7 @@ static void test_debug_fd_round_trip(void) {
 static void test_debug_fd_matches_golden_bytes(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x01U, 0x02U};
     static const unsigned char kExpectedFdBytes[] = {
-        0x46, 0x44, 0x30, 0x31, 0x01, 0x00, 0x05, 0x00, 0x10, 0x00, 0x00, 0x00,
+        0x46, 0x44, 0x30, 0x31, 0x02, 0x00, 0x05, 0x00, 0x10, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x4d, 0x45, 0x54, 0x41, 0x00, 0x00, 0x00, 0x00,
         0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -388,8 +478,8 @@ static void test_debug_fd_matches_golden_bytes(void) {
         0x00, 0x00, 0x00, 0x00, 0x46, 0x52, 0x4d, 0x53, 0x00, 0x00, 0x00, 0x00,
         0x86, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x56, 0x41, 0x52, 0x53, 0x00, 0x00, 0x00, 0x00, 0x9e, 0x01, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x45, 0x4e, 0x54, 0x53, 0x00, 0x00, 0x00, 0x00, 0x9e, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0xa7, 0x2a, 0xbe, 0xba, 0x24, 0x66, 0x1f, 0x31,
         0x22, 0x00, 0x00, 0x00, 0x2f, 0x74, 0x6d, 0x70, 0x2f, 0x66, 0x65, 0x6e,
@@ -412,9 +502,10 @@ static void test_debug_fd_matches_golden_bytes(void) {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x07, 0x00,
         0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x08, 0x00,
         0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x0c, 0x00,
-        0x00, 0x00, 0x02, 0x00, 0x00, 0x00
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x0b, 0x00,
+        0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00
     };
     static const char *kGoldenDir = "/tmp/feng_debug_fd_golden";
     static const char *kBinaryPath = "/tmp/feng_debug_fd_golden/demo.bin";
@@ -874,6 +965,7 @@ int main(void) {
     test_debug_fd_merge_rejects_conflicting_package_roots();
     test_debug_fd_merge_rejects_conflicting_variable_mappings();
     test_codegen_emits_line_directives_and_debug_info();
+    test_codegen_records_user_type_field_entities();
     test_codegen_records_capture_mappings();
     return 0;
 }

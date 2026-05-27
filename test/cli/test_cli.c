@@ -5562,11 +5562,381 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
     char *stack_trace_json;
     char *scopes_json;
     char *variables_json;
+    char *synthetic_variables_json;
+    char *synthetic_numbers_json;
+    char *synthetic_matrix_json;
+    char *synthetic_matrix_row_json;
     char *initialize_text;
     char *launch_text;
     char *stack_trace_text;
     char *scopes_text;
     char *variables_text;
+    char *synthetic_variables_text;
+    char *synthetic_numbers_text;
+    char *synthetic_matrix_text;
+    char *synthetic_matrix_row_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *backend_stack_trace_json;
+    char *backend_stack_trace_text;
+    char *backend_scopes_json;
+    char *backend_scopes_text;
+    char *backend_variables_json;
+    char *backend_variables_text;
+    char *escaped_backend_initialize_text;
+    char *escaped_backend_stack_trace_text;
+    char *escaped_backend_scopes_text;
+    char *escaped_backend_variables_text;
+    char *backend_script;
+    char *backend_script_tail;
+    char *input_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
+        "backend_param",
+        "args",
+        NULL,
+        "string[]",
+        FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
+        "backend_nums",
+        "nums",
+        NULL,
+        "i64[]",
+        FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
+        "backend_matrix",
+        "matrix",
+        NULL,
+        "i64[][]",
+        FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":2,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
+    backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
+    backend_scopes_text = build_dap_message_text(backend_scopes_json);
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"0x1000\",\"type\":\"FengArray *\",\"variablesReference\":23},{\"name\":\"backend_nums\",\"evaluateName\":\"backend_nums\",\"value\":\"0x3000\",\"type\":\"FengArray *\",\"variablesReference\":24},{\"name\":\"backend_matrix\",\"evaluateName\":\"backend_matrix\",\"value\":\"0x4000\",\"type\":\"FengArray *\",\"variablesReference\":25}]}}");
+    backend_variables_text = build_dap_message_text(backend_variables_json);
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
+    escaped_backend_scopes_text = json_escape_text(backend_scopes_text);
+    escaped_backend_variables_text = json_escape_text(backend_variables_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const responses = {\n"
+                                "  initialize: \"%s\",\n"
+                                "  stackTrace: \"%s\",\n"
+                                "  scopes: \"%s\",\n"
+                                "  variables: \"%s\"\n"
+                                "};\n"
+                                "function frame(payload) {\n"
+                                "  return `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\\r\\n\\r\\n${payload}`;\n"
+                                "}\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "process.stdout.write(responses.initialize);\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  fs.writeFileSync(requestsPath, requests);\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') process.stdout.write(responses.stackTrace);\n"
+                                "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
+                                "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
+                                "    if (message.command === 'evaluate') {\n"
+                                "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
+                                "      if (message.arguments.expression === 'backend_param') {\n"
+                                "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
+                                "      } else if (message.arguments.expression === 'backend_nums') {\n"
+                                "        body = { result: '0x3000', type: 'FengArray *', variablesReference: 24 };\n"
+                                "      } else if (message.arguments.expression === 'backend_matrix') {\n"
+                                "        body = { result: '0x4000', type: 'FengArray *', variablesReference: 25 };\n"
+                                "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(backend_param))') {\n"
+                                "        body = { result: '2', type: 'size_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(backend_nums))') {\n"
+                                "        body = { result: '257', type: 'size_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(backend_matrix))') {\n"
+                                "        body = { result: '1', type: 'size_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(((FengArray * *)feng_array_data(backend_matrix))[0]))') {\n"
+                                "        body = { result: '2', type: 'size_t', variablesReference: 0 };\n",
+                                requests_path,
+                                escaped_backend_initialize_text,
+                                escaped_backend_stack_trace_text,
+                                escaped_backend_scopes_text,
+                                escaped_backend_variables_text);
+    backend_script_tail = dup_printf("      } else if (message.arguments.expression === '((FengString * *)feng_array_data(backend_param))[0]') {\n"
+                                "        body = { result: '0x2000', type: 'FengString *', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((FengString * *)feng_array_data(backend_param))[1]') {\n"
+                                "        body = { result: '0x2008', type: 'FengString *', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(const char *)feng_string_data((const FengString *)(((FengString * *)feng_array_data(backend_param))[0]))') {\n"
+                                "        body = { result: '\"zero\"', type: 'const char *', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(const char *)feng_string_data((const FengString *)(((FengString * *)feng_array_data(backend_param))[1]))') {\n"
+                                "        body = { result: '\"one\"', type: 'const char *', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((int64_t *)feng_array_data(backend_nums))[0]') {\n"
+                                "        body = { result: '10', type: 'int64_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((int64_t *)feng_array_data(backend_nums))[1]') {\n"
+                                "        body = { result: '20', type: 'int64_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((int64_t *)feng_array_data(backend_nums))[2]') {\n"
+                                "        body = { result: '30', type: 'int64_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((FengArray * *)feng_array_data(backend_matrix))[0]') {\n"
+                                "        body = { result: '0x5000', type: 'FengArray *', variablesReference: 26 };\n"
+                                "      } else if (message.arguments.expression === '((int64_t *)feng_array_data(((FengArray * *)feng_array_data(backend_matrix))[0]))[0]') {\n"
+                                "        body = { result: '101', type: 'int64_t', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '((int64_t *)feng_array_data(((FengArray * *)feng_array_data(backend_matrix))[0]))[1]') {\n"
+                                "        body = { result: '102', type: 'int64_t', variablesReference: 0 };\n"
+                                "      }\n"
+                                "      const response = {\n"
+                                "        seq: 5,\n"
+                                "        type: 'response',\n"
+                                "        request_seq: message.seq,\n"
+                                "        success: true,\n"
+                                "        command: 'evaluate',\n"
+                                "        body\n"
+                                "      };\n"
+                                "      process.stdout.write(frame(JSON.stringify(response)));\n"
+                                "    }\n"
+                                "  }\n"
+                                "});\n"
+                                "process.stdin.on('end', () => { fs.writeFileSync(requestsPath, requests); process.exit(0); });\n");
+    backend_script = concat_owned_strings(backend_script, backend_script_tail);
+    backend_script_tail = NULL;
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
+    variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
+    synthetic_variables_json = dup_printf("{\"seq\":6,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741824}}");
+    synthetic_numbers_json = dup_printf("{\"seq\":7,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741825}}");
+    synthetic_matrix_json = dup_printf("{\"seq\":8,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741826}}");
+    synthetic_matrix_row_json = dup_printf("{\"seq\":9,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741827}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    scopes_text = build_dap_message_text(scopes_json);
+    variables_text = build_dap_message_text(variables_json);
+    synthetic_variables_text = build_dap_message_text(synthetic_variables_json);
+    synthetic_numbers_text = build_dap_message_text(synthetic_numbers_json);
+    synthetic_variables_text = concat_owned_strings(synthetic_variables_text, synthetic_numbers_text);
+    synthetic_numbers_text = NULL;
+    synthetic_matrix_text = build_dap_message_text(synthetic_matrix_json);
+    synthetic_variables_text = concat_owned_strings(synthetic_variables_text, synthetic_matrix_text);
+    synthetic_matrix_text = NULL;
+    synthetic_matrix_row_text = build_dap_message_text(synthetic_matrix_row_json);
+    synthetic_variables_text = concat_owned_strings(synthetic_variables_text, synthetic_matrix_row_text);
+    synthetic_matrix_row_text = NULL;
+    input_text = dup_printf("%s%s%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text,
+                            scopes_text,
+                            variables_text);
+
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"variablesReference\":1073741826",
+                                                               synthetic_variables_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"expression\":\"backend_param\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"(size_t)feng_array_length((const FengArray *)(backend_param))\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((FengString * *)feng_array_data(backend_param))[0]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((FengString * *)feng_array_data(backend_param))[1]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(backend_nums))[0]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(backend_nums))[2]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(backend_nums))[255]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(backend_nums))[256]\"") == NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((FengArray * *)feng_array_data(backend_matrix))[0]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(((FengArray * *)feng_array_data(backend_matrix))[0]))[0]\"") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((int64_t *)feng_array_data(((FengArray * *)feng_array_data(backend_matrix))[0]))[1]\"") != NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":1073741824") == NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":1073741825") == NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":1073741826") == NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":1073741827") == NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"string[length=2]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"variablesReference\":1073741824") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"nums\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"i64[length=257]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"variablesReference\":1073741825") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"matrix\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"i64[][length=1]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"variablesReference\":1073741826") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"i64[length=2]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"variablesReference\":1073741827") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"[0]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"[1]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"10\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"20\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"30\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"101\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"102\"") != NULL);
+    ASSERT(strstr(stdout_text, "truncated after 256 elements") != NULL);
+    ASSERT(strstr(stdout_text, "\\\"zero\\\"") != NULL);
+    ASSERT(strstr(stdout_text, "\\\"one\\\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_param") == NULL);
+    ASSERT(strstr(stdout_text, "backend_nums") == NULL);
+    ASSERT(strstr(stdout_text, "backend_matrix") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(input_text);
+    free(synthetic_variables_text);
+    free(synthetic_numbers_text);
+    free(synthetic_matrix_text);
+    free(synthetic_matrix_row_text);
+    free(variables_text);
+    free(scopes_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(synthetic_matrix_row_json);
+    free(synthetic_matrix_json);
+    free(synthetic_numbers_json);
+    free(synthetic_variables_json);
+    free(variables_json);
+    free(scopes_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script);
+    free(escaped_backend_variables_text);
+    free(escaped_backend_scopes_text);
+    free(escaped_backend_stack_trace_text);
+    free(escaped_backend_initialize_text);
+    free(backend_variables_text);
+    free(backend_variables_json);
+    free(backend_scopes_text);
+    free(backend_scopes_json);
+    free(backend_stack_trace_text);
+    free(backend_stack_trace_json);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "type Point {\n"
+        "    let x: i32;\n"
+        "    let label: string;\n"
+        "}\n"
+        "fn main(args: string[]) {\n"
+        "    let point: Point = Point{x: 7, label: \"seven\"};\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_type_fields_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *scopes_json;
+    char *variables_json;
+    char *synthetic_variables_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *scopes_text;
+    char *variables_text;
+    char *synthetic_variables_text;
     char *backend_initialize_json;
     char *backend_initialize_text;
     char *backend_stack_trace_json;
@@ -5615,11 +5985,29 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
         &info,
         "demo_pkg_main_backend",
-        "backend_param",
-        "args",
+        "backend_point",
+        "point",
+        "backend_point",
+        "Point",
+        FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_parent_display_type(
+        &info,
         NULL,
-        "string[]",
-        FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+        NULL,
+        "x",
+        "->x",
+        "i32",
+        "Point",
+        FENG_CODEGEN_MAPING_VARIABLE_FIELD));
+    ASSERT(feng_codegen_maping_info_add_variable_with_parent_display_type(
+        &info,
+        NULL,
+        NULL,
+        "label",
+        "->label",
+        "string",
+        "Point",
+        FENG_CODEGEN_MAPING_VARIABLE_FIELD));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
                                sources,
@@ -5630,11 +6018,11 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
 
     backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
     backend_initialize_text = build_dap_message_text(backend_initialize_json);
-    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":2,\"column\":1}],\"totalFrames\":1}}");
+    backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":6,\"column\":1}],\"totalFrames\":1}}");
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
     backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
     backend_scopes_text = build_dap_message_text(backend_scopes_json);
-    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"0x1000\",\"type\":\"FengArray *\",\"variablesReference\":23}]}}");
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_point\",\"evaluateName\":\"backend_point\",\"value\":\"0x1000\",\"type\":\"struct Point *\",\"variablesReference\":88}]}}");
     backend_variables_text = build_dap_message_text(backend_variables_json);
     escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
     escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
@@ -5676,20 +6064,23 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
                                 "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
                                 "    if (message.command === 'evaluate') {\n"
                                 "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
-                                "      if (message.arguments.expression === 'backend_param') {\n"
-                                "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
-                                "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(backend_param))') {\n"
-                                "        body = { result: '0', type: 'size_t', variablesReference: 0 };\n"
+                                "      if (message.arguments.expression === 'backend_point') {\n"
+                                "        body = { result: '0x1000', type: 'struct Point *', variablesReference: 88 };\n"
+                                "      } else if (message.arguments.expression === '(backend_point)->x') {\n"
+                                "        body = { result: '7', type: 'int', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(backend_point)->label') {\n"
+                                "        body = { result: '0x2000', type: 'FengString *', variablesReference: 0 };\n"
+                                "      } else if (message.arguments.expression === '(const char *)feng_string_data((const FengString *)((backend_point)->label))') {\n"
+                                "        body = { result: '\"seven\"', type: 'const char *', variablesReference: 0 };\n"
                                 "      }\n"
-                                "      const response = {\n"
+                                "      process.stdout.write(frame(JSON.stringify({\n"
                                 "        seq: 5,\n"
                                 "        type: 'response',\n"
                                 "        request_seq: message.seq,\n"
                                 "        success: true,\n"
                                 "        command: 'evaluate',\n"
                                 "        body\n"
-                                "      };\n"
-                                "      process.stdout.write(frame(JSON.stringify(response)));\n"
+                                "      })));\n"
                                 "    }\n"
                                 "  }\n"
                                 "});\n"
@@ -5711,11 +6102,13 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
     stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
     scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
     variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
+    synthetic_variables_json = dup_printf("{\"seq\":6,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741824}}");
     initialize_text = build_dap_message_text(initialize_json);
     launch_text = build_dap_message_text(launch_json);
     stack_trace_text = build_dap_message_text(stack_trace_json);
     scopes_text = build_dap_message_text(scopes_json);
     variables_text = build_dap_message_text(variables_json);
+    synthetic_variables_text = build_dap_message_text(synthetic_variables_json);
     input_text = dup_printf("%s%s%s%s%s",
                             initialize_text,
                             launch_text,
@@ -5723,31 +6116,42 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
                             scopes_text,
                             variables_text);
 
-    stdout_text = run_dap_capture_stdout_with_path(1,
-                                                   argv,
-                                                   input_text,
-                                                   path_value,
-                                                   &rc,
-                                                   &stderr_text);
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"variablesReference\":1073741824",
+                                                               synthetic_variables_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
     ASSERT(rc == 0);
     requests_text = read_text_file(requests_path);
-    ASSERT(strstr(requests_text, "\"expression\":\"backend_param\"") != NULL);
+    ASSERT(strstr(requests_text, "\"expression\":\"(backend_point)->x\"") != NULL);
+    ASSERT(strstr(requests_text, "\"expression\":\"(backend_point)->label\"") != NULL);
     ASSERT(strstr(requests_text,
-                  "\"expression\":\"(size_t)feng_array_length((const FengArray *)(backend_param))\"") != NULL);
-    ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
-    ASSERT(strstr(stdout_text, "\"value\":\"string[length=0]\"") != NULL);
-    ASSERT(strstr(stdout_text, "backend_param") == NULL);
+                  "\"expression\":\"(const char *)feng_string_data((const FengString *)((backend_point)->label))\"") != NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":1073741824") == NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"point\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"variablesReference\":1073741824") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"x\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"7\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"type\":\"i32\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"label\"") != NULL);
+    ASSERT(strstr(stdout_text, "\\\"seven\\\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_point") == NULL);
     ASSERT(strcmp(stderr_text, "") == 0);
 
     free(requests_text);
     free(stderr_text);
     free(stdout_text);
     free(input_text);
+    free(synthetic_variables_text);
     free(variables_text);
     free(scopes_text);
     free(stack_trace_text);
     free(launch_text);
     free(initialize_text);
+    free(synthetic_variables_json);
     free(variables_json);
     free(scopes_json);
     free(stack_trace_json);
@@ -11766,6 +12170,7 @@ int main(void) {
     test_dap_filters_backend_variables_and_rewrites_user_values();
     test_project_build_rewrites_module_binding_in_dap_globals();
     test_dap_uses_array_element_type_name_in_value_summary();
+    test_dap_expands_user_type_fields_with_synthetic_reference();
     test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf();
     test_project_build_keeps_for_body_locals_after_prefix_binding();
     test_dap_rewrites_identifier_evaluate_expression();

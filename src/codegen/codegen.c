@@ -1558,6 +1558,58 @@ static bool cg_debug_add_variable_record_slice_cgtype(CG *cg,
     return ok;
 }
 
+static bool cg_debug_add_user_type_field_records(CG *cg,
+                                                 const UserType *type,
+                                                 FengToken blame) {
+    CGType parent_type;
+    char *parent_display_type;
+
+    if (!cg_debug_enabled(cg) || type == NULL || type->field_count == 0U) {
+        return true;
+    }
+    memset(&parent_type, 0, sizeof(parent_type));
+    parent_type.kind = CG_TYPE_OBJECT;
+    parent_type.user = type;
+    parent_display_type = cg_debug_dup_display_type_from_cgtype(cg, &parent_type, blame);
+    if (parent_display_type == NULL) {
+        return true;
+    }
+    for (size_t index = 0U; index < type->field_count; ++index) {
+        const UserField *field = &type->fields[index];
+        char *field_display_type;
+        Buf read_expr;
+
+        if (field->feng_name == NULL || field->c_name == NULL || field->type == NULL) {
+            continue;
+        }
+        field_display_type = cg_debug_dup_display_type_from_cgtype(cg, field->type, blame);
+        if (field_display_type == NULL) {
+            continue;
+        }
+        buf_init(&read_expr);
+        buf_append_fmt(&read_expr, "->%s", field->c_name);
+        if (read_expr.data == NULL ||
+            !feng_codegen_maping_info_add_variable_with_parent_display_type(
+                &cg->debug_info,
+                NULL,
+                NULL,
+                field->feng_name,
+                read_expr.data,
+                field_display_type,
+                parent_display_type,
+                FENG_CODEGEN_MAPING_VARIABLE_FIELD)) {
+            free(read_expr.data);
+            free(field_display_type);
+            free(parent_display_type);
+            return cg_fail(cg, blame, "codegen: out of memory recording debug field");
+        }
+        free(read_expr.data);
+        free(field_display_type);
+    }
+    free(parent_display_type);
+    return true;
+}
+
 static bool cg_debug_add_current_frame_module_binding_records(CG *cg,
                                                               FengToken blame) {
     size_t index;
@@ -6757,7 +6809,7 @@ static bool cg_register_user_type_members(CG *cg, UserType *t) {
     t->field_count = fi;
     t->constructor_count = ci;
     t->method_count = mi;
-    return true;
+    return cg_debug_add_user_type_field_records(cg, t, decl->token);
 }
 
 static const UserField *cg_user_type_field(const UserType *t, const char *name, size_t len) {

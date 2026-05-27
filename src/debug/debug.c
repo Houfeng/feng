@@ -7,6 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#define FENG_DEBUG_FD_VERSION_LEGACY_VARS 1U
+#define FENG_DEBUG_FD_VERSION_ENTS_PARENT 2U
+
 /* Buffer used to assemble binary .fd sections before writing them to disk. */
 typedef struct FengDebugBuffer {
     unsigned char *data;
@@ -470,6 +473,7 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
                                         const char *input_label,
                                         char **out_error_message) {
     size_t index;
+    bool is_field;
 
     if (variable == NULL || variable->display_type == NULL ||
         variable->display_type[0] == '\0') {
@@ -478,8 +482,45 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
                         input_label != NULL ? input_label : "debug sidecar input");
         return false;
     }
+    is_field = variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD;
+    if (is_field) {
+        if (variable->frame_backend_symbol != NULL || variable->backend_name != NULL ||
+            variable->read_expr == NULL || variable->parent_display_type == NULL ||
+            variable->parent_display_type[0] == '\0') {
+            debug_set_error(out_error_message,
+                            "%s provides an invalid field entity",
+                            input_label != NULL ? input_label : "debug sidecar input");
+            return false;
+        }
+    } else if (variable->frame_backend_symbol == NULL || variable->parent_display_type != NULL) {
+        debug_set_error(out_error_message,
+                        "%s provides an invalid variable entity",
+                        input_label != NULL ? input_label : "debug sidecar input");
+        return false;
+    }
 
     for (index = 0U; index < merged_info->variable_count; ++index) {
+        if (is_field) {
+            if (merged_info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+                !debug_cstr_equals(merged_info->variables[index].parent_display_type,
+                                   variable->parent_display_type) ||
+                strcmp(merged_info->variables[index].display_name, variable->display_name) != 0) {
+                continue;
+            }
+            if (debug_cstr_equals(merged_info->variables[index].read_expr, variable->read_expr) &&
+                strcmp(merged_info->variables[index].display_type, variable->display_type) == 0) {
+                return true;
+            }
+            debug_set_error(out_error_message,
+                            "%s remaps field '%s' of '%s' inconsistently",
+                            input_label != NULL ? input_label : "debug sidecar input",
+                            variable->display_name,
+                            variable->parent_display_type);
+            return false;
+        }
+        if (merged_info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            continue;
+        }
         if (strcmp(merged_info->variables[index].frame_backend_symbol,
                    variable->frame_backend_symbol) != 0 ||
             !debug_cstr_equals(merged_info->variables[index].backend_name,
@@ -493,6 +534,8 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
         }
         if (strcmp(merged_info->variables[index].display_name, variable->display_name) == 0 &&
             debug_cstr_equals(merged_info->variables[index].read_expr, variable->read_expr) &&
+            debug_cstr_equals(merged_info->variables[index].parent_display_type,
+                              variable->parent_display_type) &&
             merged_info->variables[index].kind == variable->kind) {
             if (strcmp(merged_info->variables[index].display_type,
                        variable->display_type) != 0) {
@@ -508,13 +551,14 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
         return false;
     }
 
-    if (!feng_codegen_maping_info_add_variable_with_display_type(
+    if (!feng_codegen_maping_info_add_variable_with_parent_display_type(
             merged_info,
             variable->frame_backend_symbol,
             variable->backend_name,
             variable->display_name,
             variable->read_expr,
             variable->display_type,
+            variable->parent_display_type,
             variable->kind)) {
         debug_set_error(out_error_message, "out of memory merging debug variables");
         return false;
@@ -620,6 +664,7 @@ static bool debug_build_variables_section(FengDebugBuffer *buffer,
         uint32_t display_id;
         uint32_t read_expr_id;
         uint32_t display_type_id;
+        uint32_t parent_id;
 
         if (!debug_string_table_intern(strings,
                                        info->variables[index].frame_backend_symbol,
@@ -636,12 +681,16 @@ static bool debug_build_variables_section(FengDebugBuffer *buffer,
                 !debug_string_table_intern(strings,
                                            info->variables[index].display_type,
                                            &display_type_id) ||
+                !debug_string_table_intern(strings,
+                                           info->variables[index].parent_display_type,
+                                           &parent_id) ||
             !debug_buffer_append_u32_le(buffer, frame_id) ||
             !debug_buffer_append_u32_le(buffer, backend_id) ||
             !debug_buffer_append_u32_le(buffer, display_id) ||
             !debug_buffer_append_u32_le(buffer, read_expr_id) ||
                 !debug_buffer_append_u32_le(buffer, display_type_id) ||
-            !debug_buffer_append_u32_le(buffer, (uint32_t)info->variables[index].kind)) {
+            !debug_buffer_append_u32_le(buffer, (uint32_t)info->variables[index].kind) ||
+            !debug_buffer_append_u32_le(buffer, parent_id)) {
             return false;
         }
     }
@@ -721,6 +770,9 @@ static bool debug_collect_strings(FengDebugStringTable *strings,
                                        &ignored) ||
             !debug_string_table_intern(strings,
                                        info->variables[index].display_type,
+                                       &ignored) ||
+            !debug_string_table_intern(strings,
+                                       info->variables[index].parent_display_type,
                                        &ignored)) {
             return false;
         }
@@ -753,7 +805,7 @@ static bool debug_write_file_payload(FILE *file,
     bool ok = true;
 
     ok = fwrite(magic, 1U, sizeof(magic), file) == sizeof(magic) &&
-         debug_buffer_append_u16_le(&header, 1U) &&
+            debug_buffer_append_u16_le(&header, FENG_DEBUG_FD_VERSION_ENTS_PARENT) &&
          debug_buffer_append_u16_le(&header, section_count) &&
          debug_buffer_append_u64_le(&header, header_size) &&
          fwrite(header.data, 1U, header.length, file) == header.length;
@@ -766,7 +818,7 @@ static bool debug_write_file_payload(FILE *file,
            debug_write_section_entry(file, "STRS", strings_offset, strings->length, string_count) &&
            debug_write_section_entry(file, "PKGS", packages_offset, packages->length, package_count) &&
            debug_write_section_entry(file, "FRMS", frames_offset, frames->length, frame_count) &&
-           debug_write_section_entry(file, "VARS", variables_offset, variables->length, variable_count) &&
+           debug_write_section_entry(file, "ENTS", variables_offset, variables->length, variable_count) &&
            debug_write_buffer(file, meta) &&
            debug_write_buffer(file, strings) &&
            debug_write_buffer(file, packages) &&
@@ -864,6 +916,7 @@ static bool debug_parse_sections(const unsigned char *data,
                                  FengDebugParsedSection *packages,
                                  FengDebugParsedSection *frames,
                                  FengDebugParsedSection *variables,
+                                 uint16_t *out_version,
                                  char **out_error_message) {
     uint16_t version;
     uint16_t section_count;
@@ -876,9 +929,13 @@ static bool debug_parse_sections(const unsigned char *data,
     version = debug_read_u16_le(data + 4U);
     section_count = debug_read_u16_le(data + 6U);
     dir_offset = debug_read_u64_le(data + 8U);
-    if (version != 1U) {
+    if (version != FENG_DEBUG_FD_VERSION_LEGACY_VARS &&
+        version != FENG_DEBUG_FD_VERSION_ENTS_PARENT) {
         debug_set_error(out_error_message, "unsupported debug sidecar version %u", version);
         return false;
+    }
+    if (out_version != NULL) {
+        *out_version = version;
     }
     if (dir_offset > size ||
         (uint64_t)size - dir_offset < ((uint64_t)section_count * 32U)) {
@@ -906,7 +963,7 @@ static bool debug_parse_sections(const unsigned char *data,
             target = packages;
         } else if (memcmp(tag, "FRMS", 4U) == 0) {
             target = frames;
-        } else if (memcmp(tag, "VARS", 4U) == 0) {
+        } else if (memcmp(tag, "ENTS", 4U) == 0 || memcmp(tag, "VARS", 4U) == 0) {
             target = variables;
         } else {
             continue;
@@ -1127,16 +1184,19 @@ static bool debug_parse_frames_section(const FengDebugParsedSection *section,
 static bool debug_parse_variables_section(const FengDebugParsedSection *section,
                                           char **strings,
                                           size_t string_count,
+                                          uint16_t version,
                                           FengCodegenMapingInfo *info,
                                           char **out_error_message) {
     const unsigned char *cursor;
     const unsigned char *end;
+    size_t record_size;
 
     if (!section->present || section->record_count == 0U) {
         return true;
     }
-    if (section->size != (size_t)section->record_count * 24U) {
-        debug_set_error(out_error_message, "invalid debug VARS section");
+    record_size = version >= FENG_DEBUG_FD_VERSION_ENTS_PARENT ? 28U : 24U;
+    if (section->size != (size_t)section->record_count * record_size) {
+        debug_set_error(out_error_message, "invalid debug ENTS section");
         return false;
     }
     info->variables = (FengCodegenMapingVariableRecord *)calloc(section->record_count,
@@ -1166,9 +1226,24 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
                                                               string_count,
                                                               debug_read_u32_le(cursor + 16U));
         uint32_t kind = debug_read_u32_le(cursor + 20U);
+        const char *parent_display_type = record_size == 28U
+            ? debug_lookup_loaded_string(strings,
+                                         string_count,
+                                         debug_read_u32_le(cursor + 24U))
+            : NULL;
 
-        if (frame_backend_symbol == NULL || display_name == NULL || display_type == NULL ||
-            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_SELF) {
+        if (display_name == NULL || display_type == NULL ||
+            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            debug_set_error(out_error_message, "invalid debug variable record");
+            return false;
+        }
+        if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
+                parent_display_type == NULL) {
+                debug_set_error(out_error_message, "invalid debug field record");
+                return false;
+            }
+        } else if (frame_backend_symbol == NULL || parent_display_type != NULL) {
             debug_set_error(out_error_message, "invalid debug variable record");
             return false;
         }
@@ -1177,14 +1252,17 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
         info->variables[index].display_name = debug_dup_cstr(display_name);
         info->variables[index].read_expr = debug_dup_cstr(read_expr);
         info->variables[index].display_type = debug_dup_cstr(display_type);
+        info->variables[index].parent_display_type = debug_dup_cstr(parent_display_type);
         info->variables[index].kind = (FengCodegenMapingVariableKind)kind;
-        if (info->variables[index].frame_backend_symbol == NULL ||
+        if ((kind != (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+             info->variables[index].frame_backend_symbol == NULL) ||
             info->variables[index].display_name == NULL ||
-            info->variables[index].display_type == NULL) {
+            info->variables[index].display_type == NULL ||
+            (parent_display_type != NULL && info->variables[index].parent_display_type == NULL)) {
             debug_set_error(out_error_message, "out of memory reading debug variable");
             return false;
         }
-        cursor += 24U;
+        cursor += record_size;
     }
     return true;
 }
@@ -1465,6 +1543,7 @@ bool feng_debug_read_fd(const char *fd_path,
     FengDebugParsedSection packages = {0};
     FengDebugParsedSection frames = {0};
     FengDebugParsedSection variables = {0};
+    uint16_t version = 0U;
     char **loaded_strings = NULL;
     size_t loaded_string_count = 0U;
 
@@ -1487,6 +1566,7 @@ bool feng_debug_read_fd(const char *fd_path,
                               &packages,
                               &frames,
                               &variables,
+                              &version,
                               out_error_message) ||
         !debug_parse_strings_section(&strings,
                                      &loaded_strings,
@@ -1510,6 +1590,7 @@ bool feng_debug_read_fd(const char *fd_path,
         !debug_parse_variables_section(&variables,
                                        loaded_strings,
                                        loaded_string_count,
+                                       version,
                                         &out_artifact->info,
                                        out_error_message)) {
         free(data);

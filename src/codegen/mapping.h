@@ -30,12 +30,13 @@ typedef enum FengCodegenMapingFramePolicy {
     FENG_CODEGEN_MAPING_FRAME_COLLAPSE = 2
 } FengCodegenMapingFramePolicy;
 
-/* Classifies a user-visible variable for scope rewriting. */
+/* Classifies a user-visible debug entity for scope rewriting or expansion. */
 typedef enum FengCodegenMapingVariableKind {
     FENG_CODEGEN_MAPING_VARIABLE_PARAM = 0,
     FENG_CODEGEN_MAPING_VARIABLE_BINDING = 1,
     FENG_CODEGEN_MAPING_VARIABLE_CAPTURE = 2,
-    FENG_CODEGEN_MAPING_VARIABLE_SELF = 3
+    FENG_CODEGEN_MAPING_VARIABLE_SELF = 3,
+    FENG_CODEGEN_MAPING_VARIABLE_FIELD = 4
 } FengCodegenMapingVariableKind;
 
 /* Maps one backend frame symbol to a user-facing frame name and policy. */
@@ -45,13 +46,14 @@ typedef struct FengCodegenMapingFrameRecord {
     FengCodegenMapingFramePolicy policy;
 } FengCodegenMapingFrameRecord;
 
-/* Maps one backend variable slot or synthetic expression to a user variable. */
+/* Maps one backend variable slot, expression, or field template to a debug entity. */
 typedef struct FengCodegenMapingVariableRecord {
     char *frame_backend_symbol;
     char *backend_name;
     char *display_name;
     char *read_expr;
     char *display_type; /* required user-facing type text */
+    char *parent_display_type;
     FengCodegenMapingVariableKind kind;
 } FengCodegenMapingVariableRecord;
 
@@ -94,6 +96,17 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
     const char *display_name,
     const char *read_expr,
     const char *display_type,
+    FengCodegenMapingVariableKind kind);
+
+/* Appends or validates one debug entity record with an optional parent type. */
+bool feng_codegen_maping_info_add_variable_with_parent_display_type(
+    FengCodegenMapingInfo *info,
+    const char *frame_backend_symbol,
+    const char *backend_name,
+    const char *display_name,
+    const char *read_expr,
+    const char *display_type,
+    const char *parent_display_type,
     FengCodegenMapingVariableKind kind);
 
 #ifdef __cplusplus

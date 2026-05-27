@@ -131,11 +131,13 @@ static void mapping_variable_record_dispose(FengCodegenMapingVariableRecord *var
     free(variable->display_name);
     free(variable->read_expr);
     free(variable->display_type);
+    free(variable->parent_display_type);
     variable->frame_backend_symbol = NULL;
     variable->backend_name = NULL;
     variable->display_name = NULL;
     variable->read_expr = NULL;
     variable->display_type = NULL;
+    variable->parent_display_type = NULL;
 }
 
 bool feng_codegen_maping_resolve_source(const FengCodegenMapingSourceMapping *sources,
@@ -263,16 +265,59 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
     const char *read_expr,
     const char *display_type,
     FengCodegenMapingVariableKind kind) {
+    return feng_codegen_maping_info_add_variable_with_parent_display_type(info,
+                                                                          frame_backend_symbol,
+                                                                          backend_name,
+                                                                          display_name,
+                                                                          read_expr,
+                                                                          display_type,
+                                                                          NULL,
+                                                                          kind);
+}
+
+bool feng_codegen_maping_info_add_variable_with_parent_display_type(
+    FengCodegenMapingInfo *info,
+    const char *frame_backend_symbol,
+    const char *backend_name,
+    const char *display_name,
+    const char *read_expr,
+    const char *display_type,
+    const char *parent_display_type,
+    FengCodegenMapingVariableKind kind) {
     FengCodegenMapingVariableRecord entry;
     size_t index;
 
     memset(&entry, 0, sizeof(entry));
 
-    if (info == NULL || frame_backend_symbol == NULL || display_name == NULL ||
-        display_type == NULL || display_type[0] == '\0') {
+    if (info == NULL || display_name == NULL || display_type == NULL ||
+        display_type[0] == '\0') {
+        return false;
+    }
+    if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+        if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
+            read_expr[0] == '\0' || parent_display_type == NULL ||
+            parent_display_type[0] == '\0') {
+            return false;
+        }
+    } else if (frame_backend_symbol == NULL || parent_display_type != NULL) {
         return false;
     }
     for (index = 0U; index < info->variable_count; ++index) {
+        if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            if (info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+                !mapping_cstr_equals(info->variables[index].parent_display_type,
+                                     parent_display_type) ||
+                strcmp(info->variables[index].display_name, display_name) != 0) {
+                continue;
+            }
+            return info->variables[index].frame_backend_symbol == NULL &&
+                   info->variables[index].backend_name == NULL &&
+                   mapping_cstr_equals(info->variables[index].read_expr, read_expr) &&
+                   strcmp(info->variables[index].display_type, display_type) == 0;
+        }
+        if (info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            continue;
+        }
         if (strcmp(info->variables[index].frame_backend_symbol,
                    frame_backend_symbol) != 0 ||
             !mapping_cstr_equals(info->variables[index].backend_name, backend_name)) {
@@ -284,6 +329,7 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
         }
         if (strcmp(info->variables[index].display_name, display_name) != 0 ||
             !mapping_cstr_equals(info->variables[index].read_expr, read_expr) ||
+            !mapping_cstr_equals(info->variables[index].parent_display_type, parent_display_type) ||
             info->variables[index].kind != kind) {
             return false;
         }
@@ -298,10 +344,12 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
     entry.display_name = mapping_dup_cstr(display_name);
     entry.read_expr = mapping_dup_cstr(read_expr);
     entry.display_type = mapping_dup_cstr(display_type);
+    entry.parent_display_type = mapping_dup_cstr(parent_display_type);
     entry.kind = kind;
-    if (entry.frame_backend_symbol == NULL ||
+    if ((kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD && entry.frame_backend_symbol == NULL) ||
         entry.display_name == NULL ||
         entry.display_type == NULL ||
+        (parent_display_type != NULL && entry.parent_display_type == NULL) ||
         !mapping_append_raw((void **)&info->variables,
                             &info->variable_count,
                             &info->variable_capacity,
