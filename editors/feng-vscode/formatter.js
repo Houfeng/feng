@@ -523,7 +523,34 @@ function tokenCanFollowExplicitGenericTarget(token) {
           (token.value === '(' || token.value === '[' || token.value === '{' ||
            token.value === ')' || token.value === ']' || token.value === '}')) ||
          (token.type === 'punctuation' &&
-          (token.value === ',' || token.value === ';')));
+                    (token.value === ',' || token.value === ';' || token.value === ':')) ||
+                 (token.type === 'operator' && token.value === '>'));
+}
+
+function countGenericCloseOperators(token) {
+    if (token == null || token.type !== 'operator') {
+        return 0;
+    }
+
+    if (token.value === '>') {
+        return 1;
+    }
+
+    if (token.value === '>>') {
+        return 2;
+    }
+
+    return 0;
+}
+
+function tokenAfterConsumingGenericClosers(tokens, index, consumedClosers) {
+    const token = tokens[index];
+
+    if (token != null && token.type === 'operator' && token.value === '>>' && consumedClosers === 1) {
+        return { type: 'operator', value: '>' };
+    }
+
+    return tokens[index + 1];
 }
 
 function tokenCanAppearInGenericTypeArgs(token) {
@@ -536,7 +563,7 @@ function tokenCanAppearInGenericTypeArgs(token) {
     }
 
     if (token.type === 'punctuation') {
-        return token.value === ',' || token.value === '.';
+        return token.value === ',' || token.value === '.' || token.value === ':';
     }
 
     if (token.type === 'delimiter') {
@@ -561,16 +588,21 @@ function looksLikeExplicitGenericOpen(tokens, index, previousSignificantToken) {
 
     for (let lookahead = index + 1; lookahead < tokens.length; lookahead += 1) {
         const token = tokens[lookahead];
+        const genericCloseCount = countGenericCloseOperators(token);
 
         if (token.type === 'operator' && token.value === '<') {
             depth += 1;
             continue;
         }
 
-        if (token.type === 'operator' && token.value === '>') {
-            depth -= 1;
-            if (depth === 0) {
-                return sawTypeToken && tokenCanFollowExplicitGenericTarget(tokens[lookahead + 1]);
+        if (genericCloseCount > 0) {
+            for (let consumedClosers = 1; consumedClosers <= genericCloseCount; consumedClosers += 1) {
+                depth -= 1;
+                if (depth === 0) {
+                    return sawTypeToken && tokenCanFollowExplicitGenericTarget(
+                        tokenAfterConsumingGenericClosers(tokens, lookahead, consumedClosers)
+                    );
+                }
             }
             continue;
         }
@@ -600,6 +632,7 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         const isGenericOpen = looksLikeExplicitGenericOpen(tokens, index, previousSignificantToken);
+        const isDoubleGenericClose = token.type === 'operator' && token.value === '>>' && genericDepth >= 2;
         const isGenericClose = token.type === 'operator' && token.value === '>' && genericDepth > 0;
 
         if (isGenericOpen) {
@@ -607,6 +640,11 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             genericDepth += 1;
             lastEmittedWasGenericOpen = true;
             lastEmittedWasGenericClose = false;
+        } else if (isDoubleGenericClose) {
+            result += token.value;
+            genericDepth -= 2;
+            lastEmittedWasGenericOpen = false;
+            lastEmittedWasGenericClose = true;
         } else if (isGenericClose) {
             result += token.value;
             genericDepth -= 1;

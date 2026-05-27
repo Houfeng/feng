@@ -104,6 +104,12 @@ runCase(
 );
 
 runCase(
+    'preserves constrained and nested generics without angle bracket spaces',
+    'spec UserList<T:Named>:NamedList<Map<string,int>> {}\n',
+    'spec UserList<T: Named>: NamedList<Map<string, int>> {}\n'
+);
+
+runCase(
     'formats explicit generic call <...> without extra spaces',
     'fn main():void {\nlet x=identity<int>(42);\n}\n',
     'fn main(): void {\n    let x = identity<int>(42);\n}\n'
