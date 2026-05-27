@@ -5120,6 +5120,18 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
     return false;
 }
 
+static bool parameter_type_to_string(FengLspString *buffer, const FengParameter *param) {
+    const FengTypeRef *type = param != NULL ? param->type : NULL;
+
+    if (param != NULL && param->is_variadic) {
+        if (type != NULL && type->kind == FENG_TYPE_REF_ARRAY) {
+            return type_ref_to_string(buffer, type->as.inner) && string_append_cstr(buffer, "...");
+        }
+        return type_ref_to_string(buffer, type) && string_append_cstr(buffer, "...");
+    }
+    return type_ref_to_string(buffer, type);
+}
+
 static bool semantic_type_fact_to_string(FengLspString *buffer,
                                          const FengSemanticTypeFact *fact) {
     if (fact == NULL) {
@@ -5252,7 +5264,7 @@ static bool decl_signature_to_string_with_session(FengLspString *buffer,
                                          decl->as.function_decl.params[index].name.data,
                                          decl->as.function_decl.params[index].name.length) ||
                     !string_append_cstr(buffer, ": ") ||
-                    !type_ref_to_string(buffer, decl->as.function_decl.params[index].type)) {
+                    !parameter_type_to_string(buffer, &decl->as.function_decl.params[index])) {
                     return false;
                 }
             }
@@ -5297,7 +5309,7 @@ static bool member_signature_to_string_with_session(FengLspString *buffer,
                                  member->as.callable.params[index].name.data,
                                  member->as.callable.params[index].name.length) ||
             !string_append_cstr(buffer, ": ") ||
-            !type_ref_to_string(buffer, member->as.callable.params[index].type)) {
+            !parameter_type_to_string(buffer, &member->as.callable.params[index])) {
             return false;
         }
     }
@@ -5665,6 +5677,36 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
     return false;
 }
 
+static bool symbol_param_type_to_string(FengLspString *buffer,
+                                        const FengSymbolDeclView *decl,
+                                        size_t param_index) {
+    const FengSymbolTypeView *type = feng_symbol_decl_param_type(decl, param_index);
+
+    if (feng_symbol_decl_param_is_variadic(decl, param_index)) {
+        if (type != NULL && feng_symbol_type_kind(type) == FENG_SYMBOL_TYPE_KIND_ARRAY) {
+            size_t rank = feng_symbol_type_array_rank(type);
+            size_t layer_index;
+
+            if (rank > 0U) {
+                if (!symbol_type_to_string(buffer, feng_symbol_type_inner(type))) {
+                    return false;
+                }
+                for (layer_index = 1U; layer_index < rank; ++layer_index) {
+                    if (!string_append_cstr(buffer,
+                                            feng_symbol_type_array_layer_writable(type, layer_index)
+                                                ? "[!]"
+                                                : "[]")) {
+                        return false;
+                    }
+                }
+                return string_append_cstr(buffer, "...");
+            }
+        }
+        return symbol_type_to_string(buffer, type) && string_append_cstr(buffer, "...");
+    }
+    return symbol_type_to_string(buffer, type);
+}
+
 static bool symbol_decl_signature_to_string(FengLspString *buffer,
                                             const FengSymbolDeclView *decl) {
     size_t index;
@@ -5793,7 +5835,7 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
                 }
                 if (!string_append_bytes(buffer, param_name.data, param_name.length) ||
                     !string_append_cstr(buffer, ": ") ||
-                    !symbol_type_to_string(buffer, feng_symbol_decl_param_type(decl, index))) {
+                    !symbol_param_type_to_string(buffer, decl, index)) {
                     return false;
                 }
             }
@@ -5881,7 +5923,7 @@ static bool symbol_member_signature_to_string(FengLspString *buffer,
         }
         if (!string_append_bytes(buffer, param_name.data, param_name.length) ||
             !string_append_cstr(buffer, ": ") ||
-            !symbol_type_to_string(buffer, feng_symbol_decl_param_type(member, index))) {
+            !symbol_param_type_to_string(buffer, member, index)) {
             return false;
         }
     }

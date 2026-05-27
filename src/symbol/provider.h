@@ -116,6 +116,7 @@ const FengSymbolTypeView *feng_symbol_decl_fit_target(const FengSymbolDeclView *
 size_t feng_symbol_decl_param_count(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_param_name(const FengSymbolDeclView *decl, size_t index);
 FengMutability feng_symbol_decl_param_mutability(const FengSymbolDeclView *decl, size_t index);
+bool feng_symbol_decl_param_is_variadic(const FengSymbolDeclView *decl, size_t index);
 const FengSymbolTypeView *feng_symbol_decl_param_type(const FengSymbolDeclView *decl,
                                                       size_t index);
 size_t feng_symbol_decl_declared_spec_count(const FengSymbolDeclView *decl);

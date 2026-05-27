@@ -7798,6 +7798,47 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
     free(output);
 }
 
+static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
+    static const char *kHoverSource =
+        "mod test.lsp.variadic_signature_hover;\n"
+        "\n"
+        "fn log(fmt: string, args: string...): string {\n"
+        "    return fmt;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    let value: string = log(\"x\", \"a\");\n"
+        "}\n";
+    static const char *kCompletionSource =
+        "mod test.lsp.variadic_signature_completion;\n"
+        "\n"
+        "fn log(fmt: string, args: string...): string {\n"
+        "    return fmt;\n"
+        "}\n"
+        "\n"
+        "fn main(args: string[]) {\n"
+        "    lo\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *hover_output = capture_lsp_hover_response(kHoverSource,
+                                                    kInitialize,
+                                                    "    let value: string = log(\"x\", \"a\");",
+                                                    strlen("    let value: string = "));
+    char *completion_output = capture_lsp_completion_response(kCompletionSource,
+                                                              "    lo\n",
+                                                              strlen("    lo"));
+
+    ASSERT(strstr(hover_output, "fn log(fmt: string, args: string...): string") != NULL);
+    ASSERT(strstr(hover_output, "fn log(fmt: string, args: string[]): string") == NULL);
+    ASSERT(strstr(completion_output, "\"label\":\"log\"") != NULL);
+    ASSERT(strstr(completion_output, "\"detail\":\"fn log(fmt: string, args: string...): string\"") != NULL);
+    ASSERT(strstr(completion_output, "\"detail\":\"fn log(fmt: string, args: string[]): string\"") == NULL);
+
+    free(completion_output);
+    free(hover_output);
+}
+
 static void assert_lsp_completion_contains_labels(const char *source,
                                                   const char *needle,
                                                   size_t char_offset,
@@ -12351,6 +12392,13 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "     * Number of stored entries.\n"
         "     */\n"
         "    pu let count: int;\n"
+        "}\n"
+        "\n"
+        "/**\n"
+        " * Package join docs.\n"
+        " */\n"
+        "pu fn join(prefix: string, parts: string...): string {\n"
+        "    return prefix;\n"
         "}\n";
     static const char *kHoverSource =
         "mod test.lsp.pkgconsumer.main;\n"
@@ -12358,6 +12406,10 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "\n"
         "fn consume(map: Map<string, int>): int {\n"
         "    return map.count;\n"
+        "}\n"
+        "\n"
+        "fn consume_join(): string {\n"
+        "    return join(\"x\", \"a\");\n"
         "}\n";
     static const char *kUsePathSource =
         "mod test.lsp.pkgconsumer.useedit;\n"
@@ -12392,6 +12444,13 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "fn consume(map: Map<string, int>): int {\n"
         "    return map.;\n"
         "}\n";
+    static const char *kFunctionCompletionSource =
+        "mod test.lsp.pkgconsumer.functionedit;\n"
+        "use test.lsp.pkg.collections;\n"
+        "\n"
+        "fn run(): void {\n"
+        "    j\n"
+        "}\n";
     static const char *kInitialize =
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     char template_path[] = "/tmp/feng_lsp_external_pkg_XXXXXX";
@@ -12407,10 +12466,12 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     char *main_path;
     char *hover_type_output;
     char *hover_member_output;
+    char *hover_function_output;
     char *use_completion_output;
     char *type_completion_output;
     char *ctor_completion_output;
     char *bare_completion_output;
+    char *function_completion_output;
     char *local_dep_ctor_completion_output;
     char *local_dep_bare_completion_output;
     char *member_completion_output;
@@ -12469,6 +12530,12 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                 "textDocument/hover",
                                                                 "    return map.count;",
                                                                 strlen("    return map."));
+    hover_function_output = capture_lsp_position_response_at_path(main_path,
+                                                                  kHoverSource,
+                                                                  kInitialize,
+                                                                  "textDocument/hover",
+                                                                  "    return join(\"x\", \"a\");",
+                                                                  strlen("    return "));
     use_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                   kUsePathSource,
                                                                   kInitialize,
@@ -12493,6 +12560,12 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                    "textDocument/completion",
                                                                    "    M",
                                                                    strlen("    M"));
+    function_completion_output = capture_lsp_position_response_at_path(main_path,
+                                                                       kFunctionCompletionSource,
+                                                                       kInitialize,
+                                                                       "textDocument/completion",
+                                                                       "    j",
+                                                                       strlen("    j"));
     member_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                      kMemberCompletionSource,
                                                                      kInitialize,
@@ -12528,6 +12601,10 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(hover_member_output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(hover_member_output, "let count: i32") != NULL);
     ASSERT(strstr(hover_member_output, "Number of stored entries.") != NULL);
+    ASSERT(strstr(hover_function_output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(hover_function_output, "fn join(prefix: string, parts: string...): string") != NULL);
+    ASSERT(strstr(hover_function_output, "fn join(prefix: string, parts: string[]): string") == NULL);
+    ASSERT(strstr(hover_function_output, "Package join docs.") != NULL);
     ASSERT(strstr(use_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(use_completion_output, "\"label\":\"collections\"") != NULL);
     ASSERT(strstr(type_completion_output, "\"id\":2,\"result\":[]") == NULL);
@@ -12539,6 +12616,12 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(bare_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(bare_completion_output, "\"label\":\"Map\"") != NULL);
     ASSERT(strstr(bare_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(function_completion_output, "\"id\":2,\"result\":[]") == NULL);
+    ASSERT(strstr(function_completion_output, "\"label\":\"join\"") != NULL);
+    ASSERT(strstr(function_completion_output,
+                  "\"label\":\"join\",\"kind\":3,\"detail\":\"fn join(prefix: string, parts: string...): string\"") != NULL);
+    ASSERT(strstr(function_completion_output,
+                  "\"label\":\"join\",\"kind\":3,\"detail\":\"fn join(prefix: string, parts: string[]): string\"") == NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\"") != NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
@@ -12553,10 +12636,12 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     free(member_completion_output);
     free(local_dep_bare_completion_output);
     free(local_dep_ctor_completion_output);
+    free(function_completion_output);
     free(bare_completion_output);
     free(ctor_completion_output);
     free(type_completion_output);
     free(use_completion_output);
+    free(hover_function_output);
     free(hover_member_output);
     free(hover_type_output);
     free(main_path);
@@ -12644,6 +12729,7 @@ int main(void) {
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_uses_inferred_top_level_binding_type();
+    test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_member_completion_survives_incomplete_member_access();
         test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();

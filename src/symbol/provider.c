@@ -982,6 +982,10 @@ FengMutability feng_symbol_decl_param_mutability(const FengSymbolDeclView *decl,
     return decl->params[index].mutability;
 }
 
+bool feng_symbol_decl_param_is_variadic(const FengSymbolDeclView *decl, size_t index) {
+    return decl != NULL && index < decl->param_count && decl->params[index].is_variadic;
+}
+
 const FengSymbolTypeView *feng_symbol_decl_param_type(const FengSymbolDeclView *decl,
                                                       size_t index) {
     if (decl == NULL || index >= decl->param_count) {
