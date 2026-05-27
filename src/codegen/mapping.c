@@ -130,10 +130,12 @@ static void mapping_variable_record_dispose(FengCodegenMapingVariableRecord *var
     free(variable->backend_name);
     free(variable->display_name);
     free(variable->read_expr);
+    free(variable->display_type);
     variable->frame_backend_symbol = NULL;
     variable->backend_name = NULL;
     variable->display_name = NULL;
     variable->read_expr = NULL;
+    variable->display_type = NULL;
 }
 
 bool feng_codegen_maping_resolve_source(const FengCodegenMapingSourceMapping *sources,
@@ -253,14 +255,18 @@ bool feng_codegen_maping_info_add_frame(FengCodegenMapingInfo *info,
     return true;
 }
 
-bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
-                                  const char *frame_backend_symbol,
-                                  const char *backend_name,
-                                  const char *display_name,
-                                  const char *read_expr,
-                                  FengCodegenMapingVariableKind kind) {
+bool feng_codegen_maping_info_add_variable_with_display_type(
+    FengCodegenMapingInfo *info,
+    const char *frame_backend_symbol,
+    const char *backend_name,
+    const char *display_name,
+    const char *read_expr,
+    const char *display_type,
+    FengCodegenMapingVariableKind kind) {
     FengCodegenMapingVariableRecord entry;
     size_t index;
+
+    memset(&entry, 0, sizeof(entry));
 
     if (info == NULL || frame_backend_symbol == NULL || display_name == NULL) {
         return false;
@@ -275,18 +281,34 @@ bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
             strcmp(info->variables[index].display_name, display_name) != 0) {
             continue;
         }
-        return strcmp(info->variables[index].display_name, display_name) == 0 &&
-               mapping_cstr_equals(info->variables[index].read_expr, read_expr) &&
-               info->variables[index].kind == kind;
+        if (strcmp(info->variables[index].display_name, display_name) != 0 ||
+            !mapping_cstr_equals(info->variables[index].read_expr, read_expr) ||
+            info->variables[index].kind != kind) {
+            return false;
+        }
+        if (info->variables[index].display_type != NULL &&
+            display_type != NULL &&
+            strcmp(info->variables[index].display_type, display_type) != 0) {
+            return false;
+        }
+        if (info->variables[index].display_type == NULL && display_type != NULL) {
+            info->variables[index].display_type = mapping_dup_cstr(display_type);
+            if (info->variables[index].display_type == NULL) {
+                return false;
+            }
+        }
+        return true;
     }
 
     entry.frame_backend_symbol = mapping_dup_cstr(frame_backend_symbol);
     entry.backend_name = mapping_dup_cstr(backend_name);
     entry.display_name = mapping_dup_cstr(display_name);
     entry.read_expr = mapping_dup_cstr(read_expr);
+    entry.display_type = mapping_dup_cstr(display_type);
     entry.kind = kind;
     if (entry.frame_backend_symbol == NULL ||
         entry.display_name == NULL ||
+        (display_type != NULL && entry.display_type == NULL) ||
         !mapping_append_raw((void **)&info->variables,
                             &info->variable_count,
                             &info->variable_capacity,
@@ -296,4 +318,19 @@ bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
         return false;
     }
     return true;
+}
+
+bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
+                                  const char *frame_backend_symbol,
+                                  const char *backend_name,
+                                  const char *display_name,
+                                  const char *read_expr,
+                                  FengCodegenMapingVariableKind kind) {
+    return feng_codegen_maping_info_add_variable_with_display_type(info,
+                                                                   frame_backend_symbol,
+                                                                   backend_name,
+                                                                   display_name,
+                                                                   read_expr,
+                                                                   NULL,
+                                                                   kind);
 }

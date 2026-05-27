@@ -503,12 +503,13 @@ VARS:
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `.fd` 白名单过滤与 `backend_name -> display_name` 重写，并在记录携带 `read_expr` 时优先以该表达式回读用户值，避免把 capture / self / 其他 carrier pointer 直接暴露给编辑器；`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `.fd` 白名单过滤与 `backend_name -> display_name` 重写，并按“用户表达式优先”回读值：记录显式提供 `read_expr` 时直接用它，普通 `PARAM` / `BINDING` / `SELF` 若未提供 `read_expr` 则默认以 `backend_name` 作为只读回读表达式，从而在首次停下时也尽量避免直接暴露 backend `variables` 原值；若回读结果仍只是 runtime 载体指针，则顶层变量显示至少对 `FengArray *` / `FengString *` 通过读取 runtime `length` 字段收敛为稳定长度摘要，数组格式为 `元素类型[length=N]`，例如 `string[length=1]`，字符串格式为 `string[length=N]`。同时，三段式 `for` 的调试 codegen 需要把 header / body / update 的逻辑源码行切分稳定，避免循环体首行断点落到初始化尚未写回的 backend 地址。`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
 
 #### `setBreakpoints`
 
 - 编辑器仍以本地 `.ff` 文件路径下断点；`feng dap` 现已依据 `.fd.PKGS` 把该路径转换成对应的 `PKG_NAME://<package-relative path>`，再交给 `lldb-dap` 利用原生调试信息绑定。
 - 若某个本地文件路径无法唯一落到当前调试闭包中的一个 package URI，`feng dap` 立即报配置错误，不做猜测性绑定。
+- 调试构建生成的 line table 必须把三段式 `for` 的 init / condition / body / update 稳定地落在各自用户可理解的位置上，避免“循环体首行断点”被 `lldb-dap` 绑定到初始化尚未完成的最早地址。
 - 若遇到个别绑定不稳定情形，再用 `.fd.frames` 仅做诊断与命中后重写，不把 `.fd` 变成主断点数据库。
 
 #### `stackTrace`
@@ -525,7 +526,7 @@ VARS:
 - 作用域激活关系以 `lldb-dap` 返回结果为准，`.fd` 不再维护独立 scope 树。
 - `feng dap` 先拿当前 scope 下 **LLDB 实际返回的可见变量集合**，再依据当前 frame 的 `backend_symbol` 在 `.fd.variables` 中查找可重写条目。
 - `variables` 只对白名单内命中的 backend 变量做重写并返回给编辑器，不自行补推隐藏绑定，也不把未映射 backend 临时变量继续透传。
-- 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名；若命中的记录提供 `read_expr`，则应优先用它回读用户值并覆盖 carrier 的原始 `value` / `type` 摘要。
+- 普通变量只对这个“当前可见集合”里的 `backend_name` 做 `backend_name -> display_name` 改名；若命中的记录提供 `read_expr`，则应优先用它回读用户值并覆盖 carrier 的原始 `value` / `type` 摘要；对普通 `PARAM` / `BINDING` / `SELF`，若未显式提供 `read_expr`，则默认以该 `backend_name` 自身作为只读回读表达式。
 - 若当前可见集合在重写后对某个标识符出现 0 个候选或多个候选，`feng dap` 必须报错，不做猜测性绑定。
 
 #### `evaluate`
@@ -544,7 +545,7 @@ VARS:
 
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则先退回原始整数值。
-- string / array / object：优先复用 LLDB 已有摘要与 children；`feng dap` 只负责隐藏明显的 runtime 噪声。
+- string / array / object：优先复用 LLDB 已有 children；若 LLDB 顶层摘要仍只是 runtime carrier pointer，则 `feng dap` 负责把 string / array 收敛为基于 runtime `length` 字段的稳定摘要，而不是裸指针。
 - callable / spec：首版不引入独立 `.fd` 显示数据库，必要时只提供稳定标签重命名。
 - `.fd` 不新增 `types` / `display` 顶层区块；若后续确实发现 LLDB 信息不足，再单独评估增量字段。
 

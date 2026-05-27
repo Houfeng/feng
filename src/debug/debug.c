@@ -486,6 +486,22 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
         if (strcmp(merged_info->variables[index].display_name, variable->display_name) == 0 &&
             debug_cstr_equals(merged_info->variables[index].read_expr, variable->read_expr) &&
             merged_info->variables[index].kind == variable->kind) {
+            if (merged_info->variables[index].display_type != NULL &&
+                variable->display_type != NULL &&
+                strcmp(merged_info->variables[index].display_type,
+                       variable->display_type) != 0) {
+                break;
+            }
+            if (merged_info->variables[index].display_type == NULL &&
+                variable->display_type != NULL) {
+                merged_info->variables[index].display_type =
+                    debug_dup_cstr(variable->display_type);
+                if (merged_info->variables[index].display_type == NULL) {
+                    debug_set_error(out_error_message,
+                                    "out of memory merging debug variable types");
+                    return false;
+                }
+            }
             return true;
         }
         debug_set_error(out_error_message,
@@ -496,12 +512,14 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
         return false;
     }
 
-    if (!feng_codegen_maping_info_add_variable(merged_info,
-                                               variable->frame_backend_symbol,
-                                               variable->backend_name,
-                                               variable->display_name,
-                                               variable->read_expr,
-                                               variable->kind)) {
+    if (!feng_codegen_maping_info_add_variable_with_display_type(
+            merged_info,
+            variable->frame_backend_symbol,
+            variable->backend_name,
+            variable->display_name,
+            variable->read_expr,
+            variable->display_type,
+            variable->kind)) {
         debug_set_error(out_error_message, "out of memory merging debug variables");
         return false;
     }
@@ -629,6 +647,44 @@ static bool debug_build_variables_section(FengDebugBuffer *buffer,
     return true;
 }
 
+/* Returns whether any variable mapping carries an explicit user-facing type. */
+static bool debug_info_has_variable_display_types(const FengCodegenMapingInfo *info) {
+    size_t index;
+
+    if (info == NULL) {
+        return false;
+    }
+    for (index = 0U; index < info->variable_count; ++index) {
+        if (info->variables[index].display_type != NULL &&
+            info->variables[index].display_type[0] != '\0') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Serializes optional per-variable user-facing type text. */
+static bool debug_build_variable_types_section(FengDebugBuffer *buffer,
+                                               const FengCodegenMapingInfo *info,
+                                               FengDebugStringTable *strings) {
+    size_t index;
+
+    if (!debug_info_has_variable_display_types(info)) {
+        return true;
+    }
+    for (index = 0U; index < info->variable_count; ++index) {
+        uint32_t display_type_id;
+
+        if (!debug_string_table_intern(strings,
+                                       info->variables[index].display_type,
+                                       &display_type_id) ||
+            !debug_buffer_append_u32_le(buffer, display_type_id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Writes one raw serialized section entry into the .fd directory. */
 static bool debug_write_section_entry(FILE *file,
                                       const char tag[4],
@@ -699,6 +755,9 @@ static bool debug_collect_strings(FengDebugStringTable *strings,
                                        &ignored) ||
             !debug_string_table_intern(strings,
                                        info->variables[index].read_expr,
+                                       &ignored) ||
+            !debug_string_table_intern(strings,
+                                       info->variables[index].display_type,
                                        &ignored)) {
             return false;
         }
@@ -713,12 +772,15 @@ static bool debug_write_file_payload(FILE *file,
                                      const FengDebugBuffer *packages,
                                      const FengDebugBuffer *frames,
                                      const FengDebugBuffer *variables,
+                                     const FengDebugBuffer *variable_types,
                                      uint32_t string_count,
                                      uint32_t package_count,
                                      uint32_t frame_count,
-                                     uint32_t variable_count) {
+                                     uint32_t variable_count,
+                                     uint32_t variable_type_count) {
     static const unsigned char magic[4] = {'F', 'D', '0', '1'};
-    const uint16_t section_count = 5U;
+    const bool has_variable_types = variable_types != NULL && variable_type_count > 0U;
+    const uint16_t section_count = has_variable_types ? 6U : 5U;
     const uint64_t header_size = 16U;
     const uint64_t dir_entry_size = 32U;
     const uint64_t dir_size = (uint64_t)section_count * dir_entry_size;
@@ -727,6 +789,7 @@ static bool debug_write_file_payload(FILE *file,
     uint64_t packages_offset = strings_offset + (uint64_t)strings->length;
     uint64_t frames_offset = packages_offset + (uint64_t)packages->length;
     uint64_t variables_offset = frames_offset + (uint64_t)frames->length;
+    uint64_t variable_types_offset = variables_offset + (uint64_t)variables->length;
     FengDebugBuffer header = {0};
     bool ok = true;
 
@@ -745,11 +808,18 @@ static bool debug_write_file_payload(FILE *file,
            debug_write_section_entry(file, "PKGS", packages_offset, packages->length, package_count) &&
            debug_write_section_entry(file, "FRMS", frames_offset, frames->length, frame_count) &&
            debug_write_section_entry(file, "VARS", variables_offset, variables->length, variable_count) &&
+            (!has_variable_types ||
+             debug_write_section_entry(file,
+                           "VTYP",
+                           variable_types_offset,
+                           variable_types->length,
+                           variable_type_count)) &&
            debug_write_buffer(file, meta) &&
            debug_write_buffer(file, strings) &&
            debug_write_buffer(file, packages) &&
            debug_write_buffer(file, frames) &&
-           debug_write_buffer(file, variables);
+            debug_write_buffer(file, variables) &&
+            (!has_variable_types || debug_write_buffer(file, variable_types));
 }
 
 /* Reads one whole .fd file into memory. */
@@ -842,6 +912,7 @@ static bool debug_parse_sections(const unsigned char *data,
                                  FengDebugParsedSection *packages,
                                  FengDebugParsedSection *frames,
                                  FengDebugParsedSection *variables,
+                                 FengDebugParsedSection *variable_types,
                                  char **out_error_message) {
     uint16_t version;
     uint16_t section_count;
@@ -886,6 +957,8 @@ static bool debug_parse_sections(const unsigned char *data,
             target = frames;
         } else if (memcmp(tag, "VARS", 4U) == 0) {
             target = variables;
+        } else if (memcmp(tag, "VTYP", 4U) == 0) {
+            target = variable_types;
         } else {
             continue;
         }
@@ -1162,6 +1235,46 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
     return true;
 }
 
+/* Parses optional per-variable user-facing type text from a loaded .fd. */
+static bool debug_parse_variable_types_section(const FengDebugParsedSection *section,
+                                               char **strings,
+                                               size_t string_count,
+                                               FengCodegenMapingInfo *info,
+                                               char **out_error_message) {
+    const unsigned char *cursor;
+    const unsigned char *end;
+
+    if (!section->present || section->record_count == 0U) {
+        return true;
+    }
+    if (info == NULL || info->variables == NULL ||
+        info->variable_count != (size_t)section->record_count ||
+        section->size != (size_t)section->record_count * 4U) {
+        debug_set_error(out_error_message, "invalid debug VTYP section");
+        return false;
+    }
+    cursor = section->data;
+    end = section->data + section->size;
+    for (size_t index = 0U; cursor < end; ++index) {
+        uint32_t display_type_id = debug_read_u32_le(cursor);
+        const char *display_type = debug_lookup_loaded_string(strings,
+                                                              string_count,
+                                                              display_type_id);
+
+        if (display_type_id != 0U && display_type == NULL) {
+            debug_set_error(out_error_message, "invalid debug variable type record");
+            return false;
+        }
+        info->variables[index].display_type = debug_dup_cstr(display_type);
+        if (display_type != NULL && info->variables[index].display_type == NULL) {
+            debug_set_error(out_error_message, "out of memory reading debug variable type");
+            return false;
+        }
+        cursor += 4U;
+    }
+    return true;
+}
+
 uint64_t feng_debug_fnv1a64_file(const char *path, char **out_error_message) {
     FILE *file;
     unsigned char buffer[8192];
@@ -1220,8 +1333,10 @@ static bool debug_write_fd_with_packages(const char *fd_path,
     FengDebugBuffer packages_buffer = {0};
     FengDebugBuffer frames = {0};
     FengDebugBuffer variables = {0};
+    FengDebugBuffer variable_types = {0};
     uint32_t binary_path_id = 0U;
     FILE *file = NULL;
+    bool has_variable_types = false;
     bool ok = false;
 
     if (out_error_message != NULL) {
@@ -1256,6 +1371,12 @@ static bool debug_write_fd_with_packages(const char *fd_path,
         debug_set_error(out_error_message, "out of memory writing debug sidecar");
         goto cleanup;
     }
+    has_variable_types = debug_info_has_variable_display_types(info);
+    if (has_variable_types &&
+        !debug_build_variable_types_section(&variable_types, info, &string_table)) {
+        debug_set_error(out_error_message, "out of memory writing debug sidecar");
+        goto cleanup;
+    }
 
     if (string_table.count > UINT32_MAX ||
         package_count > UINT32_MAX ||
@@ -1278,10 +1399,14 @@ static bool debug_write_fd_with_packages(const char *fd_path,
                                   &packages_buffer,
                                   &frames,
                                   &variables,
+                                  &variable_types,
                                   (uint32_t)string_table.count,
                                   (uint32_t)package_count,
                                   info != NULL ? (uint32_t)info->frame_count : 0U,
-                                  info != NULL ? (uint32_t)info->variable_count : 0U) ||
+                                  info != NULL ? (uint32_t)info->variable_count : 0U,
+                                  has_variable_types && info != NULL
+                                      ? (uint32_t)info->variable_count
+                                      : 0U) ||
         fclose(file) != 0) {
         file = NULL;
         unlink(fd_path);
@@ -1305,6 +1430,7 @@ cleanup:
     debug_buffer_dispose(&packages_buffer);
     debug_buffer_dispose(&frames);
     debug_buffer_dispose(&variables);
+    debug_buffer_dispose(&variable_types);
     return ok;
 }
 
@@ -1438,6 +1564,7 @@ bool feng_debug_read_fd(const char *fd_path,
     FengDebugParsedSection packages = {0};
     FengDebugParsedSection frames = {0};
     FengDebugParsedSection variables = {0};
+    FengDebugParsedSection variable_types = {0};
     char **loaded_strings = NULL;
     size_t loaded_string_count = 0U;
 
@@ -1460,6 +1587,7 @@ bool feng_debug_read_fd(const char *fd_path,
                               &packages,
                               &frames,
                               &variables,
+                              &variable_types,
                               out_error_message) ||
         !debug_parse_strings_section(&strings,
                                      &loaded_strings,
@@ -1484,6 +1612,11 @@ bool feng_debug_read_fd(const char *fd_path,
                                        loaded_strings,
                                        loaded_string_count,
                                        &out_artifact->info,
+                                    out_error_message) ||
+           !debug_parse_variable_types_section(&variable_types,
+                                        loaded_strings,
+                                        loaded_string_count,
+                                        &out_artifact->info,
                                        out_error_message)) {
         free(data);
         debug_free_loaded_strings(loaded_strings, loaded_string_count);

@@ -102,6 +102,7 @@ typedef enum CGTypeKind {
 
 struct UserType;     /* forward */
 struct UserSpec;     /* forward (Step 4b) */
+typedef struct CG CG;
 
 static bool cg_user_type_is_abi(const struct UserType *t);
 
@@ -124,6 +125,12 @@ typedef struct CGType {
      * function's type_params array (e.g. 0 for T, 1 for U). */
     size_t generic_param_index;
 } CGType;
+
+static void cg_type_ref_free(FengTypeRef *ref);
+static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
+                                            const CGType *type,
+                                            FengToken token);
+static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref);
 
 typedef enum CGValueKind {
     CG_VK_TRIVIAL = 0,
@@ -1368,50 +1375,159 @@ static bool cg_debug_set_current_frame(CG *cg,
     return true;
 }
 
+static char *cg_debug_dup_display_type_from_type_ref(const FengTypeRef *type_ref) {
+    Buf out;
+
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    buf_init(&out);
+    cg_append_type_ref_display(&out, type_ref);
+    return out.data;
+}
+
+static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
+                                                   const CGType *type,
+                                                   FengToken blame) {
+    FengTypeRef *type_ref;
+    char *display_type;
+
+    if (cg == NULL || type == NULL) {
+        return NULL;
+    }
+    type_ref = cg_type_ref_from_cgtype(cg, type, blame);
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    cg_type_ref_free(type_ref);
+    return display_type;
+}
+
 /* Adds one variable mapping that already has a C-string display name. */
-static bool cg_debug_add_variable_record_cstr(CG *cg,
-                                              const char *backend_name,
-                                              const char *display_name,
-                                              const char *read_expr,
-                                              FengCodegenMapingVariableKind kind,
-                                              FengToken blame) {
+static bool cg_debug_add_variable_record_cstr_typed(CG *cg,
+                                                    const char *backend_name,
+                                                    const char *display_name,
+                                                    const char *read_expr,
+                                                    const char *display_type,
+                                                    FengCodegenMapingVariableKind kind,
+                                                    FengToken blame) {
     if (!cg_debug_enabled(cg) ||
         cg->current_frame_backend_symbol == NULL ||
         display_name == NULL) {
         return true;
     }
-    if (!feng_codegen_maping_info_add_variable(&cg->debug_info,
-                                      cg->current_frame_backend_symbol,
-                                      backend_name,
-                                      display_name,
-                                      read_expr,
-                                      kind)) {
+    if (!feng_codegen_maping_info_add_variable_with_display_type(
+            &cg->debug_info,
+            cg->current_frame_backend_symbol,
+            backend_name,
+            display_name,
+            read_expr,
+            display_type,
+            kind)) {
         return cg_fail(cg, blame, "codegen: out of memory recording debug variable");
     }
     return true;
 }
 
 /* Adds one variable mapping keyed by a Feng identifier slice. */
-static bool cg_debug_add_variable_record_slice(CG *cg,
-                                               const char *backend_name,
-                                               FengSlice display_name,
-                                               const char *read_expr,
-                                               FengCodegenMapingVariableKind kind,
-                                               FengToken blame) {
+static bool cg_debug_add_variable_record_slice_typed(CG *cg,
+                                                     const char *backend_name,
+                                                     FengSlice display_name,
+                                                     const char *read_expr,
+                                                     const char *display_type,
+                                                     FengCodegenMapingVariableKind kind,
+                                                     FengToken blame) {
     char *name = cg_dup_slice(display_name);
     bool ok;
 
     if (name == NULL) {
         return cg_fail(cg, blame, "codegen: out of memory recording debug variable");
     }
-    ok = cg_debug_add_variable_record_cstr(cg,
-                                           backend_name,
-                                           name,
-                                           read_expr,
-                                           kind,
-                                           blame);
+    ok = cg_debug_add_variable_record_cstr_typed(cg,
+                                                 backend_name,
+                                                 name,
+                                                 read_expr,
+                                                 display_type,
+                                                 kind,
+                                                 blame);
     free(name);
     return ok;
+}
+
+static bool cg_debug_add_variable_record_cstr_type_ref(CG *cg,
+                                                       const char *backend_name,
+                                                       const char *display_name,
+                                                       const char *read_expr,
+                                                       const FengTypeRef *type_ref,
+                                                       FengCodegenMapingVariableKind kind,
+                                                       FengToken blame) {
+    char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    bool ok = cg_debug_add_variable_record_cstr_typed(cg,
+                                                      backend_name,
+                                                      display_name,
+                                                      read_expr,
+                                                      display_type,
+                                                      kind,
+                                                      blame);
+
+    free(display_type);
+    return ok;
+}
+
+static bool cg_debug_add_variable_record_slice_type_ref(CG *cg,
+                                                        const char *backend_name,
+                                                        FengSlice display_name,
+                                                        const char *read_expr,
+                                                        const FengTypeRef *type_ref,
+                                                        FengCodegenMapingVariableKind kind,
+                                                        FengToken blame) {
+    char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    bool ok = cg_debug_add_variable_record_slice_typed(cg,
+                                                       backend_name,
+                                                       display_name,
+                                                       read_expr,
+                                                       display_type,
+                                                       kind,
+                                                       blame);
+
+    free(display_type);
+    return ok;
+}
+
+static bool cg_debug_add_variable_record_slice_cgtype(CG *cg,
+                                                      const char *backend_name,
+                                                      FengSlice display_name,
+                                                      const char *read_expr,
+                                                      const CGType *type,
+                                                      FengCodegenMapingVariableKind kind,
+                                                      FengToken blame) {
+    char *display_type = cg_debug_dup_display_type_from_cgtype(cg, type, blame);
+    bool ok = cg_debug_add_variable_record_slice_typed(cg,
+                                                       backend_name,
+                                                       display_name,
+                                                       read_expr,
+                                                       display_type,
+                                                       kind,
+                                                       blame);
+
+    free(display_type);
+    return ok;
+}
+
+static bool cg_debug_add_variable_record_cstr(CG *cg,
+                                              const char *backend_name,
+                                              const char *display_name,
+                                              const char *read_expr,
+                                              FengCodegenMapingVariableKind kind,
+                                              FengToken blame) {
+    return cg_debug_add_variable_record_cstr_typed(cg,
+                                                   backend_name,
+                                                   display_name,
+                                                   read_expr,
+                                                   NULL,
+                                                   kind,
+                                                   blame);
 }
 
 /* Resolves the current source file to its logical PKG_NAME:// URI. */
@@ -1465,6 +1581,25 @@ static bool cg_emit_line_directive(CG *cg, FengToken token) {
     }
     if (cg->last_emitted_line_directive == token.line) {
         return true;
+    }
+    buf_append_fmt(cg->cur_body,
+                   "#line %u \"%s\"\n",
+                   token.line,
+                   cg->debug_line_logical_uri);
+    cg->last_emitted_line_directive = token.line;
+    return true;
+}
+
+static bool cg_emit_line_directive_force(CG *cg, FengToken token) {
+    if (cg == NULL ||
+        cg->options == NULL ||
+        !cg->options->emit_line_directives ||
+        cg->cur_body == NULL ||
+        token.line == 0U) {
+        return true;
+    }
+    if (!cg_debug_prepare_line_source(cg) || cg->debug_line_logical_uri == NULL) {
+        return false;
     }
     buf_append_fmt(cg->cur_body,
                    "#line %u \"%s\"\n",
@@ -2562,12 +2697,13 @@ static bool cg_scope_bind_capture_cell(CG *cg,
         goto cleanup;
     }
     if (record_debug_variable &&
-        !cg_debug_add_variable_record_slice(cg,
-                                            cell_var,
-                                            name,
-                                            value_expr,
-                                            debug_kind,
-                                            blame)) {
+        !cg_debug_add_variable_record_slice_cgtype(cg,
+                                                   cell_var,
+                                                   name,
+                                                   value_expr,
+                                                   value_type,
+                                                   debug_kind,
+                                                   blame)) {
         goto cleanup;
     }
 
@@ -9075,15 +9211,16 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             cg_fail(cg, blame, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_slice(cg,
-                                                NULL,
-                                                capture_names[i],
-                                                value_expr.data,
-                                                cg_slice_equals(capture_names[i],
-                                                                (FengSlice){"self", 4U})
-                                                    ? FENG_CODEGEN_MAPING_VARIABLE_SELF
-                                                    : FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
-                                                blame)) {
+        if (!cg_debug_add_variable_record_slice_cgtype(cg,
+                                                       NULL,
+                                                       capture_names[i],
+                                                       value_expr.data,
+                                                       captures[i]->type,
+                                                       cg_slice_equals(capture_names[i],
+                                                                       (FengSlice){"self", 4U})
+                                                           ? FENG_CODEGEN_MAPING_VARIABLE_SELF
+                                                           : FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
+                                                       blame)) {
             buf_free(&cell_expr);
             buf_free(&value_expr);
             goto cleanup;
@@ -9125,12 +9262,13 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             cg_fail(cg, param->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_slice(cg,
-                                                arg_name,
-                                                param->name,
-                                                NULL,
-                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
-                                                param->token)) {
+        if (!cg_debug_add_variable_record_slice_cgtype(cg,
+                                                       arg_name,
+                                                       param->name,
+                                                       NULL,
+                                                       spec->callable_param_types[i],
+                                                       FENG_CODEGEN_MAPING_VARIABLE_PARAM,
+                                                       param->token)) {
             free(param_name);
             goto cleanup;
         }
@@ -14745,12 +14883,13 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
     free(added->name);
     added->name = strndup(b->name.data, b->name.length);
-    if (!cg_debug_add_variable_record_slice(cg,
-                                            cname,
-                                            b->name,
-                                            NULL,
-                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING,
-                                            b->token)) {
+    if (!cg_debug_add_variable_record_slice_cgtype(cg,
+                                                   cname,
+                                                   b->name,
+                                                   NULL,
+                                                   decl_type,
+                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+                                                   b->token)) {
         free(cname);
         return false;
     }
@@ -15995,6 +16134,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     char cont_label[64];
     snprintf(cont_label, sizeof cont_label, "_cont_%d", id);
 
+    if (!cg_emit_line_directive_force(cg, stmt->token)) return false;
     buf_append_cstr(cg->cur_body, "    {\n");
 
     /* Outer scope: holds the optional `for (init; ...)` binding. The init
@@ -16006,6 +16146,12 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     cg->cur_scope = outer_scope;
 
     if (stmt->as.for_stmt.init != NULL) {
+        if (!cg_emit_line_directive_force(cg, stmt->token)) {
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
         if (!cg_emit_stmt(cg, stmt->as.for_stmt.init)) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
@@ -16014,6 +16160,12 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         }
     }
 
+    if (!cg_emit_line_directive_force(cg, stmt->token)) {
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
     buf_append_cstr(cg->cur_body, "    for (;;) {\n");
 
     /* Condition: optional. Empty condition means "always true" per spec. */
@@ -16026,6 +16178,14 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token, "codegen: out of memory");
         }
         cg->cur_scope = cond_scope;
+        if (!cg_emit_line_directive_force(cg, stmt->token)) {
+            cg->cur_scope = cond_scope->parent;
+            scope_pop_free(cond_scope);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
         ExprResult cond;
         if (!cg_emit_expr(cg, stmt->as.for_stmt.condition, &cond)) {
             cg->cur_scope = cond_scope->parent;
@@ -16094,6 +16254,12 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     cg->loop_depth--;
 
     /* Continue label: lands here after body, before update. */
+    if (!cg_emit_line_directive_force(cg, stmt->token)) {
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
     buf_append_fmt(cg->cur_body, "        %s: ;\n", cont_label);
 
     /* Update: optional. Wrapped in its own scope so any temporaries from
@@ -16107,6 +16273,14 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token, "codegen: out of memory");
         }
         cg->cur_scope = upd_scope;
+        if (!cg_emit_line_directive_force(cg, stmt->token)) {
+            cg->cur_scope = upd_scope->parent;
+            scope_pop_free(upd_scope);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
         if (!cg_emit_stmt(cg, stmt->as.for_stmt.update)) {
             cg->cur_scope = upd_scope->parent;
             scope_pop_free(upd_scope);
@@ -16120,6 +16294,12 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         scope_pop_free(upd_scope);
     }
 
+    if (!cg_emit_line_directive_force(cg, stmt->token)) {
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
     buf_append_cstr(cg->cur_body, "    }\n");
 
     /* Outer scope cleanup (init binding release). */
@@ -17444,12 +17624,13 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                 scope_pop_free(fn_scope);
                 goto cleanup_params;
             }
-            if (!cg_debug_add_variable_record_cstr(cg,
-                                                   param_cnames[i],
-                                                   param_fnames[i],
-                                                   NULL,
-                                                   FENG_CODEGEN_MAPING_VARIABLE_PARAM,
-                                                   sig->params[i].token)) {
+            if (!cg_debug_add_variable_record_cstr_type_ref(cg,
+                                                            param_cnames[i],
+                                                            param_fnames[i],
+                                                            NULL,
+                                                            sig->params[i].type,
+                                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM,
+                                                            sig->params[i].token)) {
                 cg->cur_scope = NULL;
                 scope_pop_free(fn_scope);
                 goto cleanup_params;
@@ -18442,12 +18623,14 @@ static bool cg_emit_function(CG *cg,
             cg_fail(cg, decl->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_cstr(cg,
-                                               pn,
-                                               pn,
-                                               NULL,
-                                               FENG_CODEGEN_MAPING_VARIABLE_PARAM,
-                                               decl->as.function_decl.params[i].token)) {
+        if (!cg_debug_add_variable_record_cstr_type_ref(
+            cg,
+            pn,
+            pn,
+            NULL,
+            decl->as.function_decl.params[i].type,
+            FENG_CODEGEN_MAPING_VARIABLE_PARAM,
+            decl->as.function_decl.params[i].token)) {
             goto cleanup;
         }
     }
@@ -22765,12 +22948,14 @@ static bool cg_emit_user_method(CG *cg,
             cg_fail(cg, m->member->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_slice(cg,
-                                                pn,
-                                                m->member->as.callable.params[i].name,
-                                                NULL,
-                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
-                                                m->member->as.callable.params[i].token)) {
+        if (!cg_debug_add_variable_record_slice_type_ref(
+            cg,
+            pn,
+            m->member->as.callable.params[i].name,
+            NULL,
+            m->member->as.callable.params[i].type,
+            FENG_CODEGEN_MAPING_VARIABLE_PARAM,
+            m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
     }
@@ -23001,12 +23186,14 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             cg_fail(cg, m->member->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_slice(cg,
-                                                pn,
-                                                m->member->as.callable.params[i].name,
-                                                NULL,
-                                                FENG_CODEGEN_MAPING_VARIABLE_PARAM,
-                                                m->member->as.callable.params[i].token)) {
+        if (!cg_debug_add_variable_record_slice_type_ref(
+            cg,
+            pn,
+            m->member->as.callable.params[i].name,
+            NULL,
+            m->member->as.callable.params[i].type,
+            FENG_CODEGEN_MAPING_VARIABLE_PARAM,
+            m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
     }
