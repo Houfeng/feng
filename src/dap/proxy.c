@@ -3693,23 +3693,23 @@ static char *proxy_array_summary_element_type(const FengCodegenMapingVariableRec
     size_t length;
 
     if (record == NULL || record->display_type == NULL || record->display_type[0] == '\0') {
-        return proxy_dup_printf("T");
+        return NULL;
     }
     length = strlen(record->display_type);
     if (length > 3U &&
         record->display_type[length - 3U] == '[' &&
-        record->display_type[length - 2U] == ']' &&
-        record->display_type[length - 1U] == '!') {
+        record->display_type[length - 2U] == '!' &&
+        record->display_type[length - 1U] == ']') {
         length -= 3U;
     } else if (length > 2U &&
                record->display_type[length - 2U] == '[' &&
                record->display_type[length - 1U] == ']') {
         length -= 2U;
     } else {
-        return proxy_dup_printf("T");
+        return NULL;
     }
     if (length == 0U) {
-        return proxy_dup_printf("T");
+        return NULL;
     }
     return proxy_dup_bytes((const unsigned char *)record->display_type, length);
 }
@@ -3772,7 +3772,7 @@ static bool proxy_try_summarize_runtime_pointer_value(FengDapMessageReader *back
         if (array_element_type == NULL) {
             proxy_report_error(error_fd,
                                "failed to rewrite variables response",
-                               "out of memory");
+                               "missing array element display type");
             goto cleanup;
         }
         summary = proxy_dup_printf("%s[length=%s]", array_element_type, evaluated.result);

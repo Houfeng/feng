@@ -4783,18 +4783,20 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_param",
-                                                 "args",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_param",
+                                                                   "args",
+                                                                   NULL,
+                                                                   "string[]",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
                                sources,
@@ -4973,24 +4975,27 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_param",
-                                                 "args",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_PARAM));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "capture_cell",
-                                                 "captured",
-                                                 "(capture_cell->value)",
-                                                 FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "i",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_param",
+                                                                   "args",
+                                                                   NULL,
+                                                                   "string[]",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "capture_cell",
+                                                                   "captured",
+                                                                   "(capture_cell->value)",
+                                                                   "string",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "i",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
                                sources,
@@ -5113,7 +5118,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
     ASSERT(strstr(requests_text, "\"expression\":\"backend_local\"") != NULL);
     ASSERT(strstr(requests_text, "\"expression\":\"(capture_cell->value)\"") != NULL);
     ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
-    ASSERT(strstr(stdout_text, "\"value\":\"T[length=0]\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"string[length=0]\"") != NULL);
     ASSERT(strstr(stdout_text, "\"name\":\"captured\"") != NULL);
     ASSERT(strstr(stdout_text, "\"value\":\"captured-value\"") != NULL);
     ASSERT(strstr(stdout_text, "\"type\":\"string\"") != NULL);
@@ -5550,12 +5555,13 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
                                sources,
@@ -5897,24 +5903,27 @@ static void test_dap_rewrites_phase5_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 NULL,
-                                                 "captured",
-                                                 "(_capture_cell->value)",
-                                                 FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_items",
-                                                 "items",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   NULL,
+                                                                   "captured",
+                                                                   "(_capture_cell->value)",
+                                                                   "Captured",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_items",
+                                                                   "items",
+                                                                   NULL,
+                                                                   "int[]",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
                              "captured.member[3] + answer * 2 == items[0]",
@@ -5949,18 +5958,20 @@ static void test_dap_rejects_nonconstant_index_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_items",
-                                                 "items",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_items",
+                                                                   "items",
+                                                                   NULL,
+                                                                   "int[]",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
                              "items[answer]",
@@ -5994,12 +6005,13 @@ static void test_dap_rejects_function_call_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
                              "answer()",
@@ -6033,12 +6045,13 @@ static void test_dap_rejects_assignment_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
-    ASSERT(feng_codegen_maping_info_add_variable(&info,
-                                                 "demo_pkg_main_backend",
-                                                 "backend_local",
-                                                 "answer",
-                                                 NULL,
-                                                 FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
+                                                                   "demo_pkg_main_backend",
+                                                                   "backend_local",
+                                                                   "answer",
+                                                                   NULL,
+                                                                   "int",
+                                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
                              "answer = 1",

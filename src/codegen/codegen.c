@@ -1463,13 +1463,18 @@ static bool cg_debug_add_variable_record_cstr_type_ref(CG *cg,
                                                        FengCodegenMapingVariableKind kind,
                                                        FengToken blame) {
     char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
-    bool ok = cg_debug_add_variable_record_cstr_typed(cg,
-                                                      backend_name,
-                                                      display_name,
-                                                      read_expr,
-                                                      display_type,
-                                                      kind,
-                                                      blame);
+    bool ok;
+
+    if (display_type == NULL) {
+        return cg_fail(cg, blame, "codegen: missing debug display type");
+    }
+    ok = cg_debug_add_variable_record_cstr_typed(cg,
+                                                 backend_name,
+                                                 display_name,
+                                                 read_expr,
+                                                 display_type,
+                                                 kind,
+                                                 blame);
 
     free(display_type);
     return ok;
@@ -1483,13 +1488,43 @@ static bool cg_debug_add_variable_record_slice_type_ref(CG *cg,
                                                         FengCodegenMapingVariableKind kind,
                                                         FengToken blame) {
     char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
-    bool ok = cg_debug_add_variable_record_slice_typed(cg,
-                                                       backend_name,
-                                                       display_name,
-                                                       read_expr,
-                                                       display_type,
-                                                       kind,
-                                                       blame);
+    bool ok;
+
+    if (display_type == NULL) {
+        return cg_fail(cg, blame, "codegen: missing debug display type");
+    }
+    ok = cg_debug_add_variable_record_slice_typed(cg,
+                                                  backend_name,
+                                                  display_name,
+                                                  read_expr,
+                                                  display_type,
+                                                  kind,
+                                                  blame);
+
+    free(display_type);
+    return ok;
+}
+
+static bool cg_debug_add_variable_record_cstr_cgtype(CG *cg,
+                                                     const char *backend_name,
+                                                     const char *display_name,
+                                                     const char *read_expr,
+                                                     const CGType *type,
+                                                     FengCodegenMapingVariableKind kind,
+                                                     FengToken blame) {
+    char *display_type = cg_debug_dup_display_type_from_cgtype(cg, type, blame);
+    bool ok;
+
+    if (display_type == NULL) {
+        return cg_fail(cg, blame, "codegen: missing debug display type");
+    }
+    ok = cg_debug_add_variable_record_cstr_typed(cg,
+                                                 backend_name,
+                                                 display_name,
+                                                 read_expr,
+                                                 display_type,
+                                                 kind,
+                                                 blame);
 
     free(display_type);
     return ok;
@@ -1503,31 +1538,21 @@ static bool cg_debug_add_variable_record_slice_cgtype(CG *cg,
                                                       FengCodegenMapingVariableKind kind,
                                                       FengToken blame) {
     char *display_type = cg_debug_dup_display_type_from_cgtype(cg, type, blame);
-    bool ok = cg_debug_add_variable_record_slice_typed(cg,
-                                                       backend_name,
-                                                       display_name,
-                                                       read_expr,
-                                                       display_type,
-                                                       kind,
-                                                       blame);
+    bool ok;
+
+    if (display_type == NULL) {
+        return cg_fail(cg, blame, "codegen: missing debug display type");
+    }
+    ok = cg_debug_add_variable_record_slice_typed(cg,
+                                                  backend_name,
+                                                  display_name,
+                                                  read_expr,
+                                                  display_type,
+                                                  kind,
+                                                  blame);
 
     free(display_type);
     return ok;
-}
-
-static bool cg_debug_add_variable_record_cstr(CG *cg,
-                                              const char *backend_name,
-                                              const char *display_name,
-                                              const char *read_expr,
-                                              FengCodegenMapingVariableKind kind,
-                                              FengToken blame) {
-    return cg_debug_add_variable_record_cstr_typed(cg,
-                                                   backend_name,
-                                                   display_name,
-                                                   read_expr,
-                                                   NULL,
-                                                   kind,
-                                                   blame);
 }
 
 /* Resolves the current source file to its logical PKG_NAME:// URI. */
@@ -4245,6 +4270,19 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
         return ref;
     }
 
+    if (type->kind == CG_TYPE_POINTER && type->element != NULL) {
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_POINTER;
+        ref->as.inner = cg_type_ref_from_cgtype(cg, type->element, token);
+        if (ref->as.inner == NULL) {
+            free(ref);
+            return NULL;
+        }
+        return ref;
+    }
+
     if (type->kind == CG_TYPE_ARRAY && type->element != NULL) {
         ref = calloc(1U, sizeof *ref);
         if (ref == NULL) return NULL;
@@ -4254,6 +4292,41 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
         if (ref->as.inner == NULL) {
             free(ref);
             return NULL;
+        }
+        return ref;
+    }
+
+    if ((type->kind == CG_TYPE_SPEC || type->kind == CG_TYPE_CALLABLE) &&
+        type->user_spec != NULL && type->user_spec->decl != NULL &&
+        type->user_spec->decl->kind == FENG_DECL_SPEC) {
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_NAMED;
+        ref->as.named.segment_count = 1U;
+        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
+        if (ref->as.named.segments == NULL) {
+            free(ref);
+            return NULL;
+        }
+        segment = type->user_spec->decl->as.spec_decl.name;
+        ref->as.named.segments[0] = segment;
+        if (type->user_spec->is_generic_instance) {
+            ref->as.named.type_arg_count = type->user_spec->generic_type_arg_count;
+            ref->as.named.type_args = calloc(ref->as.named.type_arg_count,
+                                             sizeof *ref->as.named.type_args);
+            if (ref->as.named.type_arg_count > 0U && ref->as.named.type_args == NULL) {
+                cg_type_ref_free(ref);
+                return NULL;
+            }
+            for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                ref->as.named.type_args[i] =
+                    cg_type_ref_clone(type->user_spec->generic_type_args[i]);
+                if (ref->as.named.type_args[i] == NULL) {
+                    cg_type_ref_free(ref);
+                    return NULL;
+                }
+            }
         }
         return ref;
     }
@@ -4392,8 +4465,7 @@ static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {
             break;
         case FENG_TYPE_REF_ARRAY:
             cg_append_type_ref_display(out, ref->as.inner);
-            buf_append_cstr(out, "[]");
-            if (ref->array_element_writable) buf_append_cstr(out, "!");
+            buf_append_cstr(out, ref->array_element_writable ? "[!]" : "[]");
             break;
     }
 }
@@ -22915,12 +22987,13 @@ static bool cg_emit_user_method(CG *cg,
             cg_fail(cg, m->member->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_cstr(cg,
-                                               "self",
-                                               "self",
-                                               NULL,
-                                               FENG_CODEGEN_MAPING_VARIABLE_SELF,
-                                               m->member->token)) {
+        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
+                                                      "self",
+                                                      "self",
+                                                      NULL,
+                                                      self_t,
+                                                      FENG_CODEGEN_MAPING_VARIABLE_SELF,
+                                                      m->member->token)) {
             goto cleanup;
         }
     }
@@ -23153,12 +23226,13 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             cg_fail(cg, m->member->token, "codegen: out of memory");
             goto cleanup;
         }
-        if (!cg_debug_add_variable_record_cstr(cg,
-                                               "self",
-                                               "self",
-                                               NULL,
-                                               FENG_CODEGEN_MAPING_VARIABLE_SELF,
-                                               m->member->token)) {
+        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
+                                                      "self",
+                                                      "self",
+                                                      NULL,
+                                                      self_t,
+                                                      FENG_CODEGEN_MAPING_VARIABLE_SELF,
+                                                      m->member->token)) {
             goto cleanup;
         }
     }
@@ -23306,18 +23380,19 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
         }
         self_t->user = t;
         scope_add(fn_scope, "self", "self", self_t, true);
-    }
-    if (!cg_debug_add_variable_record_cstr(cg,
-                                           "self",
-                                           "self",
-                                           NULL,
-                                           FENG_CODEGEN_MAPING_VARIABLE_SELF,
-                                           fm->token)) {
-        cg->cur_scope = NULL; scope_pop_free(fn_scope);
-        cgtype_free(void_t);
-        cg->cur_body = NULL; cg->cur_return_type = NULL;
-        cg->current_frame_backend_symbol = NULL;
-        return false;
+        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
+                                                      "self",
+                                                      "self",
+                                                      NULL,
+                                                      self_t,
+                                                      FENG_CODEGEN_MAPING_VARIABLE_SELF,
+                                                      fm->token)) {
+            cg->cur_scope = NULL; scope_pop_free(fn_scope);
+            cgtype_free(void_t);
+            cg->cur_body = NULL; cg->cur_return_type = NULL;
+            cg->current_frame_backend_symbol = NULL;
+            return false;
+        }
     }
     if (!cg_emit_block(cg, fm->as.callable.body)) {
         cg->cur_scope = NULL; scope_pop_free(fn_scope);

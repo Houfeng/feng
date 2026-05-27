@@ -51,7 +51,7 @@ typedef struct FengCodegenMapingVariableRecord {
     char *backend_name;
     char *display_name;
     char *read_expr;
-    char *display_type;
+    char *display_type; /* required user-facing type text */
     FengCodegenMapingVariableKind kind;
 } FengCodegenMapingVariableRecord;
 
@@ -86,15 +86,7 @@ bool feng_codegen_maping_info_add_frame(FengCodegenMapingInfo *info,
                                const char *display_name,
                                FengCodegenMapingFramePolicy policy);
 
-/* Appends or validates one variable record inside abstract mapping info. */
-bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
-                                  const char *frame_backend_symbol,
-                                  const char *backend_name,
-                                  const char *display_name,
-                                  const char *read_expr,
-                                  FengCodegenMapingVariableKind kind);
-
-/* Appends or validates one variable record with optional user-facing type text. */
+/* Appends or validates one variable record with required user-facing type text. */
 bool feng_codegen_maping_info_add_variable_with_display_type(
     FengCodegenMapingInfo *info,
     const char *frame_backend_symbol,

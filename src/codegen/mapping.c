@@ -268,7 +268,8 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
 
     memset(&entry, 0, sizeof(entry));
 
-    if (info == NULL || frame_backend_symbol == NULL || display_name == NULL) {
+    if (info == NULL || frame_backend_symbol == NULL || display_name == NULL ||
+        display_type == NULL || display_type[0] == '\0') {
         return false;
     }
     for (index = 0U; index < info->variable_count; ++index) {
@@ -286,16 +287,8 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
             info->variables[index].kind != kind) {
             return false;
         }
-        if (info->variables[index].display_type != NULL &&
-            display_type != NULL &&
-            strcmp(info->variables[index].display_type, display_type) != 0) {
+        if (strcmp(info->variables[index].display_type, display_type) != 0) {
             return false;
-        }
-        if (info->variables[index].display_type == NULL && display_type != NULL) {
-            info->variables[index].display_type = mapping_dup_cstr(display_type);
-            if (info->variables[index].display_type == NULL) {
-                return false;
-            }
         }
         return true;
     }
@@ -308,7 +301,7 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
     entry.kind = kind;
     if (entry.frame_backend_symbol == NULL ||
         entry.display_name == NULL ||
-        (display_type != NULL && entry.display_type == NULL) ||
+        entry.display_type == NULL ||
         !mapping_append_raw((void **)&info->variables,
                             &info->variable_count,
                             &info->variable_capacity,
@@ -318,19 +311,4 @@ bool feng_codegen_maping_info_add_variable_with_display_type(
         return false;
     }
     return true;
-}
-
-bool feng_codegen_maping_info_add_variable(FengCodegenMapingInfo *info,
-                                  const char *frame_backend_symbol,
-                                  const char *backend_name,
-                                  const char *display_name,
-                                  const char *read_expr,
-                                  FengCodegenMapingVariableKind kind) {
-    return feng_codegen_maping_info_add_variable_with_display_type(info,
-                                                                   frame_backend_symbol,
-                                                                   backend_name,
-                                                                   display_name,
-                                                                   read_expr,
-                                                                   NULL,
-                                                                   kind);
 }

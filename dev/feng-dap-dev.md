@@ -366,6 +366,9 @@
   - `lldb-dap` 可见的原始变量名。
 - `display_name_strid`
   - 用户在 Feng 源码中看到的名字。
+- `display_type_strid`
+  - 用户可见的静态类型文本,为必填字段。
+  - 数组沿用 Feng 语法显示为 `T[]` 或 `T[!]`,不写运行时长度摘要。
 - `kind`
   - `param` / `local` / `capture` / `self`。
 - `read_expr_strid`
@@ -380,6 +383,7 @@
 
 - 唯一键是 `frame_backend_symbol_strid + backend_name_strid`，不是 `display_name_strid`。
 - `display_name_strid` 允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
+- `display_type_strid` 为必填；首版 reader / writer 不再保留“缺失类型时额外走可选 section 补齐”的旁路。
 - `feng dap` 只对 LLDB 当前返回的可见变量集合做重写，因此当 LLDB 的可见性结果正确时，同名变量不会串到未激活绑定上。
 
 ### 5.6 一个最小示例
@@ -423,8 +427,8 @@ FRMS:
   [backend_symbol_strid=6, display_name_strid=0, frame_policy=hidden]
 
 VARS:
-  [frame_backend_symbol_strid=4, backend_name_strid=7, display_name_strid=8, kind=local,   read_expr_strid=0]
-  [frame_backend_symbol_strid=4, backend_name_strid=9, display_name_strid=10, kind=capture, read_expr_strid=11]
+  [frame_backend_symbol_strid=4, backend_name_strid=7, display_name_strid=8, read_expr_strid=0,  display_type_strid=12, kind=local]
+  [frame_backend_symbol_strid=4, backend_name_strid=9, display_name_strid=10, read_expr_strid=11, display_type_strid=13, kind=capture]
 ```
 
 这个示例表达的重点不是字节偏移本身，而是：**`.fd`` 只保留 string table + 最小记录表，不引入通用对象树或通用文本语法。**
@@ -437,7 +441,7 @@ VARS:
 
 - 普通参数和普通局部变量，大多只需要 `backend_name + display_name`。
 - `capture`、`self` 或其他特殊 carrier 场景，LLDB 看到的往往是 cell、slot、wrapper pointer，而不是最终用户值。
-- 这类场景需要一个可选 `read_expr`，让 `feng dap` 能从 carrier 读出真正要展示的值。
+- 这类场景需要一个可选 `read_expr`，让 `feng dap` 能从 carrier 读出真正要展示的值；但 `display_type` 仍然始终来自 codegen，作为顶层摘要和变量显示的静态类型基线。
 
 因此，首版结论不是“做成完整调试数据库”，而是“以名字映射为主，只为特殊 carrier 多保留一个可选读取提示”。
 
