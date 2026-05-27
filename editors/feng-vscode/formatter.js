@@ -412,8 +412,12 @@ function needsSpaceBetween(previousEmittedToken,
         return !isPrefixOperator(previousSignificantToken, tokenBeforePreviousSignificant);
     }
 
-    if (previousEmittedToken.value === ',' || previousEmittedToken.value === ':') {
+    if (previousEmittedToken.value === ',') {
         return true;
+    }
+
+    if (previousEmittedToken.value === ':') {
+        return tokenBeforePreviousSignificant == null || tokenBeforePreviousSignificant.value !== '[';
     }
 
     if (previousEmittedToken.value === ';') {

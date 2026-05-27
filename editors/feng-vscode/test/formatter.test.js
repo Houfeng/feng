@@ -29,6 +29,12 @@ runCase(
 );
 
 runCase(
+    'keeps array creation length clause tight inside brackets',
+    'fn main():void {\nlet xs:T[:n];\nlet ys:Map<string,int>[:capacity];\n}\n',
+    'fn main(): void {\n    let xs: T[:n];\n    let ys: Map<string, int>[:capacity];\n}\n'
+);
+
+runCase(
     'indents multi-line parameter lists and for headers',
     'fn main(\nargs:string[],\nlimit:int\n):void {\nfor(i=0;i<limit;i=i+1){\nprint(args[i]);\n}\n}\n',
     'fn main(\n    args: string[],\n    limit: int\n): void {\n    for (i = 0; i < limit; i = i + 1) {\n        print(args[i]);\n    }\n}\n'
