@@ -513,6 +513,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - 每条记录存储：`{ref_id, kind, frame_id, parent_read_expr, element_display_type, element_count}`（数组）或 `{ref_id, kind, frame_id, parent_read_expr, type_display_name}`（用户类型）。
 - 当 `proxy_rewrite_one_variable_payload` 发现变量可展开时，分配 synthetic ref 并写回 JSON 的 `variablesReference` 字段。
 - 当 client 发送 `variables` 请求且 `variablesReference` 命中 synthetic ref 时，`proxy_process_client_relay_message` 拦截该请求并直接合成响应，不转发给 LLDB。
+- 当 client 发送 `continue` / step 类会恢复执行的请求时，当前 stopped 上下文失效；代理层清理 frame bindings、scope bindings、pending variables 与 synthetic refs，旧 synthetic ref 后续请求返回本地失败响应，不再触发旧 frame 的 internal evaluate。`next_synthetic_ref` 保持单调递增，避免新旧 ref ID 复用。
 
 #### 5.10.3 数组元素展开
 

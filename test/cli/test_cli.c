@@ -5904,6 +5904,296 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
     free(remove_error);
 }
 
+static void test_dap_clears_synthetic_refs_after_continue(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
+    static const char *kSourceText =
+        "mod demo.pkg;\n"
+        "fn main(args: string[]) {\n"
+        "    println(\"warmup\");\n"
+        "    println(\"warmup\");\n"
+        "    println(\"warmup\");\n"
+        "    println(\"warmup\");\n"
+        "    println(\"warmup\");\n"
+        "    println(\"first stop\");\n"
+        "    let i = 1;\n"
+        "    println(i);\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_dap_continue_synthetic_XXXXXX";
+    char *workspace_dir;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *path_value;
+    char *escaped_binary_path;
+    char *initialize_json;
+    char *launch_json;
+    char *stack_trace_json;
+    char *scopes_json;
+    char *variables_json;
+    char *continue_json;
+    char *stale_synthetic_json;
+    char *second_stack_trace_json;
+    char *second_scopes_json;
+    char *second_variables_json;
+    char *initialize_text;
+    char *launch_text;
+    char *stack_trace_text;
+    char *scopes_text;
+    char *variables_text;
+    char *continue_text;
+    char *stale_synthetic_text;
+    char *second_stack_trace_text;
+    char *second_scopes_text;
+    char *second_variables_text;
+    char *backend_initialize_json;
+    char *backend_initialize_text;
+    char *escaped_backend_initialize_text;
+    char *backend_script;
+    char *backend_script_tail;
+    char *input_text;
+    char *followup_text;
+    char *stdout_text;
+    char *stderr_text = NULL;
+    char *requests_text;
+    char *fd_error = NULL;
+    char *remove_error = NULL;
+    char *argv[] = { "--stdio" };
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping sources[1];
+    int rc;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, kSourceText);
+    binary_path = path_join(workspace_dir, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "lldb-dap");
+    requests_path = path_join(workspace_dir, "requests.txt");
+    ASSERT(fd_path != NULL);
+
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    sources[0].source_path = source_path;
+    sources[0].package_name = "demo.pkg";
+    sources[0].package_root = src_dir;
+    ASSERT(feng_codegen_maping_info_add_frame(&info,
+                                              "demo_pkg_main_backend",
+                                              "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
+        "backend_param",
+        "args",
+        NULL,
+        "string[]",
+        FENG_CODEGEN_MAPING_VARIABLE_PARAM));
+    ASSERT(feng_codegen_maping_info_add_variable_with_display_type(
+        &info,
+        "demo_pkg_main_backend",
+        "backend_i",
+        "i",
+        NULL,
+        "i64",
+        FENG_CODEGEN_MAPING_VARIABLE_BINDING));
+    ASSERT(feng_debug_write_fd(fd_path,
+                               binary_path,
+                               sources,
+                               1U,
+                               &info,
+                               &fd_error));
+    ASSERT(fd_error == NULL);
+
+    backend_initialize_json = dup_printf("{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{\"supportsConfigurationDoneRequest\":true}}");
+    backend_initialize_text = build_dap_message_text(backend_initialize_json);
+    escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
+    backend_script = dup_printf("#!/usr/bin/env node\n"
+                                "const fs = require('fs');\n"
+                                "const requestsPath = \"%s\";\n"
+                                "const initializeResponse = \"%s\";\n"
+                                "function frame(payload) {\n"
+                                "  return `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\\r\\n\\r\\n${payload}`;\n"
+                                "}\n"
+                                "let requests = '';\n"
+                                "let buffer = Buffer.alloc(0);\n"
+                                "let nextSeq = 20;\n"
+                                "let stackTraceCount = 0;\n"
+                                "process.stdout.write(initializeResponse);\n"
+                                "function writeMessage(message) { process.stdout.write(frame(JSON.stringify(message))); }\n"
+                                "function writeVariables(message) {\n"
+                                "  const ref = message.arguments && message.arguments.variablesReference;\n"
+                                "  const variables = ref === 102 ? [\n"
+                                "    { name: 'backend_param', evaluateName: 'backend_param', value: '0x1000', type: 'FengArray *', variablesReference: 23 },\n"
+                                "    { name: 'backend_i', evaluateName: 'backend_i', value: '1', type: 'int64_t', variablesReference: 0 }\n"
+                                "  ] : [\n"
+                                "    { name: 'backend_param', evaluateName: 'backend_param', value: '0x1000', type: 'FengArray *', variablesReference: 23 }\n"
+                                "  ];\n"
+                                "  writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'variables', body: { variables } });\n"
+                                "}\n"
+                                "process.stdin.on('data', chunk => {\n"
+                                "  requests += chunk.toString('utf8');\n"
+                                "  fs.writeFileSync(requestsPath, requests);\n"
+                                "  buffer = Buffer.concat([buffer, chunk]);\n"
+                                "  for (;;) {\n"
+                                "    const sep = buffer.indexOf('\\r\\n\\r\\n');\n"
+                                "    if (sep < 0) break;\n"
+                                "    const header = buffer.slice(0, sep).toString('utf8');\n"
+                                "    const match = /Content-Length: (\\d+)/i.exec(header);\n"
+                                "    if (!match) break;\n"
+                                "    const length = Number(match[1]);\n"
+                                "    const frameLength = sep + 4 + length;\n"
+                                "    if (buffer.length < frameLength) break;\n"
+                                "    const payload = buffer.slice(sep + 4, frameLength).toString('utf8');\n"
+                                "    buffer = buffer.slice(frameLength);\n"
+                                "    const message = JSON.parse(payload);\n"
+                                "    if (message.command === 'stackTrace') {\n"
+                                "      stackTraceCount += 1;\n"
+                                "      const frameId = stackTraceCount === 1 ? 7 : 8;\n"
+                                "      const line = stackTraceCount === 1 ? 8 : 10;\n"
+                                "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'stackTrace', body: { stackFrames: [{ id: frameId, name: 'demo_pkg_main_backend', source: { name: 'main.ff', path: 'demo.pkg://main.ff' }, line, column: 1 }], totalFrames: 1 } });\n"
+                                "    } else if (message.command === 'scopes') {\n"
+                                "      const scopeRef = message.arguments && message.arguments.frameId === 8 ? 102 : 101;\n"
+                                "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'scopes', body: { scopes: [{ name: 'Locals', variablesReference: scopeRef, expensive: false }] } });\n"
+                                "    } else if (message.command === 'variables') {\n"
+                                "      writeVariables(message);\n"
+                                "    } else if (message.command === 'continue') {\n"
+                                "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'continue', body: { allThreadsContinued: true } });\n"
+                                "      writeMessage({ seq: nextSeq++, type: 'event', event: 'stopped', body: { reason: 'breakpoint', threadId: 1, allThreadsStopped: true } });\n"
+                                "    } else if (message.command === 'evaluate') {\n",
+                                requests_path,
+                                escaped_backend_initialize_text);
+    backend_script_tail = dup_printf("      const expression = message.arguments && message.arguments.expression;\n"
+                                     "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
+                                     "      if (expression === 'backend_param') {\n"
+                                     "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
+                                     "      } else if (expression === 'backend_i') {\n"
+                                     "        body = { result: '1', type: 'int64_t', variablesReference: 0 };\n"
+                                     "      } else if (expression === '(size_t)feng_array_length((const FengArray *)(backend_param))') {\n"
+                                     "        body = { result: '1', type: 'size_t', variablesReference: 0 };\n"
+                                     "      } else if (expression === '((FengString * *)feng_array_data(backend_param))[0]') {\n"
+                                     "        body = { result: '0x2000', type: 'FengString *', variablesReference: 0 };\n"
+                                     "      } else if (expression === '(const char *)feng_string_data((const FengString *)(((FengString * *)feng_array_data(backend_param))[0]))') {\n"
+                                     "        body = { result: '\"stale\"', type: 'const char *', variablesReference: 0 };\n"
+                                     "      }\n"
+                                     "      writeMessage({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'evaluate', body });\n"
+                                     "    }\n"
+                                     "  }\n"
+                                     "});\n"
+                                     "process.stdin.on('end', () => { fs.writeFileSync(requestsPath, requests); process.exit(0); });\n");
+    backend_script = concat_owned_strings(backend_script, backend_script_tail);
+    backend_script_tail = NULL;
+    write_executable_text_file(backend_path, backend_script);
+
+    path_value = dup_printf("%s:%s",
+                            workspace_dir,
+                            getenv("PATH") != NULL ? getenv("PATH") : "");
+    escaped_binary_path = json_escape_text(binary_path);
+    initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                             escaped_binary_path);
+    stack_trace_json = dup_printf("{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    scopes_json = dup_printf("{\"seq\":4,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":7}}");
+    variables_json = dup_printf("{\"seq\":5,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":101}}");
+    continue_json = dup_printf("{\"seq\":6,\"type\":\"request\",\"command\":\"continue\",\"arguments\":{\"threadId\":1}}");
+    stale_synthetic_json = dup_printf("{\"seq\":7,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":1073741824}}");
+    second_stack_trace_json = dup_printf("{\"seq\":8,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    second_scopes_json = dup_printf("{\"seq\":9,\"type\":\"request\",\"command\":\"scopes\",\"arguments\":{\"frameId\":8}}");
+    second_variables_json = dup_printf("{\"seq\":10,\"type\":\"request\",\"command\":\"variables\",\"arguments\":{\"variablesReference\":102}}");
+    initialize_text = build_dap_message_text(initialize_json);
+    launch_text = build_dap_message_text(launch_json);
+    stack_trace_text = build_dap_message_text(stack_trace_json);
+    scopes_text = build_dap_message_text(scopes_json);
+    variables_text = build_dap_message_text(variables_json);
+    continue_text = build_dap_message_text(continue_json);
+    stale_synthetic_text = build_dap_message_text(stale_synthetic_json);
+    second_stack_trace_text = build_dap_message_text(second_stack_trace_json);
+    second_scopes_text = build_dap_message_text(second_scopes_json);
+    second_variables_text = build_dap_message_text(second_variables_json);
+    input_text = dup_printf("%s%s%s%s%s",
+                            initialize_text,
+                            launch_text,
+                            stack_trace_text,
+                            scopes_text,
+                            variables_text);
+    followup_text = dup_printf("%s%s%s%s%s",
+                               continue_text,
+                               stale_synthetic_text,
+                               second_stack_trace_text,
+                               second_scopes_text,
+                               second_variables_text);
+
+    stdout_text = run_dap_interactive_capture_stdout_with_path(1,
+                                                               argv,
+                                                               input_text,
+                                                               "\"variablesReference\":1073741824",
+                                                               followup_text,
+                                                               path_value,
+                                                               &rc,
+                                                               &stderr_text);
+    ASSERT(rc == 0);
+    requests_text = read_text_file(requests_path);
+    ASSERT(strstr(requests_text, "\"command\":\"continue\"") != NULL);
+    ASSERT(strstr(requests_text, "\"variablesReference\":102") != NULL);
+    ASSERT(strstr(requests_text,
+                  "\"expression\":\"((FengString * *)feng_array_data(backend_param))[0]\"") == NULL);
+    ASSERT(strstr(stdout_text, "unknown synthetic variablesReference") != NULL);
+    ASSERT(strstr(stdout_text, "\"request_seq\":7,\"success\":false") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"args\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"name\":\"i\"") != NULL);
+    ASSERT(strstr(stdout_text, "\"value\":\"1\"") != NULL);
+    ASSERT(strstr(stdout_text, "backend_i") == NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(requests_text);
+    free(stderr_text);
+    free(stdout_text);
+    free(followup_text);
+    free(input_text);
+    free(second_variables_text);
+    free(second_scopes_text);
+    free(second_stack_trace_text);
+    free(stale_synthetic_text);
+    free(continue_text);
+    free(variables_text);
+    free(scopes_text);
+    free(stack_trace_text);
+    free(launch_text);
+    free(initialize_text);
+    free(second_variables_json);
+    free(second_scopes_json);
+    free(second_stack_trace_json);
+    free(stale_synthetic_json);
+    free(continue_json);
+    free(variables_json);
+    free(scopes_json);
+    free(stack_trace_json);
+    free(launch_json);
+    free(initialize_json);
+    free(escaped_binary_path);
+    free(path_value);
+    free(backend_script_tail);
+    free(backend_script);
+    free(escaped_backend_initialize_text);
+    free(backend_initialize_text);
+    free(backend_initialize_json);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(fd_error);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
     static const char *kSourceText =
@@ -12170,6 +12460,7 @@ int main(void) {
     test_dap_filters_backend_variables_and_rewrites_user_values();
     test_project_build_rewrites_module_binding_in_dap_globals();
     test_dap_uses_array_element_type_name_in_value_summary();
+    test_dap_clears_synthetic_refs_after_continue();
     test_dap_expands_user_type_fields_with_synthetic_reference();
     test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf();
     test_project_build_keeps_for_body_locals_after_prefix_binding();

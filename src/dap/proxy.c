@@ -179,6 +179,40 @@ static void proxy_relay_state_dispose(FengDapRelayState *state) {
     memset(state, 0, sizeof(*state));
 }
 
+static void proxy_relay_state_clear_stopped_context(FengDapRelayState *state) {
+    size_t index;
+
+    if (state == NULL) {
+        return;
+    }
+    for (index = 0U; index < state->frame_binding_count; ++index) {
+        free(state->frame_bindings[index].backend_symbol);
+        state->frame_bindings[index].backend_symbol = NULL;
+    }
+    for (index = 0U; index < state->synthetic_ref_count; ++index) {
+        proxy_synthetic_ref_dispose(&state->synthetic_refs[index]);
+    }
+    state->frame_binding_count = 0U;
+    state->pending_scope_request_count = 0U;
+    state->scope_binding_count = 0U;
+    state->pending_variables_request_count = 0U;
+    state->synthetic_ref_count = 0U;
+}
+
+static bool proxy_command_resumes_execution(const char *command) {
+    if (command == NULL) {
+        return false;
+    }
+    return strcmp(command, "continue") == 0 ||
+           strcmp(command, "next") == 0 ||
+           strcmp(command, "stepIn") == 0 ||
+           strcmp(command, "stepOut") == 0 ||
+           strcmp(command, "stepBack") == 0 ||
+           strcmp(command, "reverseContinue") == 0 ||
+           strcmp(command, "restartFrame") == 0 ||
+           strcmp(command, "goto") == 0;
+}
+
 static bool proxy_relay_state_set_frame_binding(FengDapRelayState *state,
                                                 uint64_t frame_id,
                                                 const char *backend_symbol) {
@@ -5327,6 +5361,9 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
                                   message->payload_length,
                                   "seq",
                                   &request_seq)) {
+        if (proxy_command_resumes_execution(command)) {
+            proxy_relay_state_clear_stopped_context(state);
+        }
         if (strcmp(command, "scopes") == 0 &&
             proxy_json_get_request_argument_u64_member(message->payload,
                                                        message->payload_length,
