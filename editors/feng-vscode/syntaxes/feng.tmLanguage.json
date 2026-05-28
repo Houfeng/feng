@@ -115,7 +115,7 @@
     "functionDefinitions": {
       "patterns": [
         {
-          "begin": "\\b(fn)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)(<)",
+          "begin": "\\b(func)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)(<)",
           "end": ">",
           "beginCaptures": {
             "1": { "name": "keyword.declaration.function.feng" },
@@ -130,7 +130,7 @@
           ]
         },
         {
-          "match": "\\b(fn)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\\b",
+          "match": "\\b(func)(\\s+)(~[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
             "1": { "name": "keyword.declaration.function.feng" },
             "3": { "name": "entity.name.function.feng" }
@@ -210,7 +210,7 @@
     "modulePaths": {
       "patterns": [
         {
-          "match": "\\b(mod|use)(\\s+)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "match": "\\b(module|import)(\\s+)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
           "captures": {
             "1": {
               "name": "keyword.control.import.feng"
@@ -293,7 +293,7 @@
       "patterns": [
         {
           "name": "keyword.control.feng",
-          "match": "\\b(?:extern|let|var|pu|pr|mod|use|as|if|else|while|for|break|continue|try|catch|finally|throw|return)\\b"
+          "match": "\\b(?:extern|let|var|open|seal|module|import|as|if|else|while|for|break|continue|try|catch|finally|throw|return)\\b"
         }
       ]
     },

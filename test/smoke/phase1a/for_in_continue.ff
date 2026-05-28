@@ -1,11 +1,11 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 // `for/in` continue must advance the iterator index. We skip the middle
 // element via continue and verify the others still print in order.
-fn main(args: string[]) {
+func main(args: string[]) {
     let nums: i32[] = [1, 2, 3];
     for let n in nums {
         if n == 2 {

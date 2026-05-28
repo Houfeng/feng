@@ -1,9 +1,9 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn translate(word: string): string {
+func translate(word: string): string {
     let r = if word {
         "hi", "hello" { "greeting"; }
         "bye", "goodbye" { "farewell"; }
@@ -12,7 +12,7 @@ fn translate(word: string): string {
     return r;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     puts(&translate("hi"));
     puts(&translate("hello"));
     puts(&translate("bye"));

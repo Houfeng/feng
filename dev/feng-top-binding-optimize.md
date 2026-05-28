@@ -57,7 +57,7 @@ _feng_g__B__b1 = Feng__B__Foo__new(_feng_g__A__a1->x * 2);
 _feng_g__B__b2 = Feng__B__Foo__new(0);
 ```
 
-注：这一步生成的仍然是包内 `static` 存储槽。即使顶层 binding 是 `pu`，pre-lazy codegen 也没有为它单独生成跨包值导出表面；`pu` 只影响符号/可见性层，不改变这里的包内 eager 初始化形态。
+注：这一步生成的仍然是包内 `static` 存储槽。即使顶层 binding 是 `open`，pre-lazy codegen 也没有为它单独生成跨包值导出表面；`open` 只影响符号/可见性层，不改变这里的包内 eager 初始化形态。
 
 ### Lazy 后生成
 
@@ -209,34 +209,34 @@ static void _feng_ensure_g__A__a3(void) {
 
 lazy 版本补齐跨包值表面时，导出 ABI 约定如下：
 
-- `pu let name: T` / `pu var name: T`：都导出 public storage slot，命名沿用 binding 自身 mangled symbol
-- `pu let name: T` / `pu var name: T`：都导出 public ensure_init，命名为 `feng__<module>__<name>__ensure_init__from__void`
+- `open let name: T` / `open var name: T`：都导出 public storage slot，命名沿用 binding 自身 mangled symbol
+- `open let name: T` / `open var name: T`：都导出 public ensure_init，命名为 `feng__<module>__<name>__ensure_init__from__void`
 - provider 包内访问与跨包访问统一：先调用 ensure_init，再直接读/写/取址 storage slot
 - consumer 侧 imported binding codegen 生成 `extern` storage slot 声明和 `extern ensure_init` prototype；不再单独生成值访问 wrapper
 
 当前以 codegen 回归作为实现标记，验收面收敛为：
 
-1. imported `pu let` 通过 `alias.member` 读取时，codegen 成功，并生成 extern storage slot、extern ensure_init 与 ensure_init 调用点
-2. imported `pu var` 通过 `alias.member` 读取和写入时，codegen 成功，并生成 extern storage slot、extern ensure_init 与 slot 读写发码
+1. imported `open let` 通过 `alias.member` 读取时，codegen 成功，并生成 extern storage slot、extern ensure_init 与 ensure_init 调用点
+2. imported `open var` 通过 `alias.member` 读取和写入时，codegen 成功，并生成 extern storage slot、extern ensure_init 与 slot 读写发码
 3. imported public binding 的 `&` 语法可用，并在 ensure_init 之后针对 storage slot 取址或派生地址
 
 ### 跨包 TODO 拆解
 
 1. 边界先收敛
-    - 本轮跨包支持覆盖 public 顶层 binding 的值读取、`pu var` 写入，以及合法语法里的 `&public_binding`
+    - 本轮跨包支持覆盖 public 顶层 binding 的值读取、`open var` 写入，以及合法语法里的 `&public_binding`
     - public 顶层 binding 统一公开 storage slot 和 ensure_init，两者缺一不可
     - `&public_binding` 不是可以私自裁掉的语法；若包内 `&top_binding` 成立，跨包 public binding 也必须按同一语言语义补齐
 
 2. provider 侧导出面补齐
     - 在 lazy 版本现有 `storage slot + _inited + internal ensure_init` 基础上，补 public slot / public ensure_init 的导出逻辑
-    - `pu let` / `pu var`：lib 目标下都公开非 `static` storage slot
-    - `pu let` / `pu var`：lib 目标下都公开非 `static` ensure_init，内部保障 init expr 最多执行一次
+    - `open let` / `open var`：lib 目标下都公开非 `static` storage slot
+    - `open let` / `open var`：lib 目标下都公开非 `static` ensure_init，内部保障 init expr 最多执行一次
     - 包内和跨包都按“先 ensure_init，再对 storage slot 操作”发码，不再引入额外值访问 wrapper 特例
 
 3. imported binding declaration emission 补齐
     - consumer codegen 新增 imported public binding declaration pass，不再只有 imported function prototype
-    - imported `pu let` / `pu var` 都生成 storage slot `extern` 声明
-    - imported `pu let` / `pu var` 都生成 ensure_init `extern` prototype
+    - imported `open let` / `open var` 都生成 storage slot `extern` 声明
+    - imported `open let` / `open var` 都生成 ensure_init `extern` prototype
     - imported synthetic binding 继续只保留 declaration metadata，不回填 initializer
 
 4. 读取路径补齐到 imported binding
@@ -244,7 +244,7 @@ lazy 版本补齐跨包值表面时，导出 ABI 约定如下：
     - `cg_emit_identifier` 命中 imported visible public binding 时，也先 lower 为 ensure_init 调用，再返回 extern storage slot 表达式
     - 读取路径统一避免把 imported module alias 当运行时 object 去发 member access；所有后续计算都围绕 slot 展开
 
-5. 写入路径补齐到 imported `pu var`
+5. 写入路径补齐到 imported `open var`
     - identifier assignment 命中 imported public `var` 时，先 lower 为 ensure_init 调用，再直接写 extern storage slot
     - member assignment 命中 `module_alias.binding` 且 binding 为 imported public `var` 时，也先 lower 为 ensure_init 调用，再直接写 extern storage slot
     - compound assignment 不新增额外 ABI，统一拆成“ensure_init -> 读 slot -> 计算 -> 写 slot”

@@ -1,49 +1,49 @@
-mod std_test;
+module std_test;
 
-use std;
-use std.collections;
+import std;
+import std.collections;
 
-fn string_length_ascii() {
+func string_length_ascii() {
   check("abc".length() == (long)3, "length/string-ascii");
 }
 
-fn string_length_utf8_bytes() {
+func string_length_utf8_bytes() {
   check("你好".length() == (long)6, "length/string-utf8-bytes");
 }
 
-fn string_length_empty() {
+func string_length_empty() {
   check("".length() == (long)0, "length/string-empty");
 }
 
-fn array_length_readonly() {
+func array_length_readonly() {
   let values: int[] = [1, 2, 3, 4];
   check(values.length() == (long)4, "length/array-readonly");
 }
 
-fn array_length_writable() {
+func array_length_writable() {
   let values: int[!] = [10, 20];
   check(values.length() == (long)2, "length/array-writable");
 }
 
-fn array_length_empty() {
+func array_length_empty() {
   let values: int[];
   check(values.length() == (long)0, "length/array-empty");
 }
 
-fn array_length_nested() {
+func array_length_nested() {
   let matrix: int[][!] = [[1, 2, 3], [4]];
   check(matrix.length() == (long)2, "length/array-nested-outer");
   check(matrix[0].length() == (long)3, "length/array-nested-inner");
 }
 
-fn array_index_of_int() {
+func array_index_of_int() {
   let values: int[!] = [10, 20, 30, 20];
 
   check(values.indexOf(20) == (long)1, "length/array-index-of-int-hit");
   check(values.indexOf(99) == (long)-1, "length/array-index-of-int-miss");
 }
 
-fn array_index_of_string() {
+func array_index_of_string() {
   let values: string[!] = ["zero", "hello", "world"];
   let joined = "he" + "llo";
 
@@ -51,14 +51,14 @@ fn array_index_of_string() {
   check(values.indexOf("missing") == (long)-1, "length/array-index-of-string-miss");
 }
 
-fn span_length_readonly() {
+func span_length_readonly() {
   let values: int[] = [1, 2, 3, 4];
   let middle = values.slice((long)1, (long)3);
 
   check(middle.length() == (long)2, "length/span-length-readonly");
 }
 
-fn span_get_readonly() {
+func span_get_readonly() {
   let values: int[] = [1, 2, 3, 4];
   let middle = values.slice((long)1, (long)3);
 
@@ -66,7 +66,7 @@ fn span_get_readonly() {
   check(middle.get((long)1) == 3, "length/span-get-readonly-1");
 }
 
-fn span_slice_writable_source() {
+func span_slice_writable_source() {
   let values: int[!] = [10, 20, 30];
   let tail = values.slice((long)1, (long)3);
 
@@ -75,7 +75,7 @@ fn span_slice_writable_source() {
   check(tail.get((long)1) == 30, "length/span-writable-source-1");
 }
 
-fn span_slice_invalid_range() {
+func span_slice_invalid_range() {
   let values: int[] = [1, 2, 3];
   let fallback = values.slice((long)0, (long)1);
   var caught: bool = false;
@@ -88,7 +88,7 @@ fn span_slice_invalid_range() {
   check(caught, "length/span-slice-invalid-range");
 }
 
-fn span_slice_negative_start() {
+func span_slice_negative_start() {
   let values: int[] = [1, 2, 3];
   let fallback = values.slice((long)0, (long)1);
   var caught: bool = false;
@@ -101,7 +101,7 @@ fn span_slice_negative_start() {
   check(caught, "length/span-slice-negative-start");
 }
 
-fn span_get_invalid_index() {
+func span_get_invalid_index() {
   let values: int[] = [1, 2, 3];
   let middle = values.slice((long)1, (long)3);
   var caught: bool = false;
@@ -114,7 +114,7 @@ fn span_get_invalid_index() {
   check(caught, "length/span-get-invalid-index");
 }
 
-fn span_get_negative_index() {
+func span_get_negative_index() {
   let values: int[] = [1, 2, 3];
   let middle = values.slice((long)1, (long)3);
   var caught: bool = false;
@@ -127,7 +127,7 @@ fn span_get_negative_index() {
   check(caught, "length/span-get-negative-index");
 }
 
-pu fn run_length_tests() {
+open func run_length_tests() {
   string_length_ascii();
   string_length_utf8_bytes();
   string_length_empty();

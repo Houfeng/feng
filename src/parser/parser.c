@@ -308,10 +308,10 @@ static bool parser_tokenize(Parser *parser) {
 }
 
 static FengVisibility parse_visibility(Parser *parser) {
-    if (parser_match(parser, FENG_TOKEN_KW_PU)) {
+    if (parser_match(parser, FENG_TOKEN_KW_OPEN)) {
         return FENG_VISIBILITY_PUBLIC;
     }
-    if (parser_match(parser, FENG_TOKEN_KW_PR)) {
+    if (parser_match(parser, FENG_TOKEN_KW_SEAL)) {
         return FENG_VISIBILITY_PRIVATE;
     }
     return FENG_VISIBILITY_DEFAULT;
@@ -759,7 +759,7 @@ static FengCallableSignature parse_callable_signature(Parser *parser,
     callable.return_type = NULL;
     callable.body = NULL;
 
-    /* Optional generic type parameters: fn name<T: Bound, U>(...) */
+    /* Optional generic type parameters: func name<T: Bound, U>(...) */
     if (parser_match(parser, FENG_TOKEN_LT)) {
         if (!parse_type_params(parser,
                                &callable.type_params,
@@ -974,8 +974,8 @@ static FengDecl *parse_enum_declaration(Parser *parser,
         memset(&item, 0, sizeof(item));
 
         if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR) ||
-            parser_check(parser, FENG_TOKEN_KW_FN) || parser_check(parser, FENG_TOKEN_KW_EXTERN) ||
-            parser_check(parser, FENG_TOKEN_KW_PU) || parser_check(parser, FENG_TOKEN_KW_PR)) {
+            parser_check(parser, FENG_TOKEN_KW_FUNC) || parser_check(parser, FENG_TOKEN_KW_EXTERN) ||
+            parser_check(parser, FENG_TOKEN_KW_OPEN) || parser_check(parser, FENG_TOKEN_KW_SEAL)) {
             (void)parser_error_current(parser,
                                        "enum declarations only allow item names and optional integer literal initializers");
             free_decl(decl);
@@ -1161,7 +1161,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             member->as.field.name = binding.name;
             member->as.field.type = binding.type;
             member->as.field.initializer = binding.initializer;
-        } else if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+        } else if (parser_match(parser, FENG_TOKEN_KW_FUNC)) {
             FengCallableSignature callable;
             FengSlice name;
             FengToken member_name_token = parser_current_token(parser);
@@ -1186,8 +1186,8 @@ static FengDecl *parse_type_declaration(Parser *parser,
                                                &name,
                                                false,
                                                is_finalizer
-                                                   ? "expected the type name after 'fn ~' to declare a finalizer"
-                                                   : "expected a method or constructor name after 'fn'")) {
+                                                   ? "expected the type name after 'func ~' to declare a finalizer"
+                                                   : "expected a method or constructor name after 'func'")) {
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
                 return NULL;
@@ -1277,17 +1277,17 @@ static FengDecl *parse_type_declaration(Parser *parser,
             free_annotations(member_annotations, member_annotation_count);
             if (parser_starts_callable_signature(parser)) {
                 (void)parser_error_current(parser,
-                                           "type methods and constructors must start with 'fn'");
+                                           "type methods and constructors must start with 'func'");
             } else if (parser_starts_binding_without_keyword(parser)) {
                 (void)parser_error_current(parser,
                                            "type fields must start with 'let' or 'var'");
             } else if (parser_check(parser, FENG_TOKEN_KW_EXTERN)) {
                 (void)parser_error_current(
                     parser,
-                    "type members cannot use 'extern fn'; use 'fn' for methods or 'let'/'var' for fields");
+                    "type members cannot use 'extern func'; use 'func' for methods or 'let'/'var' for fields");
             } else {
                 (void)parser_error_current(parser,
-                                           "expected type member declaration: 'let', 'var', or 'fn'");
+                                           "expected type member declaration: 'let', 'var', or 'func'");
             }
             free_decl(decl);
             return NULL;
@@ -1318,10 +1318,10 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
     FengSlice doc_comment = doc_comment_from_token(&member_start);
     FengTypeMember *member = NULL;
 
-    if (parser_check(parser, FENG_TOKEN_KW_PU) || parser_check(parser, FENG_TOKEN_KW_PR)) {
+    if (parser_check(parser, FENG_TOKEN_KW_OPEN) || parser_check(parser, FENG_TOKEN_KW_SEAL)) {
         (void)parser_error_current(
             parser,
-            "spec members cannot declare visibility; remove 'pu' or 'pr'");
+            "spec members cannot declare visibility; remove 'open' or 'seal'");
         return NULL;
     }
 
@@ -1362,7 +1362,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         return member;
     }
 
-    if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+    if (parser_match(parser, FENG_TOKEN_KW_FUNC)) {
         FengCallableSignature callable;
         FengSlice name;
         FengToken member_name_token = parser_current_token(parser);
@@ -1379,8 +1379,8 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
                                            &name,
                                            false,
                                            is_finalizer
-                                               ? "expected a finalizer name after 'fn ~'"
-                                               : "expected a method name after 'fn'")) {
+                                               ? "expected a finalizer name after 'func ~'"
+                                               : "expected a method name after 'func'")) {
             return NULL;
         }
         callable = parse_callable_signature(
@@ -1430,7 +1430,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
     }
 
     (void)member_start;
-    (void)parser_error_current(parser, "expected spec member declaration: 'let', 'var', or 'fn'");
+    (void)parser_error_current(parser, "expected spec member declaration: 'let', 'var', or 'func'");
     return NULL;
 }
 
@@ -1579,12 +1579,12 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
         return NULL;
     }
 
-    if (!parser_match(parser, FENG_TOKEN_KW_FN)) {
-        (void)parser_error_current(parser, "fit block members must start with 'fn'");
+    if (!parser_match(parser, FENG_TOKEN_KW_FUNC)) {
+        (void)parser_error_current(parser, "fit block members must start with 'func'");
         return NULL;
     }
 
-    if (!parser_expect_identifier_like(parser, &name, false, "expected a method name after 'fn'")) {
+    if (!parser_expect_identifier_like(parser, &name, false, "expected a method name after 'func'")) {
         return NULL;
     }
     callable = parse_callable_signature(
@@ -1631,7 +1631,7 @@ static FengDecl *parse_fit_declaration(Parser *parser,
         return NULL;
     }
     if (visibility == FENG_VISIBILITY_PRIVATE) {
-        (void)parser_error_current(parser, "fit declarations cannot use 'pr'");
+        (void)parser_error_current(parser, "fit declarations cannot use 'seal'");
         return NULL;
     }
 
@@ -1721,7 +1721,7 @@ static FengDecl *parse_function_declaration(Parser *parser,
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
 
-    if (!parser_expect_identifier_like(parser, &name, false, "expected a function name after 'fn'")) {
+    if (!parser_expect_identifier_like(parser, &name, false, "expected a function name after 'func'")) {
         free_decl(decl);
         return NULL;
     }
@@ -1738,7 +1738,7 @@ static FengDecl *parse_function_declaration(Parser *parser,
         return NULL;
     }
 
-    /* Extern fn cannot have variadic parameters. */
+    /* Extern func cannot have variadic parameters. */
     if (is_extern &&
         decl->as.function_decl.param_count > 0U &&
         decl->as.function_decl.params[decl->as.function_decl.param_count - 1U].is_variadic) {
@@ -1823,7 +1823,7 @@ static FengDecl *parse_declaration(Parser *parser) {
     }
 
     if (is_extern) {
-        if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+        if (parser_match(parser, FENG_TOKEN_KW_FUNC)) {
             return parse_function_declaration(parser,
                                               doc_comment,
                                               visibility,
@@ -1833,13 +1833,13 @@ static FengDecl *parse_declaration(Parser *parser) {
         }
         free_annotations(annotations, annotation_count);
         (void)parser_error_current(parser,
-                                   "'extern' can only be applied to top-level 'fn' declarations");
+                                   "'extern' can only be applied to top-level 'func' declarations");
         return NULL;
     }
 
     if (parser_starts_callable_signature(parser)) {
         free_annotations(annotations, annotation_count);
-        (void)parser_error_current(parser, "top-level function declarations must start with 'fn'");
+        (void)parser_error_current(parser, "top-level function declarations must start with 'func'");
         return NULL;
     }
 
@@ -1881,7 +1881,7 @@ static FengDecl *parse_declaration(Parser *parser) {
                                      annotations,
                                      annotation_count);
     }
-    if (parser_match(parser, FENG_TOKEN_KW_FN)) {
+    if (parser_match(parser, FENG_TOKEN_KW_FUNC)) {
         return parse_function_declaration(parser,
                                           doc_comment,
                                           visibility,
@@ -1892,7 +1892,7 @@ static FengDecl *parse_declaration(Parser *parser) {
 
     free_annotations(annotations, annotation_count);
     (void)parser_error_current(parser,
-                               "expected top-level declaration: 'let', 'var', 'extern fn', 'type', 'spec', 'fit', or 'fn'");
+                               "expected top-level declaration: 'let', 'var', 'extern func', 'type', 'spec', 'fit', or 'func'");
     return NULL;
 }
 
@@ -3559,7 +3559,7 @@ static FengProgram *parse_program(Parser *parser) {
     program->path = parser->path;
 
     program->module_visibility = parse_visibility(parser);
-    if (!parser_expect(parser, FENG_TOKEN_KW_MOD, "source file must begin with mod declaration")) {
+    if (!parser_expect(parser, FENG_TOKEN_KW_MODULE, "source file must begin with module declaration")) {
         feng_program_free(program);
         return NULL;
     }
@@ -3568,16 +3568,16 @@ static FengProgram *parse_program(Parser *parser) {
                     false,
                     &program->module_segments,
                     &program->module_segment_count,
-                    "expected a module path after 'mod'")) {
+                    "expected a module path after 'module'")) {
         feng_program_free(program);
         return NULL;
     }
-    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "mod declarations must end with ';'")) {
+    if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "module declarations must end with ';'")) {
         feng_program_free(program);
         return NULL;
     }
 
-    while (parser_match(parser, FENG_TOKEN_KW_USE)) {
+    while (parser_match(parser, FENG_TOKEN_KW_IMPORT)) {
         FengUseDecl use_decl;
 
         memset(&use_decl, 0, sizeof(use_decl));
@@ -3586,7 +3586,7 @@ static FengProgram *parse_program(Parser *parser) {
                 false,
                 &use_decl.segments,
                 &use_decl.segment_count,
-                "expected a module path after 'use'")) {
+                "expected a module path after 'import'")) {
             feng_program_free(program);
             return NULL;
         }
@@ -3601,7 +3601,7 @@ static FengProgram *parse_program(Parser *parser) {
                 return NULL;
             }
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "use declarations must end with ';'")) {
+        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "import declarations must end with ';'")) {
             free(use_decl.segments);
             feng_program_free(program);
             return NULL;

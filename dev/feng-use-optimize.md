@@ -9,8 +9,8 @@
 
 按当前确认的目标规则，类型位置支持以下三种写法：
 
-- use module.path; 之后，使用短名类型：Type
-- use module.path as alias; 之后，使用别名限定类型：alias.Type
+- import module.path; 之后，使用短名类型：Type
+- import module.path as alias; 之后，使用别名限定类型：alias.Type
 - 完整模块路径类型引用不要求先 use，直接使用：module.path.Type
 
 不作为目标能力的写法：
@@ -20,8 +20,8 @@
 示例：
 
 ```feng
-use my.app.user;
-use my.app.user as user;
+import my.app.user;
+import my.app.user as user;
 
 let a: User;
 let b: user.User;
@@ -58,7 +58,7 @@ src/semantic/analyzer.c 的 find_named_type_decl(...) 当前行为如下：
 
 现有证据：
 
-- test/semantic/test_semantic.c 已有正例：use vendor.api as api; fn project(user: api.User): api.Named { ... }
+- test/semantic/test_semantic.c 已有正例：import vendor.api as api; func project(user: api.User): api.Named { ... }
 - 这说明 alias-qualified type 至少在 parser + semantic 路径上已经被实际支持。
 
 结论：主语义解析已支持 alias.Type；module.path.Type 的路径解析已有基础，但可见性规则需要改成不依赖 use。
@@ -107,27 +107,27 @@ src/semantic/analyzer.c 的 find_named_type_decl(...) 当前行为如下：
 在 test/semantic/test_semantic.c 新增最小覆盖集合：
 
 1. 短名正例
-- use vendor.api;
+- import vendor.api;
 - 在类型位置使用 User
 
 2. 别名正例
-- use vendor.api as api;
+- import vendor.api as api;
 - 在参数、返回值或绑定类型标注位置使用 api.User
 
 3. 别名数组正例
-- use vendor.api as api;
+- import vendor.api as api;
 - 在类型位置使用 api.User[]
 
 4. 完整路径正例
-- 不写 use vendor.api;
+- 不写 import vendor.api;
 - 在类型位置直接写 vendor.api.User
 
 5. 完整路径数组正例
-- 不写 use vendor.api;
+- 不写 import vendor.api;
 - 在类型位置直接写 vendor.api.User[]
 
 6. 未导入短名 / 别名负例
-- 不写 use vendor.api;
+- 不写 import vendor.api;
 - 在类型位置直接写 User 或 api.User
 - 该 case 应报错，用于锁定“短名与别名仍必须先 use”的规则
 
@@ -153,11 +153,11 @@ src/semantic/analyzer.c 的 find_named_type_decl(...) 当前行为如下：
 
 3. module.path.Type 的 codegen 正例
 - 例如参数、返回值或局部类型标注使用 vendor.api.User
-- 不额外编写 use vendor.api;
+- 不额外编写 import vendor.api;
 
 4. module.path.Type[] 的 codegen 正例
 - 例如数组绑定、函数参数或返回值类型使用 vendor.api.User[]
-- 不额外编写 use vendor.api;
+- 不额外编写 import vendor.api;
 
 验证命令：
 

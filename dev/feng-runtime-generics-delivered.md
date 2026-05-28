@@ -1,12 +1,12 @@
 # Feng Runtime API 泛型已交付
 
-> 本文档用于整理 `@runtime extern fn` 的 runtime API 泛型已交付范围、ABI 边界、实现收口与验收口径。
-> [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 是 `@runtime extern fn` 总体互操作方案；本文只补充 runtime API 泛型能力，不重复定义 `@runtime` 的目标注解、非公开定位与 contract 白名单规则。
+> 本文档用于整理 `@runtime extern func` 的 runtime API 泛型已交付范围、ABI 边界、实现收口与验收口径。
+> [dev/feng-runtime-interop-delivered.md](./feng-runtime-interop-delivered.md) 是 `@runtime extern func` 总体互操作方案；本文只补充 runtime API 泛型能力，不重复定义 `@runtime` 的目标注解、非公开定位与 contract 白名单规则。
 > 核心 runtime API 泛型能力已交付；本文中删除线项属于上层接入或关联文档收敛跟进，不阻塞本文交付。
 
 ## 1. 当前前提
 
-- `@runtime extern fn` 与 Feng 层普通泛型处于不同语义层级：前者是编译器到 C runtime contract 的调用路径；后者是语言级泛型、约束与 witness 分发机制。
+- `@runtime extern func` 与 Feng 层普通泛型处于不同语义层级：前者是编译器到 C runtime contract 的调用路径；后者是语言级泛型、约束与 witness 分发机制。
 - 两者可以共用同一个类型实参描述符载体：`FengGenericParamDescriptor`。普通泛型共享体消费其中的值模型字段与 `witness`；runtime helper 消费其中的 runtime 类型分类字段。
 - `FengGenericParamDescriptor.witness` 继续只服务非 runtime 泛型共享体：在二进制分发场景下，结构按具体类型单态，方法体可共享，共享方法体通过 descriptor 与 witness 操作已单态结构。
 - runtime API 的实现方是 C 方法，不能直接消费 Feng witness。runtime helper 需要的是编译期已知、且 C runtime 可直接理解的类型分类信息；该信息由新增的 `FengRuntimeTypeKind` 字段承载。
@@ -18,14 +18,14 @@
 
 ### 2.1 runtime API 泛型的定位
 
-runtime API 泛型只服务 `@runtime extern fn` 的 lowering：
+runtime API 泛型只服务 `@runtime extern func` 的 lowering：
 
 ```feng
 @runtime
-extern fn helper<T>(value: T): bool;
+extern func helper<T>(value: T): bool;
 
 @runtime
-extern fn helper2<T>(values: T[]): long;
+extern func helper2<T>(values: T[]): long;
 ```
 
 Feng 源层仍用普通泛型声明语法表达类型参数；codegen 在调用 runtime C 符号时，为每个类型实参传入对应的 `FengGenericParamDescriptor`。该 descriptor 由普通泛型共享体与 runtime helper 共同使用，但双方读取的字段不同。
@@ -139,7 +139,7 @@ runtime helper 不把普通 Feng witness 作为操作入口：
 
 ### 4.1 类型参数传递
 
-对 `@runtime extern fn` 的每个类型参数，codegen 传入对应的 `FengGenericParamDescriptor` 实参。建议按类型参数声明顺序传递隐藏 descriptor 参数，并在实现前固定其在 C 符号参数列表中的位置。
+对 `@runtime extern func` 的每个类型参数，codegen 传入对应的 `FengGenericParamDescriptor` 实参。建议按类型参数声明顺序传递隐藏 descriptor 参数，并在实现前固定其在 C 符号参数列表中的位置。
 
 该隐藏 descriptor 的传递顺序和传递方式必须与普通泛型向共享体传递 descriptor 的规则保持一致。
 
@@ -147,7 +147,7 @@ runtime helper 不把普通 Feng witness 作为操作入口：
 
 ```feng
 @runtime
-extern fn feng_expression_equal<T>(left: T, right: T): bool;
+extern func feng_expression_equal<T>(left: T, right: T): bool;
 ```
 
 对应 C contract 可收敛为类似形态：
@@ -164,7 +164,7 @@ bool feng_expression_equal(
 
 裸 `T` 返回值也必须避免按未知大小直接走 C 返回寄存器。当前收敛规则是：
 
-- Feng 声明仍保持 `extern fn foo<T>(...): T;`
+- Feng 声明仍保持 `extern func foo<T>(...): T;`
 - 对应 C contract 改为 `void foo(const FengGenericParamDescriptor *T, ..., void *out);`
 - 调用点按普通泛型共享体的 direct-`T` return 规则，在本地分配 concrete `T` storage，并把 `&storage` 作为隐藏 out carrier 追加到 runtime contract 实参末尾。
 - runtime helper 写入 `out` 时，managed pointer 与 aggregate 必须补 retain，保证返回值所有权语义与普通 Feng 返回一致。
@@ -173,7 +173,7 @@ bool feng_expression_equal(
 
 ```feng
 @runtime
-extern fn foo<T>(value: T): T;
+extern func foo<T>(value: T): T;
 ```
 
 对应 C contract 可收敛为类似形态：
@@ -188,7 +188,7 @@ void foo(
 
 `@runtime extern` 返回裸 `T` 的落地必须单独完成，不能因为普通泛型共享体已经支持 direct-`T` return 就默认 runtime contract 自动继承：
 
-1. 在 semantic 层接受 `@runtime extern fn foo<T>(...): T;` 这一表面形态，但不得依赖返回位单独反向推导类型实参。
+1. 在 semantic 层接受 `@runtime extern func foo<T>(...): T;` 这一表面形态，但不得依赖返回位单独反向推导类型实参。
 2. 在 extern 注册阶段，只对 `uses_runtime_contract` 的 generic extern 放宽 bare-`T` return 的 stable surface 校验；普通 extern 继续沿用现有 C ABI 规则。
 3. 在 generic runtime extern 调用 lowering 阶段，识别原始返回位是裸 `T`，为具体实例化后的 `T` 分配本地 storage，并把 `&storage` 作为隐藏 out carrier 追加到 runtime contract 实参末尾。
 4. 调用结果表达式必须改为该本地 storage，并复用普通泛型 direct-`T` return 的 ownership / cleanup 规则，确保 managed pointer 与 aggregate 的 retain 语义一致。
@@ -265,8 +265,8 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 ### 6.3 Semantic
 
-- [x] 允许 `@runtime extern fn` 在参数位使用泛型参数的裸形态和包裹形态。
-- [x] 允许 `@runtime extern fn` 在返回位使用裸 `T`，并接通对应调用链路。
+- [x] 允许 `@runtime extern func` 在参数位使用泛型参数的裸形态和包裹形态。
+- [x] 允许 `@runtime extern func` 在返回位使用裸 `T`，并接通对应调用链路。
 - [x] 把 runtime generic extern 的推导从 `T[]` wrapped shape 扩展为结构化泛型匹配。
 - [x] 对冲突推导、无法推导、显式类型实参数量不匹配给出稳定诊断。
 - [x] 确保普通 C ABI extern 不获得 runtime 泛型特权。
@@ -274,9 +274,9 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 验收口径：
 
-- `@runtime extern fn foo<T>(value: T)` 可通过语义分析。
-- `@runtime extern fn foo<T>(value: T): T` 可通过语义分析，并继续由参数位完成类型实参确定。
-- `@runtime extern fn foo<T>(value: T[])` 继续通过语义分析。
+- `@runtime extern func foo<T>(value: T)` 可通过语义分析。
+- `@runtime extern func foo<T>(value: T): T` 可通过语义分析，并继续由参数位完成类型实参确定。
+- `@runtime extern func foo<T>(value: T[])` 继续通过语义分析。
 - 非 runtime extern 中同类签名不会绕过 C ABI 规则。
 
 ### 6.4 Codegen

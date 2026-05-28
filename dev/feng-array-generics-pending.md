@@ -9,7 +9,7 @@
 - 当前文档和实现只支持无约束元素类型参数；尚不能表达 `T` 必须满足某个 `spec` 约束面。
 - 普通 Feng 泛型已经支持 `T: Spec` 形式的约束声明，并通过语义检查与 witness 支持共享方法体；该约束面当前包括 object-form `spec` 与 callable-form `spec`。
 - 数组 `fit` 目标引入的 `T` 属于 Feng 层语言泛型问题，继续走普通泛型约束 / witness 体系。
-- 该能力与 `@runtime extern fn` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)。
+- 该能力与 `@runtime extern func` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)。
 
 ## 2. 目标
 
@@ -17,11 +17,11 @@
 
 ```feng
 spec Equal<T> {
-  fn same(other: T): bool;
+  func same(other: T): bool;
 }
 
 fit T[!]: Searchable<T> where T: Equal<T> {
-  fn indexOf(value: T): long {
+  func indexOf(value: T): long {
     ...
   }
 }
@@ -130,7 +130,7 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 - [必须] 数组目标形式引入的类型参数可以声明一个或多个普通泛型约束。
 - [必须] 约束目标的合法性、父约束传递、泛型 `spec` 实参检查，复用 [docs/feng-generics-draft.md](../docs/feng-generics-draft.md) 的普通泛型约束规则；当前包括 object-form `spec` 与 callable-form `spec`。
 - [必须] `fit` 块体内，受 object-form 约束的元素类型参数可使用约束提供的字段、方法和 `spec` 视角能力。
-- [必须] `fit` 块体内，受 callable-form 约束的元素类型参数可按约束签名直接调用，例如 `fn run(value: T) { value(arg); }` 这类路径必须复用普通 generic callable constraint invoke lowering。
+- [必须] `fit` 块体内，受 callable-form 约束的元素类型参数可按约束签名直接调用，例如 `func run(value: T) { value(arg); }` 这类路径必须复用普通 generic callable constraint invoke lowering。
 - [必须] 约束在 direct-call 与 spec-call 路径中都应保持与普通泛型方法一致的 witness 行为。
 - [必须] 数组目标方法的参数类型、返回类型和局部类型引用中出现的 `T`，都必须携带该 `T` 的约束上下文。
 - [必须] 当数组 `fit` 同时声明右侧 object-form `spec` 时，右侧 `spec` 的类型实参与元素类型约束必须一起参与合法性检查。
@@ -188,7 +188,7 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 
 - [ ] `.ft` 中 ARRAY type node 的元素 `TYPE_PARAM_REF` 必须关联约束事实。
 - [ ] 公开数组 `fit` 导出时，保留类型参数顺序、约束目标、右侧 `spec` 关系和未实例化成员签名。
-- [ ] `use` 外部包时，消费者只依赖 `.ft` 即可恢复数组目标约束并完成语义分析。
+- [ ] `import` 外部包时，消费者只依赖 `.ft` 即可恢复数组目标约束并完成语义分析。
 - [ ] 孤儿适配导出规则继续按 [docs/feng-fit.md](../docs/feng-fit.md) 执行，不因元素类型约束而放宽。
 
 验收口径：

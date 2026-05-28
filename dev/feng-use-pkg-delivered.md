@@ -1,6 +1,6 @@
 # 外部包 use 支持交付
 
-> 本文档记录从「`use` 外部模块」到「完整类型检查 → 编译 → 链接 → 运行」的完整落地路线与交付结果。  
+> 本文档记录从「`import` 外部模块」到「完整类型检查 → 编译 → 链接 → 运行」的完整落地路线与交付结果。  
 > 目标原则：**最小改动、架构合理、面向未来**。  
 > 分四个 Phase 实现，每个 Phase 结束后做一次全量回归（`make test`）。
 > 当前状态：步骤 0–13 已全部完成，相关 codegen / CLI / pack / link 回归与全量 `make test` 已通过。
@@ -15,7 +15,7 @@
 - imported-module cache 已收敛到 symbol 模块，并由 CLI 只负责调度与生命周期控制
 - 外部 decl 已支持完整签名合成、消费者 prototype 发码、bundle 路径透传、按包依赖排序的 `.a` 提取链接，以及 `feng pack -> --pkg consume -> run` 端到端链路
 
-最终目标：`use` 外部包模块后，与 `use` 同编译输入中的普通模块**走完全相同的处理路径**：名字进可见表 → 类型检查 → codegen 生成正确 C → 链接 → 运行正确。
+最终目标：`import` 外部包模块后，与 `import` 同编译输入中的普通模块**走完全相同的处理路径**：名字进可见表 → 类型检查 → codegen 生成正确 C → 链接 → 运行正确。
 
 ## 2. 关键架构事实
 
@@ -42,13 +42,13 @@
 
 - 动态库（`.dylib`/`.so`）
 - 增量编译、依赖版本选择、远程下载
-- 对 `use ext.m as M;` 别名的额外测试（实现路径与非别名完全重合，Phase 1 自然覆盖，不单独拆）
+- 对 `import ext.m as M;` 别名的额外测试（实现路径与非别名完全重合，Phase 1 自然覆盖，不单独拆）
 
 ---
 
 ## Phase 1 — 语义：名字导入
 
-**目标：** `use ext.pkg.mod;` 和 `use ext.pkg.mod as M;` 均正常工作；外部模块的公开名字（type/spec/function/binding）进入可见表，语义分析感知不到内外区别。
+**目标：** `import ext.pkg.mod;` 和 `import ext.pkg.mod as M;` 均正常工作；外部模块的公开名字（type/spec/function/binding）进入可见表，语义分析感知不到内外区别。
 
 ### 1.1 `semantic.h`：重构 `FengSemanticImportedModuleQuery`
 
@@ -67,7 +67,7 @@ typedef struct FengSemanticImportedModuleQuery {
 
 ### 1.2 `analyzer.c`：在 resolve 前预注入外部模块
 
-在分析早期扫描所有 `use`，若目标不是本次编译输入中的本地模块，则调用 `get_module`；命中后直接把外部模块追加进 `analysis->modules[]`。这样后续：
+在分析早期扫描所有 `import`，若目标不是本次编译输入中的本地模块，则调用 `get_module`；命中后直接把外部模块追加进 `analysis->modules[]`。这样后续：
 
 - `find_module_index_by_path()`
 - `import_public_names()`
@@ -116,8 +116,8 @@ static const FengSemanticModule *provider_get_module(
 
 ### 1.4 测试
 
-- 语义单测：`use` 外部模块（type、spec、function、binding），名字在可见表中，不报 undefined
-- 语义单测：`use ext.m as M;` 别名注册成功，`M.SomeType` 路径可解析（若 resolver 已支持别名 qualified 访问则测，否则仅验不报错）
+- 语义单测：`import` 外部模块（type、spec、function、binding），名字在可见表中，不报 undefined
+- 语义单测：`import ext.m as M;` 别名注册成功，`M.SomeType` 路径可解析（若 resolver 已支持别名 qualified 访问则测，否则仅验不报错）
 - 语义单测：外部模块不存在时报正确错误（回归验证 `module_exists` 降级路径）
 - `make test` 全量回归
 
@@ -239,7 +239,7 @@ size_t       bundle_count;
 
 链接前在 driver 层完成：
 
-1. **解析依赖图**：遍历各 `.fb` 内的 `mod/*.ft`，读取每个模块的 `uses[]`，按包粒度建有向依赖图（A 的某模块 `use` 了 B 的模块 → A 依赖 B）
+1. **解析依赖图**：遍历各 `.fb` 内的 `mod/*.ft`，读取每个模块的 `uses[]`，按包粒度建有向依赖图（A 的某模块 `import` 了 B 的模块 → A 依赖 B）
 2. **拓扑排序**：输出有序包列表（被依赖者在后），确保 `[A.a, B.a, ...]` 顺序正确（A 依赖 B → A 在 B 前）
 3. **按序解压**：对排好序的每个 `.fb`，从 ZIP 中提取 `lib/<host_target>/lib*.a` 到 tmpdir
 4. **追加链接命令**：
@@ -254,7 +254,7 @@ cc ... feng.c libfeng_runtime.a <sorted_A.a> <sorted_B.a> ... -lpthread -o outpu
 
 - 端到端 smoke test：
   1. 构建一个最小 Feng 库（含 1 个 public 函数），`feng pack` 产出 `testpkg.fb`
-  2. 消费者工程 `feng compile --pkg=testpkg.fb`，`use` 该库，调用函数
+  2. 消费者工程 `feng compile --pkg=testpkg.fb`，`import` 该库，调用函数
   3. 运行 binary，输出正确
 - 多包依赖顺序 smoke test：A 依赖 B，消费者同时依赖 A 和 B，验证链接顺序正确、运行正确
 - `make test` 全量回归
@@ -283,7 +283,7 @@ cc ... feng.c libfeng_runtime.a <sorted_A.a> <sorted_B.a> ... -lpthread -o outpu
 | 1. 迁移当前 CLI 原型到 symbol 模块 | 当前 `src/cli/pkg_bridge.c/h` 原型，目标迁入 symbol 模块 | 把现有“由 public decl 生成最小 `FengDecl` / `FengProgram`”的实现整体迁出 CLI。迁移时不扩展功能，只搬职责。核心要求是：`get_module` 返回值的内存归 symbol 模块缓存持有。 | CLI 侧不再承担外部模块对象构造职责；当前功能行为不变 |
 | 2. CLI 改成纯调度 | `src/cli/frontend.c` | Frontend 只做四件事：加载 bundle 到 provider、创建 imported-module cache、取 query 填到 `FengSemanticAnalyzeOptions`、在 analysis / codegen / export 结束后调用 symbol release API。 | `frontend.c` 中不再出现构造 `FengDecl` / `FengProgram` 的实现细节 |
 | 3. 保持核心编译器最小接入面 | `src/semantic/semantic.h` | 核心仍然只保留 `FengSemanticImportedModuleQuery.get_module` 这一抽象入口，不新增任何 symbol 相关头文件依赖，也不传 provider、bundle、zip reader 等对象。 | semantic 公共头文件仍然只暴露抽象 query，不暴露 symbol 类型 |
-| 4. 完成 Phase 1 的 analysis 注入路径 | `src/semantic/analyzer.c` | 在 resolve 前扫描 `use`，通过 `get_module` 把外部模块注入 `analysis->modules[]`。注入后，`find_module_index_by_path()`、`import_public_names()`、`append_alias_entry()`、`build_program_aliases()` 全部复用原逻辑。核心点是“先注入，再走既有路径”，而不是在 resolver 中四处打外部特判。 | `use ext.mod;` 和 `use ext.mod as M;` 走通，且 `import_public_names()` 不需要复制出一套外部分支 |
+| 4. 完成 Phase 1 的 analysis 注入路径 | `src/semantic/analyzer.c` | 在 resolve 前扫描 `import`，通过 `get_module` 把外部模块注入 `analysis->modules[]`。注入后，`find_module_index_by_path()`、`import_public_names()`、`append_alias_entry()`、`build_program_aliases()` 全部复用原逻辑。核心点是“先注入，再走既有路径”，而不是在 resolver 中四处打外部特判。 | `import ext.mod;` 和 `import ext.mod as M;` 走通，且 `import_public_names()` 不需要复制出一套外部分支 |
 | 5. 先补 Phase 1 验证测试 | `test/semantic/test_semantic.c`、必要时 `test/cli/test_cli.c` | 在继续扩功能前，先锁住名字面行为：外部 type/spec/function/binding 可见；alias 路径可用；模块不存在时报错。测试要直接覆盖 query 命中和注入后的可见表行为。 | Phase 1 测试稳定通过，后续扩签名时能快速回归 |
 | 6. 扩展 symbol 构造逻辑到完整签名 | symbol 模块 imported-module cache 实现 | 在现有最小 `FengDecl` 基础上，逐步补 params、return_type、members、declared_specs、`FengTypeRef` 递归构造。这里的核心逻辑是“外部模块生成的仍然是核心原生 AST/decl 模型”，不引入另一套 adapter 类型参与 resolver。 | 外部 decl 拥有足够签名信息供 resolver / infer / spec 检查直接使用 |
 | 7. 调整核心 pass 时序，只做必要改动 | `src/semantic/analyzer.c` | 把依赖声明面的 pass 放到外部模块注入之后执行，尤其是 `feng_semantic_compute_spec_relations(...)`。核心点不是改 spec 算法，而是确保它看到完整的 `analysis->modules[]`。 | 外部 `declared_specs`、spec closure、spec relation 能进入后续分析结果 |
@@ -323,7 +323,7 @@ cc ... feng.c libfeng_runtime.a <sorted_A.a> <sorted_B.a> ... -lpthread -o outpu
 
 | Phase | 验收条件 |
 |---|---|
-| 1 | `use ext.mod;` 和 `use ext.mod as M;` 不报错；外部名字在可见表；`make test` 通过 |
+| 1 | `import ext.mod;` 和 `import ext.mod as M;` 不报错；外部名字在可见表；`make test` 通过 |
 | 2 | 外部函数调用/字段访问类型检查正确；签名不匹配时报正确错误；`make test` 通过 |
 | 3a | LIB 模式 public 函数无 `static`；`make test` 通过 |
 | 3b | 消费者生成 C 能通过 `clang -c`；`make test` 通过 |

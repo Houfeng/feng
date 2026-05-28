@@ -11,33 +11,33 @@
 
 ## 2 公开 API
 
-这些符号都定义在根模块 `std` 中。使用方通过 `use std;` 后即可直接调用。
+这些符号都定义在根模块 `std` 中。使用方通过 `import std;` 后即可直接调用。
 
 ### 2.1 `Stdio` 与默认实例
 
 | 符号 | 签名 | 说明 |
 | --- | --- | --- |
-| `Stdio` | `pu type Stdio` | 标准输入输出对象，封装标准输入、标准输出与标准错误的默认传输行为 |
-| `Stdio.read` | `pu fn read(buffer: byte[!]): long` | 从标准输入读取至多 `buffer.length()` 个字节写入 `buffer`，返回本次实际读入字节数 |
-| `Stdio.write` | `pu fn write(bytes: byte[]): long` | 将 `bytes` 原样写到标准输出，不自动追加换行 |
-| `Stdio.write` | `pu fn write(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准输出，不自动追加换行 |
-| `Stdio.writeError` | `pu fn writeError(bytes: byte[]): long` | 将 `bytes` 原样写到标准错误，不自动追加换行 |
-| `Stdio.writeError` | `pu fn writeError(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准错误，不自动追加换行 |
-| `Stdio.writeLine` | `pu fn writeLine(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准输出，并追加单个 `"\n"` 字节 |
-| `Stdio.writeErrorLine` | `pu fn writeErrorLine(bytes: byte[]): long` | 将 `bytes` 原样写到标准错误，并追加单个 `"\n"` 字节 |
-| `Stdio.writeErrorLine` | `pu fn writeErrorLine(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准错误，并追加单个 `"\n"` 字节 |
-| `Stdio.readLine` | `pu fn readLine(): string` | 从标准输入读取一行 UTF-8 文本，不包含行尾换行 |
-| `stdio` | `pu let stdio = Stdio()` | 绑定到标准输入、标准输出与标准错误的默认实例 |
+| `Stdio` | `open type Stdio` | 标准输入输出对象，封装标准输入、标准输出与标准错误的默认传输行为 |
+| `Stdio.read` | `open func read(buffer: byte[!]): long` | 从标准输入读取至多 `buffer.length()` 个字节写入 `buffer`，返回本次实际读入字节数 |
+| `Stdio.write` | `open func write(bytes: byte[]): long` | 将 `bytes` 原样写到标准输出，不自动追加换行 |
+| `Stdio.write` | `open func write(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准输出，不自动追加换行 |
+| `Stdio.writeError` | `open func writeError(bytes: byte[]): long` | 将 `bytes` 原样写到标准错误，不自动追加换行 |
+| `Stdio.writeError` | `open func writeError(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准错误，不自动追加换行 |
+| `Stdio.writeLine` | `open func writeLine(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准输出，并追加单个 `"\n"` 字节 |
+| `Stdio.writeErrorLine` | `open func writeErrorLine(bytes: byte[]): long` | 将 `bytes` 原样写到标准错误，并追加单个 `"\n"` 字节 |
+| `Stdio.writeErrorLine` | `open func writeErrorLine(text: string): long` | 将 `text` 当前的 UTF-8 字节序列写到标准错误，并追加单个 `"\n"` 字节 |
+| `Stdio.readLine` | `open func readLine(): string` | 从标准输入读取一行 UTF-8 文本，不包含行尾换行 |
+| `stdio` | `open let stdio = Stdio()` | 绑定到标准输入、标准输出与标准错误的默认实例 |
 
 ### 2.2 兼容顶层函数
 
 | 函数 | 签名 | 说明 |
 | --- | --- | --- |
-| `readLine` | `pu fn readLine(): string` | `stdio.readLine()` 的顶层包装 |
-| `writeLine` | `pu fn writeLine(text: string): long` | `stdio.writeLine(text)` 的顶层包装 |
-| `format` | `pu fn format(fmt: string, args: string...): string` | 返回将 `fmt` 按 `{argsIndex}` 规则插值后的字符串，不自动追加换行 |
-| `print` | `pu fn print(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，不自动追加换行 |
-| `println` | `pu fn println(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，并追加单个 `"\n"` |
+| `readLine` | `open func readLine(): string` | `stdio.readLine()` 的顶层包装 |
+| `writeLine` | `open func writeLine(text: string): long` | `stdio.writeLine(text)` 的顶层包装 |
+| `format` | `open func format(fmt: string, args: string...): string` | 返回将 `fmt` 按 `{argsIndex}` 规则插值后的字符串，不自动追加换行 |
+| `print` | `open func print(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，不自动追加换行 |
+| `println` | `open func println(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，并追加单个 `"\n"` |
 
 ## 3 语义
 
@@ -116,4 +116,4 @@
 - [feng-language.md](./feng-language.md): 语言核心总览。
 - [feng-builtin-type.md](./feng-builtin-type.md): `string`、`byte`、`byte[]` 与 `byte[!]` 的语义。
 - [feng-function-variadic.md](./feng-function-variadic.md): 顶层 `print(format, args: string...)` 使用的变长参数规则。
-- [feng-interop.md](./feng-interop.md): 标准库通过普通 `extern fn` 暴露原生能力时的 ABI 约束。
+- [feng-interop.md](./feng-interop.md): 标准库通过普通 `extern func` 暴露原生能力时的 ABI 约束。

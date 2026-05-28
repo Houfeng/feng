@@ -1,15 +1,15 @@
-pu mod std.text;
+open module std.text;
 
 /**
  * Extends `string` with standard length-related operations.
  */
-pu fit string {
+open fit string {
 
   /**
    * Returns a view of this string as a sequence of runes.
    * @return rune view of this string
    */
-  pu fn runes(): RuneView {
+  open func runes(): RuneView {
     return RuneView(self);
   }
 
@@ -19,12 +19,12 @@ pu fit string {
 /**
  * A view of a string as a sequence of runes.
  */
-pu type RuneView {
-  pr let text: string;
-  pu fn RuneView(text: string) {
+open type RuneView {
+  seal let text: string;
+  open func RuneView(text: string) {
     self.text = text;
   }
-  pu fn length(): long {
+  open func length(): long {
     return 0;
   }
 }

@@ -1,14 +1,14 @@
-pu mod std.text;
+open module std.text;
 
 /**
  * A view of a string as a sequence of graphemes.
  */
-pu type GraphemeView {
-  pr let text: string;
-  pu fn GraphemeView(text: string) {
+open type GraphemeView {
+  seal let text: string;
+  open func GraphemeView(text: string) {
     self.text = text;
   }
-  pu fn length(): long {
+  open func length(): long {
     return 0;
   }
 }
@@ -16,13 +16,13 @@ pu type GraphemeView {
 /**
  * Extends `string` with standard length-related operations.
  */
-pu fit string {
+open fit string {
 
   /**
    * Returns a view of this string as a sequence of graphemes.
    * @return grapheme view of this string
    */
-  pu fn graphemes(): GraphemeView {
+  open func graphemes(): GraphemeView {
     return GraphemeView(self);
   }
 

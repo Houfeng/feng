@@ -196,12 +196,12 @@ async function run() {
     fs.mkdirSync(projectSrcDir, { recursive: true });
     fs.writeFileSync(projectManifestPath,
                      '[package]\nname: "hello_world"\nversion: "0.1.0"\ntarget: "bin"\nout: "dist"\n');
-    fs.writeFileSync(projectSourcePath, 'fn main(args: string[]): void {}\n');
+    fs.writeFileSync(projectSourcePath, 'func main(args: string[]): void {}\n');
 
     fs.mkdirSync(path.dirname(libSourcePath), { recursive: true });
     fs.writeFileSync(libManifestPath,
                      '[package]\nname: "demo_lib"\nversion: "0.1.0"\ntarget: "lib"\nout: "artifacts"\n');
-    fs.writeFileSync(libSourcePath, 'fn helper(): void {}\n');
+    fs.writeFileSync(libSourcePath, 'func helper(): void {}\n');
 
     try {
         {

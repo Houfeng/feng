@@ -1,24 +1,24 @@
-pu mod std;
+open module std;
 
 @runtime
-extern fn feng_array_length_i64<T>(value: T[]): long;
+extern func feng_array_length_i64<T>(value: T[]): long;
 
 @runtime
-extern fn feng_array_slice<T>(value: T[], start: long, length: long): T[];
+extern func feng_array_slice<T>(value: T[], start: long, length: long): T[];
 
 @runtime
-extern fn feng_expression_equal<T>(left: T, right: T): bool;
+extern func feng_expression_equal<T>(left: T, right: T): bool;
 
 /**
  * Extends immutable arrays with standard length-related operations.
  * @param <T> - the element type
  */
-pu fit T[] {
+open fit T[] {
   /**
    * Returns the number of elements in this array.
    * @return element count of this array
    */
-  pu fn length(): long {
+  open func length(): long {
     return feng_array_length_i64(self);
   }
 
@@ -27,7 +27,7 @@ pu fit T[] {
    * @param index - zero-based index of the element to return
    * @return element at the specified index
    */
-  pu fn at(index: long): T {
+  open func at(index: long): T {
     if index < (long)0 {
       throw "Array index out of bounds";
     }
@@ -42,7 +42,7 @@ pu fit T[] {
    * @param value - the value to search for
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
-  pu fn indexOf(value: T): long {
+  open func indexOf(value: T): long {
     let len = self.length();
     for var i: long = 0; i < len; i += (long)1 {
       if feng_expression_equal(self[i], value) { return i; }
@@ -54,7 +54,7 @@ pu fit T[] {
    * Returns a dense copy of this array.
    * @return copied array containing all elements
    */
-  pu fn clone(): T[] {
+  open func clone(): T[] {
     return self.clone((long)0, self.length());
   }
 
@@ -64,7 +64,7 @@ pu fit T[] {
    * @param end - zero-based exclusive end offset of the copied range
    * @return copied array containing all elements from `start` to `end`
    */
-  pu fn clone(start: long, end: long): T[] {
+  open func clone(start: long, end: long): T[] {
     if start < (long)0 {
       throw "Array clone start out of bounds";
     }
@@ -82,7 +82,7 @@ pu fit T[] {
    * @param start - zero-based start offset of the copied range
    * @return copied array containing all elements from `start` to the end of this array
    */
-  pu fn clone(start: long): T[] {
+  open func clone(start: long): T[] {
     return self.clone(start, self.length());
   }
 }
@@ -91,12 +91,12 @@ pu fit T[] {
  * Extends writable arrays with standard length-related operations.
  * @param <T> - the element type
  */
-pu fit T[!] {
+open fit T[!] {
   /**
    * Returns the number of elements in this array.
    * @return element count of this array
    */
-  pu fn length(): long {
+  open func length(): long {
     return feng_array_length_i64((T[])self);
   }
 
@@ -105,7 +105,7 @@ pu fit T[!] {
    * @param index - zero-based index of the element to return
    * @return element at the specified index
    */
-  pu fn at(index: long): T {
+  open func at(index: long): T {
     return ((T[])self).at(index);
   }
 
@@ -114,7 +114,7 @@ pu fit T[!] {
    * @param value - the value to search for
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
-  pu fn indexOf(value: T): long {
+  open func indexOf(value: T): long {
     return ((T[])self).indexOf(value);
   }
 
@@ -122,7 +122,7 @@ pu fit T[!] {
    * Returns a dense read-only copy of this array.
    * @return copied array containing all elements
    */
-  pu fn clone(): T[] {
+  open func clone(): T[] {
     return ((T[])self).clone();
   }
 
@@ -132,7 +132,7 @@ pu fit T[!] {
    * @param end - zero-based exclusive end offset of the copied range
    * @return copied array containing all elements from `start` to `end`
    */
-  pu fn clone(start: long, end: long): T[] {
+  open func clone(start: long, end: long): T[] {
     return ((T[])self).clone(start, end);
   }
 
@@ -141,7 +141,7 @@ pu fit T[!] {
    * @param start - zero-based start offset of the copied range
    * @return copied array containing all elements from `start` to the end of this array
    */
-  pu fn clone(start: long): T[] {
+  open func clone(start: long): T[] {
     return ((T[])self).clone(start);
   }
 

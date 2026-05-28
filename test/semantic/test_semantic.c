@@ -261,10 +261,10 @@ static const FengExpr *find_call_with_member_name(
 
 static void test_duplicate_type_across_files_same_module(void) {
     const char *source_a =
-        "pu mod demo.main;\n"
+        "open module demo.main;\n"
         "type User {}\n";
     const char *source_b =
-        "pu mod demo.main;\n"
+        "open module demo.main;\n"
         "type User {}\n";
     FengProgram *program_a = parse_program_or_die("type_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("type_b.f", source_b);
@@ -286,10 +286,10 @@ static void test_duplicate_type_across_files_same_module(void) {
 
 static void test_duplicate_binding_across_files_same_module(void) {
     const char *source_a =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "let name: string = \"a\";\n";
     const char *source_b =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "var name: string = \"b\";\n";
     FengProgram *program_a = parse_program_or_die("binding_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("binding_b.f", source_b);
@@ -311,11 +311,11 @@ static void test_duplicate_binding_across_files_same_module(void) {
 
 static void test_function_return_only_overload_error(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: int): string {\n"
+        "func pick(a: int): string {\n"
         "    return \"value\";\n"
         "}\n";
     FengProgram *program = parse_program_or_die("return_overload.f", source);
@@ -340,21 +340,21 @@ static void test_top_level_overload_overlap_via_fit_rejected(void) {
      * fit makes Dog satisfy Animal. The conflict must be reported at the
      * declaration site, not deferred to call resolution. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Animal {\n"
-        "    fn name(): string;\n"
+        "    func name(): string;\n"
         "}\n"
         "type Dog {\n"
         "    let name: string;\n"
         "}\n"
         "fit Dog: Animal {\n"
-        "    fn name(): string {\n"
+        "    func name(): string {\n"
         "        return self.name;\n"
         "    }\n"
         "}\n"
-        "fn pet(a: Animal) {\n"
+        "func pet(a: Animal) {\n"
         "}\n"
-        "fn pet(d: Dog) {\n"
+        "func pet(d: Dog) {\n"
         "}\n";
     FengProgram *program = parse_program_or_die("overload_overlap_via_fit.f", source);
     const FengProgram *programs[] = {program};
@@ -377,25 +377,25 @@ static void test_top_level_overload_overlap_via_two_specs_rejected(void) {
      * concrete type satisfies both specs, the overload set is ambiguous and
      * must be rejected at declaration time. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn name(): string;\n"
+        "    func name(): string;\n"
         "}\n"
         "spec Sized {\n"
-        "    fn size(): int;\n"
+        "    func size(): int;\n"
         "}\n"
         "type Box {\n"
         "    let label: string;\n"
         "    let count: int;\n"
         "}\n"
         "fit Box: Named {\n"
-        "    fn name(): string { return self.label; }\n"
+        "    func name(): string { return self.label; }\n"
         "}\n"
         "fit Box: Sized {\n"
-        "    fn size(): int { return self.count; }\n"
+        "    func size(): int { return self.count; }\n"
         "}\n"
-        "fn show(x: Named) {}\n"
-        "fn show(x: Sized) {}\n";
+        "func show(x: Named) {}\n"
+        "func show(x: Sized) {}\n";
     FengProgram *program = parse_program_or_die("overload_overlap_two_specs.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -416,27 +416,27 @@ static void test_top_level_overload_two_specs_no_common_type_accepted(void) {
     /* When two spec parameters have no common satisfying type visible in
      * the analysis, the overload set is unambiguous and must not be flagged. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn name(): string;\n"
+        "    func name(): string;\n"
         "}\n"
         "spec Sized {\n"
-        "    fn size(): int;\n"
+        "    func size(): int;\n"
         "}\n"
         "type Tag {\n"
         "    let label: string;\n"
         "}\n"
         "fit Tag: Named {\n"
-        "    fn name(): string { return self.label; }\n"
+        "    func name(): string { return self.label; }\n"
         "}\n"
         "type Bucket {\n"
         "    let count: int;\n"
         "}\n"
         "fit Bucket: Sized {\n"
-        "    fn size(): int { return self.count; }\n"
+        "    func size(): int { return self.count; }\n"
         "}\n"
-        "fn show(x: Named) {}\n"
-        "fn show(x: Sized) {}\n";
+        "func show(x: Named) {}\n"
+        "func show(x: Sized) {}\n";
     FengProgram *program = parse_program_or_die("overload_two_specs_disjoint_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -453,19 +453,19 @@ static void test_top_level_overload_two_specs_no_common_type_accepted(void) {
 static void test_member_method_overload_overlap_via_fit_rejected(void) {
     /* Same overlap rule applies to member method overload sets. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Animal {\n"
-        "    fn name(): string;\n"
+        "    func name(): string;\n"
         "}\n"
         "type Dog {\n"
         "    let name: string;\n"
         "}\n"
         "fit Dog: Animal {\n"
-        "    fn name(): string { return self.name; }\n"
+        "    func name(): string { return self.name; }\n"
         "}\n"
         "type Owner {\n"
-        "    fn pet(a: Animal) {}\n"
-        "    fn pet(d: Dog) {}\n"
+        "    func pet(a: Animal) {}\n"
+        "    func pet(d: Dog) {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("member_overload_overlap.f", source);
     const FengProgram *programs[] = {program};
@@ -485,10 +485,10 @@ static void test_member_method_overload_overlap_via_fit_rejected(void) {
 
 static void test_extern_function_accepts_module_string_library_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "let math_lib = \"m\";\n"
         "@cdecl(math_lib)\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengProgram *program = parse_program_or_die("extern_fn_module_string_binding_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -506,8 +506,8 @@ static void test_extern_function_accepts_module_string_library_binding(void) {
 
 static void test_extern_function_without_calling_convention_annotation_is_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
-        "extern fn sin(x: float): float;\n";
+        "module demo.main;\n"
+        "extern func sin(x: float): float;\n";
     FengProgram *program = parse_program_or_die("extern_fn_missing_callconv_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -525,8 +525,8 @@ static void test_extern_function_without_calling_convention_annotation_is_accept
 
 static void test_extern_function_accepts_string_parameter_without_c_abi_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
-        "extern fn print(msg: string): int;\n";
+        "module demo.main;\n"
+        "extern func print(msg: string): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_string_param_without_c_abi_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -544,8 +544,8 @@ static void test_extern_function_accepts_string_parameter_without_c_abi_annotati
 
 static void test_extern_function_accepts_string_return_without_c_abi_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
-        "extern fn load(): string;\n";
+        "module demo.main;\n"
+        "extern func load(): string;\n";
     FengProgram *program = parse_program_or_die("extern_fn_string_return_without_c_abi_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -563,9 +563,9 @@ static void test_extern_function_accepts_string_return_without_c_abi_annotation(
 
 static void test_runtime_annotation_accepts_top_level_extern_function(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): long;\n";
     FengProgram *program = parse_program_or_die("runtime_extern_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -583,9 +583,9 @@ static void test_runtime_annotation_accepts_top_level_extern_function(void) {
 
 static void test_runtime_annotation_rejects_non_extern_function(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "fn feng_string_length(value: string): long {\n"
+        "func feng_string_length(value: string): long {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("runtime_non_extern_error.f", source);
@@ -606,10 +606,10 @@ static void test_runtime_annotation_rejects_non_extern_function(void) {
 
 static void test_runtime_annotation_rejects_c_abi_target_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
         "@cdecl(\"m\")\n"
-        "extern fn feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): long;\n";
     FengProgram *program = parse_program_or_die("runtime_callconv_conflict_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -628,10 +628,10 @@ static void test_runtime_annotation_rejects_c_abi_target_annotation(void) {
 
 static void test_runtime_annotation_rejects_abi_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
         "@abi\n"
-        "extern fn feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): long;\n";
     FengProgram *program = parse_program_or_die("runtime_abi_conflict_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -650,7 +650,7 @@ static void test_runtime_annotation_rejects_abi_annotation(void) {
 
 static void test_runtime_annotation_rejects_type_declaration(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
         "type User {\n"
         "    var name: string;\n"
@@ -665,7 +665,7 @@ static void test_runtime_annotation_rejects_type_declaration(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "runtime_type_error.f") == 0);
     ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern fn declarations") != NULL);
+    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern func declarations") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -673,10 +673,10 @@ static void test_runtime_annotation_rejects_type_declaration(void) {
 
 static void test_runtime_annotation_rejects_member_method(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    @runtime\n"
-        "    fn name(): string {\n"
+        "    func name(): string {\n"
         "        return \"guest\";\n"
         "    }\n"
         "}\n";
@@ -690,7 +690,7 @@ static void test_runtime_annotation_rejects_member_method(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "runtime_member_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern fn declarations") != NULL);
+    ASSERT(strstr(errors[0].message, "@runtime only applies to top-level extern func declarations") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -698,10 +698,10 @@ static void test_runtime_annotation_rejects_member_method(void) {
 
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
         "@stdcall(\"m\")\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengProgram *program = parse_program_or_die("extern_fn_multiple_callconv_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -721,10 +721,10 @@ static void test_extern_function_rejects_multiple_calling_convention_annotations
 
 static void test_extern_function_rejects_non_string_library_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "var math_lib = \"m\";\n"
         "@cdecl(math_lib)\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengProgram *program = parse_program_or_die("extern_fn_non_string_binding_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -744,13 +744,13 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
 
 static void test_extern_function_accepts_imported_string_library_binding(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu let math_lib = \"m\";\n";
+        "open module demo.base;\n"
+        "open let math_lib = \"m\";\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
         "@cdecl(math_lib)\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengProgram *base_program = parse_program_or_die("extern_fn_imported_binding_base.f", base_source);
     FengProgram *main_program = parse_program_or_die("extern_fn_imported_binding_main.f", main_source);
     const FengProgram *programs[] = {base_program, main_program};
@@ -770,13 +770,13 @@ static void test_extern_function_accepts_imported_string_library_binding(void) {
 
 static void test_extern_function_rejects_imported_var_library_binding(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu var math_lib = \"m\";\n";
+        "open module demo.base;\n"
+        "open var math_lib = \"m\";\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
         "@cdecl(math_lib)\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengProgram *base_program = parse_program_or_die("extern_fn_imported_var_base.f", base_source);
     FengProgram *main_program = parse_program_or_die("extern_fn_imported_var_main.f", main_source);
     const FengProgram *programs[] = {base_program, main_program};
@@ -796,9 +796,9 @@ static void test_extern_function_rejects_imported_var_library_binding(void) {
 
 static void test_extern_function_accepts_abi_array_parameter_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
-        "extern fn fill(values: int[]): int;\n";
+        "extern func fill(values: int[]): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_array_param_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -816,9 +816,9 @@ static void test_extern_function_accepts_abi_array_parameter_type(void) {
 
 static void test_extern_function_accepts_abi_array_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
-        "extern fn load(name: int): int[];\n";
+        "extern func load(name: int): int[];\n";
     FengProgram *program = parse_program_or_die("extern_fn_array_return_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -836,9 +836,9 @@ static void test_extern_function_accepts_abi_array_return_type(void) {
 
 static void test_extern_function_rejects_bare_string_parameter_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
-        "extern fn print(msg: string): int;\n";
+        "extern func print(msg: string): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_string_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -859,9 +859,9 @@ static void test_extern_function_rejects_bare_string_parameter_type(void) {
 
 static void test_extern_function_rejects_bare_string_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
-        "extern fn load(): string;\n";
+        "extern func load(): string;\n";
     FengProgram *program = parse_program_or_die("extern_fn_string_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -882,9 +882,9 @@ static void test_extern_function_rejects_bare_string_return_type(void) {
 
 static void test_extern_function_rejects_non_abi_array_parameter_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"m\")\n"
-        "extern fn fill(values: string[]): int;\n";
+        "extern func fill(values: string[]): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_string_array_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -904,13 +904,13 @@ static void test_extern_function_rejects_non_abi_array_parameter_type(void) {
 
 static void test_extern_function_rejects_non_fixed_object_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
         "@cdecl(\"m\")\n"
-        "extern fn use_point(point: Point): int;\n";
+        "extern func use_point(point: Point): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_non_fixed_object_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -929,7 +929,7 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
 
 static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
@@ -938,7 +938,7 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
         "@abi\n"
         "spec PointCallback(p: Point): int;\n"
         "@cdecl(\"m\")\n"
-        "extern fn run_point(point: Point, cb: PointCallback): int;\n";
+        "extern func run_point(point: Point, cb: PointCallback): int;\n";
     FengProgram *program = parse_program_or_die("extern_fn_fixed_types_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -956,9 +956,9 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
 
 static void test_legacy_fixed_annotation_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@fixed\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("legacy_fixed_annotation_error.f", source);
@@ -979,7 +979,7 @@ static void test_legacy_fixed_annotation_is_rejected(void) {
 
 static void test_fixed_type_accepts_abi_stable_fields(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
         "@abi\n"
@@ -1010,7 +1010,7 @@ static void test_fixed_type_accepts_abi_stable_fields(void) {
 
 static void test_fixed_type_rejects_managed_field_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type NameBox {\n"
         "    var name: string;\n"
@@ -1033,7 +1033,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
 
 static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
@@ -1061,7 +1061,7 @@ static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
 
 static void test_fixed_type_rejects_direct_array_field_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Box {\n"
         "    var values: int[];\n"
@@ -1085,7 +1085,7 @@ static void test_fixed_type_rejects_direct_array_field_type(void) {
 
 static void test_fixed_type_rejects_direct_callable_field_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
         "@abi\n"
@@ -1111,7 +1111,7 @@ static void test_fixed_type_rejects_direct_callable_field_type(void) {
 
 static void test_fixed_function_type_rejects_union_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "@union\n"
         "spec Cmp(a: int, b: int): int;\n";
@@ -1133,9 +1133,9 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
 
 static void test_fixed_function_accepts_abi_stable_signature(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_ok.f", source);
@@ -1155,12 +1155,12 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
 
 static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@abi\n"
-        "fn roundtrip(handle: Handle*): Handle* {\n"
+        "func roundtrip(handle: Handle*): Handle* {\n"
         "    return handle;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_fieldless_pointer_ok.f", source);
@@ -1181,12 +1181,12 @@ static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(voi
 
 static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@abi\n"
-        "fn close(handle: Handle): int {\n"
+        "func close(handle: Handle): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_param_error.f", source);
@@ -1209,12 +1209,12 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void)
 
 static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@abi\n"
-        "fn make_handle(): Handle {\n"
+        "func make_handle(): Handle {\n"
         "    return Handle {};\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_return_error.f", source);
@@ -1237,17 +1237,17 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
 
 static void test_extern_function_accepts_abi_value_param_and_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn create_point(x: int, y: int): Point;\n"
+        "extern func create_point(x: int, y: int): Point;\n"
         "@cdecl(\"c\")\n"
-        "extern fn point_sum(p: Point): int;\n"
-        "fn run() {\n"
+        "extern func point_sum(p: Point): int;\n"
+        "func run() {\n"
         "    let point: Point = create_point(1, 2);\n"
         "    let total: int = point_sum(point);\n"
         "}\n";
@@ -1269,15 +1269,15 @@ static void test_extern_function_accepts_abi_value_param_and_return(void) {
 
 static void test_extern_function_accepts_fieldless_abi_type_pointer_param_and_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn handle_open(): Handle*;\n"
+        "extern func handle_open(): Handle*;\n"
         "@cdecl(\"c\")\n"
-        "extern fn handle_close(handle: Handle*): void;\n"
-        "fn run() {\n"
+        "extern func handle_close(handle: Handle*): void;\n"
+        "func run() {\n"
         "    let handle: Handle* = handle_open();\n"
         "    handle_close(handle);\n"
         "}\n";
@@ -1299,12 +1299,12 @@ static void test_extern_function_accepts_fieldless_abi_type_pointer_param_and_re
 
 static void test_extern_function_rejects_fieldless_abi_type_value_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn handle_close(handle: Handle): void;\n";
+        "extern func handle_close(handle: Handle): void;\n";
     FengProgram *program = parse_program_or_die("extern_fieldless_abi_value_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -1325,12 +1325,12 @@ static void test_extern_function_rejects_fieldless_abi_type_value_parameter(void
 
 static void test_extern_function_rejects_fieldless_abi_type_value_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn handle_open(): Handle;\n";
+        "extern func handle_open(): Handle;\n";
     FengProgram *program = parse_program_or_die("extern_fieldless_abi_value_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -1351,11 +1351,11 @@ static void test_extern_function_rejects_fieldless_abi_type_value_return(void) {
 
 static void test_extern_function_rejects_non_abi_type_pointer_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Handle {\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn handle_close(handle: Handle*): void;\n";
+        "extern func handle_close(handle: Handle*): void;\n";
     FengProgram *program = parse_program_or_die("extern_non_abi_pointer_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -1376,9 +1376,9 @@ static void test_extern_function_rejects_non_abi_type_pointer_parameter(void) {
 
 static void test_fixed_function_accepts_abi_array_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
-        "fn sum(values: int[]): int {\n"
+        "func sum(values: int[]): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_array_param_ok.f", source);
@@ -1398,10 +1398,10 @@ static void test_fixed_function_accepts_abi_array_parameter(void) {
 
 static void test_fixed_function_rejects_parameterized_calling_convention(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "@cdecl(\"m\")\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_callconv_arg_error.f", source);
@@ -1422,10 +1422,10 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
 
 static void test_fixed_method_rejects_managed_signature_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type CallbackHolder {\n"
         "    @abi\n"
-        "    fn emit(msg: string) {\n"
+        "    func emit(msg: string) {\n"
         "    }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_method_managed_signature_error.f", source);
@@ -1446,14 +1446,14 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
 
 static void test_fixed_function_type_accepts_fixed_function_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
         "@abi\n"
-        "fn add1(x: int): int {\n"
+        "func add1(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb: Callback = add1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_callback_fixed_fn_ok.f", source);
@@ -1473,13 +1473,13 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
 
 static void test_fixed_function_type_rejects_plain_function_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
-        "fn add1(x: int): int {\n"
+        "func add1(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb: Callback = add1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_callback_plain_fn_error.f", source);
@@ -1500,10 +1500,10 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
 
 static void test_fixed_function_type_rejects_direct_lambda_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb: Callback = (x: int) -> x + 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_callback_lambda_error.f", source);
@@ -1524,10 +1524,10 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
 
 static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Callback(x: int): int;\n"
-        "fn run(base: int) {\n"
+        "func run(base: int) {\n"
         "    let cb: Callback = (x: int) -> x + base;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_callback_captured_lambda_error.f", source);
@@ -1548,7 +1548,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
 
 static void test_object_form_spec_rejects_fixed_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Shape {\n"
         "    var x: int;\n"
@@ -1571,7 +1571,7 @@ static void test_object_form_spec_rejects_fixed_annotation(void) {
 
 static void test_object_form_spec_rejects_union_annotation(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@union\n"
         "spec Shape {\n"
         "    var x: int;\n"
@@ -1593,7 +1593,7 @@ static void test_object_form_spec_rejects_union_annotation(void) {
 
 static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
@@ -1617,7 +1617,7 @@ static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
 
 static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
@@ -1640,7 +1640,7 @@ static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signatur
 
 static void test_fixed_callable_spec_accepts_abi_array_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Batch(values: int[]): int;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_array_ok.f", source);
@@ -1659,7 +1659,7 @@ static void test_fixed_callable_spec_accepts_abi_array_parameter(void) {
 
 static void test_fixed_callable_spec_rejects_non_abi_array_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Batch(values: string[]): int;\n";
     FengProgram *program = parse_program_or_die("fixed_callable_spec_string_array_error.f", source);
@@ -1679,7 +1679,7 @@ static void test_fixed_callable_spec_rejects_non_abi_array_parameter(void) {
 
 static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Bag {\n"
         "    var name: string;\n"
         "}\n"
@@ -1702,7 +1702,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
 
 static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
@@ -1728,7 +1728,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(
 
 static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Shape {\n"
         "    var x: int;\n"
         "}\n"
@@ -1751,7 +1751,7 @@ static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
 
 static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Bag {\n"
         "    var name: string;\n"
         "}\n"
@@ -1774,7 +1774,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
 
 static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
@@ -1800,9 +1800,9 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(voi
 
 static void test_fixed_function_rejects_uncaught_throw(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
-        "fn fail(): int {\n"
+        "func fail(): int {\n"
         "    throw \"boom\";\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_uncaught_throw_error.f", source);
@@ -1823,12 +1823,12 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
 
 static void test_fixed_function_allows_locally_caught_throw(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn fail(): int {\n"
+        "module demo.main;\n"
+        "func fail(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
-        "fn recover(): int {\n"
+        "func recover(): int {\n"
         "    let value = try fail() catch ex: string { 0; };\n"
         "    return value;\n"
         "}\n";
@@ -1849,12 +1849,12 @@ static void test_fixed_function_allows_locally_caught_throw(void) {
 
 static void test_fixed_function_rejects_call_to_throwing_function(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn helper(): int {\n"
+        "module demo.main;\n"
+        "func helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return helper();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_throwing_call_error.f", source);
@@ -1875,16 +1875,16 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
 
 static void test_fixed_function_allows_call_to_catching_function(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn fail(): int {\n"
+        "module demo.main;\n"
+        "func fail(): int {\n"
         "        throw \"boom\";\n"
         "}\n"
-        "fn helper(): int {\n"
+        "func helper(): int {\n"
         "    let value = try fail() catch ex: string { 0; };\n"
         "    return value;\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return helper();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fixed_fn_catching_call_ok.f", source);
@@ -1904,10 +1904,10 @@ static void test_fixed_function_allows_call_to_catching_function(void) {
 
 static void test_fixed_method_rejects_uncaught_throw(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Worker {\n"
         "    @abi\n"
-        "    fn run() {\n"
+        "    func run() {\n"
         "        throw \"boom\";\n"
         "    }\n"
         "}\n";
@@ -1929,13 +1929,13 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
 
 static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Callback(x: int): int;\n"
-        "fn helper(): int {\n"
+        "func helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return 0;\n"
         "}\n";
@@ -1956,13 +1956,13 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
 
 static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Callback(x: int): int;\n"
-        "fn helper(): int {\n"
+        "func helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
@@ -1984,13 +1984,13 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
 
 static void test_fixed_function_rejects_local_function_value_call_to_throwing_function(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Callback(x: int): int;\n"
-        "fn helper(x: int): int {\n"
+        "func helper(x: int): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let cb: Callback = helper;\n"
         "    return cb(1);\n"
         "}\n";
@@ -2012,17 +2012,17 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
 
 static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Callback(x: int): int;\n"
-        "fn fail(): int {\n"
+        "func fail(): int {\n"
         "        throw \"boom\";\n"
         "}\n"
-        "fn helper(): int {\n"
+        "func helper(): int {\n"
         "    let value = try fail() catch ex: string { 0; };\n"
         "    return value;\n"
         "}\n"
         "@abi\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
@@ -2043,10 +2043,10 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
 
 static void test_throw_rejects_void_expression(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn side() {\n"
+        "module demo.main;\n"
+        "func side() {\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    throw side();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("throw_void_expression_error.f", source);
@@ -2067,8 +2067,8 @@ static void test_throw_rejects_void_expression(void) {
 
 static void test_break_outside_loop_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    break;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("break_outside_loop_error.f", source);
@@ -2090,8 +2090,8 @@ static void test_break_outside_loop_is_rejected(void) {
 
 static void test_continue_outside_loop_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    if (true) {\n"
         "        continue;\n"
         "    }\n"
@@ -2115,9 +2115,9 @@ static void test_continue_outside_loop_is_rejected(void) {
 
 static void test_break_inside_lambda_in_loop_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Action(): void;\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    while (true) {\n"
         "        let action: Action = () { break; };\n"
         "        action();\n"
@@ -2142,8 +2142,8 @@ static void test_break_inside_lambda_in_loop_is_rejected(void) {
 
 static void test_break_and_continue_inside_for_loop_are_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    for var i = 0; i < 10; i = i + 1 {\n"
         "        if (i == 1) { continue; }\n"
         "        if (i == 5) { break; }\n"
@@ -2168,8 +2168,8 @@ static void test_break_directly_in_if_expr_block_is_rejected(void) {
     /* break directly inside an if-expression block is invalid because the
      * expression must produce a value on every path. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    while (true) {\n"
         "        let x: bool = if (true) { break; false } else { false };\n"
         "    }\n"
@@ -2195,8 +2195,8 @@ static void test_continue_directly_in_if_expr_block_is_rejected(void) {
     /* continue directly inside an if-expression block is invalid for the same
      * reason as break: the expression must produce a value. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    while (true) {\n"
         "        let x: bool = if (true) { true } else { continue; false };\n"
         "    }\n"
@@ -2222,8 +2222,8 @@ static void test_break_inside_loop_inside_if_expr_block_is_accepted(void) {
     /* A loop nested inside an if-expression block may contain break/continue
      * normally because those target the inner loop, not the if-expression. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: bool = if (true) {\n"
         "        while (true) {\n"
         "            break;\n"
@@ -2252,9 +2252,9 @@ static void test_break_directly_in_try_expr_catch_block_is_rejected(void) {
     /* break directly inside a catch block of a try expression is invalid
      * because the expression must produce a value on every path. */
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { return 1; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func run() {\n"
         "    while (true) {\n"
         "        let x: i32 = try parse() catch ex: i32 { break; 0 };\n"
         "    }\n"
@@ -2280,9 +2280,9 @@ static void test_continue_directly_in_try_expr_catch_block_is_rejected(void) {
     /* continue directly inside a catch block of a try expression is invalid
      * for the same reason: the expression must produce a value. */
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { return 1; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func run() {\n"
         "    while (true) {\n"
         "        let x: i32 = try parse() catch ex: i32 { continue; 0 };\n"
         "    }\n"
@@ -2308,9 +2308,9 @@ static void test_break_inside_loop_inside_try_expr_catch_block_is_accepted(void)
     /* A loop nested inside a catch block of a try expression may contain
      * break/continue normally because those target the inner loop. */
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): bool { return true; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): bool { return true; }\n"
+        "func run() {\n"
         "    let x: bool = try parse() catch ex: bool {\n"
         "        while (true) {\n"
         "            break;\n"
@@ -2335,8 +2335,8 @@ static void test_break_inside_loop_inside_try_expr_catch_block_is_accepted(void)
 
 static void test_throw_rejects_pointer_value(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(p: int*) {\n"
+        "module demo.main;\n"
+        "func run(p: int*) {\n"
         "    throw p;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("throw_pointer_error.f", source);
@@ -2358,9 +2358,9 @@ static void test_throw_rejects_pointer_value(void) {
 
 static void test_throw_rejects_fixed_type_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi type Handle { let id: int; }\n"
-        "fn run(h: Handle) {\n"
+        "func run(h: Handle) {\n"
         "    throw h;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("throw_fixed_error.f", source);
@@ -2382,12 +2382,12 @@ static void test_throw_rejects_fixed_type_value(void) {
 
 static void test_throw_accepts_string_and_managed_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Err { let message: string; }\n"
-        "fn run_string() {\n"
+        "func run_string() {\n"
         "    throw \"boom\";\n"
         "}\n"
-        "fn run_managed() {\n"
+        "func run_managed() {\n"
         "    throw Err { message: \"x\" };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("throw_managed_ok.f", source);
@@ -2407,9 +2407,9 @@ static void test_throw_accepts_string_and_managed_type(void) {
 
 static void test_catch_unknown_allows_rethrow_only(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): int { return 1; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): int { return 1; }\n"
+        "func run() {\n"
         "    try parse() catch ex: unknown { throw ex; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("catch_unknown_rethrow_ok.f", source);
@@ -2429,9 +2429,9 @@ static void test_catch_unknown_allows_rethrow_only(void) {
 
 static void test_catch_unknown_rejects_value_use(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): int { return 1; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): int { return 1; }\n"
+        "func run() {\n"
         "    try parse() catch ex: unknown { ex.message; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("catch_unknown_value_use_error.f", source);
@@ -2451,10 +2451,10 @@ static void test_catch_unknown_rejects_value_use(void) {
 
 static void test_try_expression_catch_result_can_use_bound_value(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { return 1; }\n"
-        "fn id(value: i32): i32 { return value; }\n"
-        "fn run(): i32 {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func id(value: i32): i32 { return value; }\n"
+        "func run(): i32 {\n"
         "    let value = try parse() catch ex: i32 { id(ex); };\n"
         "    return value;\n"
         "}\n";
@@ -2475,9 +2475,9 @@ static void test_try_expression_catch_result_can_use_bound_value(void) {
 
 static void test_try_without_catch_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { return 1; }\n"
-        "fn run(): i32 {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func run(): i32 {\n"
         "    let value = try parse();\n"
         "    return value;\n"
         "}\n";
@@ -2491,9 +2491,9 @@ static void test_try_without_catch_is_rejected(void) {
 
 static void test_try_catch_statement_allows_empty_catch(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { throw 1; return 0; }\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { throw 1; return 0; }\n"
+        "func run() {\n"
         "    try parse() catch ex: i32 {\n"
         "    };\n"
         "}\n";
@@ -2514,10 +2514,10 @@ static void test_try_catch_statement_allows_empty_catch(void) {
 
 static void test_try_expression_rejects_bound_value_result_mismatch(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { return 1; }\n"
-        "fn label(value: i32): string { return \"x\"; }\n"
-        "fn run(): i32 {\n"
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func label(value: i32): string { return \"x\"; }\n"
+        "func run(): i32 {\n"
         "    let value = try parse() catch ex: i32 { label(ex); };\n"
         "    return value;\n"
         "}\n";
@@ -2538,10 +2538,10 @@ static void test_try_expression_rejects_bound_value_result_mismatch(void) {
 
 static void test_unknown_type_is_only_valid_in_catch_clause(void) {
     static const char *const cases[] = {
-        "mod demo.main;\nfn run(x: unknown) {}\n",
-        "mod demo.main;\nfn run(): unknown { return 1; }\n",
-        "mod demo.main;\ntype Box { let value: unknown; }\n",
-        "mod demo.main;\nfn run() { let value: unknown = 1; }\n"
+        "module demo.main;\nfunc run(x: unknown) {}\n",
+        "module demo.main;\nfunc run(): unknown { return 1; }\n",
+        "module demo.main;\ntype Box { let value: unknown; }\n",
+        "module demo.main;\nfunc run() { let value: unknown = 1; }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -2564,10 +2564,10 @@ static void test_unknown_type_is_only_valid_in_catch_clause(void) {
 static void test_throw_rejects_callable_values(void) {
     /* fn values, lambdas, member methods, and callable-form specs are not throwable. */
     static const char *const cases[] = {
-        "mod demo.main;\nfn side() {}\nfn run() { throw side; }\n",
-        "mod demo.main;\nfn run() { throw () { }; }\n",
-        "mod demo.main;\ntype Box { fn ping() {} }\nfn run(box: Box) { throw box.ping; }\n",
-        "mod demo.main;\nspec Callback(): void;\nfn run(cb: Callback) { throw cb; }\n"
+        "module demo.main;\nfunc side() {}\nfunc run() { throw side; }\n",
+        "module demo.main;\nfunc run() { throw () { }; }\n",
+        "module demo.main;\ntype Box { func ping() {} }\nfunc run(box: Box) { throw box.ping; }\n",
+        "module demo.main;\nspec Callback(): void;\nfunc run(cb: Callback) { throw cb; }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -2591,10 +2591,10 @@ static void test_throw_allows_spec_values(void) {
     /* spec fat values are now throwable: codegen extracts .subject and reads
      * the concrete descriptor from FengManagedHeader at throw time. */
     const char *source =
-        "mod demo.main;\n"
-        "spec Named { fn greet(): string; }\n"
-        "type Foo: Named { let x: i32; fn greet(): string { return \"ok\"; } }\n"
-        "fn run(v: Named) { throw v; }\n";
+        "module demo.main;\n"
+        "spec Named { func greet(): string; }\n"
+        "type Foo: Named { let x: i32; func greet(): string { return \"ok\"; } }\n"
+        "func run(v: Named) { throw v; }\n";
     FengProgram *program = parse_program_or_die("throw_spec_value_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2610,9 +2610,9 @@ static void test_throw_allows_spec_values(void) {
 
 static void test_catch_rejects_non_exception_types(void) {
     static const char *const cases[] = {
-        "mod demo.main;\nspec Named { var name: string; }\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: Named { throw \"x\"; }; }\n",
-        "mod demo.main;\nspec Callback(): void;\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: Callback { throw \"x\"; }; }\n",
-        "mod demo.main;\nfn parse(): int { return 1; }\nfn run() { try parse() catch ex: int* { throw \"x\"; }; }\n"
+        "module demo.main;\nspec Named { var name: string; }\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Named { throw \"x\"; }; }\n",
+        "module demo.main;\nspec Callback(): void;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Callback { throw \"x\"; }; }\n",
+        "module demo.main;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: int* { throw \"x\"; }; }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -2637,11 +2637,11 @@ static void test_catch_without_binding_accepts_anonymous_clause(void) {
     /* catch { } (anonymous) is valid as statement or expression catch-all */
     static const char *const cases[] = {
         /* statement: anonymous catch-all */
-        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run() { try parse() catch { }; }\n",
+        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch { }; }\n",
         /* statement: anonymous catch-all after specific catch */
-        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run() { try parse() catch ex: i32 { } catch { }; }\n",
+        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch ex: i32 { } catch { }; }\n",
         /* expression: anonymous catch-all producing value */
-        "mod demo.main;\nfn parse(): i32 { throw 1; return 0; }\nfn run(): i32 { return try parse() catch { 0 }; }\n"
+        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run(): i32 { return try parse() catch { 0 }; }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -2664,9 +2664,9 @@ static void test_catch_without_binding_accepts_anonymous_clause(void) {
 static void test_catch_anonymous_must_be_last_clause(void) {
     /* anonymous catch { } must be the last catch clause */
     const char *source =
-        "mod demo.main;\n"
-        "fn parse(): i32 { throw 1; return 0; }\n"
-        "fn run() { try parse() catch { } catch ex: i32 { }; }\n";
+        "module demo.main;\n"
+        "func parse(): i32 { throw 1; return 0; }\n"
+        "func run() { try parse() catch { } catch ex: i32 { }; }\n";
     FengProgram *program = parse_program_or_die("catch_anon_not_last_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2684,11 +2684,11 @@ static void test_catch_anonymous_must_be_last_clause(void) {
 
 static void test_top_level_function_auto_infers_return_type_for_forward_call(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value: int = add(1, 2);\n"
         "}\n"
-        "fn add(a: int, b: int) {\n"
+        "func add(a: int, b: int) {\n"
         "    return a + b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("auto_return_forward_call_ok.f", source);
@@ -2708,14 +2708,14 @@ static void test_top_level_function_auto_infers_return_type_for_forward_call(voi
 
 static void test_top_level_function_rejects_conflicting_inferred_return_types(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(flag: bool) {\n"
+        "module demo.main;\n"
+        "func pick(flag: bool) {\n"
         "    if flag {\n"
         "        return 1;\n"
         "    }\n"
         "    return true;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let value: int = pick(false);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("auto_return_conflict_error.f", source);
@@ -2736,13 +2736,13 @@ static void test_top_level_function_rejects_conflicting_inferred_return_types(vo
 
 static void test_method_auto_infers_return_type_for_forward_call(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Counter {\n"
-        "    fn value() {\n"
+        "    func value() {\n"
         "        return 1;\n"
         "    }\n"
         "}\n"
-        "fn run(counter: Counter) {\n"
+        "func run(counter: Counter) {\n"
         "    let value: int = counter.value();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_auto_return_forward_call_ok.f", source);
@@ -2762,14 +2762,14 @@ static void test_method_auto_infers_return_type_for_forward_call(void) {
 
 static void test_imported_function_auto_infers_return_type_across_modules(void) {
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func run(): int {\n"
         "    return base.value();\n"
         "}\n";
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn value() {\n"
+        "open module demo.base;\n"
+        "open func value() {\n"
         "    return 1;\n"
         "}\n";
     FengProgram *main_program = parse_program_or_die("auto_return_import_main.f", main_source);
@@ -2791,12 +2791,12 @@ static void test_imported_function_auto_infers_return_type_across_modules(void) 
 
 static void test_omitted_return_function_rejects_lambda_signature_inference(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntToInt(x: int): int;\n"
-        "fn make() {\n"
+        "func make() {\n"
         "    return (x: int) -> x * 2;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let callable: IntToInt = make();\n"
         "    return callable(4);\n"
         "}\n";
@@ -2818,12 +2818,12 @@ static void test_omitted_return_function_rejects_lambda_signature_inference(void
 
 static void test_explicit_callable_return_accepts_lambda(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntAdder(x: int, y: int): int;\n"
-        "fn make(): IntAdder {\n"
+        "func make(): IntAdder {\n"
         "    return (x: int, y: int) -> x + y;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let add: IntAdder = make();\n"
         "    return add(1, 2);\n"
         "}\n";
@@ -2844,12 +2844,12 @@ static void test_explicit_callable_return_accepts_lambda(void) {
 
 static void test_omitted_return_function_value_matches_named_function_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntToInt(x: int): int;\n"
-        "fn pick(x: int) {\n"
+        "func pick(x: int) {\n"
         "    return x;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let callable: IntToInt = pick;\n"
         "    return callable(4);\n"
         "}\n";
@@ -2870,8 +2870,8 @@ static void test_omitted_return_function_value_matches_named_function_type(void)
 
 static void test_explicit_non_void_return_rejects_empty_return(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn value(): int {\n"
+        "module demo.main;\n"
+        "func value(): int {\n"
         "    return;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("explicit_non_void_empty_return_error.f", source);
@@ -2892,8 +2892,8 @@ static void test_explicit_non_void_return_rejects_empty_return(void) {
 
 static void test_match_expression_rejects_non_constant_label(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int, other: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int, other: int): int {\n"
         "    let pivot = other + 1;\n"
         "    return if value {\n"
         "        pivot { 1; }\n"
@@ -2918,8 +2918,8 @@ static void test_match_expression_rejects_non_constant_label(void) {
 
 static void test_match_expression_rejects_incomparable_label_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    return if value {\n"
         "        \"one\" { 1; }\n"
         "        else { 0; }\n"
@@ -2943,8 +2943,8 @@ static void test_match_expression_rejects_incomparable_label_type(void) {
 
 static void test_match_expression_rejects_inconsistent_result_types(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    return if value {\n"
         "        1 { 1; }\n"
         "        else { \"zero\"; }\n"
@@ -2968,8 +2968,8 @@ static void test_match_expression_rejects_inconsistent_result_types(void) {
 
 static void test_untyped_lambda_binding_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let callable = (x: int) -> x * 2;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("untyped_lambda_binding_error.f", source);
@@ -2990,9 +2990,9 @@ static void test_untyped_lambda_binding_is_rejected(void) {
 
 static void test_untyped_lambda_binding_cannot_later_match_named_function_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntToInt(x: int): int;\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let callable = (x: int) -> x * 2;\n"
         "    let typed: IntToInt = callable;\n"
         "    return typed(3);\n"
@@ -3014,8 +3014,8 @@ static void test_untyped_lambda_binding_cannot_later_match_named_function_type(v
 }
 
 static void test_module_visibility_conflict(void) {
-    const char *source_a = "pu mod demo.main;\n";
-    const char *source_b = "mod demo.main;\n";
+    const char *source_a = "open module demo.main;\n";
+    const char *source_b = "module demo.main;\n";
     FengProgram *program_a = parse_program_or_die("visibility_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("visibility_b.f", source_b);
     const FengProgram *programs[] = {program_a, program_b};
@@ -3036,11 +3036,11 @@ static void test_module_visibility_conflict(void) {
 
 static void test_valid_function_overload_by_parameter_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("valid_overload.f", source);
@@ -3060,14 +3060,14 @@ static void test_valid_function_overload_by_parameter_type(void) {
 
 static void test_top_level_function_call_selects_overload_by_literal_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("call_overload_literal_ok.f", source);
@@ -3087,14 +3087,14 @@ static void test_top_level_function_call_selects_overload_by_literal_type(void) 
 
 static void test_top_level_function_call_selects_overload_by_inferred_local_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let value = 1;\n"
         "    return pick(value);\n"
         "}\n";
@@ -3115,9 +3115,9 @@ static void test_top_level_function_call_selects_overload_by_inferred_local_bind
 
 static void test_top_level_binding_inferred_type_is_used_by_identifier(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "let TEST_NAME = \"hello_world\";\n"
-        "fn run(): string {\n"
+        "func run(): string {\n"
         "    return \"Running test: \" + TEST_NAME;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("top_binding_inferred_identifier_ok.f", source);
@@ -3144,14 +3144,14 @@ static void test_top_level_binding_inferred_type_is_used_by_identifier(void) {
 
 static void test_top_level_function_call_reports_type_mismatch(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    pick(true);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("call_overload_type_mismatch.f", source);
@@ -3172,10 +3172,10 @@ static void test_top_level_function_call_reports_type_mismatch(void) {
 
 static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn feng_array_length_i64<T>(value: T[]): long;\n"
-        "fn run(values: int[]): long {\n"
+        "extern func feng_array_length_i64<T>(value: T[]): long;\n"
+        "func run(values: int[]): long {\n"
         "    return feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_wrapped_ok.f", source);
@@ -3196,10 +3196,10 @@ static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
 
 static void test_generic_extern_call_accepts_bare_type_param_inference(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn same<T>(left: T, right: T): bool;\n"
-        "fn run(left: int, right: int): bool {\n"
+        "extern func same<T>(left: T, right: T): bool;\n"
+        "func run(left: int, right: int): bool {\n"
         "    return same(left, right);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_bare_ok.f", source);
@@ -3220,10 +3220,10 @@ static void test_generic_extern_call_accepts_bare_type_param_inference(void) {
 
 static void test_generic_extern_call_accepts_bare_type_param_return(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn __test_value_identity<T>(value: T): T;\n"
-        "fn run(value: int): int {\n"
+        "extern func __test_value_identity<T>(value: T): T;\n"
+        "func run(value: int): int {\n"
         "    return __test_value_identity(value);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_bare_return_ok.f", source);
@@ -3244,13 +3244,13 @@ static void test_generic_extern_call_accepts_bare_type_param_return(void) {
 
 static void test_fit_method_accepts_fit_type_param_argument(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "fit T[!] {\n"
-        "    fn pick(value: T): long {\n"
+        "    func pick(value: T): long {\n"
         "        return (long)1;\n"
         "    }\n"
         "}\n"
-        "fn run(values: int[!]): long {\n"
+        "func run(values: int[!]): long {\n"
         "    return values.pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_method_type_param_arg_ok.f", source);
@@ -3271,10 +3271,10 @@ static void test_fit_method_accepts_fit_type_param_argument(void) {
 
 static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn same<T>(left: T[], right: T[]): long;\n"
-        "fn run(left: int[], right: string[]): long {\n"
+        "extern func same<T>(left: T[], right: T[]): long;\n"
+        "func run(left: int[], right: string[]): long {\n"
         "    return same(left, right);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_wrapped_conflict.f", source);
@@ -3295,11 +3295,11 @@ static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference
 
 static void test_generic_non_extern_call_does_not_expand_wrapped_array_inference(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn same<T>(values: T[]): T[] {\n"
+        "module demo.main;\n"
+        "func same<T>(values: T[]): T[] {\n"
         "    return values;\n"
         "}\n"
-        "fn run(values: int[]): int[] {\n"
+        "func run(values: int[]): int[] {\n"
         "    return same(values);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_non_extern_wrapped_scope.f", source);
@@ -3320,17 +3320,17 @@ static void test_generic_non_extern_call_does_not_expand_wrapped_array_inference
 
 static void test_imported_function_call_selects_overload_by_literal_type(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn pick(a: int): int {\n"
+        "open module demo.base;\n"
+        "open func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "pu fn pick(a: string): string {\n"
+        "open func pick(a: string): string {\n"
         "    return a;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func run(): int {\n"
         "    return pick(1);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("imported_call_base.f", base_source);
@@ -3352,13 +3352,13 @@ static void test_imported_function_call_selects_overload_by_literal_type(void) {
 
 static void test_imported_generic_extern_call_accepts_wrapped_array_inference(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
+        "open module demo.base;\n"
         "@runtime\n"
-        "pu extern fn feng_array_length_i64<T>(value: T[]): long;\n";
+        "open extern func feng_array_length_i64<T>(value: T[]): long;\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn run(values: int[]): long {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func run(values: int[]): long {\n"
         "    return base.feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("imported_generic_extern_base.f", base_source);
@@ -3381,17 +3381,17 @@ static void test_imported_generic_extern_call_accepts_wrapped_array_inference(vo
 
 static void test_alias_function_call_selects_overload_by_literal_type(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn pick(a: int): int {\n"
+        "open module demo.base;\n"
+        "open func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "pu fn pick(a: string): string {\n"
+        "open func pick(a: string): string {\n"
         "    return a;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func run(): int {\n"
         "    return base.pick(1);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_call_base.f", base_source);
@@ -3413,16 +3413,16 @@ static void test_alias_function_call_selects_overload_by_literal_type(void) {
 
 static void test_method_call_selects_overload_by_literal_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn pick(a: int): int {\n"
+        "    func pick(a: int): int {\n"
         "        return a;\n"
         "    }\n"
-        "    fn pick(a: string): string {\n"
+        "    func pick(a: string): string {\n"
         "        return a;\n"
         "    }\n"
         "}\n"
-        "fn run(user: User): int {\n"
+        "func run(user: User): int {\n"
         "    return user.pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_call_overload_ok.f", source);
@@ -3442,9 +3442,9 @@ static void test_method_call_selects_overload_by_literal_type(void) {
 
 static void test_function_typed_local_binding_is_callable(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Picker(a: int): int;\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let pick: Picker = (a: int) -> a;\n"
         "    return pick(1);\n"
         "}\n";
@@ -3465,8 +3465,8 @@ static void test_function_typed_local_binding_is_callable(void) {
 
 static void test_non_callable_local_binding_reports_error(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value = 1;\n"
         "    value(2);\n"
         "}\n";
@@ -3488,16 +3488,16 @@ static void test_non_callable_local_binding_reports_error(void) {
 
 static void test_private_method_is_inaccessible_across_modules(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {\n"
-        "    pr fn secret(): int {\n"
+        "open module demo.base;\n"
+        "open type User {\n"
+        "    seal func secret(): int {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn run(user: User): int {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func run(user: User): int {\n"
         "    return user.secret();\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("private_method_base.f", base_source);
@@ -3520,15 +3520,15 @@ static void test_private_method_is_inaccessible_across_modules(void) {
 
 static void test_top_level_function_value_selects_overload_by_explicit_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntPicker(a: int): int;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let picker: IntPicker = pick;\n"
         "    return picker(1);\n"
         "}\n";
@@ -3549,18 +3549,18 @@ static void test_top_level_function_value_selects_overload_by_explicit_binding_t
 
 static void test_top_level_function_value_selects_overload_by_parameter_context(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntPicker(a: int): int;\n"
-        "fn apply(picker: IntPicker): int {\n"
+        "func apply(picker: IntPicker): int {\n"
         "    return picker(1);\n"
         "}\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return apply(pick);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_arg_ok.f", source);
@@ -3580,15 +3580,15 @@ static void test_top_level_function_value_selects_overload_by_parameter_context(
 
 static void test_top_level_function_value_selects_overload_by_return_type_context(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntPicker(a: int): int;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn make(): IntPicker {\n"
+        "func make(): IntPicker {\n"
         "    return pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_return_ok.f", source);
@@ -3608,14 +3608,14 @@ static void test_top_level_function_value_selects_overload_by_return_type_contex
 
 static void test_top_level_function_value_requires_explicit_type_when_overloaded(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let picker = pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_requires_type_error.f", source);
@@ -3636,13 +3636,13 @@ static void test_top_level_function_value_requires_explicit_type_when_overloaded
 
 static void test_method_value_selects_overload_by_explicit_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec M0(): void;\n"
         "type User {\n"
-        "    fn say() {}\n"
-        "    fn say(msg: string) {}\n"
+        "    func say() {}\n"
+        "    func say(msg: string) {}\n"
         "}\n"
-        "fn run(user: User) {\n"
+        "func run(user: User) {\n"
         "    let action: M0 = user.say;\n"
         "    action();\n"
         "}\n";
@@ -3663,16 +3663,16 @@ static void test_method_value_selects_overload_by_explicit_binding_type(void) {
 
 static void test_method_value_selects_overload_by_parameter_context(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec M0(): void;\n"
         "type User {\n"
-        "    fn say() {}\n"
-        "    fn say(msg: string) {}\n"
+        "    func say() {}\n"
+        "    func say(msg: string) {}\n"
         "}\n"
-        "fn apply(action: M0) {\n"
+        "func apply(action: M0) {\n"
         "    action();\n"
         "}\n"
-        "fn run(user: User) {\n"
+        "func run(user: User) {\n"
         "    apply(user.say);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_value_arg_ok.f", source);
@@ -3692,13 +3692,13 @@ static void test_method_value_selects_overload_by_parameter_context(void) {
 
 static void test_method_value_selects_overload_by_return_type_context(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec M0(): void;\n"
         "type User {\n"
-        "    fn say() {}\n"
-        "    fn say(msg: string) {}\n"
+        "    func say() {}\n"
+        "    func say(msg: string) {}\n"
         "}\n"
-        "fn make(user: User): M0 {\n"
+        "func make(user: User): M0 {\n"
         "    return user.say;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_value_return_ok.f", source);
@@ -3718,12 +3718,12 @@ static void test_method_value_selects_overload_by_return_type_context(void) {
 
 static void test_method_value_requires_explicit_type_when_overloaded(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn say() {}\n"
-        "    fn say(msg: string) {}\n"
+        "    func say() {}\n"
+        "    func say(msg: string) {}\n"
         "}\n"
-        "fn run(user: User) {\n"
+        "func run(user: User) {\n"
         "    let action = user.say;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_value_requires_type_error.f", source);
@@ -3744,15 +3744,15 @@ static void test_method_value_requires_explicit_type_when_overloaded(void) {
 
 static void test_top_level_function_value_binding_rejects_non_matching_target_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec BoolPicker(a: bool): bool;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let picker: BoolPicker = pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_binding_mismatch_error.f", source);
@@ -3773,15 +3773,15 @@ static void test_top_level_function_value_binding_rejects_non_matching_target_ty
 
 static void test_top_level_function_value_return_rejects_non_matching_target_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec BoolPicker(a: bool): bool;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn pick(a: string): string {\n"
+        "func pick(a: string): string {\n"
         "    return a;\n"
         "}\n"
-        "fn make(): BoolPicker {\n"
+        "func make(): BoolPicker {\n"
         "    return pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_return_mismatch_error.f", source);
@@ -3802,11 +3802,11 @@ static void test_top_level_function_value_return_rejects_non_matching_target_typ
 
 static void test_top_level_function_value_rejects_non_function_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let flag: bool = pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("function_value_non_function_binding_error.f", source);
@@ -3827,12 +3827,12 @@ static void test_top_level_function_value_rejects_non_function_binding_type(void
 
 static void test_lambda_body_rejects_function_value_for_non_function_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec BoolMaker(a: int): bool;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let maker: BoolMaker = (a: int) -> pick;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("lambda_body_function_value_return_error.f", source);
@@ -3853,19 +3853,19 @@ static void test_lambda_body_rejects_function_value_for_non_function_return_type
 
 static void test_alias_function_value_argument_rejects_non_matching_target_type(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn pick(a: int): int {\n"
+        "open module demo.base;\n"
+        "open func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "pu fn pick(a: string): string {\n"
+        "open func pick(a: string): string {\n"
         "    return a;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
         "spec BoolPicker(a: bool): bool;\n"
-        "fn accept(picker: BoolPicker) {}\n"
-        "fn run() {\n"
+        "func accept(picker: BoolPicker) {}\n"
+        "func run() {\n"
         "    accept(base.pick);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_function_value_base.f", base_source);
@@ -3888,14 +3888,14 @@ static void test_alias_function_value_argument_rejects_non_matching_target_type(
 
 static void test_method_value_argument_rejects_non_matching_target_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec BoolAction(flag: bool): bool;\n"
         "type User {\n"
-        "    fn say() {}\n"
-        "    fn say(msg: string) {}\n"
+        "    func say() {}\n"
+        "    func say(msg: string) {}\n"
         "}\n"
-        "fn accept(action: BoolAction) {}\n"
-        "fn run(user: User) {\n"
+        "func accept(action: BoolAction) {}\n"
+        "func run(user: User) {\n"
         "    accept(user.say);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_value_argument_mismatch_error.f", source);
@@ -3916,12 +3916,12 @@ static void test_method_value_argument_rejects_non_matching_target_type(void) {
 
 static void test_function_typed_call_result_rejects_non_matching_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntPicker(a: int): int;\n"
-        "fn pick(a: int): int {\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let picker: IntPicker = pick;\n"
         "    let flag: bool = picker(1);\n"
         "}\n";
@@ -3943,11 +3943,11 @@ static void test_function_typed_call_result_rejects_non_matching_binding_type(vo
 
 static void test_top_level_call_result_rejects_non_matching_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let flag: bool = pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("top_level_call_result_binding_error.f", source);
@@ -3968,11 +3968,11 @@ static void test_top_level_call_result_rejects_non_matching_binding_type(void) {
 
 static void test_top_level_call_result_rejects_non_matching_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn pick(a: int): int {\n"
+        "module demo.main;\n"
+        "func pick(a: int): int {\n"
         "    return a;\n"
         "}\n"
-        "fn run(): bool {\n"
+        "func run(): bool {\n"
         "    return pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("top_level_call_result_return_error.f", source);
@@ -3993,13 +3993,13 @@ static void test_top_level_call_result_rejects_non_matching_return_type(void) {
 
 static void test_method_call_result_rejects_non_matching_binding_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn pick(a: int): int {\n"
+        "    func pick(a: int): int {\n"
         "        return a;\n"
         "    }\n"
         "}\n"
-        "fn run(user: User) {\n"
+        "func run(user: User) {\n"
         "    let flag: bool = user.pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("method_call_result_binding_error.f", source);
@@ -4020,8 +4020,8 @@ static void test_method_call_result_rejects_non_matching_binding_type(void) {
 
 static void test_local_assignment_rejects_non_matching_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var flag: bool = true;\n"
         "    flag = 1;\n"
         "}\n";
@@ -4043,10 +4043,10 @@ static void test_local_assignment_rejects_non_matching_type(void) {
 
 static void test_member_assignment_rejects_non_matching_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var flag: bool;\n"
-        "    fn update() {\n"
+        "    func update() {\n"
         "        self.flag = 1;\n"
         "    }\n"
         "}\n";
@@ -4068,11 +4068,11 @@ static void test_member_assignment_rejects_non_matching_type(void) {
 
 static void test_object_literal_field_value_rejects_non_matching_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var flag: bool;\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User { flag: 1 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_literal_field_type_error.f", source);
@@ -4093,7 +4093,7 @@ static void test_object_literal_field_value_rejects_non_matching_type(void) {
 
 static void test_type_field_inferred_initializer_member_access_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type UserType {\n"
         "    let id: int = 7;\n"
         "}\n"
@@ -4103,7 +4103,7 @@ static void test_type_field_inferred_initializer_member_access_accepted(void) {
         "    let y = UserType();\n"
         "    let z = UserType {};\n"
         "}\n"
-        "fn total(): int {\n"
+        "func total(): int {\n"
         "    let user = User();\n"
         "    return user.id + user.x.id + user.y.id + user.z.id;\n"
         "}\n";
@@ -4136,8 +4136,8 @@ static void test_type_field_inferred_initializer_member_access_accepted(void) {
 
 static void test_local_let_assignment_rejects_non_writable_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let count: int = 0;\n"
         "    count = 1;\n"
         "}\n";
@@ -4159,8 +4159,8 @@ static void test_local_let_assignment_rejects_non_writable_target(void) {
 
 static void test_default_parameter_assignment_rejects_non_writable_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(total: int) {\n"
+        "module demo.main;\n"
+        "func run(total: int) {\n"
         "    total = 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("default_param_assign_error.f", source);
@@ -4181,8 +4181,8 @@ static void test_default_parameter_assignment_rejects_non_writable_target(void) 
 
 static void test_var_parameter_assignment_is_writable(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(var total: int) {\n"
+        "module demo.main;\n"
+        "func run(var total: int) {\n"
         "    total = 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("var_param_assign_ok.f", source);
@@ -4202,9 +4202,9 @@ static void test_var_parameter_assignment_is_writable(void) {
 
 static void test_top_level_let_assignment_rejects_non_writable_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "let count: int = 0;\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    count = 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("top_level_let_assign_error.f", source);
@@ -4225,11 +4225,11 @@ static void test_top_level_let_assignment_rejects_non_writable_target(void) {
 
 static void test_instance_let_member_assignment_rejects_non_writable_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int = 0;\n"
         "}\n"
-        "fn update(var user: User) {\n"
+        "func update(var user: User) {\n"
         "    user.id = 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("instance_let_member_assign_error.f", source);
@@ -4250,12 +4250,12 @@ static void test_instance_let_member_assignment_rejects_non_writable_target(void
 
 static void test_alias_public_let_binding_assignment_rejects_non_writable_target(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu let count: int = 0;\n";
+        "open module demo.base;\n"
+        "open let count: int = 0;\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func run() {\n"
         "    base.count = 1;\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_assign_base.f", base_source);
@@ -4278,8 +4278,8 @@ static void test_alias_public_let_binding_assignment_rejects_non_writable_target
 
 static void test_index_assignment_accepts_explicit_array_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[!] = [1, 2, 3];\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
@@ -4301,8 +4301,8 @@ static void test_index_assignment_accepts_explicit_array_target(void) {
 
 static void test_index_assignment_rejects_non_matching_array_element_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[!] = [1, 2, 3];\n"
         "    items[0] = true;\n"
         "}\n";
@@ -4324,8 +4324,8 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
 
 static void test_compound_assignment_accepts_numeric_and_bitwise_targets(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var rem: double = 7.8;\n"
         "    rem %= 3.2;\n"
         "    var mask: i32 = 8;\n"
@@ -4348,8 +4348,8 @@ static void test_compound_assignment_accepts_numeric_and_bitwise_targets(void) {
 
 static void test_compound_assignment_rejects_string_plus_equal(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var name: string = \"a\";\n"
         "    name += \"b\";\n"
         "}\n";
@@ -4371,8 +4371,8 @@ static void test_compound_assignment_rejects_string_plus_equal(void) {
 
 static void test_inferred_array_literal_binding_rejects_index_write_without_writable_layer(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items = [1, 2, 3];\n"
         "    items[0] = 4;\n"
         "    let first: int = items[0];\n"
@@ -4395,8 +4395,8 @@ static void test_inferred_array_literal_binding_rejects_index_write_without_writ
 
 static void test_inferred_array_literal_binding_rejects_non_matching_index_assignment(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items = [1, 2, 3];\n"
         "    items[0] = true;\n"
         "}\n";
@@ -4418,8 +4418,8 @@ static void test_inferred_array_literal_binding_rejects_non_matching_index_assig
 
 static void test_inferred_array_literal_rejects_mixed_element_types(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items = [1, true];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("mixed_array_literal_error.f", source);
@@ -4441,8 +4441,8 @@ static void test_inferred_array_literal_rejects_mixed_element_types(void) {
 
 static void test_inferred_nested_array_literal_rejects_nested_index_write_without_writable_layer(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var matrix = [[1, 2], [3, 4]];\n"
         "    matrix[0][1] = 5;\n"
         "    let value: int = matrix[1][0];\n"
@@ -4465,8 +4465,8 @@ static void test_inferred_nested_array_literal_rejects_nested_index_write_withou
 
 static void test_empty_array_literal_binding_requires_explicit_target_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items = [];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("empty_array_literal_type_context_error.f", source);
@@ -4488,8 +4488,8 @@ static void test_empty_array_literal_binding_requires_explicit_target_type(void)
 
 static void test_empty_array_literal_binding_accepts_explicit_target_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("empty_array_literal_typed_ok.f", source);
@@ -4511,8 +4511,8 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
  * indexed array layer lacks the writable mark `!`. */
 static void test_index_assignment_rejects_readonly_array(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "    items[0] = 4;\n"
         "}\n";
@@ -4535,8 +4535,8 @@ static void test_index_assignment_rejects_readonly_array(void) {
  * readonly slot without an explicit cast is rejected per docs §5. */
 static void test_array_literal_matches_readonly_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("writable_literal_to_readonly_error.f", source);
@@ -4557,8 +4557,8 @@ static void test_array_literal_matches_readonly_target(void) {
 /* Cast may STRIP `!` (writable → readonly): allowed. */
 static void test_cast_strips_writable_array_to_readonly(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var src: int[!] = [1, 2, 3];\n"
         "    let view: int[] = (int[])src;\n"
         "}\n";
@@ -4578,8 +4578,8 @@ static void test_cast_strips_writable_array_to_readonly(void) {
 /* Cast must not ADD `!` (readonly → writable): rejected. */
 static void test_cast_rejects_adding_writable_to_readonly_array(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var src: int[] = [1, 2, 3];\n"
         "    let view: int[!] = (int[!])src;\n"
         "}\n";
@@ -4601,8 +4601,8 @@ static void test_cast_rejects_adding_writable_to_readonly_array(void) {
 /* Empty `[]` requires an explicit writable target type when binding to `T[!]`. */
 static void test_empty_writable_array_literal_requires_writable_target(void) {
     const char *ok_source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[!] = [];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("empty_writable_literal_ok.f", ok_source);
@@ -4620,8 +4620,8 @@ static void test_empty_writable_array_literal_requires_writable_target(void) {
 
 static void test_explicit_numeric_and_exact_casts_pass(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "    var index: u8 = (u8)1;\n"
         "    let value: int = items[index];\n"
@@ -4646,8 +4646,8 @@ static void test_explicit_numeric_and_exact_casts_pass(void) {
 
 static void test_cast_rejects_bool_to_numeric(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value: int = (int)true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_bool_to_numeric_error.f", source);
@@ -4668,8 +4668,8 @@ static void test_cast_rejects_bool_to_numeric(void) {
 
 static void test_cast_rejects_numeric_to_bool(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let flag: bool = (bool)1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_numeric_to_bool_error.f", source);
@@ -4690,8 +4690,8 @@ static void test_cast_rejects_numeric_to_bool(void) {
 
 static void test_cast_rejects_string_to_numeric(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value: int = (int)\"12\";\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_string_to_numeric_error.f", source);
@@ -4712,8 +4712,8 @@ static void test_cast_rejects_string_to_numeric(void) {
 
 static void test_cast_rejects_array_to_numeric(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "    let value: int = (int)items;\n"
         "}\n";
@@ -4735,8 +4735,8 @@ static void test_cast_rejects_array_to_numeric(void) {
 
 static void test_cast_rejects_numeric_to_string(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let s: string = (string)1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_numeric_to_string_error.f", source);
@@ -4755,8 +4755,8 @@ static void test_cast_rejects_numeric_to_string(void) {
 
 static void test_cast_rejects_numeric_to_array(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let xs: int[] = (int[])1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_numeric_to_array_error.f", source);
@@ -4775,8 +4775,8 @@ static void test_cast_rejects_numeric_to_array(void) {
 
 static void test_cast_rejects_string_to_bool(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let b: bool = (bool)\"x\";\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_string_to_bool_error.f", source);
@@ -4795,8 +4795,8 @@ static void test_cast_rejects_string_to_bool(void) {
 
 static void test_cast_rejects_bool_to_string(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let s: string = (string)true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_bool_to_string_error.f", source);
@@ -4815,9 +4815,9 @@ static void test_cast_rejects_bool_to_string(void) {
 
 static void test_cast_rejects_numeric_to_object(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Point { var x: int; var y: int; }\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let p: Point = (Point)1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_numeric_to_object_error.f", source);
@@ -4836,9 +4836,9 @@ static void test_cast_rejects_numeric_to_object(void) {
 
 static void test_cast_rejects_object_to_numeric(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Point { var x: int; var y: int; }\n"
-        "fn run(p: Point) {\n"
+        "func run(p: Point) {\n"
         "    let v: int = (int)p;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("cast_object_to_numeric_error.f", source);
@@ -4857,8 +4857,8 @@ static void test_cast_rejects_object_to_numeric(void) {
 
 static void test_cast_same_type_passes(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let i: int = (int)1;\n"
         "    let s: string = (string)\"x\";\n"
         "    let b: bool = (bool)true;\n"
@@ -4878,8 +4878,8 @@ static void test_cast_same_type_passes(void) {
 
 static void test_non_generic_array_new_colon_dimension_accepts_expected_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(n: int) {\n"
+        "module demo.main;\n"
+        "func run(n: int) {\n"
         "    var items: int[!] = int[:n];\n"
         "    items[0] = 1;\n"
         "}\n";
@@ -4898,8 +4898,8 @@ static void test_non_generic_array_new_colon_dimension_accepts_expected_target(v
 
 static void test_non_generic_array_new_legacy_bracket_syntax_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let items: int[!] = int[3];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("array_new_legacy_syntax_error.f", source);
@@ -4920,12 +4920,12 @@ static void test_non_generic_array_new_legacy_bracket_syntax_rejected(void) {
 
 static void test_generic_array_new_colon_dimension_accepts_expected_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Pair<A, B> {\n"
         "    var left: A;\n"
         "    var right: B;\n"
         "}\n"
-        "fn run(n: int) {\n"
+        "func run(n: int) {\n"
         "    var pairs: Pair<int, int>[!] = Pair<int, int>[:n];\n"
         "    pairs[0].left = 1;\n"
         "}\n";
@@ -4944,12 +4944,12 @@ static void test_generic_array_new_colon_dimension_accepts_expected_target(void)
 
 static void test_generic_array_new_legacy_bracket_syntax_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Pair<A, B> {\n"
         "    var left: A;\n"
         "    var right: B;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let pairs: Pair<int, int>[!] = Pair<int, int>[3];\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_array_new_legacy_syntax_error.f", source);
@@ -4970,8 +4970,8 @@ static void test_generic_array_new_legacy_bracket_syntax_rejected(void) {
 
 static void test_index_access_on_uppercase_local_name_remains_index_expression(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var Data: int[] = [1, 2, 3];\n"
         "    let value: int = Data[0];\n"
         "}\n";
@@ -4990,8 +4990,8 @@ static void test_index_access_on_uppercase_local_name_remains_index_expression(v
 
 static void test_index_expression_rejects_float_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "    let value: int = items[1.5];\n"
         "}\n";
@@ -5013,8 +5013,8 @@ static void test_index_expression_rejects_float_operand(void) {
 
 static void test_index_expression_rejects_bool_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var items: int[] = [1, 2, 3];\n"
         "    let value: int = items[true];\n"
         "}\n";
@@ -5036,8 +5036,8 @@ static void test_index_expression_rejects_bool_operand(void) {
 
 static void test_index_expression_rejects_non_array_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var value: int = 1;\n"
         "    let item: int = value[0];\n"
         "}\n";
@@ -5059,8 +5059,8 @@ static void test_index_expression_rejects_non_array_target(void) {
 
 static void test_index_assignment_rejects_non_array_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var value: int = 1;\n"
         "    value[0] = 2;\n"
         "}\n";
@@ -5082,8 +5082,8 @@ static void test_index_assignment_rejects_non_array_target(void) {
 
 static void test_unary_minus_rejects_non_numeric_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    -true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_minus_type_error.f", source);
@@ -5104,8 +5104,8 @@ static void test_unary_minus_rejects_non_numeric_operand(void) {
 
 static void test_unary_not_rejects_non_bool_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    !1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_not_type_error.f", source);
@@ -5126,8 +5126,8 @@ static void test_unary_not_rejects_non_bool_operand(void) {
 
 static void test_unary_address_of_rejects_returned_scalar_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: i32): i32* {\n"
+        "module demo.main;\n"
+        "func run(value: i32): i32* {\n"
         "    return &value;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_scalar_return_error.f", source);
@@ -5151,8 +5151,8 @@ static void test_unary_address_of_rejects_returned_scalar_binding(void) {
 
 static void test_unary_address_of_rejects_returned_array_value(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(values: int[]): int* {\n"
+        "module demo.main;\n"
+        "func run(values: int[]): int* {\n"
         "    return &values;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_array_return_error.f", source);
@@ -5176,8 +5176,8 @@ static void test_unary_address_of_rejects_returned_array_value(void) {
 
 static void test_unary_address_of_rejects_returned_string_value(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(text: string): string* {\n"
+        "module demo.main;\n"
+        "func run(text: string): string* {\n"
         "    return &text;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_string_return_error.f", source);
@@ -5201,14 +5201,14 @@ static void test_unary_address_of_rejects_returned_string_value(void) {
 
 static void test_unary_address_of_allows_extern_call_borrowed_data_pointer(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"c_use_i32_ptr\")\n"
-        "extern fn c_use_i32_ptr(p: i32*): void;\n"
+        "extern func c_use_i32_ptr(p: i32*): void;\n"
         "@cdecl(\"c_use_array_ptr\")\n"
-        "extern fn c_use_array_ptr(p: int*): void;\n"
+        "extern func c_use_array_ptr(p: int*): void;\n"
         "@cdecl(\"c_use_text_ptr\")\n"
-        "extern fn c_use_text_ptr(p: string*): void;\n"
-        "fn run(value: i32, values: int[], text: string) {\n"
+        "extern func c_use_text_ptr(p: string*): void;\n"
+        "func run(value: i32, values: int[], text: string) {\n"
         "    let p1: i32* = &value;\n"
         "    let p2: int* = &values;\n"
         "    let p3: string* = &text;\n"
@@ -5233,14 +5233,14 @@ static void test_unary_address_of_allows_extern_call_borrowed_data_pointer(void)
 
 static void test_unary_address_of_allows_fielded_abi_type_pointer_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn use_point_ptr(p: Point*): void;\n"
-        "fn run(point: Point) {\n"
+        "extern func use_point_ptr(p: Point*): void;\n"
+        "func run(point: Point) {\n"
         "    let ptr: Point* = &point;\n"
         "    use_point_ptr(ptr);\n"
         "}\n";
@@ -5261,11 +5261,11 @@ static void test_unary_address_of_allows_fielded_abi_type_pointer_binding(void) 
 
 static void test_unary_address_of_rejects_fieldless_abi_type_pointer_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Handle {\n"
         "}\n"
-        "fn run(handle: Handle) {\n"
+        "func run(handle: Handle) {\n"
         "    let ptr: Handle* = &handle;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_fieldless_abi_type_error.f", source);
@@ -5288,8 +5288,8 @@ static void test_unary_address_of_rejects_fieldless_abi_type_pointer_binding(voi
 
 static void test_unary_address_of_rejects_string_to_byte_pointer_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(text: string) {\n"
+        "module demo.main;\n"
+        "func run(text: string) {\n"
         "    let p: byte* = &text;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_string_to_byte_pointer_error.f", source);
@@ -5310,12 +5310,12 @@ static void test_unary_address_of_rejects_string_to_byte_pointer_binding(void) {
 
 static void test_unary_address_of_rejects_non_extern_forwarding_via_assignment_alias(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"c_get_i32_ptr\")\n"
-        "extern fn c_get_i32_ptr(): i32*;\n"
-        "fn forward(p: i32*) {\n"
+        "extern func c_get_i32_ptr(): i32*;\n"
+        "func forward(p: i32*) {\n"
         "}\n"
-        "fn run(value: i32) {\n"
+        "func run(value: i32) {\n"
         "    var p: i32* = c_get_i32_ptr();\n"
         "    p = &value;\n"
         "    forward(p);\n"
@@ -5339,11 +5339,11 @@ static void test_unary_address_of_rejects_non_extern_forwarding_via_assignment_a
 
 static void test_unary_address_of_rejects_object_field_storage(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Holder {\n"
         "    var ptr: i32*;\n"
         "}\n"
-        "fn run(value: i32) {\n"
+        "func run(value: i32) {\n"
         "    let p: i32* = &value;\n"
         "    let holder = Holder { ptr: p };\n"
         "}\n";
@@ -5366,13 +5366,13 @@ static void test_unary_address_of_rejects_object_field_storage(void) {
 
 static void test_unary_address_of_rejects_member_assignment_storage(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Holder {\n"
         "    var ptr: i32*;\n"
         "}\n"
         "@cdecl(\"c_get_i32_ptr\")\n"
-        "extern fn c_get_i32_ptr(): i32*;\n"
-        "fn run(value: i32) {\n"
+        "extern func c_get_i32_ptr(): i32*;\n"
+        "func run(value: i32) {\n"
         "    let holder = Holder { ptr: c_get_i32_ptr() };\n"
         "    holder.ptr = &value;\n"
         "}\n";
@@ -5395,14 +5395,14 @@ static void test_unary_address_of_rejects_member_assignment_storage(void) {
 
 static void test_unary_address_of_accepts_top_level_abi_function_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "@abi\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb: Cmp* = &cmp;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_abi_fn_ptr_ok.f", source);
@@ -5422,14 +5422,14 @@ static void test_unary_address_of_accepts_top_level_abi_function_pointer_target(
 
 static void test_unary_address_of_requires_explicit_function_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "@abi\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb = &cmp;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_missing_target_error.f", source);
@@ -5451,13 +5451,13 @@ static void test_unary_address_of_requires_explicit_function_pointer_target(void
 
 static void test_unary_address_of_rejects_plain_function_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let cb: Cmp* = &cmp;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_plain_fn_error.f", source);
@@ -5479,15 +5479,15 @@ static void test_unary_address_of_rejects_plain_function_pointer_target(void) {
 
 static void test_unary_address_of_rejects_method_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "type Box {\n"
-        "    fn cmp(a: int, b: int): int {\n"
+        "    func cmp(a: int, b: int): int {\n"
         "        return a - b;\n"
         "    }\n"
         "}\n"
-        "fn run(box: Box) {\n"
+        "func run(box: Box) {\n"
         "    let cb: Cmp* = &box.cmp;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_method_error.f", source);
@@ -5509,11 +5509,11 @@ static void test_unary_address_of_rejects_method_pointer_target(void) {
 
 static void test_unary_address_of_rejects_local_lambda_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "spec LocalCmp(a: int, b: int): int;\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let local: LocalCmp = (a: int, b: int) -> a - b;\n"
         "    let cb: Cmp* = &local;\n"
         "}\n";
@@ -5536,12 +5536,12 @@ static void test_unary_address_of_rejects_local_lambda_pointer_target(void) {
 
 static void test_function_pointer_binding_is_not_directly_callable(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "@cdecl(\"c_load_cmp\")\n"
-        "extern fn c_load_cmp(): Cmp*;\n"
-        "fn run() {\n"
+        "extern func c_load_cmp(): Cmp*;\n"
+        "func run() {\n"
         "    let cb: Cmp* = c_load_cmp();\n"
         "    cb(1, 2);\n"
         "}\n";
@@ -5565,7 +5565,7 @@ static void test_function_pointer_binding_is_not_directly_callable(void) {
 
 static void test_function_pointer_semantic_allows_field_param_and_return_flow(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "@abi\n"
@@ -5573,14 +5573,14 @@ static void test_function_pointer_semantic_allows_field_param_and_return_flow(vo
         "    var cb: Cmp*;\n"
         "}\n"
         "@abi\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern fn c_register_cmp(cb: Cmp*): void;\n"
+        "extern func c_register_cmp(cb: Cmp*): void;\n"
         "@cdecl(\"c\")\n"
-        "extern fn c_load_cmp(): Cmp*;\n"
-        "fn run() {\n"
+        "extern func c_load_cmp(): Cmp*;\n"
+        "func run() {\n"
         "    let cb: Cmp* = &cmp;\n"
         "    let holder: Holder = Holder{cb: cb};\n"
         "    c_register_cmp(holder.cb);\n"
@@ -5605,15 +5605,15 @@ static void test_function_pointer_semantic_allows_field_param_and_return_flow(vo
 
 static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "type Box {\n"
-        "    fn cmp(a: int, b: int): int {\n"
+        "    func cmp(a: int, b: int): int {\n"
         "        return a - b;\n"
         "    }\n"
         "}\n"
-        "fn run(box: Box) {\n"
+        "func run(box: Box) {\n"
         "    let method = box.cmp;\n"
         "    let cb: Cmp* = &method;\n"
         "}\n";
@@ -5637,8 +5637,8 @@ static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
 
 static void test_binary_equality_accepts_data_pointer_operands(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: int = 1;\n"
         "    let p: int* = &x;\n"
         "    let q: int* = p;\n"
@@ -5662,14 +5662,14 @@ static void test_binary_equality_accepts_data_pointer_operands(void) {
 
 static void test_binary_equality_accepts_function_pointer_operands(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
         "@abi\n"
-        "fn cmp(a: int, b: int): int {\n"
+        "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let fp: Cmp* = &cmp;\n"
         "    let fq: Cmp* = fp;\n"
         "    let same: bool = fp != fq;\n"
@@ -5692,8 +5692,8 @@ static void test_binary_equality_accepts_function_pointer_operands(void) {
 
 static void test_binary_equality_rejects_mismatched_pointer_operands(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: int = 1;\n"
         "    let p: int* = &x;\n"
         "    let bytes: byte[] = [1];\n"
@@ -5720,8 +5720,8 @@ static void test_binary_equality_rejects_mismatched_pointer_operands(void) {
 
 static void test_binary_plus_rejects_non_matching_operands(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    1 + true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("binary_plus_type_error.f", source);
@@ -5743,8 +5743,8 @@ static void test_binary_plus_rejects_non_matching_operands(void) {
 
 static void test_binary_and_rejects_non_bool_operands(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    1 && true;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("binary_and_type_error.f", source);
@@ -5765,8 +5765,8 @@ static void test_binary_and_rejects_non_bool_operands(void) {
 
 static void test_bitwise_ops_accept_same_integer_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: i32, b: i32) {\n"
+        "module demo.main;\n"
+        "func run(a: i32, b: i32) {\n"
         "    let c = a & b;\n"
         "    let d = a | b;\n"
         "    let e = a ^ b;\n"
@@ -5789,8 +5789,8 @@ static void test_bitwise_ops_accept_same_integer_type(void) {
 
 static void test_bitwise_and_rejects_mismatched_integer_types(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: i32, b: i64) {\n"
+        "module demo.main;\n"
+        "func run(a: i32, b: i64) {\n"
         "    let c = a & b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("bitwise_and_mismatch.f", source);
@@ -5810,8 +5810,8 @@ static void test_bitwise_and_rejects_mismatched_integer_types(void) {
 
 static void test_bitwise_or_rejects_non_integer_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: f32, b: f32) {\n"
+        "module demo.main;\n"
+        "func run(a: f32, b: f32) {\n"
         "    let c = a | b;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("bitwise_or_float.f", source);
@@ -5831,8 +5831,8 @@ static void test_bitwise_or_rejects_non_integer_operand(void) {
 
 static void test_unary_tilde_rejects_non_integer_operand(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(x: f32) {\n"
+        "module demo.main;\n"
+        "func run(x: f32) {\n"
         "    ~x;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_tilde_float.f", source);
@@ -5852,8 +5852,8 @@ static void test_unary_tilde_rejects_non_integer_operand(void) {
 
 static void test_shift_amount_out_of_range_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: i32) {\n"
+        "module demo.main;\n"
+        "func run(a: i32) {\n"
         "    let b = a << 32;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("shift_out_of_range.f", source);
@@ -5873,8 +5873,8 @@ static void test_shift_amount_out_of_range_rejected(void) {
 
 static void test_const_fold_arithmetic_fits_narrow_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: u8 = 100 + 50;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_fit.f", source);
@@ -5892,8 +5892,8 @@ static void test_const_fold_arithmetic_fits_narrow_target(void) {
 
 static void test_const_fold_arithmetic_overflows_narrow_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: u8 = 200 + 100;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_overflow_target.f", source);
@@ -5911,8 +5911,8 @@ static void test_const_fold_arithmetic_overflows_narrow_target(void) {
 
 static void test_const_fold_division_by_zero_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: int = 1 / 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_div_zero.f", source);
@@ -5931,8 +5931,8 @@ static void test_const_fold_division_by_zero_rejected(void) {
 
 static void test_const_fold_modulo_by_zero_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: int = 1 % 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_mod_zero.f", source);
@@ -5951,8 +5951,8 @@ static void test_const_fold_modulo_by_zero_rejected(void) {
 
 static void test_const_fold_float_modulo_by_zero_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: double = 1.0 % 0.0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_float_mod_zero.f", source);
@@ -5971,8 +5971,8 @@ static void test_const_fold_float_modulo_by_zero_rejected(void) {
 
 static void test_float_modulo_expression_is_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let rem: double = 7.8 % 3.2;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("float_mod_ok.f", source);
@@ -5992,8 +5992,8 @@ static void test_float_modulo_expression_is_accepted(void) {
 
 static void test_const_fold_i64_overflow_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: i64 = 9223372036854775807 + 1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_i64_overflow.f", source);
@@ -6012,8 +6012,8 @@ static void test_const_fold_i64_overflow_rejected(void) {
 
 static void test_const_fold_shift_amount_via_const_expr(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: i32) {\n"
+        "module demo.main;\n"
+        "func run(a: i32) {\n"
         "    let b = a << (16 + 16);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_shift_const_expr.f", source);
@@ -6033,8 +6033,8 @@ static void test_const_fold_shift_amount_via_const_expr(void) {
 
 static void test_const_fold_cast_truncation_then_target_check(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let x: u8 = (u8)(255 + 1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("const_fold_cast_trunc.f", source);
@@ -6052,8 +6052,8 @@ static void test_const_fold_cast_truncation_then_target_check(void) {
 
 static void test_const_fold_immutable_local_binding_requires_explicit_cast(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let n: int = 100;\n"
         "    let x: u8 = n + 50;\n"
         "}\n";
@@ -6072,8 +6072,8 @@ static void test_const_fold_immutable_local_binding_requires_explicit_cast(void)
 
 static void test_const_fold_does_not_propagate_var_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    var n: int = 100;\n"
         "    let x: u8 = n + 50;\n"
         "}\n";
@@ -6092,8 +6092,8 @@ static void test_const_fold_does_not_propagate_var_binding(void) {
 
 static void test_if_expression_rejects_non_bool_condition(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value = if 1 { 2; } else { 3; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("if_expr_condition_type_error.f", source);
@@ -6114,8 +6114,8 @@ static void test_if_expression_rejects_non_bool_condition(void) {
 
 static void test_if_expression_requires_matching_branch_types(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let value = if true { 1; } else { \"two\"; };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("if_expr_branch_type_error.f", source);
@@ -6136,8 +6136,8 @@ static void test_if_expression_requires_matching_branch_types(void) {
 
 static void test_valid_unary_binary_and_if_expressions_pass(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    let flag: bool = !false && 1 < 2;\n"
         "    let value: int = if flag { 1 + 2; } else { 3 + 4; };\n"
         "}\n";
@@ -6158,8 +6158,8 @@ static void test_valid_unary_binary_and_if_expressions_pass(void) {
 
 static void test_if_statement_rejects_non_bool_condition(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    if 1 {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("if_stmt_condition_type_error.f", source);
@@ -6180,8 +6180,8 @@ static void test_if_statement_rejects_non_bool_condition(void) {
 
 static void test_while_statement_rejects_non_bool_condition(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    while 1 {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("while_stmt_condition_type_error.f", source);
@@ -6202,8 +6202,8 @@ static void test_while_statement_rejects_non_bool_condition(void) {
 
 static void test_for_statement_rejects_non_bool_condition(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    for ; 1; {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("for_stmt_condition_type_error.f", source);
@@ -6224,8 +6224,8 @@ static void test_for_statement_rejects_non_bool_condition(void) {
 
 static void test_valid_statement_conditions_pass(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    if true {}\n"
         "    while false {}\n"
         "    for var i = 0; i < 1; i = i + 1 {}\n"
@@ -6247,8 +6247,8 @@ static void test_valid_statement_conditions_pass(void) {
 
 static void test_for_statement_accepts_empty_condition(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    for ; ; {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("for_stmt_empty_condition_ok.f", source);
@@ -6268,9 +6268,9 @@ static void test_for_statement_accepts_empty_condition(void) {
 
 static void test_missing_use_target_module(void) {
     const char *source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn main() {}\n";
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func main() {}\n";
     FengProgram *program = parse_program_or_die("missing_use_target.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -6280,7 +6280,7 @@ static void test_missing_use_target_module(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message, "use target module 'demo.base' was not found") != NULL);
+    ASSERT(strstr(errors[0].message, "import target module 'demo.base' was not found") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -6288,11 +6288,11 @@ static void test_missing_use_target_module(void) {
 
 static void test_imported_type_conflicts_with_local_type(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {}\n";
+        "open module demo.base;\n"
+        "open type User {}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
         "type User {}\n";
     FengProgram *base_program = parse_program_or_die("base_type.f", base_source);
     FengProgram *main_program = parse_program_or_die("main_type_conflict.f", main_source);
@@ -6314,14 +6314,14 @@ static void test_imported_type_conflicts_with_local_type(void) {
 
 static void test_imported_value_conflicts_with_local_value(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn load(): int {\n"
+        "open module demo.base;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn load(): int {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func load(): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("base_value.f", base_source);
@@ -6344,20 +6344,20 @@ static void test_imported_value_conflicts_with_local_value(void) {
 
 static void test_imported_name_conflicts_between_modules(void) {
     const char *source_a =
-        "pu mod demo.a;\n"
-        "pu fn load(): int {\n"
+        "open module demo.a;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *source_b =
-        "pu mod demo.b;\n"
-        "pu fn load(): int {\n"
+        "open module demo.b;\n"
+        "open func load(): int {\n"
         "    return 2;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.a;\n"
-        "use demo.b;\n"
-        "fn main() {}\n";
+        "module demo.main;\n"
+        "import demo.a;\n"
+        "import demo.b;\n"
+        "func main() {}\n";
     FengProgram *program_a = parse_program_or_die("import_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("import_b.f", source_b);
     FengProgram *main_program = parse_program_or_die("import_conflict_main.f", main_source);
@@ -6380,14 +6380,14 @@ static void test_imported_name_conflicts_between_modules(void) {
 
 static void test_alias_import_does_not_inject_short_names(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn load(): int {\n"
+        "open module demo.base;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn load(): int {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func load(): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_base.f", base_source);
@@ -6409,20 +6409,20 @@ static void test_alias_import_does_not_inject_short_names(void) {
 
 static void test_duplicate_use_alias_in_same_file(void) {
     const char *source_a =
-        "pu mod demo.a;\n"
-        "pu fn load(): int {\n"
+        "open module demo.a;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *source_b =
-        "pu mod demo.b;\n"
-        "pu fn store(): int {\n"
+        "open module demo.b;\n"
+        "open func store(): int {\n"
         "    return 2;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.a as tools;\n"
-        "use demo.b as tools;\n"
-        "fn main() {}\n";
+        "module demo.main;\n"
+        "import demo.a as tools;\n"
+        "import demo.b as tools;\n"
+        "func main() {}\n";
     FengProgram *program_a = parse_program_or_die("alias_dup_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("alias_dup_b.f", source_b);
     FengProgram *main_program = parse_program_or_die("alias_dup_main.f", main_source);
@@ -6435,7 +6435,7 @@ static void test_duplicate_use_alias_in_same_file(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_dup_main.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "duplicate use alias 'tools'") != NULL);
+    ASSERT(strstr(errors[0].message, "duplicate import alias 'tools'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
@@ -6484,9 +6484,9 @@ static const FengSemanticModule *external_module_query_get_module(
 
 static void test_unknown_use_module_rejected_without_import_query(void) {
     const char *source =
-        "mod demo.main;\n"
-        "use vendor.math;\n"
-        "fn run() {}\n";
+        "module demo.main;\n"
+        "import vendor.math;\n"
+        "func run() {}\n";
     FengProgram *program = parse_program_or_die("unknown_use_external.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -6495,7 +6495,7 @@ static void test_unknown_use_module_rejected_without_import_query(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "use target module 'vendor.math'") != NULL);
+    ASSERT(strstr(errors[0].message, "import target module 'vendor.math'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -6503,9 +6503,9 @@ static void test_unknown_use_module_rejected_without_import_query(void) {
 
 static void test_external_use_module_accepted_via_import_query(void) {
     const char *source =
-        "mod demo.main;\n"
-        "use vendor.math;\n"
-        "fn run() {}\n";
+        "module demo.main;\n"
+        "import vendor.math;\n"
+        "func run() {}\n";
     const char *segments[] = {"vendor", "math"};
     ExternalModuleQueryFixture fixture = {segments, 2U, 0U, {0}};
     FengSemanticImportedModuleQuery query = {&fixture, external_module_query_get_module};
@@ -6528,14 +6528,14 @@ static void test_external_use_module_accepted_via_import_query(void) {
 
 static void test_external_imported_function_argument_type_mismatch(void) {
     const char *external_source =
-        "pu mod vendor.math;\n"
-        "pu fn add(a: int, b: int): int {\n"
+        "open module vendor.math;\n"
+        "open func add(a: int, b: int): int {\n"
         "    return a + b;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.math as math;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import vendor.math as math;\n"
+        "func run(): int {\n"
         "    return math.add(\"oops\", 1);\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6571,14 +6571,14 @@ static void test_external_imported_function_argument_type_mismatch(void) {
 
 static void test_external_imported_function_argument_type_match(void) {
     const char *external_source =
-        "pu mod vendor.math;\n"
-        "pu fn add(a: int, b: int): int {\n"
+        "open module vendor.math;\n"
+        "open func add(a: int, b: int): int {\n"
         "    return a + b;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.math as math;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import vendor.math as math;\n"
+        "func run(): int {\n"
         "    return math.add(1, 2);\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6614,14 +6614,14 @@ static void test_external_imported_function_argument_type_match(void) {
 
 static void test_external_imported_field_type_participates_in_typecheck(void) {
     const char *external_source =
-        "pu mod vendor.model;\n"
-        "pu type User {\n"
-        "    pu let name: string;\n"
+        "open module vendor.model;\n"
+        "open type User {\n"
+        "    open let name: string;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.model as model;\n"
-        "fn project(user: model.User): int {\n"
+        "module demo.main;\n"
+        "import vendor.model as model;\n"
+        "func project(user: model.User): int {\n"
         "    return user.name;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6657,16 +6657,16 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
 
 static void test_external_full_path_type_refs_do_not_require_use(void) {
     const char *external_source =
-        "pu mod vendor.api;\n"
-        "pu type User {\n"
-        "    pu let name: string;\n"
+        "open module vendor.api;\n"
+        "open type User {\n"
+        "    open let name: string;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "fn id(user: vendor.api.User): vendor.api.User {\n"
+        "module demo.main;\n"
+        "func id(user: vendor.api.User): vendor.api.User {\n"
         "    return user;\n"
         "}\n"
-        "fn count(users: vendor.api.User[]): int {\n"
+        "func count(users: vendor.api.User[]): int {\n"
         "    return 0;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6702,13 +6702,13 @@ static void test_external_full_path_type_refs_do_not_require_use(void) {
 
 static void test_external_alias_type_ref_still_requires_use_alias(void) {
     const char *external_source =
-        "pu mod vendor.api;\n"
-        "pu type User {\n"
-        "    pu let name: string;\n"
+        "open module vendor.api;\n"
+        "open type User {\n"
+        "    open let name: string;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "fn bad(user: api.User): int {\n"
+        "module demo.main;\n"
+        "func bad(user: api.User): int {\n"
         "    return 0;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6743,17 +6743,17 @@ static void test_external_alias_type_ref_still_requires_use_alias(void) {
 
 static void test_external_imported_declared_specs_enable_spec_coercion(void) {
     const char *external_source =
-        "pu mod vendor.api;\n"
-        "pu spec Named {\n"
+        "open module vendor.api;\n"
+        "open spec Named {\n"
         "    let name: string;\n"
         "}\n"
-        "pu type User: Named {\n"
-        "    pu let name: string;\n"
+        "open type User: Named {\n"
+        "    open let name: string;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.api as api;\n"
-        "fn project(user: api.User): api.Named {\n"
+        "module demo.main;\n"
+        "import vendor.api as api;\n"
+        "func project(user: api.User): api.Named {\n"
         "    return user;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6789,15 +6789,15 @@ static void test_external_imported_declared_specs_enable_spec_coercion(void) {
 
 static void test_external_imported_enum_item_participates_in_typecheck(void) {
     const char *external_source =
-        "pu mod vendor.http;\n"
-        "pu enum HttpStatus {\n"
+        "open module vendor.http;\n"
+        "open enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.http as http;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import vendor.http as http;\n"
+        "func run(): int {\n"
         "    let status: http.HttpStatus = http.HttpStatus.NotFound;\n"
         "    return (int)status;\n"
         "}\n";
@@ -6834,14 +6834,14 @@ static void test_external_imported_enum_item_participates_in_typecheck(void) {
 
 static void test_external_imported_enum_conflicts_with_local_type_name(void) {
     const char *external_source =
-        "pu mod vendor.http;\n"
-        "pu enum HttpStatus {\n"
+        "open module vendor.http;\n"
+        "open enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.http;\n"
+        "module demo.main;\n"
+        "import vendor.http;\n"
         "type HttpStatus {}\n";
     ImportedSourceFixture fixture;
     FengSemanticImportedModuleQuery query;
@@ -6877,15 +6877,15 @@ static void test_external_imported_enum_conflicts_with_local_type_name(void) {
 
 static void test_external_imported_private_enum_is_not_visible(void) {
     const char *external_source =
-        "pu mod vendor.http;\n"
+        "open module vendor.http;\n"
         "enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use vendor.http as http;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import vendor.http as http;\n"
+        "func run(): int {\n"
         "    return (int)http.HttpStatus.Ok;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -6930,8 +6930,8 @@ static void test_external_imported_private_enum_is_not_visible(void) {
 
 static void test_undefined_identifier_in_function_body(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(): int {\n"
+        "module demo.main;\n"
+        "func main(): int {\n"
         "    return missing;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("undefined_identifier.f", source);
@@ -6952,8 +6952,8 @@ static void test_undefined_identifier_in_function_body(void) {
 
 static void test_unknown_type_reference_in_function_signature(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(value: Missing): int {\n"
+        "module demo.main;\n"
+        "func main(value: Missing): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unknown_type.f", source);
@@ -6974,10 +6974,10 @@ static void test_unknown_type_reference_in_function_signature(void) {
 
 static void test_self_is_valid_inside_type_method(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var id: int;\n"
-        "    fn read(): int {\n"
+        "    func read(): int {\n"
         "        return self.id;\n"
         "    }\n"
         "}\n";
@@ -6998,8 +6998,8 @@ static void test_self_is_valid_inside_type_method(void) {
 
 static void test_self_is_invalid_outside_type_method(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(): int {\n"
+        "module demo.main;\n"
+        "func main(): int {\n"
         "    return self.id;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("self_top_level_error.f", source);
@@ -7022,11 +7022,11 @@ static void test_self_is_capturable_inside_method_lambda(void) {
     /* Per docs/feng-function.md, lambdas declared inside a member method
      * (or constructor) body may capture the enclosing object's `self`. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Thunk(): int;\n"
         "type User {\n"
         "    var id: int;\n"
-        "    fn read(): int {\n"
+        "    func read(): int {\n"
         "        let thunk: Thunk = () -> self.id;\n"
         "        return 0;\n"
         "    }\n"
@@ -7048,12 +7048,12 @@ static void test_self_is_capturable_inside_method_lambda(void) {
 
 static void test_alias_member_access_resolves_public_names(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {}\n";
+        "open module demo.base;\n"
+        "open type User {}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn make(): base.User {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func make(): base.User {\n"
         "    return base.User {};\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_member_base.f", base_source);
@@ -7075,14 +7075,14 @@ static void test_alias_member_access_resolves_public_names(void) {
 
 static void test_alias_member_access_reports_missing_public_name(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn load(): int {\n"
+        "open module demo.base;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn main(): int {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func main(): int {\n"
         "    return base.store();\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_missing_base.f", base_source);
@@ -7105,14 +7105,14 @@ static void test_alias_member_access_reports_missing_public_name(void) {
 
 static void test_alias_identifier_requires_member_access(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu fn load(): int {\n"
+        "open module demo.base;\n"
+        "open func load(): int {\n"
         "    return 1;\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base as base;\n"
-        "fn main() {\n"
+        "module demo.main;\n"
+        "import demo.base as base;\n"
+        "func main() {\n"
         "    base;\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("alias_ident_base.f", base_source);
@@ -7135,10 +7135,10 @@ static void test_alias_identifier_requires_member_access(void) {
 
 static void test_self_reports_unknown_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var id: int;\n"
-        "    fn read(): int {\n"
+        "    func read(): int {\n"
         "        return self.name;\n"
         "    }\n"
         "}\n";
@@ -7160,16 +7160,16 @@ static void test_self_reports_unknown_member(void) {
 
 static void test_spec_typed_param_supports_field_and_method_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    var name: string;\n"
-        "    fn display(): string;\n"
+        "    func display(): string;\n"
         "}\n"
         "spec Identified: Named {\n"
-        "    fn id(): int;\n"
+        "    func id(): int;\n"
         "}\n"
         "type Wrapper {\n"
-        "    fn process(target: Identified): int {\n"
+        "    func process(target: Identified): int {\n"
         "        target.name = \"x\";\n"
         "        let s: string = target.display();\n"
         "        return target.id();\n"
@@ -7191,12 +7191,12 @@ static void test_spec_typed_param_supports_field_and_method_access(void) {
 
 static void test_spec_typed_param_rejects_let_field_assignment(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
         "type Wrapper {\n"
-        "    fn rename(target: Named): void {\n"
+        "    func rename(target: Named): void {\n"
         "        target.name = \"x\";\n"
         "    }\n"
         "}\n";
@@ -7216,12 +7216,12 @@ static void test_spec_typed_param_rejects_let_field_assignment(void) {
 
 static void test_spec_typed_param_reports_unknown_member_with_spec_name(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    var name: string;\n"
         "}\n"
         "type Wrapper {\n"
-        "    fn rename(target: Named): void {\n"
+        "    func rename(target: Named): void {\n"
         "        let unused: string = target.unknown;\n"
         "    }\n"
         "}\n";
@@ -7241,10 +7241,10 @@ static void test_spec_typed_param_reports_unknown_member_with_spec_name(void) {
 
 static void test_callable_form_spec_typed_param_rejects_member_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Mapper(x: int): int;\n"
         "type Wrapper {\n"
-        "    fn invoke(target: Mapper): void {\n"
+        "    func invoke(target: Mapper): void {\n"
         "        let unused: int = target.x;\n"
         "    }\n"
         "}\n";
@@ -7264,8 +7264,8 @@ static void test_callable_form_spec_typed_param_rejects_member_access(void) {
 
 static void test_numeric_literal_adapts_to_explicit_integer_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: i32 = 1;\n"
         "    let b: i64 = 1;\n"
         "    let c: i16 = -1;\n"
@@ -7293,8 +7293,8 @@ static void test_numeric_literal_adapts_to_explicit_integer_target(void) {
 
 static void test_numeric_literal_adapts_to_explicit_alias_targets(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: int = 1;\n"
         "    let b: long = 1;\n"
         "    let c: byte = 0;\n"
@@ -7317,8 +7317,8 @@ static void test_numeric_literal_adapts_to_explicit_alias_targets(void) {
 
 static void test_numeric_literal_overflowing_target_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: i8 = 200;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("numeric_literal_overflow.f", source);
@@ -7338,8 +7338,8 @@ static void test_numeric_literal_overflowing_target_is_rejected(void) {
 
 static void test_numeric_literal_negative_to_unsigned_target_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: u8 = -1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("numeric_literal_neg_unsigned.f", source);
@@ -7361,8 +7361,8 @@ static void test_numeric_literal_overflows_default_int_target(void) {
     /* Default integer literal type is `int` (i32) per docs/feng-builtin-type.md §16, so an
      * out-of-range literal must be rejected even when the target's canonical name is i32. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: i32 = 9999999999;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("numeric_literal_default_int_overflow.f", source);
@@ -7382,8 +7382,8 @@ static void test_numeric_literal_overflows_default_int_target(void) {
 
 static void test_numeric_literal_integer_adapts_to_explicit_float_targets(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: f32 = 1;\n"
         "    let b: f64 = 1;\n"
         "    let c: float = 1;\n"
@@ -7405,8 +7405,8 @@ static void test_numeric_literal_integer_adapts_to_explicit_float_targets(void) 
 
 static void test_numeric_float_literal_to_integer_target_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let a: int = 1.0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("numeric_float_literal_to_int_rejected.f", source);
@@ -7426,8 +7426,8 @@ static void test_numeric_float_literal_to_integer_target_is_rejected(void) {
 
 static void test_typed_numeric_binding_requires_explicit_conversion_on_let_assignment(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let x: int = 1;\n"
         "    let y: f64 = x;\n"
         "}\n";
@@ -7448,8 +7448,8 @@ static void test_typed_numeric_binding_requires_explicit_conversion_on_let_assig
 
 static void test_numeric_literal_adapts_to_float_targets_on_var_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    var a: f32 = 1;\n"
         "    var b: f64 = 1;\n"
         "    var c: f64 = 100 + 50;\n"
@@ -7471,8 +7471,8 @@ static void test_numeric_literal_adapts_to_float_targets_on_var_binding(void) {
 
 static void test_typed_numeric_binding_requires_explicit_conversion_on_var_binding(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let x: int = 1;\n"
         "    var y: f64 = x;\n"
         "}\n";
@@ -7494,14 +7494,14 @@ static void test_typed_numeric_binding_requires_explicit_conversion_on_var_bindi
 
 static void test_numeric_literal_argument_adapts_to_float_targets(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
         "    var value: f64;\n"
-        "    fn Box(v: f64) { self.value = v; }\n"
-        "    fn set(v: f64): void { self.value = v; }\n"
+        "    func Box(v: f64) { self.value = v; }\n"
+        "    func set(v: f64): void { self.value = v; }\n"
         "}\n"
-        "fn takes(v: f64): void {}\n"
-        "fn run(): void {\n"
+        "func takes(v: f64): void {}\n"
+        "func run(): void {\n"
         "    let b = Box(1);\n"
         "    b.set(1);\n"
         "    takes(1);\n"
@@ -7522,9 +7522,9 @@ static void test_numeric_literal_argument_adapts_to_float_targets(void) {
 
 static void test_typed_numeric_argument_requires_explicit_conversion_for_float_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn takes(v: f64): void {}\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func takes(v: f64): void {}\n"
+        "func run(): void {\n"
         "    let x: int = 1;\n"
         "    takes(x);\n"
         "}\n";
@@ -7545,11 +7545,11 @@ static void test_typed_numeric_argument_requires_explicit_conversion_for_float_p
 
 static void test_member_assignment_numeric_literal_adapts_to_float_field(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
         "    var value: f64;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    var box = Box { value: 1 };\n"
         "    box.value = 1;\n"
         "}\n";
@@ -7569,11 +7569,11 @@ static void test_member_assignment_numeric_literal_adapts_to_float_field(void) {
 
 static void test_member_assignment_typed_numeric_binding_requires_explicit_conversion(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
         "    var value: f64;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    var box = Box { value: 1 };\n"
         "    let x: int = 1;\n"
         "    box.value = x;\n"
@@ -7595,8 +7595,8 @@ static void test_member_assignment_typed_numeric_binding_requires_explicit_conve
 
 static void test_numeric_constant_expression_adapts_to_float_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let x: f64 = 100 + 50;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("numeric_const_expr_to_float_ok.f", source);
@@ -7616,8 +7616,8 @@ static void test_numeric_constant_expression_adapts_to_float_target(void) {
 
 static void test_numeric_expression_with_identifier_requires_explicit_conversion(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let base: int = 100;\n"
         "    let x: f64 = base + 50;\n"
         "}\n";
@@ -7640,11 +7640,11 @@ static void test_numeric_expression_with_identifier_requires_explicit_conversion
 
 static void test_object_literal_reports_unknown_field(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var id: int;\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User { name: 1 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_literal_unknown_field.f", source);
@@ -7665,9 +7665,9 @@ static void test_object_literal_reports_unknown_field(void) {
 
 static void test_object_literal_requires_object_type_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Factory(): int;\n"
-        "fn make() {\n"
+        "func make() {\n"
         "    Factory {};\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_literal_non_object_target.f", source);
@@ -7688,12 +7688,12 @@ static void test_object_literal_requires_object_type_target(void) {
 
 static void test_object_literal_accepts_constructor_call_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var id: int;\n"
-        "    fn User() {}\n"
+        "    func User() {}\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User() { id: 1 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_literal_ctor_target_ok.f", source);
@@ -7713,9 +7713,9 @@ static void test_object_literal_accepts_constructor_call_target(void) {
 
 static void test_constructor_call_uses_implicit_default_constructor(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_implicit_default_ok.f", source);
@@ -7735,11 +7735,11 @@ static void test_constructor_call_uses_implicit_default_constructor(void) {
 
 static void test_constructor_call_reports_missing_zero_arg_constructor(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn User(name: string) {}\n"
+        "    func User(name: string) {}\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_missing_zero_arg.f", source);
@@ -7760,12 +7760,12 @@ static void test_constructor_call_reports_missing_zero_arg_constructor(void) {
 
 static void test_constructor_call_selects_overload_by_literal_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn User(id: i64) {}\n"
-        "    fn User(name: string) {}\n"
+        "    func User(id: i64) {}\n"
+        "    func User(name: string) {}\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_overload_literal_ok.f", source);
@@ -7785,12 +7785,12 @@ static void test_constructor_call_selects_overload_by_literal_type(void) {
 
 static void test_constructor_call_selects_overload_by_inferred_local_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn User(id: int) {}\n"
-        "    fn User(name: string) {}\n"
+        "    func User(id: int) {}\n"
+        "    func User(name: string) {}\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    let id = 1;\n"
         "    return User(id);\n"
         "}\n";
@@ -7811,12 +7811,12 @@ static void test_constructor_call_selects_overload_by_inferred_local_binding(voi
 
 static void test_constructor_call_reports_type_mismatch(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    fn User(id: int) {}\n"
-        "    fn User(name: string) {}\n"
+        "    func User(id: int) {}\n"
+        "    func User(name: string) {}\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User(true);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_type_mismatch.f", source);
@@ -7837,9 +7837,9 @@ static void test_constructor_call_reports_type_mismatch(void) {
 
 static void test_constructor_call_rejects_function_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Factory(): int;\n"
-        "fn make() {\n"
+        "func make() {\n"
         "    Factory();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_non_object_type.f", source);
@@ -7860,11 +7860,11 @@ static void test_constructor_call_rejects_function_type(void) {
 
 static void test_constructor_call_rejects_object_form_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec CommitOptions {\n"
         "    var message: int;\n"
         "}\n"
-        "fn make() {\n"
+        "func make() {\n"
         "    CommitOptions();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ctor_object_spec.f", source);
@@ -7884,14 +7884,14 @@ static void test_constructor_call_rejects_object_form_spec(void) {
 
 static void test_object_literal_reports_inaccessible_imported_constructor(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {\n"
-        "    pr fn User() {}\n"
+        "open module demo.base;\n"
+        "open type User {\n"
+        "    seal func User() {}\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn make(): User {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func make(): User {\n"
         "    return User {};\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("ctor_import_base.f", base_source);
@@ -7914,14 +7914,14 @@ static void test_object_literal_reports_inaccessible_imported_constructor(void) 
 
 static void test_constructor_call_reports_inaccessible_imported_constructor(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {\n"
-        "    pr fn User() {}\n"
+        "open module demo.base;\n"
+        "open type User {\n"
+        "    seal func User() {}\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn make(): User {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func make(): User {\n"
         "    return User();\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("ctor_call_import_base.f", base_source);
@@ -7944,14 +7944,14 @@ static void test_constructor_call_reports_inaccessible_imported_constructor(void
 
 static void test_object_literal_constructor_call_reports_inaccessible_imported_constructor(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {\n"
-        "    pr fn User() {}\n"
+        "open module demo.base;\n"
+        "open type User {\n"
+        "    seal func User() {}\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn make(): User {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func make(): User {\n"
         "    return User() {};\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("ctor_objcall_import_base.f", base_source);
@@ -7974,11 +7974,11 @@ static void test_object_literal_constructor_call_reports_inaccessible_imported_c
 
 static void test_object_literal_rejects_decl_bound_let_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int = 1;\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User { id: 2 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("let_decl_object_literal_error.f", source);
@@ -7999,10 +7999,10 @@ static void test_object_literal_rejects_decl_bound_let_member(void) {
 
 static void test_constructor_rejects_decl_bound_let_member_assignment(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int = 1;\n"
-        "    fn User() {\n"
+        "    func User() {\n"
         "        self.id = 2;\n"
         "    }\n"
         "}\n";
@@ -8024,10 +8024,10 @@ static void test_constructor_rejects_decl_bound_let_member_assignment(void) {
 
 static void test_constructor_rejects_repeated_let_member_binding(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
-        "    fn User() {\n"
+        "    func User() {\n"
         "        self.id = 1;\n"
         "        self.id = 2;\n"
         "    }\n"
@@ -8050,10 +8050,10 @@ static void test_constructor_rejects_repeated_let_member_binding(void) {
 
 static void test_method_rejects_let_member_assignment(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
-        "    fn update() {\n"
+        "    func update() {\n"
         "        self.id = 1;\n"
         "    }\n"
         "}\n";
@@ -8075,14 +8075,14 @@ static void test_method_rejects_let_member_assignment(void) {
 
 static void test_object_literal_rejects_ctor_bound_let_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
-        "    fn User() {\n"
+        "    func User() {\n"
         "        self.id = 1;\n"
         "    }\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User() { id: 2 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("let_ctor_object_literal_error.f", source);
@@ -8103,18 +8103,18 @@ static void test_object_literal_rejects_ctor_bound_let_member(void) {
 
 static void test_object_literal_rejects_ctor_bound_let_member_for_selected_overload(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
-        "    fn User(id: int) {\n"
+        "    func User(id: int) {\n"
         "        self.id = id;\n"
         "    }\n"
-        "    fn User(name: string) {}\n"
+        "    func User(name: string) {}\n"
         "}\n"
-        "fn make_ok(): User {\n"
+        "func make_ok(): User {\n"
         "    return User(\"ok\") { id: 1 };\n"
         "}\n"
-        "fn make_bad(): User {\n"
+        "func make_bad(): User {\n"
         "    return User(1) { id: 2 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("let_ctor_selected_overload_error.f", source);
@@ -8135,11 +8135,11 @@ static void test_object_literal_rejects_ctor_bound_let_member_for_selected_overl
 
 static void test_object_literal_allows_unbound_let_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    let id: int;\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User { id: 2 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("let_object_literal_ok.f", source);
@@ -8159,11 +8159,11 @@ static void test_object_literal_allows_unbound_let_member(void) {
 
 static void test_object_literal_rejects_duplicate_fields(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
         "    var id: int;\n"
         "}\n"
-        "fn make(): User {\n"
+        "func make(): User {\n"
         "    return User { id: 1, id: 2 };\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_literal_duplicate_field_error.f", source);
@@ -8184,15 +8184,15 @@ static void test_object_literal_rejects_duplicate_fields(void) {
 
 static void test_object_literal_rejects_inaccessible_private_field(void) {
     const char *base_source =
-        "pu mod demo.base;\n"
-        "pu type User {\n"
-        "    pr var secret: int;\n"
-        "    pu fn User() {}\n"
+        "open module demo.base;\n"
+        "open type User {\n"
+        "    seal var secret: int;\n"
+        "    open func User() {}\n"
         "}\n";
     const char *main_source =
-        "mod demo.main;\n"
-        "use demo.base;\n"
-        "fn make(): User {\n"
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func make(): User {\n"
         "    return User { secret: 1 };\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("object_literal_private_base.f", base_source);
@@ -8215,14 +8215,14 @@ static void test_object_literal_rejects_inaccessible_private_field(void) {
 
 static void test_object_literal_allows_private_field_inside_same_module(void) {
     const char *source_a =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {\n"
-        "    pr var secret: int;\n"
-        "    fn User() {}\n"
+        "    seal var secret: int;\n"
+        "    func User() {}\n"
         "}\n";
     const char *source_b =
-        "mod demo.main;\n"
-        "fn make(): User {\n"
+        "module demo.main;\n"
+        "func make(): User {\n"
         "    return User { secret: 1 };\n"
         "}\n";
     FengProgram *program_a = parse_program_or_die("object_literal_same_module_a.f", source_a);
@@ -8244,14 +8244,14 @@ static void test_object_literal_allows_private_field_inside_same_module(void) {
 
 static void test_spec_type_satisfaction_succeeds(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User: Named {\n"
         "    let name: string;\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return self.name;\n"
         "    }\n"
         "}\n";
@@ -8269,9 +8269,9 @@ static void test_spec_type_satisfaction_succeeds(void) {
 
 static void test_object_form_spec_rejects_constructor_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Shape {\n"
-        "    fn Shape();\n"
+        "    func Shape();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_spec_constructor_error.f", source);
     const FengProgram *programs[] = {program};
@@ -8291,9 +8291,9 @@ static void test_object_form_spec_rejects_constructor_member(void) {
 
 static void test_object_form_spec_rejects_finalizer_member(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Shape {\n"
-        "    fn ~Shape();\n"
+        "    func ~Shape();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("object_spec_finalizer_error.f", source);
     const FengProgram *programs[] = {program};
@@ -8313,7 +8313,7 @@ static void test_object_form_spec_rejects_finalizer_member(void) {
 
 static void test_spec_parent_specs_must_be_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Other {}\n"
         "spec Bad: Other {}\n";
     FengProgram *program = parse_program_or_die("spec_parent_type.f", source);
@@ -8332,7 +8332,7 @@ static void test_spec_parent_specs_must_be_spec(void) {
 
 static void test_spec_parent_specs_rejects_duplicate(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A {}\n"
         "spec B: A, A {}\n";
     FengProgram *program = parse_program_or_die("spec_parent_dup.f", source);
@@ -8350,7 +8350,7 @@ static void test_spec_parent_specs_rejects_duplicate(void) {
 
 static void test_spec_parent_specs_rejects_cycle(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A: B {}\n"
         "spec B: A {}\n";
     FengProgram *program = parse_program_or_die("spec_cycle.f", source);
@@ -8368,7 +8368,7 @@ static void test_spec_parent_specs_rejects_cycle(void) {
 
 static void test_type_declared_specs_must_be_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Other {}\n"
         "type User: Other {}\n";
     FengProgram *program = parse_program_or_die("type_declared_type.f", source);
@@ -8387,7 +8387,7 @@ static void test_type_declared_specs_must_be_spec(void) {
 
 static void test_type_declared_specs_rejects_duplicate(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A {}\n"
         "type User: A, A {}\n";
     FengProgram *program = parse_program_or_die("type_declared_dup.f", source);
@@ -8405,7 +8405,7 @@ static void test_type_declared_specs_rejects_duplicate(void) {
 
 static void test_type_declared_specs_missing_field_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
@@ -8426,7 +8426,7 @@ static void test_type_declared_specs_missing_field_rejected(void) {
 
 static void test_type_declared_specs_field_mutability_mismatch_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
@@ -8448,12 +8448,12 @@ static void test_type_declared_specs_field_mutability_mismatch_rejected(void) {
 
 static void test_type_declared_specs_method_signature_mismatch_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User: Named {\n"
-        "    fn greet(): int {\n"
+        "    func greet(): int {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
@@ -8472,9 +8472,9 @@ static void test_type_declared_specs_method_signature_mismatch_rejected(void) {
 
 static void test_type_declared_specs_transitive_satisfaction_required(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Identified {\n"
-        "    fn id(): int;\n"
+        "    func id(): int;\n"
         "}\n"
         "spec Named: Identified {\n"
         "    let name: string;\n"
@@ -8498,15 +8498,15 @@ static void test_type_declared_specs_transitive_satisfaction_required(void) {
 
 static void test_type_declared_specs_cross_spec_method_conflict(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A {\n"
-        "    fn run(): int;\n"
+        "    func run(): int;\n"
         "}\n"
         "spec B {\n"
-        "    fn run(): string;\n"
+        "    func run(): string;\n"
         "}\n"
         "type Worker: A, B {\n"
-        "    fn run(): int {\n"
+        "    func run(): int {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
@@ -8528,7 +8528,7 @@ static void test_type_declared_specs_cross_spec_method_conflict(void) {
 
 static void test_fit_target_must_be_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A {}\n"
         "spec B {}\n"
         "fit A: B;\n";
@@ -8547,7 +8547,7 @@ static void test_fit_target_must_be_type(void) {
 
 static void test_fit_specs_must_be_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type User {}\n"
         "type Other {}\n"
         "fit User: Other;\n";
@@ -8566,7 +8566,7 @@ static void test_fit_specs_must_be_spec(void) {
 
 static void test_fit_specs_rejects_duplicate(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec A {}\n"
         "type User {}\n"
         "fit User: A, A;\n";
@@ -8585,16 +8585,16 @@ static void test_fit_specs_rejects_duplicate(void) {
 
 static void test_fit_body_methods_satisfy_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "fit User: Named {\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return self.name;\n"
         "    }\n"
         "}\n";
@@ -8612,9 +8612,9 @@ static void test_fit_body_methods_satisfy_spec(void) {
 
 static void test_fit_missing_method_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {}\n"
         "fit User: Named;\n";
@@ -8634,24 +8634,24 @@ static void test_fit_missing_method_rejected(void) {
 
 static void test_orphan_pu_fit_emits_info_and_downgrades(void) {
     /* Module `demo.types` defines the type, `demo.specs` defines the spec,
-     * and `demo.adapter` declares a `pu fit` that bridges them. Because the
+     * and `demo.adapter` declares a `open fit` that bridges them. Because the
      * adapter owns neither the type nor the spec, it is an orphan and its
-     * `pu` export must be downgraded to module-local visibility with an
+     * `open` export must be downgraded to module-local visibility with an
      * informational note. */
     const char *src_types =
-        "pu mod demo.types;\n"
-        "pu type User {}\n";
+        "open module demo.types;\n"
+        "open type User {}\n";
     const char *src_specs =
-        "pu mod demo.specs;\n"
-        "pu spec Named {\n"
-        "    fn greet(): string;\n"
+        "open module demo.specs;\n"
+        "open spec Named {\n"
+        "    func greet(): string;\n"
         "}\n";
     const char *src_adapter =
-        "pu mod demo.adapter;\n"
-        "use demo.types;\n"
-        "use demo.specs;\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open module demo.adapter;\n"
+        "import demo.types;\n"
+        "import demo.specs;\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     FengProgram *p1 = parse_program_or_die("types.f", src_types);
     FengProgram *p2 = parse_program_or_die("specs.f", src_specs);
@@ -8679,13 +8679,13 @@ static void test_local_fit_emits_no_orphan_info(void) {
     /* The fit lives in the same module as its target type, so it is not an
      * orphan and no info is emitted. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {}\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("local_fit.f", source);
     const FengProgram *programs[] = {program};
@@ -8701,28 +8701,28 @@ static void test_local_fit_emits_no_orphan_info(void) {
     feng_program_free(program);
 }
 
-/* Cross-module pu fit becomes effective in the consumer when the consumer
+/* Cross-module open fit becomes effective in the consumer when the consumer
  * imports the fit's owning module via `use`. The consumer can then call
  * the spec method on a value of the imported type. The fit module owns
  * the spec so it is not an orphan adapter. */
 static void test_pu_fit_visible_after_use_enables_method_call(void) {
     const char *src_types =
-        "pu mod demo.types;\n"
-        "pu type User {}\n";
+        "open module demo.types;\n"
+        "open type User {}\n";
     const char *src_adapter =
-        "pu mod demo.adapter;\n"
-        "use demo.types;\n"
-        "pu spec Named {\n"
-        "    fn greet(): string;\n"
+        "open module demo.adapter;\n"
+        "import demo.types;\n"
+        "open spec Named {\n"
+        "    func greet(): string;\n"
         "}\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     const char *src_consumer =
-        "pu mod demo.consumer;\n"
-        "use demo.types;\n"
-        "use demo.adapter;\n"
-        "fn run(): string {\n"
+        "open module demo.consumer;\n"
+        "import demo.types;\n"
+        "import demo.adapter;\n"
+        "func run(): string {\n"
         "    let u: User = User();\n"
         "    return u.greet();\n"
         "}\n";
@@ -8742,26 +8742,26 @@ static void test_pu_fit_visible_after_use_enables_method_call(void) {
     feng_program_free(p4);
 }
 
-/* Without `use` of the fit's owning module, the pu fit must not bridge
+/* Without `use` of the fit's owning module, the open fit must not bridge
  * the type to the spec; calling the spec method on the type's value is
  * rejected because the contract relation is not in scope. */
 static void test_pu_fit_invisible_without_use_rejects_method_call(void) {
     const char *src_types =
-        "pu mod demo.types;\n"
-        "pu type User {}\n";
+        "open module demo.types;\n"
+        "open type User {}\n";
     const char *src_adapter =
-        "pu mod demo.adapter;\n"
-        "use demo.types;\n"
-        "pu spec Named {\n"
-        "    fn greet(): string;\n"
+        "open module demo.adapter;\n"
+        "import demo.types;\n"
+        "open spec Named {\n"
+        "    func greet(): string;\n"
         "}\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     const char *src_consumer =
-        "pu mod demo.consumer;\n"
-        "use demo.types;\n"
-        "fn run(): string {\n"
+        "open module demo.consumer;\n"
+        "import demo.types;\n"
+        "func run(): string {\n"
         "    let u: User = User();\n"
         "    return u.greet();\n"
         "}\n";
@@ -8782,28 +8782,28 @@ static void test_pu_fit_invisible_without_use_rejects_method_call(void) {
     feng_program_free(p4);
 }
 
-/* Spec satisfaction at type position must consider pu fits from any
+/* Spec satisfaction at type position must consider open fits from any
  * module the consumer has `use`d, not only fits declared in the
  * consumer's own module. */
 static void test_imported_pu_fit_satisfies_spec_typed_parameter(void) {
     const char *src_types =
-        "pu mod demo.types;\n"
-        "pu type User {}\n";
+        "open module demo.types;\n"
+        "open type User {}\n";
     const char *src_adapter =
-        "pu mod demo.adapter;\n"
-        "use demo.types;\n"
-        "pu spec Named {\n"
-        "    fn greet(): string;\n"
+        "open module demo.adapter;\n"
+        "import demo.types;\n"
+        "open spec Named {\n"
+        "    func greet(): string;\n"
         "}\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     const char *src_consumer =
-        "pu mod demo.consumer;\n"
-        "use demo.types;\n"
-        "use demo.adapter;\n"
-        "fn use_named(n: Named): void { return; }\n"
-        "fn run(): void {\n"
+        "open module demo.consumer;\n"
+        "import demo.types;\n"
+        "import demo.adapter;\n"
+        "func use_named(n: Named): void { return; }\n"
+        "func run(): void {\n"
         "    let u: User = User();\n"
         "    use_named(u);\n"
         "}\n";
@@ -8823,27 +8823,27 @@ static void test_imported_pu_fit_satisfies_spec_typed_parameter(void) {
     feng_program_free(p4);
 }
 
-/* Aliased `use` must also activate the imported module's pu fit
+/* Aliased `use` must also activate the imported module's open fit
  * contracts, even though the imported short names go through the
  * alias instead of being injected into the current scope. */
 static void test_pu_fit_visible_via_alias_use(void) {
     const char *src_types =
-        "pu mod demo.types;\n"
-        "pu type User {}\n";
+        "open module demo.types;\n"
+        "open type User {}\n";
     const char *src_adapter =
-        "pu mod demo.adapter;\n"
-        "use demo.types;\n"
-        "pu spec Named {\n"
-        "    fn greet(): string;\n"
+        "open module demo.adapter;\n"
+        "import demo.types;\n"
+        "open spec Named {\n"
+        "    func greet(): string;\n"
         "}\n"
-        "pu fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "open fit User: Named {\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n";
     const char *src_consumer =
-        "pu mod demo.consumer;\n"
-        "use demo.types;\n"
-        "use demo.adapter as adapter;\n"
-        "fn run(): string {\n"
+        "open module demo.consumer;\n"
+        "import demo.types;\n"
+        "import demo.adapter as adapter;\n"
+        "func run(): string {\n"
         "    let u: User = User();\n"
         "    return u.greet();\n"
         "}\n";
@@ -8865,15 +8865,15 @@ static void test_pu_fit_visible_via_alias_use(void) {
 
 static void test_fit_method_callable_on_instance(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {}\n"
         "fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n"
-        "fn run(): string {\n"
+        "func run(): string {\n"
         "    let u: User = User {};\n"
         "    return u.greet();\n"
         "}\n";
@@ -8891,11 +8891,11 @@ static void test_fit_method_callable_on_instance(void) {
 
 static void test_fit_builtin_method_callable_on_literal(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "fit i32 {\n"
-        "    fn double(): i32 { return self * 2; }\n"
+        "    func double(): i32 { return self * 2; }\n"
         "}\n"
-        "fn run(): i32 {\n"
+        "func run(): i32 {\n"
         "    return 21.double();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_builtin_call.f", source);
@@ -8913,17 +8913,17 @@ static void test_fit_builtin_method_callable_on_literal(void) {
 
 static void test_fit_enum_method_callable_on_item(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    Failed\n"
         "}\n"
         "fit Status {\n"
-        "    fn code(): int {\n"
+        "    func code(): int {\n"
         "        return (int)self;\n"
         "    }\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return Status.Failed.code();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_enum_call.f", source);
@@ -8941,23 +8941,23 @@ static void test_fit_enum_method_callable_on_item(void) {
 
 static void test_fit_enum_satisfies_spec_typed_parameter(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn code(): int;\n"
+        "    func code(): int;\n"
         "}\n"
         "enum Status {\n"
         "    Ok,\n"
         "    Failed\n"
         "}\n"
         "fit Status: Named {\n"
-        "    fn code(): int {\n"
+        "    func code(): int {\n"
         "        return (int)self;\n"
         "    }\n"
         "}\n"
-        "fn use_named(value: Named): int {\n"
+        "func use_named(value: Named): int {\n"
         "    return value.code();\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return use_named(Status.Ok);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_enum_spec_param.f", source);
@@ -8975,27 +8975,27 @@ static void test_fit_enum_satisfies_spec_typed_parameter(void) {
 
 static void test_fit_enum_satisfies_generic_constraint(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Hashable<T> {\n"
-        "    fn hash(): int;\n"
-        "    fn same(other: T): bool;\n"
+        "    func hash(): int;\n"
+        "    func same(other: T): bool;\n"
         "}\n"
         "enum Status {\n"
         "    Ok,\n"
         "    Failed\n"
         "}\n"
         "fit Status: Hashable<Status> {\n"
-        "    fn hash(): int {\n"
+        "    func hash(): int {\n"
         "        return (int)self;\n"
         "    }\n"
-        "    fn same(other: Status): bool {\n"
+        "    func same(other: Status): bool {\n"
         "        return self == other;\n"
         "    }\n"
         "}\n"
-        "fn use_hash<K: Hashable<K>>(value: K): int {\n"
+        "func use_hash<K: Hashable<K>>(value: K): int {\n"
         "    return value.hash();\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return use_hash(Status.Failed);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_enum_generic_constraint.f", source);
@@ -9013,16 +9013,16 @@ static void test_fit_enum_satisfies_generic_constraint(void) {
 
 static void test_fit_enum_missing_method_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Hashable<T> {\n"
-        "    fn hash(): int;\n"
-        "    fn same(other: T): bool;\n"
+        "    func hash(): int;\n"
+        "    func same(other: T): bool;\n"
         "}\n"
         "enum Status {\n"
         "    Ok\n"
         "}\n"
         "fit Status: Hashable<Status> {\n"
-        "    fn hash(): int {\n"
+        "    func hash(): int {\n"
         "        return 0;\n"
         "    }\n"
         "}\n";
@@ -9043,16 +9043,16 @@ static void test_fit_enum_missing_method_rejected(void) {
 
 static void test_fit_enum_unknown_member_still_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "enum Status {\n"
         "    Ok\n"
         "}\n"
         "fit Status {\n"
-        "    fn label(): string {\n"
+        "    func label(): string {\n"
         "        return \"ok\";\n"
         "    }\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    Status.Ok.missing();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_enum_unknown.f", source);
@@ -9071,11 +9071,11 @@ static void test_fit_enum_unknown_member_still_rejected(void) {
 
 static void test_fit_array_method_callable_on_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "fit int[] {\n"
-        "    fn head(): int { return self[0]; }\n"
+        "    func head(): int { return self[0]; }\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let xs: int[] = [3, 4];\n"
         "    return xs.head();\n"
         "}\n";
@@ -9096,9 +9096,9 @@ static void test_fit_array_method_callable_on_value(void) {
  * is provided.  A stub without a body (';' only) must still be rejected. */
 static void test_fit_builtin_target_rejects_specs_clause_without_body(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "fit i32: Named;\n";
     FengProgram *program = parse_program_or_die("fit_builtin_specs_reject.f", source);
@@ -9117,9 +9117,9 @@ static void test_fit_builtin_target_rejects_specs_clause_without_body(void) {
 
 static void test_fit_array_target_rejects_specs_clause_without_body(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "fit int[]: Named;\n";
     FengProgram *program = parse_program_or_die("fit_array_specs_reject.f", source);
@@ -9138,13 +9138,13 @@ static void test_fit_array_target_rejects_specs_clause_without_body(void) {
 
 static void test_fit_array_target_element_type_param_visible_in_body(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "fit T[!] {\n"
-        "    fn head(): T {\n"
+        "    func head(): T {\n"
         "        return self[0];\n"
         "    }\n"
         "}\n"
-        "fn run(xs: int[!]): void {\n"
+        "func run(xs: int[!]): void {\n"
         "    return;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_array_t_scope_ok.f", source);
@@ -9162,13 +9162,13 @@ static void test_fit_array_target_element_type_param_visible_in_body(void) {
 
 static void test_fit_array_target_element_type_param_does_not_leak(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "fit T[] {\n"
-        "    fn head(): T {\n"
+        "    func head(): T {\n"
         "        return self[0];\n"
         "    }\n"
         "}\n"
-        "fn bad(x: T): T {\n"
+        "func bad(x: T): T {\n"
         "    return x;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_array_t_scope_no_leak.f", source);
@@ -9187,16 +9187,16 @@ static void test_fit_array_target_element_type_param_does_not_leak(void) {
 
 static void test_fit_user_type_path_still_uses_current_type_decl(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
         "    let value: T;\n"
         "}\n"
         "fit Box<T> {\n"
-        "    fn get(): T {\n"
+        "    func get(): T {\n"
         "        return self.value;\n"
         "    }\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let b: Box<int> = Box<int>();\n"
         "    return b.get();\n"
         "}\n";
@@ -9215,13 +9215,13 @@ static void test_fit_user_type_path_still_uses_current_type_decl(void) {
 
 static void test_fit_user_type_satisfaction_reuses_visible_fit_members(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {}\n"
         "fit User {\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return \"hi\";\n"
         "    }\n"
         "}\n"
@@ -9241,9 +9241,9 @@ static void test_fit_user_type_satisfaction_reuses_visible_fit_members(void) {
 
 static void test_pu_builtin_self_fit_emits_no_orphan_info(void) {
     const char *source =
-        "pu mod demo.main;\n"
-        "pu fit i32 {\n"
-        "    fn double(): i32 {\n"
+        "open module demo.main;\n"
+        "open fit i32 {\n"
+        "    func double(): i32 {\n"
         "        return self * 2;\n"
         "    }\n"
         "}\n";
@@ -9275,15 +9275,15 @@ static void test_pu_builtin_self_fit_emits_no_orphan_info(void) {
 
 static void test_fit_method_unknown_member_still_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {}\n"
         "fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let u: User = User {};\n"
         "    u.farewell();\n"
         "}\n";
@@ -9302,15 +9302,15 @@ static void test_fit_method_unknown_member_still_rejected(void) {
 
 static void test_fit_body_rejects_self_private_field_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {\n"
-        "    pr let secret: string;\n"
+        "    seal let secret: string;\n"
         "}\n"
         "fit User: Named {\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return self.secret;\n"
         "    }\n"
         "}\n";
@@ -9330,15 +9330,15 @@ static void test_fit_body_rejects_self_private_field_access(void) {
 
 static void test_fit_body_rejects_self_private_method_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {\n"
-        "    pr fn whisper(): string { return \"shh\"; }\n"
+        "    seal func whisper(): string { return \"shh\"; }\n"
         "}\n"
         "fit User: Named {\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return self.whisper();\n"
         "    }\n"
         "}\n";
@@ -9358,15 +9358,15 @@ static void test_fit_body_rejects_self_private_method_access(void) {
 
 static void test_fit_body_rejects_other_param_private_field_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Tagged {\n"
-        "    fn tag_of(other: User): string;\n"
+        "    func tag_of(other: User): string;\n"
         "}\n"
         "type User {\n"
-        "    pr let secret: string;\n"
+        "    seal let secret: string;\n"
         "}\n"
         "fit User: Tagged {\n"
-        "    fn tag_of(other: User): string {\n"
+        "    func tag_of(other: User): string {\n"
         "        return other.secret;\n"
         "    }\n"
         "}\n";
@@ -9386,16 +9386,16 @@ static void test_fit_body_rejects_other_param_private_field_access(void) {
 
 static void test_fit_body_rejects_object_literal_private_field(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Builder {\n"
-        "    fn make(): User;\n"
+        "    func make(): User;\n"
         "}\n"
         "type User {\n"
         "    let name: string;\n"
-        "    pr let secret: string;\n"
+        "    seal let secret: string;\n"
         "}\n"
         "fit User: Builder {\n"
-        "    fn make(): User {\n"
+        "    func make(): User {\n"
         "        return User { name: \"a\", secret: \"b\" };\n"
         "    }\n"
         "}\n";
@@ -9415,17 +9415,17 @@ static void test_fit_body_rejects_object_literal_private_field(void) {
 
 static void test_fit_body_allows_public_member_access(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {\n"
         "    let name: string;\n"
-        "    pr let secret: string;\n"
-        "    fn shout(): string { return self.name; }\n"
+        "    seal let secret: string;\n"
+        "    func shout(): string { return self.name; }\n"
         "}\n"
         "fit User: Named {\n"
-        "    fn greet(): string {\n"
+        "    func greet(): string {\n"
         "        return self.shout();\n"
         "    }\n"
         "}\n";
@@ -9443,17 +9443,17 @@ static void test_fit_body_allows_public_member_access(void) {
 
 static void test_spec_at_type_position_accepts_satisfying_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
         "type User: Named {\n"
         "    let name: string;\n"
         "}\n"
-        "fn use_named(n: Named): void {\n"
+        "func use_named(n: Named): void {\n"
         "    return;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let u: User = User { name: \"a\" };\n"
         "    use_named(u);\n"
         "}\n";
@@ -9471,17 +9471,17 @@ static void test_spec_at_type_position_accepts_satisfying_type(void) {
 
 static void test_spec_at_type_position_rejects_unrelated_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
         "type Other {\n"
         "    let name: string;\n"
         "}\n"
-        "fn use_named(n: Named): void {\n"
+        "func use_named(n: Named): void {\n"
         "    return;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let o: Other = Other { name: \"a\" };\n"
         "    use_named(o);\n"
         "}\n";
@@ -9499,7 +9499,7 @@ static void test_spec_at_type_position_rejects_unrelated_type(void) {
 
 static void test_spec_at_type_position_accepts_via_fit(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
         "    let name: string;\n"
         "}\n"
@@ -9507,10 +9507,10 @@ static void test_spec_at_type_position_accepts_via_fit(void) {
         "    let name: string;\n"
         "}\n"
         "fit Other: Named;\n"
-        "fn use_named(n: Named): void {\n"
+        "func use_named(n: Named): void {\n"
         "    return;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let o: Other = Other { name: \"a\" };\n"
         "    use_named(o);\n"
         "}\n";
@@ -9544,18 +9544,18 @@ static const FengDecl *find_function_decl_by_name(
 static void test_resolved_callable_attached_to_call_exprs(void) {
     /* Exercises all four resolved-callable kinds in a single program. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Named {\n"
-        "    fn greet(): string;\n"
+        "    func greet(): string;\n"
         "}\n"
         "type User {\n"
-        "    fn shout(): string { return \"HI\"; }\n"
+        "    func shout(): string { return \"HI\"; }\n"
         "}\n"
         "fit User: Named {\n"
-        "    fn greet(): string { return \"hi\"; }\n"
+        "    func greet(): string { return \"hi\"; }\n"
         "}\n"
-        "fn helper(): int { return 1; }\n"
-        "fn run(): int {\n"
+        "func helper(): int { return 1; }\n"
+        "func run(): int {\n"
         "    let u: User = User();\n"
         "    let a: string = u.greet();\n"
         "    let b: string = u.shout();\n"
@@ -9636,13 +9636,13 @@ static void test_resolved_callable_attached_to_call_exprs(void) {
 
 static void test_finalizer_basic_ok(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Buffer {\n"
-        "    pu var size: int;\n"
-        "    fn Buffer(s: int) {\n"
+        "    open var size: int;\n"
+        "    func Buffer(s: int) {\n"
         "        self.size = s;\n"
         "    }\n"
-        "    fn ~Buffer() {\n"
+        "    func ~Buffer() {\n"
         "        return;\n"
         "    }\n"
         "}\n";
@@ -9661,10 +9661,10 @@ static void test_finalizer_basic_ok(void) {
 
 static void test_finalizer_rejects_multiple_per_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Buffer {\n"
-        "    fn ~Buffer() {}\n"
-        "    fn ~Buffer() {}\n"
+        "    func ~Buffer() {}\n"
+        "    func ~Buffer() {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fin_dup.f", source);
     const FengProgram *programs[] = {program};
@@ -9682,11 +9682,11 @@ static void test_finalizer_rejects_multiple_per_type(void) {
 
 static void test_finalizer_rejected_on_fixed_type(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@abi\n"
         "type Buffer {\n"
-        "    pu let size: int;\n"
-        "    fn ~Buffer() {}\n"
+        "    open let size: int;\n"
+        "    func ~Buffer() {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fin_fixed.f", source);
     const FengProgram *programs[] = {program};
@@ -9705,9 +9705,9 @@ static void test_finalizer_rejected_on_fixed_type(void) {
 
 static void test_finalizer_rejects_return_with_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Buffer {\n"
-        "    fn ~Buffer() {\n"
+        "    func ~Buffer() {\n"
         "        return 0;\n"
         "    }\n"
         "}\n";
@@ -9727,9 +9727,9 @@ static void test_finalizer_rejects_return_with_value(void) {
 
 static void test_constructor_rejects_return_with_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
-        "    fn Box() {\n"
+        "    func Box() {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
@@ -9749,10 +9749,10 @@ static void test_constructor_rejects_return_with_value(void) {
 
 static void test_constructor_with_explicit_void_return_ok(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
-        "    pu var v: int;\n"
-        "    fn Box(): void {\n"
+        "    open var v: int;\n"
+        "    func Box(): void {\n"
         "        self.v = 1;\n"
         "        return;\n"
         "    }\n"
@@ -9774,9 +9774,9 @@ static void test_constructor_with_explicit_void_return_ok(void) {
 
 static void test_lambda_block_body_returns_value(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec IntFn(a: int): int;\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let f: IntFn = (a: int) {\n"
         "        let b = a + 1;\n"
         "        return b;\n"
@@ -9799,9 +9799,9 @@ static void test_lambda_block_body_returns_value(void) {
 
 static void test_lambda_block_body_records_local_capture(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Reader(): int;\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let x = 1;\n"
         "    let f: Reader = () {\n"
         "        return x;\n"
@@ -9845,11 +9845,11 @@ static void test_lambda_block_body_records_local_capture(void) {
 
 static void test_lambda_in_method_records_self_capture(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Reader(): int;\n"
         "type User {\n"
         "    var id: int;\n"
-        "    fn read(): int {\n"
+        "    func read(): int {\n"
         "        let f: Reader = () -> self.id;\n"
         "        return f();\n"
         "    }\n"
@@ -9879,7 +9879,7 @@ static void test_lambda_in_method_records_self_capture(void) {
 
 static void test_field_init_lambda_captures_self_when_callable_spec(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Reader(): int;\n"
         "type Box {\n"
         "    var n: int;\n"
@@ -9900,7 +9900,7 @@ static void test_field_init_lambda_captures_self_when_callable_spec(void) {
 
 static void test_field_init_bare_self_is_invalid(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box {\n"
         "    var n: int;\n"
         "    let m: int = self.n;\n"
@@ -9921,10 +9921,10 @@ static void test_field_init_bare_self_is_invalid(void) {
 
 static void test_duplicate_method_signature_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type T {\n"
-        "    fn pick(a: int): int { return a; }\n"
-        "    fn pick(a: int): int { return a + 1; }\n"
+        "    func pick(a: int): int { return a; }\n"
+        "    func pick(a: int): int { return a + 1; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("dup_method.f", source);
     const FengProgram *programs[] = {program};
@@ -9942,10 +9942,10 @@ static void test_duplicate_method_signature_is_rejected(void) {
 
 static void test_method_overload_return_only_difference_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type T {\n"
-        "    fn pick(a: int): int { return a; }\n"
-        "    fn pick(a: int): bool { return true; }\n"
+        "    func pick(a: int): int { return a; }\n"
+        "    func pick(a: int): bool { return true; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("ret_only_method.f", source);
     const FengProgram *programs[] = {program};
@@ -9963,8 +9963,8 @@ static void test_method_overload_return_only_difference_is_rejected(void) {
 
 static void test_main_entry_required_for_bin_target(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn helper(): int { return 0; }\n";
+        "module demo.main;\n"
+        "func helper(): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("no_main.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -9981,8 +9981,8 @@ static void test_main_entry_required_for_bin_target(void) {
 
 static void test_main_entry_valid_signature_passes_for_bin(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.main;\n"
+        "func main(args: string[]) {\n"
         "    return;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("main_ok.f", source);
@@ -10000,8 +10000,8 @@ static void test_main_entry_valid_signature_passes_for_bin(void) {
 
 static void test_main_entry_bad_signature_is_rejected_for_bin(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(): int { return 0; }\n";
+        "module demo.main;\n"
+        "func main(): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("main_bad_sig.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10017,11 +10017,11 @@ static void test_main_entry_bad_signature_is_rejected_for_bin(void) {
 
 static void test_multiple_main_entries_rejected_for_bin(void) {
     const char *source_a =
-        "mod demo.main;\n"
-        "fn main(args: string[]) { return; }\n";
+        "module demo.main;\n"
+        "func main(args: string[]) { return; }\n";
     const char *source_b =
-        "mod demo.other;\n"
-        "fn main(args: string[]) { return; }\n";
+        "module demo.other;\n"
+        "func main(args: string[]) { return; }\n";
     FengProgram *program_a = parse_program_or_die("main_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("main_b.f", source_b);
     const FengProgram *programs[] = {program_a, program_b};
@@ -10040,8 +10040,8 @@ static void test_multiple_main_entries_rejected_for_bin(void) {
 
 static void test_lib_target_skips_main_check(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn helper(): int { return 0; }\n";
+        "module demo.main;\n"
+        "func helper(): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("lib_no_main.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10057,8 +10057,8 @@ static void test_lib_target_skips_main_check(void) {
 
 static void test_match_range_label_overlap_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    return if value {\n"
         "        1...10 { 1; }\n"
         "        5...15 { 2; }\n"
@@ -10081,8 +10081,8 @@ static void test_match_range_label_overlap_rejected(void) {
 
 static void test_match_single_label_overlap_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    return if value {\n"
         "        1, 2, 3 { 1; }\n"
         "        2 { 2; }\n"
@@ -10105,8 +10105,8 @@ static void test_match_single_label_overlap_rejected(void) {
 
 static void test_match_range_invalid_bounds_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    return if value {\n"
         "        10...1 { 1; }\n"
         "        else { 0; }\n"
@@ -10127,8 +10127,8 @@ static void test_match_range_invalid_bounds_rejected(void) {
 
 static void test_match_target_type_disallowed(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: f64): int {\n"
+        "module demo.main;\n"
+        "func run(value: f64): int {\n"
         "    return if value {\n"
         "        1 { 1; }\n"
         "        else { 0; }\n"
@@ -10150,8 +10150,8 @@ static void test_match_target_type_disallowed(void) {
 
 static void test_match_let_bound_label_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    let one = 1;\n"
         "    return if value {\n"
         "        one { 100; }\n"
@@ -10173,13 +10173,13 @@ static void test_match_let_bound_label_accepted(void) {
 
 static void test_for_in_loop_array_accepted(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(items: int[]) {\n"
+        "module demo.main;\n"
+        "func run(items: int[]) {\n"
         "    for let it in items {\n"
         "        print(it);\n"
         "    }\n"
         "}\n"
-        "fn print(value: int) {}\n";
+        "func print(value: int) {}\n";
     FengProgram *program = parse_program_or_die("for_in_array.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10195,13 +10195,13 @@ static void test_for_in_loop_array_accepted(void) {
 
 static void test_for_in_loop_non_array_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int) {\n"
+        "module demo.main;\n"
+        "func run(value: int) {\n"
         "    for let it in value {\n"
         "        print(it);\n"
         "    }\n"
         "}\n"
-        "fn print(value: int) {}\n";
+        "func print(value: int) {}\n";
     FengProgram *program = parse_program_or_die("for_in_non_array.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10243,7 +10243,7 @@ static const FengDecl *find_type_decl_by_name(
 
 static void test_cyclicity_acyclic_chain_marks_none(void) {
     const char *src =
-        "pu mod demo.cyc;\n"
+        "open module demo.cyc;\n"
         "type Leaf { let id: int; }\n"
         "type Mid { let leaf: Leaf; }\n"
         "type Top { let mid: Mid; }\n";
@@ -10268,7 +10268,7 @@ static void test_cyclicity_acyclic_chain_marks_none(void) {
 
 static void test_cyclicity_self_loop_marks_self(void) {
     const char *src =
-        "pu mod demo.cyc;\n"
+        "open module demo.cyc;\n"
         "type Node { var next: Node; }\n"
         "type Other { let id: int; }\n";
     FengProgram *program = parse_program_or_die("self.f", src);
@@ -10290,7 +10290,7 @@ static void test_cyclicity_self_loop_marks_self(void) {
 
 static void test_cyclicity_two_node_cycle_marks_both(void) {
     const char *src =
-        "pu mod demo.cyc;\n"
+        "open module demo.cyc;\n"
         "type A { var b: B; }\n"
         "type B { var a: A; }\n"
         "type C { let id: int; }\n";
@@ -10315,7 +10315,7 @@ static void test_cyclicity_two_node_cycle_marks_both(void) {
 
 static void test_cyclicity_three_node_cycle_marks_all(void) {
     const char *src =
-        "pu mod demo.cyc;\n"
+        "open module demo.cyc;\n"
         "type A { var b: B; }\n"
         "type B { var c: C; }\n"
         "type C { var a: A; }\n";
@@ -10342,7 +10342,7 @@ static void test_cyclicity_array_mediated_cycle_marks_both(void) {
     /* B contains an array of A, and A back-references B; an array of T is a
      * managed reference for cyclicity purposes, so {A,B} form an SCC. */
     const char *src =
-        "pu mod demo.cyc;\n"
+        "open module demo.cyc;\n"
         "type A { var owner: B; }\n"
         "type B { var children: A[]; }\n";
     FengProgram *program = parse_program_or_die("arrcyc.f", src);
@@ -10436,9 +10436,9 @@ static void test_spec_relation_declared_head_recorded(void) {
     /* `type T : S` records a single DECLARED_HEAD source for (T, S) and
      * does not invent any other relation. */
     const char *src =
-        "pu mod demo.rel;\n"
-        "spec Named { fn name(): string; }\n"
-        "type User: Named { fn name(): string { return \"u\"; } }\n";
+        "open module demo.rel;\n"
+        "spec Named { func name(): string; }\n"
+        "type User: Named { func name(): string { return \"u\"; } }\n";
     FengProgram *program = parse_program_or_die("rel_decl_head.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10469,12 +10469,12 @@ static void test_spec_relation_declared_parent_transitive(void) {
     /* `type T : Child` where `spec Child : Parent` records DECLARED_HEAD for
      * (T, Child) and DECLARED_PARENT for (T, Parent) via the head Child. */
     const char *src =
-        "pu mod demo.rel;\n"
-        "spec Parent { fn p(): int; }\n"
-        "spec Child: Parent { fn c(): int; }\n"
+        "open module demo.rel;\n"
+        "spec Parent { func p(): int; }\n"
+        "spec Child: Parent { func c(): int; }\n"
         "type Both: Child {\n"
-        "    fn p(): int { return 1; }\n"
-        "    fn c(): int { return 2; }\n"
+        "    func p(): int { return 1; }\n"
+        "    func c(): int { return 2; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("rel_decl_parent.f", src);
     const FengProgram *programs[] = {program};
@@ -10508,13 +10508,13 @@ static void test_spec_relation_fit_head_and_parent(void) {
     /* `fit T : Child` produces FIT_HEAD for (T, Child) and FIT_PARENT for
      * (T, Parent), both pointing back at the same fit decl. */
     const char *src =
-        "pu mod demo.rel;\n"
-        "spec Parent { fn p(): int; }\n"
-        "spec Child: Parent { fn c(): int; }\n"
+        "open module demo.rel;\n"
+        "spec Parent { func p(): int; }\n"
+        "spec Child: Parent { func c(): int; }\n"
         "type Tag {}\n"
         "fit Tag: Child {\n"
-        "    fn p(): int { return 1; }\n"
-        "    fn c(): int { return 2; }\n"
+        "    func p(): int { return 1; }\n"
+        "    func c(): int { return 2; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("rel_fit.f", src);
     const FengProgram *programs[] = {program};
@@ -10564,21 +10564,21 @@ static void test_spec_relation_fit_head_and_parent(void) {
 }
 
 static void test_spec_relation_visibility_filter(void) {
-    /* A `pu fit` lives in module A; module B does not `use` A; module C
+    /* A `open fit` lives in module A; module B does not `use` A; module C
      * does. The relation table records the fit source unconditionally;
      * the visibility helper rejects B and accepts C. */
     const char *src_a =
-        "pu mod demo.a;\n"
-        "pu spec Named { fn name(): string; }\n"
-        "pu type Tag {}\n"
-        "pu fit Tag: Named { fn name(): string { return \"t\"; } }\n";
+        "open module demo.a;\n"
+        "open spec Named { func name(): string; }\n"
+        "open type Tag {}\n"
+        "open fit Tag: Named { func name(): string { return \"t\"; } }\n";
     const char *src_b =
-        "mod demo.b;\n"
-        "fn unrelated() {}\n";
+        "module demo.b;\n"
+        "func unrelated() {}\n";
     const char *src_c =
-        "mod demo.c;\n"
-        "use demo.a;\n"
-        "fn unrelated() {}\n";
+        "module demo.c;\n"
+        "import demo.a;\n"
+        "func unrelated() {}\n";
     FengProgram *pa = parse_program_or_die("vis_a.f", src_a);
     FengProgram *pb = parse_program_or_die("vis_b.f", src_b);
     FengProgram *pc = parse_program_or_die("vis_c.f", src_c);
@@ -10627,9 +10627,9 @@ static void test_spec_relation_fit_builtin_target(void) {
     /* `fit i32: Named { ... }` should record a FIT_HEAD relation with a
      * BUILTIN subject key for "i32". */
     const char *src =
-        "pu mod demo.rel.builtin;\n"
-        "pu spec Named { fn name(): string; }\n"
-        "pu fit i32: Named { fn name(): string { return \"i32\"; } }\n";
+        "open module demo.rel.builtin;\n"
+        "open spec Named { func name(): string; }\n"
+        "open fit i32: Named { func name(): string { return \"i32\"; } }\n";
     FengProgram *program = parse_program_or_die("rel_builtin.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10668,9 +10668,9 @@ static void test_spec_relation_fit_array_target(void) {
     /* `fit i32[]: Named { ... }` should record a FIT_HEAD relation with an
      * ARRAY subject key whose element type is i32. */
     const char *src =
-        "pu mod demo.rel.array;\n"
-        "pu spec Named { fn name(): string; }\n"
-        "pu fit i32[]: Named { fn name(): string { return \"arr\"; } }\n";
+        "open module demo.rel.array;\n"
+        "open spec Named { func name(): string; }\n"
+        "open fit i32[]: Named { func name(): string { return \"arr\"; } }\n";
     FengProgram *program = parse_program_or_die("rel_array.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -10760,13 +10760,13 @@ static void test_spec_coercion_object_let_binding(void) {
      * the initializer expression, with the SpecRelation entry that
      * justifies the satisfaction. */
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let x: Named = User{n: \"u\"};\n"
         "    return 0;\n"
         "}\n";
@@ -10807,12 +10807,12 @@ static void test_spec_coercion_object_builtin_let_binding(void) {
     /* `let x: Named = 7;` should record OBJECT coercion with BUILTIN subject
      * key once a visible `fit i32: Named { ... }` exists. */
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "fit i32: Named {\n"
-        "    fn name(): string { return \"i32\"; }\n"
+        "    func name(): string { return \"i32\"; }\n"
         "}\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let x: Named = (7);\n"
         "    return 0;\n"
         "}\n";
@@ -10852,12 +10852,12 @@ static void test_spec_coercion_object_array_let_binding(void) {
     /* `let x: Named = xs;` where xs: int[] should record OBJECT coercion with
      * ARRAY subject key when `fit int[]: Named { ... }` exists. */
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "fit int[]: Named {\n"
-        "    fn name(): string { return \"arr\"; }\n"
+        "    func name(): string { return \"arr\"; }\n"
         "}\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let xs: int[] = [1, 2];\n"
         "    let x: Named = xs;\n"
         "    return 0;\n"
@@ -10896,14 +10896,14 @@ static void test_spec_coercion_object_argument(void) {
     /* Argument-passing coercion: `accept(User{...})` against parameter
      * `s: Named` records an OBJECT site on the argument expression. */
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn accept(s: Named) {}\n"
-        "fn caller(): int {\n"
+        "func accept(s: Named) {}\n"
+        "func caller(): int {\n"
         "    accept(User{n: \"u\"});\n"
         "    return 0;\n"
         "}\n";
@@ -10944,15 +10944,15 @@ static void test_spec_coercion_object_argument(void) {
 
 static void test_spec_coercion_object_scalar_argument_uses_borrow_local(void) {
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "fit i32: Named {\n"
-        "    fn name(): string { return \"i32\"; }\n"
+        "    func name(): string { return \"i32\"; }\n"
         "}\n"
-        "fn accept(n: Named): string {\n"
+        "func accept(n: Named): string {\n"
         "    return n.name();\n"
         "}\n"
-        "fn caller(): string {\n"
+        "func caller(): string {\n"
         "    return accept((7));\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_scalar_arg.f", src);
@@ -10992,13 +10992,13 @@ static void test_spec_coercion_object_return(void) {
     /* Return coercion: `return User{...};` from a function returning Named
      * records an OBJECT site on the returned expression. */
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn make(): Named {\n"
+        "func make(): Named {\n"
         "    return User{n: \"u\"};\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_ret.f", src);
@@ -11032,12 +11032,12 @@ static void test_spec_coercion_object_return(void) {
 
 static void test_spec_coercion_object_scalar_return_uses_box_owner(void) {
     const char *src =
-        "pu mod demo.coerce;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.coerce;\n"
+        "spec Named { func name(): string; }\n"
         "fit i32: Named {\n"
-        "    fn name(): string { return \"i32\"; }\n"
+        "    func name(): string { return \"i32\"; }\n"
         "}\n"
-        "fn make(): Named {\n"
+        "func make(): Named {\n"
         "    return (7);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_scalar_ret.f", src);
@@ -11073,10 +11073,10 @@ static void test_spec_coercion_callable_top_level_fn(void) {
     /* `let f: Cb = my_fn;` — top-level function bound to a callable-form
      * spec slot records a CALLABLE site classified as TOP_LEVEL_FN. */
     const char *src =
-        "pu mod demo.coerce;\n"
+        "open module demo.coerce;\n"
         "spec Cb(x: int): int;\n"
-        "fn double(x: int): int { return x + x; }\n"
-        "fn caller(): int {\n"
+        "func double(x: int): int { return x + x; }\n"
+        "func caller(): int {\n"
         "    let f: Cb = double;\n"
         "    return 0;\n"
         "}\n";
@@ -11109,9 +11109,9 @@ static void test_spec_coercion_callable_lambda(void) {
     /* Lambda literal coerced to a callable-form spec slot records a
      * CALLABLE site classified as LAMBDA. */
     const char *src =
-        "pu mod demo.coerce;\n"
+        "open module demo.coerce;\n"
         "spec Cb(x: int): int;\n"
-        "fn caller(): int {\n"
+        "func caller(): int {\n"
         "    let f: Cb = (x: int) -> x + 1;\n"
         "    return 0;\n"
         "}\n";
@@ -11141,12 +11141,12 @@ static void test_spec_coercion_callable_lambda(void) {
 
 static void test_spec_coercion_callable_lambda_argument(void) {
     const char *src =
-        "pu mod demo.coerce.arg;\n"
+        "open module demo.coerce.arg;\n"
         "spec Cb(x: int): int;\n"
-        "fn apply(cb: Cb): int {\n"
+        "func apply(cb: Cb): int {\n"
         "    return cb(4);\n"
         "}\n"
-        "fn caller(): int {\n"
+        "func caller(): int {\n"
         "    return apply((x: int) -> x + 1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_callable_lambda_arg.f", src);
@@ -11189,11 +11189,11 @@ static void test_spec_coercion_callable_lambda_argument(void) {
 
 static void test_callable_spec_value_rejects_different_spec_implicit_match(void) {
     const char *src =
-        "pu mod demo.callable.nominal;\n"
+        "open module demo.callable.nominal;\n"
         "spec A(x: int): int;\n"
         "spec B(x: int): int;\n"
-        "fn double(x: int): int { return x + x; }\n"
-        "fn caller(): int {\n"
+        "func double(x: int): int { return x + x; }\n"
+        "func caller(): int {\n"
         "    let a: A = double;\n"
         "    let b: B = a;\n"
         "    return 0;\n"
@@ -11217,11 +11217,11 @@ static void test_callable_spec_value_rejects_different_spec_implicit_match(void)
 
 static void test_callable_spec_value_explicit_cast_accepts_equal_signature(void) {
     const char *src =
-        "pu mod demo.callable.nominal;\n"
+        "open module demo.callable.nominal;\n"
         "spec A(x: int): int;\n"
         "spec B(x: int): int;\n"
-        "fn double(x: int): int { return x + x; }\n"
-        "fn caller(): int {\n"
+        "func double(x: int): int { return x + x; }\n"
+        "func caller(): int {\n"
         "    let a: A = double;\n"
         "    let b: B = (B)a;\n"
         "    return b(2);\n"
@@ -11244,11 +11244,11 @@ static void test_callable_spec_value_explicit_cast_accepts_equal_signature(void)
 
 static void test_callable_spec_top_level_fn_still_matches_multiple_specs(void) {
     const char *src =
-        "pu mod demo.callable.nominal;\n"
+        "open module demo.callable.nominal;\n"
         "spec A(x: int): int;\n"
         "spec B(x: int): int;\n"
-        "fn double(x: int): int { return x + x; }\n"
-        "fn caller(): int {\n"
+        "func double(x: int): int { return x + x; }\n"
+        "func caller(): int {\n"
         "    let a: A = double;\n"
         "    let b: B = double;\n"
         "    return a(1) + b(1);\n"
@@ -11286,9 +11286,9 @@ static void test_spec_default_local_binding_object_form(void) {
     /* `let s: Named;` (no initializer) records a LOCAL_BINDING default-
      * witness site against the object-form spec `Named`. */
     const char *src =
-        "pu mod demo.defaults;\n"
-        "spec Named { fn name(): string; }\n"
-        "fn make(): int {\n"
+        "open module demo.defaults;\n"
+        "spec Named { func name(): string; }\n"
+        "func make(): int {\n"
         "    let s: Named;\n"
         "    return 0;\n"
         "}\n";
@@ -11323,9 +11323,9 @@ static void test_spec_default_local_binding_callable_form(void) {
     /* `let f: Cb;` (no initializer, Cb is callable-form spec) records a
      * LOCAL_BINDING default-witness site with form CALLABLE. */
     const char *src =
-        "pu mod demo.defaults;\n"
+        "open module demo.defaults;\n"
         "spec Cb(x: int): int;\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let f: Cb;\n"
         "    return 0;\n"
         "}\n";
@@ -11360,11 +11360,11 @@ static void test_spec_default_type_field_no_initializer(void) {
      * default-witness site keyed by the field's FengTypeMember*. A
      * concrete type is also given so analysis succeeds. */
     const char *src =
-        "pu mod demo.defaults;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.defaults;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
         "type Holder {\n"
         "    var named: Named;\n"
@@ -11403,12 +11403,12 @@ static void test_spec_member_access_field_read(void) {
     /* `s.n` where s has static type Named (object-form spec) records a
      * FIELD_READ entry with mutability VAR (matching the spec field). */
     const char *src =
-        "pu mod demo.access;\n"
+        "open module demo.access;\n"
         "spec Named { var n: string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
         "}\n"
-        "fn read_it(s: Named): string {\n"
+        "func read_it(s: Named): string {\n"
         "    return s.n;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("access_read.f", src);
@@ -11443,12 +11443,12 @@ static void test_spec_member_access_field_write(void) {
     /* `s.n = "x";` upgrades the FIELD_READ entry on the LHS member-expr
      * to FIELD_WRITE. */
     const char *src =
-        "pu mod demo.access;\n"
+        "open module demo.access;\n"
         "spec Named { var n: string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
         "}\n"
-        "fn write_it(s: Named) {\n"
+        "func write_it(s: Named) {\n"
         "    s.n = \"x\";\n"
         "}\n";
     FengProgram *program = parse_program_or_die("access_write.f", src);
@@ -11482,13 +11482,13 @@ static void test_spec_member_access_method_call(void) {
     /* `s.name()` records a METHOD_CALL entry on the member-expression
      * (the callee of the call), pointing at the spec method. */
     const char *src =
-        "pu mod demo.access;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.access;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn call_it(s: Named): string {\n"
+        "func call_it(s: Named): string {\n"
         "    return s.name();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("access_call.f", src);
@@ -11524,9 +11524,9 @@ static void test_spec_member_access_callable_form_rejected(void) {
     /* §9.4: accessing a member on a callable-form spec value is rejected
      * by the resolver and no member-access sidecar entry is recorded. */
     const char *src =
-        "pu mod demo.access;\n"
+        "open module demo.access;\n"
         "spec Cb(x: int): int;\n"
-        "fn use_it(c: Cb): int {\n"
+        "func use_it(c: Cb): int {\n"
         "    return c.bogus;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("access_callable.f", src);
@@ -11550,13 +11550,13 @@ static void test_spec_witness_via_declared_head(void) {
     /* §9.5 (1): T satisfies S via its own declared head; each S member
      * resolves to T's own implementation. */
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let s: Named = User{n: \"u\"};\n"
         "    return 0;\n"
         "}\n";
@@ -11593,11 +11593,11 @@ static void test_spec_witness_via_fit(void) {
     /* §9.5 (2): T satisfies S only through a fit; the witness member
      * resolves to FIT_METHOD with the fit decl/module recorded. */
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
         "type User { var n: string; }\n"
-        "fit User: Named { fn name(): string { return self.n; } }\n"
-        "fn make(): int {\n"
+        "fit User: Named { func name(): string { return self.n; } }\n"
+        "func make(): int {\n"
         "    let s: Named = User{n: \"u\"};\n"
         "    return 0;\n"
         "}\n";
@@ -11631,10 +11631,10 @@ static void test_spec_witness_via_fit(void) {
 static void test_spec_witness_field_member(void) {
     /* §9.5: a spec field maps to T's own field via TYPE_OWN_FIELD. */
     const char *src =
-        "pu mod demo.witness;\n"
+        "open module demo.witness;\n"
         "spec Named { var n: string; }\n"
         "type User: Named { var n: string; }\n"
-        "fn make(): int {\n"
+        "func make(): int {\n"
         "    let s: Named = User{n: \"u\"};\n"
         "    return 0;\n"
         "}\n";
@@ -11666,11 +11666,11 @@ static void test_spec_witness_on_demand_only(void) {
     /* §8.2: with no coercion site, no witness is materialised — even
      * though (User, Named) has a SpecRelation entry. */
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("witness_lazy.f", src);
     const FengProgram *programs[] = {program};
@@ -11698,16 +11698,16 @@ static void test_spec_witness_via_generic_instantiation(void) {
     /* Generic instantiation should demand the same object-form witness that
      * direct spec coercion sites already materialize. */
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn greet<T: Named>(value: T): string {\n"
+        "func greet<T: Named>(value: T): string {\n"
         "    return value.name();\n"
         "}\n"
-        "fn run(): string {\n"
+        "func run(): string {\n"
         "    let user = User{n: \"u\"};\n"
         "    return greet(user);\n"
         "}\n";
@@ -11735,12 +11735,12 @@ static void test_spec_witness_via_generic_instantiation(void) {
 
 static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
-        "fn take(xs: int[!]): int { return 0; }\n"
-        "fn take2(xs: i32[!]): int { return 0; }\n"
-        "fn take_ro(xs: i32[]): int { return 0; }\n"
-        "fn take2d(xs: i32[][]): int { return 0; }\n";
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
+        "func take(xs: int[!]): int { return 0; }\n"
+        "func take2(xs: i32[!]): int { return 0; }\n"
+        "func take_ro(xs: i32[]): int { return 0; }\n"
+        "func take2d(xs: i32[][]): int { return 0; }\n";
     FengProgram *program = parse_program_or_die("witness_subject_keys.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -11815,12 +11815,12 @@ static void test_spec_witness_multi_fit_conflict(void) {
     /* §8.1: two visible fits both provide the same (name, params, return)
      * implementation of S's method on T → conflict at first coercion. */
     const char *src =
-        "pu mod demo.witness;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.witness;\n"
+        "spec Named { func name(): string; }\n"
         "type User { var n: string; }\n"
-        "fit User: Named { fn name(): string { return self.n; } }\n"
-        "fit User: Named { fn name(): string { return \"x\"; } }\n"
-        "fn make(): int {\n"
+        "fit User: Named { func name(): string { return self.n; } }\n"
+        "fit User: Named { func name(): string { return \"x\"; } }\n"
+        "func make(): int {\n"
         "    let s: Named = User{n: \"u\"};\n"
         "    return 0;\n"
         "}\n";
@@ -11916,13 +11916,13 @@ static void test_spec_equality_object_eq_recorded(void) {
      * identity comparison; the binary expr is recorded with op=EQ and
      * spec_decl pointing at the spec. */
     const char *src =
-        "pu mod demo.eq;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.eq;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn make(): bool {\n"
+        "func make(): bool {\n"
         "    let a: Named = User{n: \"u\"};\n"
         "    let b: Named = User{n: \"u\"};\n"
         "    return a == b;\n"
@@ -11955,13 +11955,13 @@ static void test_spec_equality_object_neq_recorded(void) {
      * conclusion is still reference-identity comparison, only the boolean
      * polarity differs. */
     const char *src =
-        "pu mod demo.eq;\n"
-        "spec Named { fn name(): string; }\n"
+        "open module demo.eq;\n"
+        "spec Named { func name(): string; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
-        "    fn name(): string { return self.n; }\n"
+        "    func name(): string { return self.n; }\n"
         "}\n"
-        "fn make(): bool {\n"
+        "func make(): bool {\n"
         "    let a: Named = User{n: \"u\"};\n"
         "    let b: Named = User{n: \"u\"};\n"
         "    return a != b;\n"
@@ -11992,8 +11992,8 @@ static void test_spec_equality_string_not_recorded(void) {
      * path; no SpecEquality entry is recorded. This protects the existing
      * string equality semantics (regression guard for §9.7). */
     const char *src =
-        "pu mod demo.eq;\n"
-        "fn make(): bool {\n"
+        "open module demo.eq;\n"
+        "func make(): bool {\n"
         "    let a: string = \"u\";\n"
         "    let b: string = \"u\";\n"
         "    return a == b;\n"
@@ -12022,8 +12022,8 @@ static void test_spec_equality_int_not_recorded(void) {
     /* §9.6 negative: `==` on builtin numeric operands has no SpecEquality
      * entry. Sanity check — only spec-typed operands trigger recording. */
     const char *src =
-        "pu mod demo.eq;\n"
-        "fn make(): bool {\n"
+        "open module demo.eq;\n"
+        "func make(): bool {\n"
         "    let a: int = 1;\n"
         "    let b: int = 1;\n"
         "    return a == b;\n"
@@ -12076,13 +12076,13 @@ static FengSlice slice_from_cstr(const char *literal) {
 
 static void test_enum_info_tracks_implicit_values(void) {
     const char *src =
-        "pu mod demo.enums;\n"
+        "open module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound,\n"
         "    InternalError\n"
         "}\n"
-        "fn pick(): Status {\n"
+        "func pick(): Status {\n"
         "    return Status.NotFound;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_info_implicit.f", src);
@@ -12122,12 +12122,12 @@ static void test_enum_info_tracks_implicit_values(void) {
 
 static void test_enum_info_tracks_explicit_values_and_cast_to_int(void) {
     const char *src =
-        "pu mod demo.enums;\n"
+        "open module demo.enums;\n"
         "enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n"
-        "fn code(): int {\n"
+        "func code(): int {\n"
         "    return (int)HttpStatus.NotFound;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_info_explicit.f", src);
@@ -12162,7 +12162,7 @@ static void test_enum_info_tracks_explicit_values_and_cast_to_int(void) {
 
 static void test_enum_rejects_mixed_explicit_and_implicit_values(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok = 200,\n"
         "    NotFound\n"
@@ -12187,7 +12187,7 @@ static void test_enum_rejects_mixed_explicit_and_implicit_values(void) {
 
 static void test_enum_rejects_duplicate_item_name(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    Ok\n"
@@ -12211,7 +12211,7 @@ static void test_enum_rejects_duplicate_item_name(void) {
 
 static void test_enum_rejects_duplicate_item_value(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok = 200,\n"
         "    AlsoOk = 200\n"
@@ -12235,12 +12235,12 @@ static void test_enum_rejects_duplicate_item_value(void) {
 
 static void test_enum_rejects_int_to_enum_cast(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
         "}\n"
-        "fn bad(): Status {\n"
+        "func bad(): Status {\n"
         "    return (Status)1;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_cast_from_int_error.f", src);
@@ -12262,12 +12262,12 @@ static void test_enum_rejects_int_to_enum_cast(void) {
 
 static void test_enum_relational_compare_is_rejected(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
         "}\n"
-        "fn bad(): bool {\n"
+        "func bad(): bool {\n"
         "    return Status.Ok < Status.NotFound;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_relational_error.f", src);
@@ -12290,7 +12290,7 @@ static void test_enum_relational_compare_is_rejected(void) {
 
 static void test_enum_is_valid_in_ordinary_type_positions(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
@@ -12298,10 +12298,10 @@ static void test_enum_is_valid_in_ordinary_type_positions(void) {
         "type Packet {\n"
         "    var status: Status;\n"
         "}\n"
-        "fn echo(status: Status): Status {\n"
+        "func echo(status: Status): Status {\n"
         "    return status;\n"
         "}\n"
-        "fn run(history: Status[]): Status {\n"
+        "func run(history: Status[]): Status {\n"
         "    let current: Status = Status.Ok;\n"
         "    let packet: Packet = Packet { status: current };\n"
         "    let picked: Status = history[0];\n"
@@ -12327,10 +12327,10 @@ static void test_enum_is_valid_in_ordinary_type_positions(void) {
 
 static void test_enum_rejects_different_enum_assignment(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status { Ok, NotFound }\n"
         "enum Color { Red, Blue }\n"
-        "fn bad(): Status {\n"
+        "func bad(): Status {\n"
         "    return Color.Red;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_cross_assign_error.f", src);
@@ -12352,10 +12352,10 @@ static void test_enum_rejects_different_enum_assignment(void) {
 
 static void test_enum_rejects_different_enum_equality_compare(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status { Ok, NotFound }\n"
         "enum Color { Red, Blue }\n"
-        "fn bad(): bool {\n"
+        "func bad(): bool {\n"
         "    return Status.Ok == Color.Red;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_cross_compare_error.f", src);
@@ -12378,10 +12378,10 @@ static void test_enum_rejects_different_enum_equality_compare(void) {
 
 static void test_enum_rejects_different_enum_cast(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status { Ok, NotFound }\n"
         "enum Color { Red, Blue }\n"
-        "fn bad(): Color {\n"
+        "func bad(): Color {\n"
         "    return (Color)Status.Ok;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_cross_cast_error.f", src);
@@ -12403,9 +12403,9 @@ static void test_enum_rejects_different_enum_cast(void) {
 
 static void test_enum_arithmetic_is_rejected(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status { Ok, NotFound }\n"
-        "fn bad(): Status {\n"
+        "func bad(): Status {\n"
         "    return Status.Ok + Status.NotFound;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("enum_arithmetic_error.f", src);
@@ -12428,15 +12428,15 @@ static void test_enum_arithmetic_is_rejected(void) {
 
 static void test_enum_abi_surfaces_accept_enum_signatures(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n"
         "@cdecl(\"m\")\n"
-        "extern fn fetch(status: Status): Status;\n"
+        "extern func fetch(status: Status): Status;\n"
         "@abi\n"
-        "fn publish(status: Status): Status {\n"
+        "func publish(status: Status): Status {\n"
         "    return status;\n"
         "}\n"
         "@abi\n"
@@ -12462,14 +12462,14 @@ static void test_enum_abi_surfaces_accept_enum_signatures(void) {
 
 static void test_enum_address_of_matches_int_pointer_rules(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
         "}\n"
         "@cdecl(\"m\")\n"
-        "extern fn use_status_ptr(status: Status*): void;\n"
-        "fn run(history: Status[]): Status {\n"
+        "extern func use_status_ptr(status: Status*): void;\n"
+        "func run(history: Status[]): Status {\n"
         "    let current: Status = history[0];\n"
         "    let ptr: Status* = &current;\n"
         "    use_status_ptr(ptr);\n"
@@ -12492,13 +12492,13 @@ static void test_enum_address_of_matches_int_pointer_rules(void) {
 
 static void test_extern_function_accepts_enum_types(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n"
         "@cdecl(\"m\")\n"
-        "extern fn fetch(status: Status): Status;\n";
+        "extern func fetch(status: Status): Status;\n";
     FengProgram *program = parse_program_or_die("extern_enum_ok.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -12516,7 +12516,7 @@ static void test_extern_function_accepts_enum_types(void) {
 
 static void test_abi_type_accepts_enum_field(void) {
     const char *src =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
@@ -12542,7 +12542,7 @@ static void test_abi_type_accepts_enum_field(void) {
 
 static void test_value_kind_enum_is_trivial(void) {
     const char *src =
-        "pu mod demo.vk;\n"
+        "open module demo.vk;\n"
         "enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
@@ -12589,16 +12589,16 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
 
     static void test_pu_builtin_self_fit_visible_after_use_enables_method_call(void) {
         const char *src_adapter =
-            "pu mod demo.adapter;\n"
-            "pu fit string {\n"
-            "    pu fn length(): long {\n"
+            "open module demo.adapter;\n"
+            "open fit string {\n"
+            "    open func length(): long {\n"
             "        return 7;\n"
             "    }\n"
             "}\n";
         const char *src_consumer =
-            "pu mod demo.consumer;\n"
-            "use demo.adapter;\n"
-            "fn run(): long {\n"
+            "open module demo.consumer;\n"
+            "import demo.adapter;\n"
+            "func run(): long {\n"
             "    return \"abc\".length();\n"
             "}\n";
         FengProgram *p1 = parse_program_or_die("builtin_fit_adapter.f", src_adapter);
@@ -12619,16 +12619,16 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
 
     static void test_external_imported_builtin_self_fit_method_visible(void) {
         const char *external_source =
-            "pu mod vendor.text;\n"
-            "pu fit string {\n"
-            "    pu fn length(): long {\n"
+            "open module vendor.text;\n"
+            "open fit string {\n"
+            "    open func length(): long {\n"
             "        return 7;\n"
             "    }\n"
             "}\n";
         const char *main_source =
-            "mod demo.main;\n"
-            "use vendor.text;\n"
-            "fn run(): long {\n"
+            "module demo.main;\n"
+            "import vendor.text;\n"
+            "func run(): long {\n"
             "    return \"abc\".length();\n"
             "}\n";
         ImportedSourceFixture fixture;
@@ -12664,25 +12664,25 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
 
     static void test_external_imported_array_self_fit_method_visible(void) {
         const char *external_source =
-            "pu mod vendor.text;\n"
-            "pu fit T[] {\n"
-            "    pu fn length(): long {\n"
+            "open module vendor.text;\n"
+            "open fit T[] {\n"
+            "    open func length(): long {\n"
             "        return 7;\n"
             "    }\n"
             "}\n"
-            "pu fit T[!] {\n"
-            "    pu fn length(): long {\n"
+            "open fit T[!] {\n"
+            "    open func length(): long {\n"
             "        return 9;\n"
             "    }\n"
             "}\n";
         const char *main_source =
-            "mod demo.main;\n"
-            "use vendor.text;\n"
-            "fn mutable_len(): long {\n"
+            "module demo.main;\n"
+            "import vendor.text;\n"
+            "func mutable_len(): long {\n"
             "    let values: int[] = [1, 2, 3];\n"
             "    return values.length();\n"
             "}\n"
-            "fn readonly_len(): long {\n"
+            "func readonly_len(): long {\n"
             "    let values: int[!] = [1, 2, 3];\n"
             "    return values.length();\n"
             "}\n";
@@ -12734,7 +12734,7 @@ static void test_value_kind_builtin_unknown_name_defaults_to_trivial(void) {
 
 static void test_value_kind_user_type_is_managed_pointer(void) {
     const char *src =
-        "pu mod demo.vk;\n"
+        "open module demo.vk;\n"
         "type Holder { let id: int; }\n";
     FengProgram *program = parse_program_or_die("vk_type.f", src);
     const FengProgram *programs[] = {program};
@@ -12757,7 +12757,7 @@ static void test_value_kind_user_type_is_managed_pointer(void) {
 
 static void test_value_kind_object_form_spec_is_aggregate(void) {
     const char *src =
-        "pu mod demo.vk;\n"
+        "open module demo.vk;\n"
         "spec Named { let name: string; }\n";
     FengProgram *program = parse_program_or_die("vk_obj_spec.f", src);
     const FengProgram *programs[] = {program};
@@ -12781,7 +12781,7 @@ static void test_value_kind_object_form_spec_is_aggregate(void) {
 
 static void test_value_kind_callable_form_spec_is_managed_pointer(void) {
     const char *src =
-        "pu mod demo.vk;\n"
+        "open module demo.vk;\n"
         "spec Greet(name: string): string;\n";
     FengProgram *program = parse_program_or_die("vk_call_spec.f", src);
     const FengProgram *programs[] = {program};
@@ -12815,8 +12815,8 @@ static void test_value_kind_non_type_decl_is_trivial(void) {
      * and has no value kind; the helper degrades to TRIVIAL rather than
      * lying. */
     const char *src =
-        "pu mod demo.vk;\n"
-        "fn helper() { }\n";
+        "open module demo.vk;\n"
+        "func helper() { }\n";
     FengProgram *program = parse_program_or_die("vk_fn.f", src);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -12854,8 +12854,8 @@ static void test_generic_function_decl_ok(void) {
     /* A generic function with a single type parameter in both the parameter
      * and the return type must analyse without errors. */
     const char *source =
-        "mod demo.main;\n"
-        "fn identity<T>(x: T): T {\n"
+        "module demo.main;\n"
+        "func identity<T>(x: T): T {\n"
         "    return x;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_fn_ok.f", source);
@@ -12876,9 +12876,9 @@ static void test_generic_type_decl_ok(void) {
     /* A generic type with a single type parameter used in a field type must
      * analyse without errors. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
+        "    open let value: T;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_type_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -12898,9 +12898,9 @@ static void test_generic_spec_decl_ok(void) {
     /* A generic spec with a single type parameter used in a method return type
      * must analyse without errors. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Container<T> {\n"
-        "    fn fetch(): T;\n"
+        "    func fetch(): T;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_spec_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -12921,11 +12921,11 @@ static void test_generic_function_call_wildcard_ok(void) {
      * argument type (wildcard matching, G4-12) must succeed.  The result
      * binding is untyped so no return-type inference is required. */
     const char *source =
-        "mod demo.main;\n"
-        "fn identity<T>(x: T): T {\n"
+        "module demo.main;\n"
+        "func identity<T>(x: T): T {\n"
         "    return x;\n"
         "}\n"
-        "fn check(): void {\n"
+        "func check(): void {\n"
         "    let result = identity(42);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_call_ok.f", source);
@@ -12945,11 +12945,11 @@ static void test_generic_function_call_wildcard_ok(void) {
 static void test_generic_explicit_type_args_ok(void) {
     /* Explicit type arguments with the correct arity must be accepted. */
     const char *source =
-        "mod demo.main;\n"
-        "fn identity<T>(x: T): T {\n"
+        "module demo.main;\n"
+        "func identity<T>(x: T): T {\n"
         "    return x;\n"
         "}\n"
-        "fn check(): void {\n"
+        "func check(): void {\n"
         "    let result = identity<int>(42);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_explicit_ok.f", source);
@@ -12970,9 +12970,9 @@ static void test_generic_type_param_constraint_must_be_spec(void) {
     /* A type parameter constraint that names a *type* (not a spec) must be
      * rejected.  Only specs are legal as constraints. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type MyType {}\n"
-        "fn process<T: MyType>(x: T): void {}\n";
+        "func process<T: MyType>(x: T): void {}\n";
     FengProgram *program = parse_program_or_die("gen_bad_constraint.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -12992,11 +12992,11 @@ static void test_generic_type_ref_arity_too_many(void) {
     /* Supplying more type arguments than a generic type declares must be an
      * error (G4-7 arity check). */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
+        "    open let value: T;\n"
         "}\n"
-        "fn process(b: Box<int, bool>): void {}\n";
+        "func process(b: Box<int, bool>): void {}\n";
     FengProgram *program = parse_program_or_die("gen_arity_many.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -13015,9 +13015,9 @@ static void test_generic_type_ref_arity_too_many(void) {
 static void test_generic_non_generic_type_with_type_args_rejected(void) {
     /* Supplying type arguments to a non-generic type must be an error. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Plain {}\n"
-        "fn process(p: Plain<int>): void {}\n";
+        "func process(p: Plain<int>): void {}\n";
     FengProgram *program = parse_program_or_die("gen_non_generic.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -13036,10 +13036,10 @@ static void test_generic_non_generic_type_with_type_args_rejected(void) {
 static void test_generic_type_with_finalizer_rejected(void) {
     /* A generic type cannot declare a finalizer (G4-18). */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
-        "    fn ~Box() {}\n"
+        "    open let value: T;\n"
+        "    func ~Box() {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_fin.f", source);
     const FengProgram *programs[] = {program};
@@ -13060,11 +13060,11 @@ static void test_generic_explicit_type_args_arity_mismatch(void) {
     /* Providing the wrong number of explicit type arguments must be rejected
      * (G4-13 arity check). */
     const char *source =
-        "mod demo.main;\n"
-        "fn identity<T>(x: T): T {\n"
+        "module demo.main;\n"
+        "func identity<T>(x: T): T {\n"
         "    return x;\n"
         "}\n"
-        "fn check(): void {\n"
+        "func check(): void {\n"
         "    let result = identity<int, bool>(42);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_explicit_bad.f", source);
@@ -13085,11 +13085,11 @@ static void test_generic_explicit_type_args_arity_mismatch(void) {
 static void test_generic_type_constructor_explicit_type_args_ok(void) {
     /* Type<T>() constructor with correct arity must be accepted (G4-13b). */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
+        "    open let value: T;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let b = Box<int>();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_ctor_ok.f", source);
@@ -13109,11 +13109,11 @@ static void test_generic_type_constructor_explicit_type_args_ok(void) {
 static void test_generic_type_constructor_explicit_type_args_arity_mismatch(void) {
     /* Type<T1, T2>() on a 1-param type must be rejected with an arity error. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
+        "    open let value: T;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let b = Box<int, string>();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_ctor_bad.f", source);
@@ -13135,10 +13135,10 @@ static void test_generic_method_type_param_collides_with_type_param(void) {
     /* A method may not reuse the same type parameter name as its enclosing
      * type (G4-14 collision check). */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
-        "    fn transform<T>(): void {}\n"
+        "    open let value: T;\n"
+        "    func transform<T>(): void {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_shadow.f", source);
     const FengProgram *programs[] = {program};
@@ -13160,9 +13160,9 @@ static void test_generic_method_type_param_collides_with_type_param(void) {
 static void test_generic_function_two_type_params_ok(void) {
     /* 正确语法七: fn pair<T, U>(a: T, b: U) infers both params from args. */
     const char *source =
-        "mod demo.main;\n"
-        "fn pair<T, U>(a: T, b: U): void {}\n"
-        "fn check(): void {\n"
+        "module demo.main;\n"
+        "func pair<T, U>(a: T, b: U): void {}\n"
+        "func check(): void {\n"
         "    pair(1, \"hello\");\n"
         "    pair(true, 42);\n"
         "}\n";
@@ -13184,12 +13184,12 @@ static void test_generic_spec_generic_parent_forwarding_ok(void) {
     /* 正确语法四 (simplified): spec MyList: List<int> — using concrete type arg
      * in parent spec is valid. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Sequence<T> {\n"
-        "    fn size(): int;\n"
+        "    func size(): int;\n"
         "}\n"
         "spec IntSequence: Sequence<int> {\n"
-        "    fn size(): int;\n"
+        "    func size(): int;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_parent_fwd.f", source);
     const FengProgram *programs[] = {program};
@@ -13210,10 +13210,10 @@ static void test_generic_duplicate_fn_by_type_param_name_only_rejected(void) {
      * they have identical effective signatures and must be rejected.
      * Verified as ambiguous (or duplicate) at call site. */
     const char *source =
-        "mod demo.main;\n"
-        "fn foo<T>(): void {}\n"
-        "fn foo<U>(): void {}\n"
-        "fn check(): void {\n"
+        "module demo.main;\n"
+        "func foo<T>(): void {}\n"
+        "func foo<U>(): void {}\n"
+        "func check(): void {\n"
         "    foo();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_dup_fn.f", source);
@@ -13235,11 +13235,11 @@ static void test_generic_same_name_same_arity_different_constraint_rejected(void
     /* 错误语法十二: type Foo<T: SpecA> and type Foo<T: SpecB> share the same
      * identity (name + arity) and must be rejected as duplicate declarations. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec SpecA {}\n"
         "spec SpecB {}\n"
-        "type Foo<T: SpecA> { pu let value: int; }\n"
-        "type Foo<T: SpecB> { pu let value: int; }\n";
+        "type Foo<T: SpecA> { open let value: int; }\n"
+        "type Foo<T: SpecB> { open let value: int; }\n";
     FengProgram *program = parse_program_or_die("gen_dup_type.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -13257,11 +13257,11 @@ static void test_generic_same_name_same_arity_different_constraint_rejected(void
 /* T1: a variadic-only function must accept 0 / 1 / N arguments. */
 static void test_variadic_accepts_zero_one_many_arguments(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn sum(args: int...): int {\n"
+        "module demo.main;\n"
+        "func sum(args: int...): int {\n"
         "    return 0;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let zero = sum();\n"
         "    let one = sum(1);\n"
         "    return sum(zero, one, 3);\n"
@@ -13285,11 +13285,11 @@ static void test_variadic_accepts_zero_one_many_arguments(void) {
 /* T2: fixed arguments remain positional, variadic suffix accepts zero or many elements. */
 static void test_fixed_and_variadic_parameters_accept_calls(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn log(level: int, args: string...): int {\n"
+        "module demo.main;\n"
+        "func log(level: int, args: string...): int {\n"
         "    return level;\n"
         "}\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let base = log(0);\n"
         "    return log(base, \"a\", \"b\");\n"
         "}\n";
@@ -13312,11 +13312,11 @@ static void test_fixed_and_variadic_parameters_accept_calls(void) {
 /* T3: each variadic element must match the variadic element type. */
 static void test_variadic_rejects_mismatched_element_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn f(args: int...): void {\n"
+        "module demo.main;\n"
+        "func f(args: int...): void {\n"
         "    return;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    f(\"bad\");\n"
         "    return;\n"
         "}\n";
@@ -13341,11 +13341,11 @@ static void test_variadic_rejects_mismatched_element_type(void) {
 /* T5: an existing T[] value cannot be passed directly into a variadic position. */
 static void test_variadic_rejects_existing_array_argument(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn f(args: int...): void {\n"
+        "module demo.main;\n"
+        "func f(args: int...): void {\n"
         "    return;\n"
         "}\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let arr: int[] = [1, 2];\n"
         "    f(arr);\n"
         "    return;\n"
@@ -13371,9 +13371,9 @@ static void test_variadic_rejects_existing_array_argument(void) {
 /* T6: variadic callable-form specs accept variadic lambdas and remain callable through the spec value. */
 static void test_variadic_callable_spec_lambda_call_ok(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Printer(args: int...): int;\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    let printer: Printer = (args: int...) {\n"
         "        return 0;\n"
         "    };\n"
@@ -13399,10 +13399,10 @@ static void test_variadic_callable_spec_lambda_call_ok(void) {
  * fn foo(x: int, y: int) because the variadic can be called with 2 fixed args. */
 static void test_variadic_overload_conflict_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn foo(x: int, y: int...): int { return x; }\n"
-        "fn foo(x: int, y: int): int { return y; }\n"
-        "fn check(): int { return foo(1, 2); }\n";
+        "module demo.main;\n"
+        "func foo(x: int, y: int...): int { return x; }\n"
+        "func foo(x: int, y: int): int { return y; }\n"
+        "func check(): int { return foo(1, 2); }\n";
     FengProgram *program = parse_program_or_die("variadic_conflict.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -13420,11 +13420,11 @@ static void test_variadic_overload_conflict_rejected(void) {
 /* T7: fn f(x: int) conflicts with fn f(args: int...) at declaration time. */
 static void test_variadic_single_fixed_and_variadic_overload_conflict_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn f(x: int): void {\n"
+        "module demo.main;\n"
+        "func f(x: int): void {\n"
         "    return;\n"
         "}\n"
-        "fn f(args: int...): void {\n"
+        "func f(args: int...): void {\n"
         "    return;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("variadic_single_conflict.f", source);
@@ -13448,13 +13448,13 @@ static void test_variadic_single_fixed_and_variadic_overload_conflict_rejected(v
  * variadic method cannot be satisfied by a non-variadic implementation. */
 static void test_variadic_spec_satisfaction_mismatch_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Logger {\n"
-        "    fn log(values: int...): void;\n"
+        "    func log(values: int...): void;\n"
         "}\n"
         "type Console {}\n"
         "fit Console: Logger {\n"
-        "    fn log(values: int[]): void {}\n"
+        "    func log(values: int[]): void {}\n"
         "}\n";
     FengProgram *program = parse_program_or_die("variadic_spec.f", source);
     const FengProgram *programs[] = {program};

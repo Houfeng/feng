@@ -371,7 +371,7 @@ const FengSpecRelation *feng_semantic_lookup_spec_relation(
  * `consumer_module` whose `use` list resolves to the modules in
  * `consumer_imports[0..consumer_import_count)`. DECLARED_* sources are
  * always visible. FIT_* sources are visible iff the fit's provider module
- * is the consumer module itself, or the fit is `pu` and the consumer
+ * is the consumer module itself, or the fit is `open` and the consumer
  * imported the provider module. Mirrors docs/feng-fit.md §4. */
 bool feng_semantic_spec_relation_source_visible_from(
     const FengSpecRelationSource *source,

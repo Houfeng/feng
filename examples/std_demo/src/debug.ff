@@ -1,15 +1,15 @@
-mod feng.examples.debug;
+module feng.examples.debug;
 
 spec CommitOptions {
   var message: i32;
 }
 
 type User {
-  fn commit(options: CommitOptions): void {
+  func commit(options: CommitOptions): void {
     options.message = 1;
   }
 
-  fn commit(message: i32): int {
+  func commit(message: i32): int {
     let x = if message > 0 { 1 } else { 2 };
     let y = if message {
       1 { "ok" }
@@ -19,7 +19,7 @@ type User {
   }
 }
 
-fn debug_example(args: string[]) {
+func debug_example(args: string[]) {
   let user = User();
   user.commit(1);
 }

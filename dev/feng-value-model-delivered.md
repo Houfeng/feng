@@ -474,7 +474,7 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 - cycle collector **数组元素遍历**升级为按元素三分类（trivial / managed-pointer / aggregate）分派；其余 CC 路径（phase15 BFS 主框架、phase 2 free 路径、对象 `managed_fields` 通用展平）零修改 ✅。理由：数组元素的物理布局是数组本身固有信息，无法通过 §7.2 对象 `managed_fields` 方式承载，因此元素层的描述符分派必须写在 CC 数组分支里；该扩面是描述符驱动而非按 spec 写死的特殊路径，对未来新增 aggregate 元素类型零修改。
 - runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动 ✅。
 - 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateValueDescriptor` + 必要时新增 `FengAggregateDefaultInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
-- fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_init` API；spec 端默认 init 实体由 [feng-spec-codegen-delivered.md](./feng-spec-codegen-delivered.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init fn，作为安全栅栏直至 4b-β 提供真实实现。
+- fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_init` API；spec 端默认 init 实体由 [feng-spec-codegen-delivered.md](./feng-spec-codegen-delivered.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init func，作为安全栅栏直至 4b-β 提供真实实现。
 - fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路：layer 已提供 `feng_array_new_kinded` + `feng_aggregate_release` + 对象字段展平 helper；端到端站点接入由 spec-codegen-pending §13.2 / §13.3 跟踪。
 - 所有现有 smoke 与单测零回归 ✅（11/11 smokes + 4 单元套件）。
 

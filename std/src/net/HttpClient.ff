@@ -1,1 +1,1 @@
-pu mod std.net;
+open module std.net;

@@ -12,45 +12,45 @@ function runManifestCase(name, input, expected) {
 
 runCase(
     'normalizes operators and trailing comments',
-    'fn calc(a:int,b:int):int {\nlet total=a+b*2; //sum\nreturn total==0||!done;\n}\n',
-    'fn calc(a: int, b: int): int {\n    let total = a + b * 2; //sum\n    return total == 0 || !done;\n}\n'
+    'func calc(a:int,b:int):int {\nlet total=a+b*2; //sum\nreturn total==0||!done;\n}\n',
+    'func calc(a: int, b: int): int {\n    let total = a + b * 2; //sum\n    return total == 0 || !done;\n}\n'
 );
 
 runCase(
     'normalizes multi-line object literals',
-    'fn main(args:string[]):void {\nlet user=User{\nname:"Houfeng",\nage:18\n};\n}\n',
-    'fn main(args: string[]): void {\n    let user = User {\n        name: "Houfeng",\n        age: 18\n    };\n}\n'
+    'func main(args:string[]):void {\nlet user=User{\nname:"Houfeng",\nage:18\n};\n}\n',
+    'func main(args: string[]): void {\n    let user = User {\n        name: "Houfeng",\n        age: 18\n    };\n}\n'
 );
 
 runCase(
     'normalizes pointer and array parameter types',
-    'extern fn map(cb:Handler,ptr:*Point,items:string[]):void;\n',
-    'extern fn map(cb: Handler, ptr: *Point, items: string[]): void;\n'
+    'extern func map(cb:Handler,ptr:*Point,items:string[]):void;\n',
+    'extern func map(cb: Handler, ptr: *Point, items: string[]): void;\n'
 );
 
 runCase(
     'keeps array creation length clause tight inside brackets',
-    'fn main():void {\nlet xs:T[:n];\nlet ys:Map<string,int>[:capacity];\n}\n',
-    'fn main(): void {\n    let xs: T[:n];\n    let ys: Map<string, int>[:capacity];\n}\n'
+    'func main():void {\nlet xs:T[:n];\nlet ys:Map<string,int>[:capacity];\n}\n',
+    'func main(): void {\n    let xs: T[:n];\n    let ys: Map<string, int>[:capacity];\n}\n'
 );
 
 runCase(
     'indents multi-line parameter lists and for headers',
-    'fn main(\nargs:string[],\nlimit:int\n):void {\nfor(i=0;i<limit;i=i+1){\nprint(args[i]);\n}\n}\n',
-    'fn main(\n    args: string[],\n    limit: int\n): void {\n    for (i = 0; i < limit; i = i + 1) {\n        print(args[i]);\n    }\n}\n'
+    'func main(\nargs:string[],\nlimit:int\n):void {\nfor(i=0;i<limit;i=i+1){\nprint(args[i]);\n}\n}\n',
+    'func main(\n    args: string[],\n    limit: int\n): void {\n    for (i = 0; i < limit; i = i + 1) {\n        print(args[i]);\n    }\n}\n'
 );
 
 runCase(
     'preserves tab indentation when requested',
-    'fn main(args:string[]):void {\nlet value=-1;\nif !ready {\nreturn value;\n}\n}\n',
-    'fn main(args: string[]): void {\n\tlet value = -1;\n\tif !ready {\n\t\treturn value;\n\t}\n}\n',
+    'func main(args:string[]):void {\nlet value=-1;\nif !ready {\nreturn value;\n}\n}\n',
+    'func main(args: string[]): void {\n\tlet value = -1;\n\tif !ready {\n\t\treturn value;\n\t}\n}\n',
     { insertSpaces: false, tabSize: 4 }
 );
 
 runCase(
     'normalizes compound and bitwise operators',
-    'fn run():void {\nvar count:i32=1;\ncount+=2;\ncount-=3;\ncount*=4;\ncount/=5;\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask&=3;\nmask|=4;\nmask^=1;\nmask<<=2;\nmask>>=1;\n}\n',
-    'fn run(): void {\n    var count: i32 = 1;\n    count += 2;\n    count -= 3;\n    count *= 4;\n    count /= 5;\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask &= 3;\n    mask |= 4;\n    mask ^= 1;\n    mask <<= 2;\n    mask >>= 1;\n}\n'
+    'func run():void {\nvar count:i32=1;\ncount+=2;\ncount-=3;\ncount*=4;\ncount/=5;\nvar total:float=(float)7.8;\ntotal%=(float)3.2;\nvar mask:i32=8;\nmask&=3;\nmask|=4;\nmask^=1;\nmask<<=2;\nmask>>=1;\n}\n',
+    'func run(): void {\n    var count: i32 = 1;\n    count += 2;\n    count -= 3;\n    count *= 4;\n    count /= 5;\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask &= 3;\n    mask |= 4;\n    mask ^= 1;\n    mask <<= 2;\n    mask >>= 1;\n}\n'
 );
 
 runManifestCase(
@@ -67,8 +67,8 @@ runManifestCase(
 
 runCase(
     'preserves single-line block comment unchanged',
-    'fn test(): void {\n    let x = /* value */ 1;\n}\n',
-    'fn test(): void {\n    let x = /* value */ 1;\n}\n'
+    'func test(): void {\n    let x = /* value */ 1;\n}\n',
+    'func test(): void {\n    let x = /* value */ 1;\n}\n'
 );
 
 runCase(
@@ -79,8 +79,8 @@ runCase(
 
 runCase(
     'formats doc comment inside function body',
-    'fn outer(): void {\n/**\n* Does something\n* @param x the value\n*/\nlet y = 1;\n}\n',
-    'fn outer(): void {\n    /**\n     * Does something\n     * @param x the value\n     */\n    let y = 1;\n}\n'
+    'func outer(): void {\n/**\n* Does something\n* @param x the value\n*/\nlet y = 1;\n}\n',
+    'func outer(): void {\n    /**\n     * Does something\n     * @param x the value\n     */\n    let y = 1;\n}\n'
 );
 
 runCase(
@@ -93,8 +93,8 @@ runCase(
 
 runCase(
     'preserves angle brackets in generic function declaration without spaces',
-    'fn foo<T>(x:T):T {\nreturn x;\n}\n',
-    'fn foo<T>(x: T): T {\n    return x;\n}\n'
+    'func foo<T>(x:T):T {\nreturn x;\n}\n',
+    'func foo<T>(x: T): T {\n    return x;\n}\n'
 );
 
 runCase(
@@ -111,26 +111,26 @@ runCase(
 
 runCase(
     'formats explicit generic call <...> without extra spaces',
-    'fn main():void {\nlet x=identity<int>(42);\n}\n',
-    'fn main(): void {\n    let x = identity<int>(42);\n}\n'
+    'func main():void {\nlet x=identity<int>(42);\n}\n',
+    'func main(): void {\n    let x = identity<int>(42);\n}\n'
 );
 
 runCase(
     'formats generic type references in variable declarations',
-    'fn main():void {\nlet m:Map<string,int>;\n}\n',
-    'fn main(): void {\n    let m: Map<string, int>;\n}\n'
+    'func main():void {\nlet m:Map<string,int>;\n}\n',
+    'func main(): void {\n    let m: Map<string, int>;\n}\n'
 );
 
 runCase(
     'keeps generic array type suffix attached without spaces',
-    'fn main():void {\nlet entries:Map<string,int>[];\n}\n',
-    'fn main(): void {\n    let entries: Map<string, int>[];\n}\n'
+    'func main():void {\nlet entries:Map<string,int>[];\n}\n',
+    'func main(): void {\n    let entries: Map<string, int>[];\n}\n'
 );
 
 runCase(
     'preserves comparison operators with spaces (not confused with generics)',
-    'fn check(n:int):bool {\nreturn n<10;\n}\n',
-    'fn check(n: int): bool {\n    return n < 10;\n}\n'
+    'func check(n:int):bool {\nreturn n<10;\n}\n',
+    'func check(n: int): bool {\n    return n < 10;\n}\n'
 );
 
 console.log('formatter tests passed');

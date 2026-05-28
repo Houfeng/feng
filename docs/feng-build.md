@@ -44,15 +44,15 @@ feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg
 error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 ```
 
-模块名冲突不推迟到 `use` 使用点,编译器不提供别名机制;消解冲突是构建工具在依赖解析阶段的责任。
+模块名冲突不推迟到 `import` 使用点,编译器不提供别名机制;消解冲突是构建工具在依赖解析阶段的责任。
 
-### 2.3 处理 use 声明
+### 2.3 处理 import 声明
 
-遇到 `use net.http;` 时:
+遇到 `import net.http;` 时:
 
 1. 查内部模块索引,定位对应 `.fb`
 2. 按模块名层级推导 `.ft` 路径（`net.http` → `mod/net/http.ft`）
-3. 通过 `.ft` 读取器把该公开包表解析为统一查询视图,将公开 `type`、公开 `enum`、公开顶层 `fn`、公开模块级 `let` / `var`、公开成员、`spec` / `fit` 与 `@bounded` 相关事实引入当前作用域
+3. 通过 `.ft` 读取器把该公开包表解析为统一查询视图,将公开 `type`、公开 `enum`、公开顶层 `func`、公开模块级 `let` / `var`、公开成员、`spec` / `fit` 与 `@bounded` 相关事实引入当前作用域
 
 整个过程 O(1),无需遍历搜索。
 
@@ -65,16 +65,16 @@ runtime 链接边界:
 - `target=bin`: 编译器固定补入 runtime 静态库 `build/lib/libfeng_runtime.a`。
 - `target=lib`: 编译器只生成对象并归档,不链接 runtime,也不在此阶段闭合最终原生依赖。
 
-编译器私有的 runtime contract helper 若存在,统一由这套 runtime 库提供,不再单独产出 intrinsic 静态库。在 Feng 层（如标准库）显式调用这类 helper 时,使用 `@runtime extern fn`,不通过公开 C ABI 注解声明内部 helper。
+编译器私有的 runtime contract helper 若存在,统一由这套 runtime 库提供,不再单独产出 intrinsic 静态库。在 Feng 层（如标准库）显式调用这类 helper 时,使用 `@runtime extern func`,不通过公开 C ABI 注解声明内部 helper。
 
 **来源①: `.ff` 源文件中的 `@cdecl` / `@stdcall` / `@fastcall` 导入注解**
 
 ```feng
 @cdecl("m")
-extern fn sin(x: float): float;
+extern func sin(x: float): float;
 
 @cdecl("ssl")
-extern fn ssl_connect(fd: int): int;
+extern func ssl_connect(fd: int): int;
 ```
 
 编译器读取注解参数，解析为库名并生成对应链接参数。
@@ -83,16 +83,16 @@ extern fn ssl_connect(fd: int): int;
 
 编译器根据公开 `.ft` 中的声明事实与 `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定当前平台可用的链接目标:
 
-- 普通 `pu type` / `pu fn` / `pu let` / `pu var` 声明 → 链接 `lib/` 下对应平台正式静态库; 当前平台文件名规则固定为 Linux / macOS 使用 `lib<name>.a`,Windows 使用 `<name>.lib`
-- 公开 `extern fn` 导入声明 → 从当前源码与导入包公开 `.ft` 的 `extern` 元信息中收集原生库名; 若某个 `--pkg` 包在 `extlib/<当前平台>/` 下携带了与该库名匹配的主机静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
+- 普通 `open type` / `open func` / `open let` / `open var` 声明 → 链接 `lib/` 下对应平台正式静态库; 当前平台文件名规则固定为 Linux / macOS 使用 `lib<name>.a`,Windows 使用 `<name>.lib`
+- 公开 `extern func` 导入声明 → 从当前源码与导入包公开 `.ft` 的 `extern` 元信息中收集原生库名; 若某个 `--pkg` 包在 `extlib/<当前平台>/` 下携带了与该库名匹配的主机静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
 
 上述自动收集结果与显式 `--lib` 参数最终汇总后统一传递给底层 C 链接器。`--lib` 在 `target=bin` 的最终链接步骤生效; `target=lib` 只生成对象并归档,不会在该阶段闭合原生依赖。
 
 **`--lib` 的用途**
 
-`--lib` 是兜底参数,仅用于以下场景：没有对应 feng `extern fn` 声明、也不来自任何 `.fb` 包的纯原生库（如系统 `pthread`）。大多数情况下不需要手动指定。裸系统库名按 `-l<name>` 语义参与最终链接；显式库文件路径（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）按文件路径原样参与最终链接。
+`--lib` 是兜底参数,仅用于以下场景：没有对应 feng `extern func` 声明、也不来自任何 `.fb` 包的纯原生库（如系统 `pthread`）。大多数情况下不需要手动指定。裸系统库名按 `-l<name>` 语义参与最终链接；显式库文件路径（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）按文件路径原样参与最终链接。
 
-补充边界：除编译器自身 runtime 产物外,编译器不会主动扫描磁盘动态查找 `.a` / `.lib` / `.so` / `.dylib` / `.dll`。`extlib/` 静态库只会在已有 `extern fn` 元信息显式要求该库名时参与链接,不会因为目录存在而被自动注入。项目与依赖库输入应通过源码声明和显式 CLI 参数（`--pkg` / `--lib`）提供。
+补充边界：除编译器自身 runtime 产物外,编译器不会主动扫描磁盘动态查找 `.a` / `.lib` / `.so` / `.dylib` / `.dll`。`extlib/` 静态库只会在已有 `extern func` 元信息显式要求该库名时参与链接,不会因为目录存在而被自动注入。项目与依赖库输入应通过源码声明和显式 CLI 参数（`--pkg` / `--lib`）提供。
 
 ### 2.5 动态库运行时查找策略
 
@@ -104,7 +104,7 @@ extern fn ssl_connect(fd: int): int;
 说明:
 
 - 编译器不定义额外的运行时动态库发现机制。
-- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中收集到的 `extern fn` 库名,仅从传入的平铺 `.fb` 中筛出当前平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
+- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中收集到的 `extern func` 库名,仅从传入的平铺 `.fb` 中筛出当前平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
 - 运行期释放只处理 `.fb/extlib/<当前平台>/` 下与已收集库名精确命中的动态库后缀（Linux `lib<name>.so`、macOS `lib<name>.dylib`、Windows `<name>.dll`）；未命中的动态库、`extlib/` 中的静态库（`.a` / `.lib`）与 `.fb/lib/<平台>/` 中的正式静态库都不参与运行期释放。
 - 若多个依赖包在当前平台提供同名动态库,构建应报错,避免在可执行文件目录中发生静默覆盖。
 
@@ -186,8 +186,8 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 - 若项目的 `target` 不是 `lib`,构建工具在进入打包流程前立即报错。
 
 1. 在语义分析成功后导出 `build/mod/**/*.ft` 公开符号表
-2. 调用编译器将普通 `type` / `fn` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
-3. 汇总公开 `extern fn` 导入声明并保留其原生库来源与调用方式元信息
+2. 调用编译器将普通 `type` / `func` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
+3. 汇总公开 `extern func` 导入声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
 5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树（包含 `[assets].extlib` 直接 staging 的内容）与 `build/assets/` 中其余 `[assets]` staging 目录打包为 `.fb` ZIP 归档
 
@@ -210,7 +210,7 @@ feng.fm (项目)
 feng src/*.ff --pkg a.fb --pkg b.fb
     │
     ├─ 扫描 .fb，建模块索引
-    ├─ 处理 use，定位 .ft，类型检查
+    ├─ 处理 import，定位 .ft，类型检查
     ├─ 收集 @cdecl 注解，生成链接参数
     ├─ 从 .fb 读取当前平台实际存在的 lib，生成链接参数
     └─ 调用 C 链接器，产出最终二进制

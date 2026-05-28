@@ -1,45 +1,45 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Named {
-    fn greet(): string;
+    func greet(): string;
 }
 
 type User: Named {
     let name: string;
 
-    fn greet(): string {
+    func greet(): string {
         return self.name;
     }
 }
 
-fn identity<T>(value: T): T {
+func identity<T>(value: T): T {
     return value;
 }
 
 type Holder<T> {
     var value: T;
 
-    fn put(value: T) {
+    func put(value: T) {
         self.value = value;
     }
 
-    fn readValue(): T {
+    func readValue(): T {
         return self.value;
     }
 
-    fn echo<U>(value: U): U {
+    func echo<U>(value: U): U {
         return value;
     }
 
-    fn echoThroughMethod(value: T): T {
+    func echoThroughMethod(value: T): T {
         return self.echo(value);
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let named: Named = User{name: "spec generic value ok"};
 
     let fromFn: Named = identity(named);

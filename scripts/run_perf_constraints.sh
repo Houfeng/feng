@@ -99,17 +99,17 @@ if [[ -f "$OUT_ROOT/spec_call_witness/ir/c/feng.c" ]]; then
 fi
 
 # 3) generic Set<int> direct-call path must stay monomorphized and no boxing/lookup.
-GENERIC_SRC='mod feng.perf.g16;
+GENERIC_SRC='module feng.perf.g16;
 type Set<T> {
     var value: T;
-    fn put(next: T) {
+    func put(next: T) {
         self.value = next;
     }
-    fn get(): T {
+    func get(): T {
         return self.value;
     }
 }
-fn use_it(): int {
+func use_it(): int {
     let set: Set<int> = Set<int>();
     set.put(7);
     return set.get();

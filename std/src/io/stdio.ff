@@ -1,23 +1,23 @@
-pu mod std;
+open module std;
 
-use std.collections;
-
-@cdecl("libc")
-extern fn read(fd: int, buf: byte*, count: long): long;
+import std.collections;
 
 @cdecl("libc")
-extern fn write(fd: int, buf: byte*, count: long): long;
+extern func read(fd: int, buf: byte*, count: long): long;
+
+@cdecl("libc")
+extern func write(fd: int, buf: byte*, count: long): long;
 
 @runtime
-extern fn feng_string_from_utf8_bytes(value: byte[], length: long): string;
+extern func feng_string_from_utf8_bytes(value: byte[], length: long): string;
 
 @runtime
-extern fn feng_string_to_utf8_bytes(value: string): byte[];
+extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 /**
  * Returns a new empty immutable byte array.
  */
-pr fn emptyByteArray(): byte[] {
+seal func emptyByteArray(): byte[] {
 	let items: byte[!] = byte[: (long)0];
 	return (byte[])items;
 }
@@ -27,7 +27,7 @@ pr fn emptyByteArray(): byte[] {
  * @param target - byte list receiving appended data
  * @param values - bytes to append
  */
-pr fn appendBytes(target: List<byte>, values: byte[]) {
+seal func appendBytes(target: List<byte>, values: byte[]) {
 	let length = values.length();
 	for var index: long = (long)0; index < length; index += (long)1 {
 		target.add(values[index]);
@@ -39,7 +39,7 @@ pr fn appendBytes(target: List<byte>, values: byte[]) {
  * @param line - byte list containing the line payload
  * @return UTF-8 string built from the current list entries
  */
-pr fn lineBytesToString(line: List<byte>): string {
+seal func lineBytesToString(line: List<byte>): string {
 	let entries = line.entries();
 	return feng_string_from_utf8_bytes(entries, entries.length());
 }
@@ -50,7 +50,7 @@ pr fn lineBytesToString(line: List<byte>): string {
  * @param args - interpolation arguments packed as a read-only string array
  * @return rendered bytes without any trailing newline byte
  */
-pr fn renderFormattedBytes(format: string, args: string[]): byte[] {
+seal func renderFormattedBytes(format: string, args: string[]): byte[] {
 	let output = List<byte>();
 	let formatBytes = feng_string_to_utf8_bytes(format);
 	let encodedArgList = List<byte[]>();
@@ -110,7 +110,7 @@ pr fn renderFormattedBytes(format: string, args: string[]): byte[] {
  * @param args - interpolation arguments packed as a read-only string array
  * @return formatted UTF-8 string without any implicit trailing newline
  */
-pr fn renderFormattedString(fmt: string, args: string[]): string {
+seal func renderFormattedString(fmt: string, args: string[]): string {
 	let rendered = renderFormattedBytes(fmt, args);
 	return feng_string_from_utf8_bytes(rendered, rendered.length());
 }
@@ -120,7 +120,7 @@ pr fn renderFormattedString(fmt: string, args: string[]): string {
  * @param bytes - source bytes written before the trailing newline
  * @return rendered bytes ending with a single newline byte
  */
-pr fn appendTrailingNewline(bytes: byte[]): byte[] {
+seal func appendTrailingNewline(bytes: byte[]): byte[] {
 	let output = List<byte>();
 	appendBytes(output, bytes);
 	output.add((byte)10);
@@ -130,17 +130,17 @@ pr fn appendTrailingNewline(bytes: byte[]): byte[] {
 /**
  * Standard input/output object backed by libc standard streams.
  */
-pu type Stdio {
-	pr let inputFd: int;
-	pr let outputFd: int;
-	pr let errorFd: int;
-	pr var pending: byte[];
-	pr var pendingOffset: long;
+open type Stdio {
+	seal let inputFd: int;
+	seal let outputFd: int;
+	seal let errorFd: int;
+	seal var pending: byte[];
+	seal var pendingOffset: long;
 
 	/**
 	 * Creates a stdio object bound to the process standard streams.
 	 */
-	pu fn Stdio() {
+	open func Stdio() {
 		self.inputFd = 0;
 		self.outputFd = 1;
 		self.errorFd = 2;
@@ -151,7 +151,7 @@ pu type Stdio {
 	/**
 	 * Clears unread bytes retained for the next `readLine` call.
 	 */
-	pr fn clearPending() {
+	seal func clearPending() {
 		self.pending = emptyByteArray();
 		self.pendingOffset = (long)0;
 	}
@@ -161,7 +161,7 @@ pu type Stdio {
 	 * @param buffer - writable destination buffer
 	 * @return number of bytes copied from the pending segment
 	 */
-	pr fn consumePending(buffer: byte[!]): long {
+	seal func consumePending(buffer: byte[!]): long {
 		let capacity = buffer.length();
 		if capacity == (long)0 {
 			return (long)0;
@@ -193,7 +193,7 @@ pu type Stdio {
 	 * @param start - zero-based inclusive start index of the unread suffix
 	 * @param end - zero-based exclusive end index of the unread suffix
 	 */
-	pr fn savePending(buffer: byte[!], start: long, end: long) {
+	seal func savePending(buffer: byte[!], start: long, end: long) {
 		if start >= end {
 			self.clearPending();
 			return;
@@ -208,7 +208,7 @@ pu type Stdio {
 	 * @param buffer - writable destination buffer
 	 * @return actual bytes read, `0` on EOF, or a negative value on error
 	 */
-	pu fn read(buffer: byte[!]): long {
+	open func read(buffer: byte[!]): long {
 		let capacity = buffer.length();
 		if capacity == (long)0 {
 			return (long)0;
@@ -249,7 +249,7 @@ pu type Stdio {
 	 * @param bytes - bytes to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	pu fn write(bytes: byte[]): long {
+	open func write(bytes: byte[]): long {
 		let length = bytes.length();
 		if length == (long)0 {
 			return (long)0;
@@ -262,7 +262,7 @@ pu type Stdio {
 	 * @param text - UTF-8 text to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	pu fn write(text: string): long {
+	open func write(text: string): long {
 		return self.write(feng_string_to_utf8_bytes(text));
 	}
 
@@ -271,7 +271,7 @@ pu type Stdio {
 	 * @param text - UTF-8 text written before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	pu fn writeLine(text: string): long {
+	open func writeLine(text: string): long {
 		let bytes = feng_string_to_utf8_bytes(text);
 		let line = appendTrailingNewline(bytes);
 		return self.write(line);
@@ -282,7 +282,7 @@ pu type Stdio {
 	 * @param bytes - bytes to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	pu fn writeError(bytes: byte[]): long {
+	open func writeError(bytes: byte[]): long {
 		let length = bytes.length();
 		if length == (long)0 {
 			return (long)0;
@@ -295,7 +295,7 @@ pu type Stdio {
 	 * @param text - UTF-8 text to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	pu fn writeError(text: string): long {
+	open func writeError(text: string): long {
 		return self.writeError(feng_string_to_utf8_bytes(text));
 	}
 
@@ -304,7 +304,7 @@ pu type Stdio {
 	 * @param bytes - bytes to write before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	pu fn writeErrorLine(bytes: byte[]): long {
+	open func writeErrorLine(bytes: byte[]): long {
 		let line = appendTrailingNewline(bytes);
 		return self.writeError(line);
 	}
@@ -314,7 +314,7 @@ pu type Stdio {
 	 * @param text - UTF-8 text written before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	pu fn writeErrorLine(text: string): long {
+	open func writeErrorLine(text: string): long {
 		return self.writeErrorLine(feng_string_to_utf8_bytes(text));
 	}
 
@@ -323,7 +323,7 @@ pu type Stdio {
 	 * The trailing newline is not included. Returns `""` on EOF before any byte.
 	 * @return line content without the trailing newline
 	 */
-	pu fn readLine(): string {
+	open func readLine(): string {
 		let line = List<byte>();
 		let chunk: byte[!] = byte[: (long)4096];
 		var foundNewline = false;
@@ -360,14 +360,14 @@ pu type Stdio {
 /**
  * Default stdio instance bound to stdin, stdout, and stderr.
  */
-pu let stdio = Stdio();
+open let stdio = Stdio();
 
 /**
  * Reads a single UTF-8 line from the default standard input.
  * The trailing newline is not included. Returns `""` on EOF before any byte.
  * @return line content without the trailing newline
  */
-pu fn readLine(): string {
+open func readLine(): string {
 	return stdio.readLine();
 }
 
@@ -376,7 +376,7 @@ pu fn readLine(): string {
  * @param text - UTF-8 text written before the trailing newline
  * @return actual bytes written, including the trailing newline, or a negative value on error
  */
-pu fn writeLine(text: string): long {
+open func writeLine(text: string): long {
 	return stdio.writeLine(text);
 }
 
@@ -386,7 +386,7 @@ pu fn writeLine(text: string): long {
  * @param args - zero-based interpolation arguments
 	 * @return formatted text without any implicit trailing newline
  */
-pu fn format(fmt: string, args: string...): string {
+open func format(fmt: string, args: string...): string {
 	return renderFormattedString(fmt, args);
 }
 
@@ -396,7 +396,7 @@ pu fn format(fmt: string, args: string...): string {
  * @param args - zero-based interpolation arguments
 	 * @return total bytes written
  */
-pu fn print(fmt: string, args: string...): long {
+open func print(fmt: string, args: string...): long {
 	let rendered = renderFormattedBytes(fmt, args);
 	return stdio.write(rendered);
 }
@@ -407,7 +407,7 @@ pu fn print(fmt: string, args: string...): long {
  * @param args - zero-based interpolation arguments
 	 * @return total bytes written, including the trailing newline
  */
-pu fn println(fmt: string, args: string...): long {
+open func println(fmt: string, args: string...): long {
 	let text = renderFormattedString(fmt, args);
 	return stdio.writeLine(text);
 }

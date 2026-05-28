@@ -5248,7 +5248,7 @@ static bool decl_signature_to_string_with_session(FengLspString *buffer,
         case FENG_DECL_FIT:
             return string_append_cstr(buffer, "fit");
         case FENG_DECL_FUNCTION:
-            if (!string_append_cstr(buffer, "fn ") ||
+            if (!string_append_cstr(buffer, "func ") ||
                 !string_append_bytes(buffer,
                                      decl->as.function_decl.name.data,
                                      decl->as.function_decl.name.length) ||
@@ -5293,7 +5293,7 @@ static bool member_signature_to_string_with_session(FengLspString *buffer,
     }
     if (!string_append_cstr(buffer,
                             member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "ctor " :
-                            member->kind == FENG_TYPE_MEMBER_FINALIZER ? "finalizer " : "fn ") ||
+                            member->kind == FENG_TYPE_MEMBER_FINALIZER ? "finalizer " : "func ") ||
         !string_append_bytes(buffer,
                              member->as.callable.name.data,
                              member->as.callable.name.length) ||
@@ -5795,7 +5795,7 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
         case FENG_SYMBOL_DECL_KIND_FUNCTION: {
             size_t mi;
 
-            if (!string_append_cstr(buffer, "fn ") ||
+            if (!string_append_cstr(buffer, "func ") ||
                 !string_append_bytes(buffer, name.data, name.length)) {
                 return false;
             }
@@ -5881,7 +5881,7 @@ static bool symbol_member_signature_to_string(FengLspString *buffer,
     }
     if (!string_append_cstr(buffer,
                             kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ? "ctor " :
-                            kind == FENG_SYMBOL_DECL_KIND_FINALIZER ? "finalizer " : "fn ") ||
+                            kind == FENG_SYMBOL_DECL_KIND_FINALIZER ? "finalizer " : "func ") ||
         !string_append_bytes(buffer, name.data, name.length)) {
         return false;
     }
@@ -9772,8 +9772,8 @@ static bool append_alias_module_completion_items(FengLspString *json,
     return true;
 }
 
-/* Returns true if the cursor at `offset` in `text` is inside a `use` module
- * path (e.g. `use feng.` or `use feng.examples`).  When true, fills
+/* Returns true if the cursor at `offset` in `text` is inside an `import` module
+ * path (e.g. `import feng.` or `import feng.examples`). When true, fills
  * `prefix_segments[0..prefix_count-1]` with the already-typed path segments
  * (the ones before the current dot, if any) and `partial` with the partial
  * segment being typed. `prefix_segments` must point to an array of at least
@@ -9833,13 +9833,14 @@ static bool extract_use_path_context(const char *text,
         --pos;
     }
 
-    /* Check for the `use` keyword immediately before the path. */
-    if (pos < 3U ||
-        text[pos - 3U] != 'u' || text[pos - 2U] != 's' || text[pos - 1U] != 'e') {
+    /* Check for the `import` keyword immediately before the path. */
+    if (pos < 6U ||
+        text[pos - 6U] != 'i' || text[pos - 5U] != 'm' || text[pos - 4U] != 'p' ||
+        text[pos - 3U] != 'o' || text[pos - 2U] != 'r' || text[pos - 1U] != 't') {
         return false;
     }
-    /* Ensure `use` is not part of a longer identifier. */
-    if (pos > 3U && completion_identifier_continue((unsigned char)text[pos - 4U])) {
+    /* Ensure `import` is not part of a longer identifier. */
+    if (pos > 6U && completion_identifier_continue((unsigned char)text[pos - 7U])) {
         return false;
     }
 
@@ -9967,7 +9968,7 @@ static bool append_bundle_use_path_completion_items(FengLspString *json,
     return ok;
 }
 
-/* Emits completion items for the next segment of a use-path.  All loaded
+/* Emits completion items for the next segment of an import path. All loaded
  * source files whose module path starts with `prefix_segments[0..n-1]` are
  * examined; for each one the segment at index `n` (if it starts with
  * `partial`) is offered as a completion item.  Duplicate segment names are
@@ -10015,7 +10016,7 @@ static bool append_use_path_completion_items(FengLspString *json,
         }
     }
     /* Also enumerate imported-package modules from the analysis so that
-     * bundle modules appear as use-path completion candidates. */
+     * bundle modules appear as import-path completion candidates. */
     if (session->analysis != NULL) {
         size_t mod_index;
         for (mod_index = 0U; mod_index < session->analysis->module_count; ++mod_index) {
@@ -10065,7 +10066,7 @@ static bool append_use_path_completion_items(FengLspString *json,
 /* Scans every source file in the project (except the document being edited)
  * by parsing each file individually.  This is used as a fallback when the
  * current file has a parse error that prevents the normal analysis session
- * from loading all project sources (e.g. an incomplete `use` declaration).
+ * from loading all project sources (e.g. an incomplete `import` declaration).
  * Emits the next module-path segment for all files whose module path starts
  * with `prefix_segments[0..prefix_count-1]` and whose segment at index
  * `prefix_count` starts with `partial`. */
@@ -10515,8 +10516,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
         return false;
     }
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
-    /* Check if cursor is inside a `use` module path (e.g. `use feng.` or
-     * `use feng.examples`).  If so, offer module path segment completions and
+    /* Check if cursor is inside an `import` module path (e.g. `import feng.` or
+     * `import feng.examples`). If so, offer module path segment completions and
      * skip the normal member/identifier completion logic. */
     {
         FengSlice use_prefix[16];

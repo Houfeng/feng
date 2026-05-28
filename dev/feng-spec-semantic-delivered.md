@@ -40,7 +40,7 @@
 - `type_decl_satisfies_spec_decl`：基于声明头 + 可见 `fit` + 父 `spec` 闭包做名义满足判定。
 - `spec_collect_closure`：收集 `spec` 的传递父闭包。
 - `find_spec_object_member`：在闭包内按名查找 object-form 成员。
-- `fit_decl_is_visible_from`：跨模块 `pu fit` + `use` 可见性判定。
+- `fit_decl_is_visible_from`：跨模块 `open fit` + `import` 可见性判定。
 - `detect_cross_spec_method_conflicts`：多 `spec` 同名同参不同返回的冲突检测。
 - `expr_type_assignable_to_type_ref`：把"具体 type → object-form spec"的赋值/传参/返回路径接入名义满足判定。
 - `lambda_expr_matches_function_type`：lambda → callable-form `spec` 的形状匹配。
@@ -180,7 +180,7 @@ lambda / 函数值 / 方法值 → callable-form `spec` 的匹配在 `lambda_exp
 - 多 `spec` 同名同参不同返回冲突（已实现；归入新结构后保持）。
 - 同一 `(T, S)` 组合下，声明头 / 传递父 `spec` / 可见 `fit` 三方提供同名成员且签名不一致的冲突。
 - 同一 `(T, S)` 下多个可见 `fit` 都提供同名同签名实现的歧义判定（见 §8）。
-- `fit` 跨模块可见性（`pu fit` + `use`）。
+- `fit` 跨模块可见性（`open fit` + `import`）。
 - callable-form `spec` 不可标 `@union`、对象形状 `spec` 不可标 `@fixed` / `@union` / 调用方式注解。
 
 ## 8 已决策的规则点
@@ -196,7 +196,7 @@ lambda / 函数值 / 方法值 → callable-form `spec` 的匹配在 `lambda_exp
 - 对任何 `(T, S)` 对，当前位置可见的全部成员实现来源（`type` 内联声明 + 当前可见的全部 `fit`）合并为一个集合，按"同名同参数"规则做冲突判定：
   - 同名同参数但返回类型不一致 → 冲突报错。
   - 同名同参数同返回但实现归属不同（`type` 自身一份 + `fit` 一份，或两个 `fit` 各一份）→ 冲突报错。
-- 不在当前编译位置可见的 `fit`（未通过 `pu fit` 导出，或未被 `use` 引入）**不进入可见面**，因此即便其与其他实现潜在冲突，**当前位置不报错**。
+- 不在当前编译位置可见的 `fit`（未通过 `open fit` 导出，或未被 `import` 引入）**不进入可见面**，因此即便其与其他实现潜在冲突，**当前位置不报错**。
 - `type` 内联声明本身的内部冲突（同名同参数的方法重载冲突）依然由现有 `type` 内重载冲突路径处理。
 
 实现意义：所有 (T, S) 级冲突在 §6.5 `SpecWitness` 的解析过程中按可见面集合统一报错，不再分散到 `fit` 单独检查路径。
@@ -242,7 +242,7 @@ callable-form spec 的满足判定是结构化的（签名匹配，无可见性�
 - T 在 `fit` 中满足 S，可见关系命中该 `fit`。
 - T 通过传递 `spec S2: S` + `T: S2` 满足 S，可见关系命中传递路径。
 - T 同时通过声明头与 `fit` 满足 S，按 §8 Q1 决策给出预期。
-- 跨模块 `pu fit` + `use` 命中；缺 `use` 时不命中。
+- 跨模块 `open fit` + `import` 命中；缺 `import` 时不命中。
 
 ### 9.2 coercion 站点
 

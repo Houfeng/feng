@@ -8,45 +8,45 @@
 
 本轮结论如下：
 
-1. `extern fn` 不是 C ABI 独占语法；它的职责是声明“实现不在当前 Feng 源文件中的外部函数”。
-2. 具体走哪一类外部调用契约，由注解决定，而不是由 `extern fn` 关键字本身决定。
+1. `extern func` 不是 C ABI 独占语法；它的职责是声明“实现不在当前 Feng 源文件中的外部函数”。
+2. 具体走哪一类外部调用契约，由注解决定，而不是由 `extern func` 关键字本身决定。
 3. C ABI 仍然使用既有 `@cdecl` / `@stdcall` / `@fastcall` 路径；runtime object contract 新增 `@runtime` 路径。
 4. runtime 导入统一采用 `@runtime` 作为目标注解入口，不新增关键字，也不通过库名特判扩展语义。
 5. `@runtime` 的目标是“编译器自有且可版本化的 runtime contract”，不是对整个 runtime 内部实现的开放访问。
 6. `@runtime` 首版不新增来源身份限制或公开导出过滤逻辑；只保留“非公开 API、无稳定性承诺、仅建议编译器和标准库使用”的边界。
 7. `@runtime` 不维护独立类型白名单 / 黑名单，也不引入额外签名语义检查；参数和返回值合法性直接复用普通 Feng 函数签名规则。
-8. `@runtime extern fn` 在 Feng 侧的使用语义应与普通 Feng 顶层函数一致；区别仅在于实现体来自 C native runtime contract，而不是由 Feng 源码提供函数体。
-9. `@runtime extern fn` 的最小实现路径是：生成对应 C 符号声明，并把调用点直接发为对该 C 函数的普通调用；不额外引入 ABI bridge、trampoline 或特殊调用机制。
-10. 顶层 `intrinsic` 不再作为独立层保留；现存 compiler-shipped helper 应迁入 `src/runtime/contract/`（名称待最终定稿，但本文先用 `contract`），作为允许 `@runtime extern fn` 声明使用的受控白名单。
+8. `@runtime extern func` 在 Feng 侧的使用语义应与普通 Feng 顶层函数一致；区别仅在于实现体来自 C native runtime contract，而不是由 Feng 源码提供函数体。
+9. `@runtime extern func` 的最小实现路径是：生成对应 C 符号声明，并把调用点直接发为对该 C 函数的普通调用；不额外引入 ABI bridge、trampoline 或特殊调用机制。
+10. 顶层 `intrinsic` 不再作为独立层保留；现存 compiler-shipped helper 应迁入 `src/runtime/contract/`（名称待最终定稿，但本文先用 `contract`），作为允许 `@runtime extern func` 声明使用的受控白名单。
 11. 不移动 `src/runtime/` 目录本身；只取消顶层 `src/intrinsic/`，并把其剩余实现与声明并入 runtime 子层。
 12. 迁移完成后的结束形态只保留一个 `libfeng_runtime.a`；`libfeng_intrinsic.a`、`FENG_INTRINSIC_LIB` 以及 `@cdecl("feng_intrinsic")` 都应消失。
-13. 当前实现里，`extern fn` 仍被语义层直接视为 C ABI 导入：先强制要求恰好一个 `@cdecl` / `@stdcall` / `@fastcall`，再对参数和返回值统一做 C ABI 兼容检查；引入 `@runtime` 前必须先解耦这条现状。
+13. 当前实现里，`extern func` 仍被语义层直接视为 C ABI 导入：先强制要求恰好一个 `@cdecl` / `@stdcall` / `@fastcall`，再对参数和返回值统一做 C ABI 兼容检查；引入 `@runtime` 前必须先解耦这条现状。
 
 当前推荐方向：
 
-- 保持 `extern fn` 作为统一外部函数声明语法。
+- 保持 `extern func` 作为统一外部函数声明语法。
 - 保持 C ABI 与 runtime contract 两条路径并列存在。
-- 通过新增 `@runtime` 注解，为 `extern fn` 提供独立于 C ABI 的目标分流与发码分支；除注解互斥和 `extern fn` 壳约束外，不新增额外语义检查。
+- 通过新增 `@runtime` 注解，为 `extern func` 提供独立于 C ABI 的目标分流与发码分支；除注解互斥和 `extern func` 壳约束外，不新增额外语义检查。
 - 不再把顶层 intrinsic 视为长期层；将其剩余 helper 并入 `src/runtime/contract/` 这类 runtime 子层，不移动 runtime 根目录。
 
 ---
 
-## 2. `extern fn` 的总模型
+## 2. `extern func` 的总模型
 
 ### 2.1 重新收敛后的定义
 
-`extern fn` 表示：函数实现不在当前 Feng 源中，由外部契约提供，且声明本身不得带函数体。
+`extern func` 表示：函数实现不在当前 Feng 源中，由外部契约提供，且声明本身不得带函数体。
 
 这里的“外部契约”不预设必须是 C ABI。当前先收敛两类目标：
 
 1. C ABI 导入
 2. Runtime contract 导入
 
-未来如有新的外部目标（如其他原生平台契约、特定 VM 契约等），继续通过新增目标注解扩展，不重新设计 `extern fn` 语法。
+未来如有新的外部目标（如其他原生平台契约、特定 VM 契约等），继续通过新增目标注解扩展，不重新设计 `extern func` 语法。
 
 ### 2.2 目标注解分流
 
-当前阶段，`extern fn` 必须且只能选择一种目标注解分支：
+当前阶段，`extern func` 必须且只能选择一种目标注解分支：
 
 | 路径 | 注解 | 语义 | 当前签名约束 |
 | --- | --- | --- | --- |
@@ -55,11 +55,11 @@
 
 补充规则：
 
-1. `extern fn` 不允许无目标注解悬空存在。
+1. `extern func` 不允许无目标注解悬空存在。
 2. 不同目标注解族两两互斥。
 3. 目标注解的含义必须可由声明规则静态判定，不依赖运行时猜测或具体库名特判。
 
-注：上表是目标模型；当前实现仍把所有 `extern fn` 直接当作 C ABI 导入处理，因此落地前需先完成 [§11.2](#112-phase-05前置解耦当前-extern-fn-的-c-only-检查) 的前置解耦。
+注：上表是目标模型；当前实现仍把所有 `extern func` 直接当作 C ABI 导入处理，因此落地前需先完成 [§11.2](#112-phase-05前置解耦当前-extern-fn-的-c-only-检查) 的前置解耦。
 
 ---
 
@@ -67,9 +67,9 @@
 
 ### 3.1 定位
 
-`@runtime` 表示该 `extern fn` 走 Feng runtime object contract，而不是 C ABI lowering。
+`@runtime` 表示该 `extern func` 走 Feng runtime object contract，而不是 C ABI lowering。
 
-从 Feng 代码视角看，`@runtime extern fn` 应尽量等价于“由原生实现提供函数体的普通顶层函数声明”：
+从 Feng 代码视角看，`@runtime extern func` 应尽量等价于“由原生实现提供函数体的普通顶层函数声明”：
 
 1. 调用方式与普通 Feng 函数一致。
 2. 参数和返回值语义与普通 Feng 函数一致。
@@ -104,12 +104,12 @@
 
 ```feng
 @runtime
-extern fn feng_string_length(value: string): long;
+extern func feng_string_length(value: string): long;
 ```
 
 ### 4.2 适用位置
 
-`@runtime` 当前仅适用于无函数体的顶层 `extern fn` 声明。除这一声明形态约束及目标注解互斥外，`@runtime` 不再引入额外语义检查。
+`@runtime` 当前仅适用于无函数体的顶层 `extern func` 声明。除这一声明形态约束及目标注解互斥外，`@runtime` 不再引入额外语义检查。
 
 ### 4.3 互斥规则
 
@@ -128,7 +128,7 @@ extern fn feng_string_length(value: string): long;
 
 ### 4.4 非公开定位与使用边界
 
-`@runtime extern fn` 的定位是编译器自有的非公开 API。为减少实现复杂性，首版不新增“标准库 / 普通库”来源身份限制，也不新增公开导出过滤逻辑；当前只保留以下边界：
+`@runtime extern func` 的定位是编译器自有的非公开 API。为减少实现复杂性，首版不新增“标准库 / 普通库”来源身份限制，也不新增公开导出过滤逻辑；当前只保留以下边界：
 
 1. `@runtime` 不属于面向用户承诺的公共规范能力，不作为公开互操作层文档化。
 2. `@runtime` 不提供 API 稳定性承诺；其签名、carrier、符号与 lowering 细节都可随编译器和 runtime 演进调整。
@@ -170,7 +170,7 @@ extern fn feng_string_length(value: string): long;
 
 补充说明：
 
-- `T*`、`Foo*` 在 Feng 中就是合法的不透明指针类型；`@runtime extern fn` 与普通 Feng 函数一样可直接使用它们，不需要额外说明或专属检查。
+- `T*`、`Foo*` 在 Feng 中就是合法的不透明指针类型；`@runtime extern func` 与普通 Feng 函数一样可直接使用它们，不需要额外说明或专属检查。
 - `@runtime` 允许指针类型，不等于应该把原本可自然写成 `string`、数组或对象值的 contract 一律改写成指针版本；是否使用指针，应由 contract 的真实语义决定。
 - 这一路径的目标是减少规则分叉：`@runtime` 主要新增的是目标注解分流与 lowering 分支，而不是第二套类型系统门槛。
 
@@ -192,7 +192,7 @@ extern fn feng_string_length(value: string): long;
 
 ### 6.2 发码分支
 
-对 `@runtime extern fn`，codegen 走独立 lowering：
+对 `@runtime extern func`，codegen 走独立 lowering：
 
 1. 前端语义尽量复用普通 Feng 函数调用规则，而不是额外发明新的调用模型。
 2. 不做 C ABI 兼容资格检查，也不新增一套专属于 `@runtime` 的签名语义检查。
@@ -202,7 +202,7 @@ extern fn feng_string_length(value: string): long;
 
 首版最小实现建议进一步收敛为：
 
-1. 对每个 `@runtime extern fn`，生成与其 runtime contract carrier 对应的 C 原型声明。
+1. 对每个 `@runtime extern func`，生成与其 runtime contract carrier 对应的 C 原型声明。
 2. 在调用点，直接把实参 lowering 后发为对该 C 符号的普通调用表达式。
 3. 不额外生成 trampoline、shim、桥接结构或第二套调用协议。
 4. 只有在未来出现明确需求时，才为个别能力引入额外 bridge；首版默认路径就是“直接发为相应 C 函数调用”。
@@ -225,7 +225,7 @@ extern fn feng_string_length(value: string): long;
 
 ### 6.4 符号命名
 
-首版建议继续沿用 `extern fn` 当前做法：Feng 声明名与目标 C 符号名保持一致，不额外引入第二套命名系统。
+首版建议继续沿用 `extern func` 当前做法：Feng 声明名与目标 C 符号名保持一致，不额外引入第二套命名系统。
 
 若未来 runtime contract 需要名字重映射，再单独引入精确规则；当前不提前扩展。
 
@@ -278,7 +278,7 @@ extern fn feng_string_length(value: string): long;
 
 顶层 `intrinsic` 在本文中不再视为长期保留层，但其“受控可声明入口集合”这一职责仍然保留，并迁入 runtime 子层。
 
-当前收敛方向是：现存通过 `@cdecl("feng_intrinsic")` 暴露的 compiler-shipped helper，从顶层 `src/intrinsic/` 迁入 `src/runtime/contract/`，并改为 `@runtime extern fn` 路径可声明的受控白名单。
+当前收敛方向是：现存通过 `@cdecl("feng_intrinsic")` 暴露的 compiler-shipped helper，从顶层 `src/intrinsic/` 迁入 `src/runtime/contract/`，并改为 `@runtime extern func` 路径可声明的受控白名单。
 
 这意味着：
 
@@ -297,9 +297,9 @@ extern fn feng_string_length(value: string): long;
 
 ### 8.3 与未来扩展的关系
 
-采用 `extern fn` + 目标注解分流后，未来新增其他外部调用契约时，原则上继续复用：
+采用 `extern func` + 目标注解分流后，未来新增其他外部调用契约时，原则上继续复用：
 
-1. `extern fn` 作为统一语法壳。
+1. `extern func` 作为统一语法壳。
 2. 通过新的目标注解引入新的目标分流与发码分支；除目标注解自身约束外，不轻易新增一套平行的语义检查。
 3. 不引入额外关键字，除非出现注解无法表达的根本性语义差异。
 
@@ -311,9 +311,9 @@ extern fn feng_string_length(value: string): long;
 
 ```feng
 @runtime
-extern fn feng_string_length(value: string): long;
+extern func feng_string_length(value: string): long;
 
-fn size_of(s: string): long {
+func size_of(s: string): long {
     return feng_string_length(s);
 }
 ```
@@ -322,7 +322,7 @@ fn size_of(s: string): long {
 
 ```feng
 @runtime
-extern fn feng_array_slice<T>(values: T[], start: long, length: long): T[];
+extern func feng_array_slice<T>(values: T[], start: long, length: long): T[];
 ```
 
 该类 helper 的 contract 语义应由具体符号精确定义；例如 `feng_array_slice` 可定义为按右开区间 `[start, start + length)` 复制数组子区间并返回新的数组值，而不是返回借用视图。
@@ -332,7 +332,7 @@ extern fn feng_array_slice<T>(values: T[], start: long, length: long): T[];
 ```feng
 @runtime
 @cdecl("feng_runtime")
-extern fn bad(value: string): long;
+extern func bad(value: string): long;
 // 编译期报错：`@runtime` 与 C ABI 目标注解互斥
 ```
 
@@ -340,7 +340,7 @@ extern fn bad(value: string): long;
 
 ```feng
 @runtime
-extern fn feng_debug_bytes(data: byte*, size: long): void;
+extern func feng_debug_bytes(data: byte*, size: long): void;
 // 合法：若 runtime contract 的语义本来就是操作指针值，`@runtime` 可以直接使用指针类型
 // 但这不意味着应把本来可自然写成 `string` / 数组 / 对象值的 contract 一律改写成指针形状
 ```
@@ -353,14 +353,14 @@ type User {
 }
 
 @runtime
-extern fn feng_user_debug(value: User): void;
+extern func feng_user_debug(value: User): void;
 ```
 
 ---
 
 ## 10. 入口收敛
 
-为减少噪声与分叉，本文只保留当前有效入口：runtime 导入统一使用 `@runtime extern fn` 表达。
+为减少噪声与分叉，本文只保留当前有效入口：runtime 导入统一使用 `@runtime extern func` 表达。
 
 其他命名或入口形式（如新增关键字、使用更宽泛的内部语义命名、或通过库名特判模拟 runtime 路径）当前都不进入本稿正文规则；除非后续确有必要，否则不再展开历史讨论。
 
@@ -370,22 +370,22 @@ extern fn feng_user_debug(value: User): void;
 
 ### 11.1 Phase 0：规范与术语收敛
 
-- [x] 在开发文档中确认 `extern fn` 的总定义不再限定为 C-only。
-- [x] 同步公共权威文档：把 `extern fn` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern fn` 语义。
+- [x] 在开发文档中确认 `extern func` 的总定义不再限定为 C-only。
+- [x] 同步公共权威文档：把 `extern func` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern func` 语义。
 - [x] 为 `@runtime` 明确首版适用位置、互斥规则、非公开定位，以及“签名语义与普通 Feng 函数一致”的原则。
 - [x] 明确顶层 intrinsic 迁入 `src/runtime/contract/` 子层；runtime 语义继续停留在 `src/runtime/` contract surface。
 
-### 11.2 Phase 0.5：前置解耦当前 `extern fn` 的 C-only 检查
+### 11.2 Phase 0.5：前置解耦当前 `extern func` 的 C-only 检查
 
-- [x] 把当前“所有 `extern fn` 都必须恰好使用一个 `@cdecl` / `@stdcall` / `@fastcall`”的检查，收敛到 C ABI 路径本身，而不是继续绑定在裸 `extern fn` 上。
-- [x] 把当前 `extern fn` 参数 / 返回值统一走 C ABI 兼容检查的逻辑，收敛到 C ABI 路径本身，避免未来 `@runtime extern fn` 误触发 “not C ABI-stable” 诊断。
-- [x] 补充前置回归：C ABI 导入保持现状；非 C ABI 的 `extern fn` 形态在进入 `@runtime` 阶段前不再先被 C ABI 规则拦截。
+- [x] 把当前“所有 `extern func` 都必须恰好使用一个 `@cdecl` / `@stdcall` / `@fastcall`”的检查，收敛到 C ABI 路径本身，而不是继续绑定在裸 `extern func` 上。
+- [x] 把当前 `extern func` 参数 / 返回值统一走 C ABI 兼容检查的逻辑，收敛到 C ABI 路径本身，避免未来 `@runtime extern func` 误触发 “not C ABI-stable” 诊断。
+- [x] 补充前置回归：C ABI 导入保持现状；非 C ABI 的 `extern func` 形态在进入 `@runtime` 阶段前不再先被 C ABI 规则拦截。
 
 ### 11.3 Phase 1：词法 / 语法入口
 
 - [x] 新增内建注解 `@runtime`。
-- [x] parser 允许其标注在无函数体的顶层 `extern fn` 上。
-- [x] 明确“标注在非 `extern fn` 场景”等明显非法组合由 semantic 阶段拒绝，而不是由 parser 承担注解语义校验。
+- [x] parser 允许其标注在无函数体的顶层 `extern func` 上。
+- [x] 明确“标注在非 `extern func` 场景”等明显非法组合由 semantic 阶段拒绝，而不是由 parser 承担注解语义校验。
 
 ### 11.4 Phase 2：目标分流与普通函数语义复用
 
@@ -396,13 +396,13 @@ extern fn feng_user_debug(value: User): void;
 
 ### 11.5 Phase 3：发码与链接
 
-- [x] 为 `@runtime extern fn` 新增独立 lowering 分支；首版直接 emit 对应 C 原型与普通 C 调用，不引入额外 bridge / trampoline。
+- [x] 为 `@runtime extern func` 新增独立 lowering 分支；首版直接 emit 对应 C 原型与普通 C 调用，不引入额外 bridge / trampoline。
 - [x] 收敛 runtime contract 头文件白名单边界；必要时从现有 runtime 头中拆出更窄的 contract 头，仅用于枚举 `@runtime` 可声明入口。
 - [x] 明确 runtime contract 符号的链接来源与 build 集成方式。
 
 ### 11.6 Phase 4：intrinsic 并入 runtime 子层
 
-- [x] 把现存 `feng_intrinsic` helper 移入 `src/runtime/contract/`，并迁移到 `@runtime extern fn` 路径。
+- [x] 把现存 `feng_intrinsic` helper 移入 `src/runtime/contract/`，并迁移到 `@runtime extern func` 路径。
 - [x] 删除顶层 `src/intrinsic/`、独立 `libfeng_intrinsic.a`、`FENG_INTRINSIC_LIB` 与 `@cdecl("feng_intrinsic")` 相关保留逻辑。
 - [x] 同步清理 build、文档与测试中对顶层 intrinsic 层的长期假设。
 
@@ -426,5 +426,5 @@ extern fn feng_user_debug(value: User): void;
 后续流程建议：
 
 1. 先按第 11 节收敛术语、语义边界与首版资格。
-2. 再进入实现，先完成当前 `extern fn` 的 C-only 解耦，再做 `@runtime` 注解入口、目标分流与发码接入。
+2. 再进入实现，先完成当前 `extern func` 的 C-only 解耦，再做 `@runtime` 注解入口、目标分流与发码接入。
 3. 最后根据实现结果，把稳定结论同步回公共规范文档。

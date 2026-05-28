@@ -2,7 +2,7 @@
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的异常处理概要说明,聚焦 Feng 语言中的 `throw`、异常传播、`try/catch` 表达式与 C ABI 边界规则。
 
-> **设计原则基础**: `extern fn` 自身的无函数体约束属于语法层; `@abi` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
+> **设计原则基础**: `extern func` 自身的无函数体约束属于语法层; `@abi` 边界上的异常限制属于语义与代码生成层。详见 [Feng 语言设计原则](./feng-principles.md)。
 
 ## 1 异常模型概览
 
@@ -24,7 +24,7 @@
 - `throw` 会终止当前执行路径,其后的同级语句不可达。
 
 ```feng
-fn ensure_positive(x: int) {
+func ensure_positive(x: int) {
     if x < 0 {
         throw "x must be positive";
     }
@@ -127,7 +127,7 @@ let x = try foo() catch {
 - 异常时不在当前点处理,自动继续向上传播,并终止当前语句之后的同级后续语句执行。
 
 ```feng
-fn load_port(): int {
+func load_port(): int {
     let v = try parse_port() catch err: ParseError {
         8080
     } catch err: unknown {
@@ -136,7 +136,7 @@ fn load_port(): int {
     return v;
 }
 
-fn startup() {
+func startup() {
     try init_runtime();
 }
 ```
@@ -158,14 +158,14 @@ fn startup() {
 ## 5 与 C ABI 的边界约束
 
 - 异常不得穿过 `@abi` ABI 边界传播到 C 调用方。
-- 用于 ABI 边界的顶层 `@abi fn`（含回调函数来源,以及未来的公开导出 surface）均须确保内部异常在函数体内被捕获处理，不得向 C 调用方传播。
-- 编译器在语义阶段对 `@abi` ABI 边界做静态异常传播分析：若用于 ABI 边界的顶层 `@abi fn` 内存在可能未被捕获而到达函数出口的异常路径，编译期报错，而非依赖运行时检测。
+- 用于 ABI 边界的顶层 `@abi func`（含回调函数来源,以及未来的公开导出 surface）均须确保内部异常在函数体内被捕获处理，不得向 C 调用方传播。
+- 编译器在语义阶段对 `@abi` ABI 边界做静态异常传播分析：若用于 ABI 边界的顶层 `@abi func` 内存在可能未被捕获而到达函数出口的异常路径，编译期报错，而非依赖运行时检测。
 - 若未捕获异常到达 `@abi` 的 ABI 边界,运行时直接终止当前进程,不得向 C 侧继续返回未定义状态。
-- C ABI 路径下的 `extern fn` 导入声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
+- C ABI 路径下的 `extern func` 导入声明本身不向 Feng 异常系统抛出可捕获异常; 来自 C 的错误应通过返回值、错误码或显式回调约定传递。
 
 ## 6 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch` 表达式的控制流关系。
-- [feng-interop.md](./feng-interop.md): C ABI 路径下的 `extern fn` 导入规则、`@abi` 的 ABI 规则与异常边界。
+- [feng-interop.md](./feng-interop.md): C ABI 路径下的 `extern func` 导入规则、`@abi` 的 ABI 规则与异常边界。
 - 本文档: `throw`、`try/catch` 表达式语义、传播模型与 C ABI 边界限制。

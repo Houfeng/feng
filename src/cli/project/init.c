@@ -26,15 +26,15 @@ typedef enum InitDirectoryState {
 } InitDirectoryState;
 
 static const char *kBinTemplate =
-    "mod %s;\n"
+    "module %s;\n"
     "\n"
-    "fn main(args: string[]) {\n"
+    "func main(args: string[]) {\n"
     "}\n";
 
 static const char *kLibTemplate =
-    "mod %s;\n"
+    "module %s;\n"
     "\n"
-    "fn helper(): int {\n"
+    "func helper(): int {\n"
     "  return 0;\n"
     "}\n";
 

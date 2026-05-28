@@ -1,9 +1,9 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn pick(flag: bool): i32 {
+func pick(flag: bool): i32 {
     return if flag {
         100;
     } else {
@@ -11,7 +11,7 @@ fn pick(flag: bool): i32 {
     };
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let a = pick(true);
     let b = pick(false);
     if a == 100 {

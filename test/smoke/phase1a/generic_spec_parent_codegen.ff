@@ -1,10 +1,10 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
-    fn size(): int;
+    func size(): int;
 }
 
 spec IntSequence: Sequence<int> {
@@ -13,16 +13,16 @@ spec IntSequence: Sequence<int> {
 type Counter: IntSequence {
     var n: int;
 
-    fn size(): int {
+    func size(): int {
         return self.n;
     }
 }
 
-fn check(seq: IntSequence): int {
+func check(seq: IntSequence): int {
     return seq.size();
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let counter: Counter = Counter{n: 7};
     if check(counter) == 7 {
         puts(&"generic spec parent inherited member ok");

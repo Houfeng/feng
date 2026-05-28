@@ -1,34 +1,34 @@
-mod feng.smoke.phase1a.generic_aggregate_return;
+module feng.smoke.phase1a.generic_aggregate_return;
 
 @cdecl("libc")
-extern fn puts(value: string*): int;
+extern func puts(value: string*): int;
 
 spec Named {
-    fn greet(): string;
+    func greet(): string;
 }
 
 type User: Named {
     let name: string;
 
-    fn greet(): string {
+    func greet(): string {
         return self.name;
     }
 }
 
-fn makeNamed<T>(name: string): Named {
+func makeNamed<T>(name: string): Named {
     let user: User = User{name: name};
     return user;
 }
 
-fn forwardNamed<T>(named: Named): Named {
+func forwardNamed<T>(named: Named): Named {
     return named;
 }
 
-fn reboundNamed<T>(name: string): Named {
+func reboundNamed<T>(name: string): Named {
     return makeNamed<T>(name);
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let created: Named = makeNamed<int>("generic aggregate return ok");
     puts(&created.greet());
 

@@ -15,14 +15,14 @@ extern "C" {
     X(SPEC, "spec") \
     X(FIT, "fit") \
     X(EXTERN, "extern") \
-    X(FN, "fn") \
+    X(FUNC, "func") \
     X(LET, "let") \
     X(VAR, "var") \
-    X(PU, "pu") \
-    X(PR, "pr") \
+    X(OPEN, "open") \
+    X(SEAL, "seal") \
     X(SELF, "self") \
-    X(MOD, "mod") \
-    X(USE, "use") \
+    X(MODULE, "module") \
+    X(IMPORT, "import") \
     X(AS, "as") \
     X(IF, "if") \
     X(ELSE, "else") \
@@ -44,11 +44,11 @@ extern "C" {
     X(STATIC, "static") \
     X(CONST, "const") \
     X(EXPORT, "export") \
-    X(IMPORT, "import") \
-    X(MODULE, "module") \
-    X(OPEN, "open") \
-    X(SEAL, "seal") \
-    X(FUNC, "func") \
+    X(FN, "fn") \
+    X(MOD, "mod") \
+    X(PU, "pu") \
+    X(PR, "pr") \
+    X(USE, "use") \
     X(PROP, "prop")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \

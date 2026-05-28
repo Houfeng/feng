@@ -2880,7 +2880,7 @@ static bool cg_slice_equals(FengSlice a, FengSlice b) {
  *   - same module across different files (semantic groups them together); or
  *   - `consumer` lists `provider`'s module name in its `use` declarations.
  * The visibility check is deliberately structural and does NOT consult
- * `pu` markers \u2014 semantic has already accepted the program as well-typed,
+ * `open` markers \u2014 semantic has already accepted the program as well-typed,
  * so any name the user wrote is by construction visible. We only need to
  * pick the *correct* candidate when multiple modules expose a same-simple-named
  * type, which is the exact bug this guards against. */
@@ -6481,7 +6481,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     if (ef->uses_runtime_contract && !cg_runtime_contract_contains_name(sig->name)) {
         return cg_fail(cg,
                        sig->token,
-                       "codegen: @runtime extern fn '%.*s' is not declared by runtime contract",
+                       "codegen: @runtime extern func '%.*s' is not declared by runtime contract",
                        (int)sig->name.length,
                        sig->name.data);
     }
@@ -6517,7 +6517,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         if (sig->type_param_count > 0U && !has_stable_surface) {
             cg_fail(cg,
                     sig->params[i].token,
-                    "codegen: generic extern fn '%.*s' parameter '%.*s' does not lower to a single external surface",
+                    "codegen: generic extern func '%.*s' parameter '%.*s' does not lower to a single external surface",
                     (int)sig->name.length,
                     sig->name.data,
                     (int)sig->params[i].name.length,
@@ -6539,7 +6539,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         if (!has_stable_surface) {
             cg_fail(cg,
                     sig->token,
-                    "codegen: generic extern fn '%.*s' return type does not lower to a single external surface",
+                    "codegen: generic extern func '%.*s' return type does not lower to a single external surface",
                     (int)sig->name.length,
                     sig->name.data);
             goto cleanup;

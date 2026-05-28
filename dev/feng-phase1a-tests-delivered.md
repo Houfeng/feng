@@ -18,7 +18,7 @@
 | `inferred_int_literal` | `let x = 1;` 的绑定与表达式 `inferred_type` 均为 `i32` |
 | `inferred_string_literal` | `let s = "hi";` 推导为 `string` |
 | `inferred_array_literal` | `let a = [1, 2, 3];` 推导为 `i32[]`，元素类型可读取 |
-| `inferred_call_return` | `let r = greet();` 取自 `fn greet(): string` 的返回类型 |
+| `inferred_call_return` | `let r = greet();` 取自 `func greet(): string` 的返回类型 |
 | `inferred_member_access` | `user.age` 推导为字段声明类型 `i32` |
 | `inferred_binary_arith` | `a + b`（两侧 `i32`）推导为 `i32` |
 | `inferred_if_expression` | `let v = if c { 1 } else { 2 };` 推导为 `i32` |
@@ -44,9 +44,9 @@
 
 | 用例 | 验证点 |
 | --- | --- |
-| `emit_empty_program` | 仅 `mod x;` 的程序输出可编译的 C，含 runtime header include |
+| `emit_empty_program` | 仅 `module x;` 的程序输出可编译的 C，含 runtime header include |
 | `emit_global_let` | 模块级 `let n: i32 = 1;` 输出含正确符号名与初始化 |
-| `emit_top_fn` | `fn add(a: i32, b: i32): i32` 输出签名与返回 |
+| `emit_top_fn` | `func add(a: i32, b: i32): i32` 输出签名与返回 |
 | `emit_type_with_finalizer` | type + finalizer 输出 descriptor 表与 finalizer 函数 |
 | `reject_lib_target` | 1A 传入 `lib` 目标，返回错误信息含 "lib target not yet supported" |
 | `reject_unsupported_features` | 含 `match` 表达式 / 方法重载 / `spec` 输入时返回明确诊断（不静默成功） |

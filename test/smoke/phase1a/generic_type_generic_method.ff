@@ -1,34 +1,34 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
 
-    fn echo<U>(value: U): U {
+    func echo<U>(value: U): U {
         return value;
     }
 
-    fn replace<U>(next: T, result: U): U {
+    func replace<U>(next: T, result: U): U {
         self.value = next;
         return result;
     }
 
-    fn current(): T {
+    func current(): T {
         return self.value;
     }
 
-    fn currentAgain(): T {
+    func currentAgain(): T {
         return self.current();
     }
 
-    fn echoInt(value: int): int {
+    func echoInt(value: int): int {
         return self.echo(value);
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let box = Box<int>();
     let first: int = box.echo(20);
     let second: int = box.replace<int>(22, first);

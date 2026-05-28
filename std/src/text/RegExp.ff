@@ -1,1 +1,1 @@
-pu mod std.text;
+open module std.text;

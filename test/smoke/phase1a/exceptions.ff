@@ -1,22 +1,22 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn maybe_throw(should_throw: bool) {
+func maybe_throw(should_throw: bool) {
     if should_throw {
         throw "boom";
     }
 }
 
-fn maybe_label(should_throw: bool): string {
+func maybe_label(should_throw: bool): string {
     if should_throw {
         throw "boom";
     }
     return "ok";
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let first = try maybe_label(true) catch ex: string {
         "caught-1";
     };

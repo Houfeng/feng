@@ -19,16 +19,16 @@
     } while (0)
 
 static const char *kLineSource =
-    "mod feng.debug.demo;\n"
-    "fn main(args: string[]) {\n"
+    "module feng.debug.demo;\n"
+    "func main(args: string[]) {\n"
     "    let count = 42;\n"
     "    let plus = count + 1;\n"
     "}\n";
 
 static const char *kCaptureSource =
-    "mod feng.debug.capture;\n"
+    "module feng.debug.capture;\n"
     "spec Mapper(x: int): int;\n"
-    "fn use_it(): int {\n"
+    "func use_it(): int {\n"
     "    var base: int = 1;\n"
     "    let mapper: Mapper = (x: int) -> x + base;\n"
     "    base = 2;\n"
@@ -36,12 +36,12 @@ static const char *kCaptureSource =
     "}\n";
 
 static const char *kFieldSource =
-    "mod feng.debug.fields;\n"
+    "module feng.debug.fields;\n"
     "type Point {\n"
     "    let x: i32;\n"
     "    let label: string;\n"
     "}\n"
-    "fn main(args: string[]) {\n"
+    "func main(args: string[]) {\n"
     "    let point: Point = Point{x: 7, label: \"p\"};\n"
     "}\n";
 

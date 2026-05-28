@@ -8,7 +8,7 @@
 
 ## 1 职责
 
-- 为 Feng 增加类型参数机制，允许在 `type`、`fn`、`spec` 和成员方法上声明泛型参数。
+- 为 Feng 增加类型参数机制，允许在 `type`、`func`、`spec` 和成员方法上声明泛型参数。
 - 在不让 Parser 反向依赖 Semantic 的前提下，为显式泛型调用提供无歧义语法。
 - 在调用点省略显式类型实参时，允许编译器按既定规则完成泛型推导。
 - 收敛已经确认的命名约束：泛型 `type` 内的方法泛型参数不得与所在类型的泛型参数重名。
@@ -16,8 +16,8 @@
 ## 2 术语
 
 - 类型泛型参数：声明在 `type Name<T>` 或 `spec Name<T>` 上的类型参数。
-- 函数泛型参数：声明在顶层 `fn Name<T>` 上的类型参数。
-- 方法泛型参数：声明在 `type` 成员方法 `fn Name<T>` 上的类型参数。
+- 函数泛型参数：声明在顶层 `func Name<T>` 上的类型参数。
+- 方法泛型参数：声明在 `type` 成员方法 `func Name<T>` 上的类型参数。
 - 泛型参数数量：某个泛型声明头中类型参数列表的长度，例如 `foo<T, U>` 的泛型参数数量是 `2`。
 - 约束泛型参数：在类型参数名后写出泛型约束的泛型参数，例如 `T: Named`。
 - 无约束泛型参数：未声明泛型约束的泛型参数，例如 `T`。
@@ -35,10 +35,10 @@
 ```feng
 type List<T> { ... }
 
-fn map<T, U>(left: T, right: U): T { ... }
+func map<T, U>(left: T, right: U): T { ... }
 
 spec Comparable<T> {
-  fn compare(other: T): int;
+  func compare(other: T): int;
 }
 
 spec Mapper<T, U>(value: T): U;
@@ -48,9 +48,9 @@ spec Mapper<T, U>(value: T): U;
 
 ```feng
 type Box<T> {
-  fn get(): T { ... }
+  func get(): T { ... }
 
-  fn map<U>(value: U): T { ... }
+  func map<U>(value: U): T { ... }
 }
 ```
 
@@ -66,13 +66,13 @@ spec Process(x: int): void;
 spec Value: int | string;
 
 type Box<T: Named> {
-  fn get_name(value: T): string {
+  func get_name(value: T): string {
     return value.name;
   }
 }
 
 type Runner<F: Process> {
-  fn run(handler: F) {
+  func run(handler: F) {
     handler(1);
   }
 }
@@ -94,7 +94,7 @@ type Plain<T> {
 
 ```feng
 spec List<T> {
-  fn size(): int;
+  func size(): int;
 }
 
 spec MyList: List<int> {}
@@ -106,7 +106,7 @@ spec Named {
 }
 
 spec NamedList<T: Named> {
-  fn first(): T;
+  func first(): T;
 }
 
 spec UserList<T: Named>: NamedList<T> {}
@@ -133,7 +133,7 @@ type Holder<T> {
 
 let a: List<int> = ...;
 
-fn wrap(value: Holder<string>): List<string> { ... }
+func wrap(value: Holder<string>): List<string> { ... }
 
 let b = List<int>();
 ```
@@ -158,8 +158,8 @@ let b = Box<User>();
 正确语法七，省略显式类型实参时的泛型推导：
 
 ```feng
-fn id<T>(value: T): T { ... }
-fn pair<T, U>(left: T, right: U): T { ... }
+func id<T>(value: T): T { ... }
+func pair<T, U>(left: T, right: U): T { ... }
 
 let a = id(1);
 let b = pair(1, "x");
@@ -168,11 +168,11 @@ let b = pair(1, "x");
 正确语法八，泛型参与重载：
 
 ```feng
-fn foo() { ... }
-fn foo<T>() { ... }
+func foo() { ... }
+func foo<T>() { ... }
 
-fn bar(value: int) { ... }
-fn bar<T>(value: T) { ... }
+func bar(value: int) { ... }
+func bar<T>(value: T) { ... }
 
 foo();         // 命中非泛型 foo()
 foo<int>();    // 命中泛型 foo<T>()
@@ -206,7 +206,7 @@ let d = Map:<string, int>();
 
 ```feng
 type Box<T> {
-  fn bad<T>(value: T): T { ... }
+  func bad<T>(value: T): T { ... }
 }
 ```
 
@@ -225,7 +225,7 @@ spec Named {
 }
 
 spec NamedList<T: Named> {
-  fn first(): T;
+  func first(): T;
 }
 
 spec BadList<T>: NamedList<T> {}
@@ -234,27 +234,27 @@ spec BadList<T>: NamedList<T> {}
 错语法五，同名声明仅靠泛型参数名或约束不同来区分重载：
 
 ```feng
-fn foo<T>() { ... }
-fn foo<U>() { ... }              // 错误：泛型参数名不参与重载区分
+func foo<T>() { ... }
+func foo<U>() { ... }              // 错误：泛型参数名不参与重载区分
 
-fn bar<T: Named>(value: T) { ... }
-fn bar<U: Process>(value: U) { ... }   // 错误：约束不参与重载区分
+func bar<T: Named>(value: T) { ... }
+func bar<U: Process>(value: U) { ... }   // 错误：约束不参与重载区分
 ```
 
 错语法六，终结器带参数、带返回值、重载或声明泛型参数：
 
 ```feng
 type Resource<T> {
-  fn ~Resource(x: int) {}     // 错误：终结器不能有参数
+  func ~Resource(x: int) {}     // 错误：终结器不能有参数
 }
 
 type File {
-  fn ~File(): int {}          // 错误：终结器不能声明非 void 返回类型
-  fn ~File() {}               // 错误：终结器不允许重载；每个 type 至多一个终结器
+  func ~File(): int {}          // 错误：终结器不能声明非 void 返回类型
+  func ~File() {}               // 错误：终结器不允许重载；每个 type 至多一个终结器
 }
 
 type Box {
-  fn ~Box<T>() {}             // 错误：终结器不允许泛型
+  func ~Box<T>() {}             // 错误：终结器不允许泛型
 }
 ```
 
@@ -274,7 +274,7 @@ let x: List:<int> = ...;
 错语法九，省略显式类型实参但无法完成唯一推导：
 
 ```feng
-fn make<T>(): T { ... }
+func make<T>(): T { ... }
 
 let value = make();
 ```
@@ -283,15 +283,15 @@ let value = make();
 
 ```feng
 type Plain<T> {
-  fn bad_member(value: T): string {
+  func bad_member(value: T): string {
     return value.name;        // 错误：无约束 T 不能访问成员
   }
 
-  fn bad_compare(left: T, right: T): bool {
+  func bad_compare(left: T, right: T): bool {
     return left < right;      // 错误：无约束 T 不能做关系运算
   }
 
-  fn bad_logic(value: T): bool {
+  func bad_logic(value: T): bool {
     return value && value;    // 错误：无约束 T 不能做逻辑运算
   }
 }
@@ -327,7 +327,7 @@ spec Reader<T: Bar> { ... }
 
 ## 4 语义
 
-- Feng 允许在 `type`、顶层 `fn`、object-form `spec`、callable-form `spec` 和成员方法上声明泛型参数。
+- Feng 允许在 `type`、顶层 `func`、object-form `spec`、callable-form `spec` 和成员方法上声明泛型参数。
 - 泛型声明头继续使用普通角括号语法，即 `Name<T>`、`Name<T, U>`。
 - 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
 - 类型参数可选择声明泛型约束，语法为 `T: SomeSpec`；无约束时直接写作 `T`。
@@ -408,7 +408,7 @@ spec Reader<T: Bar> { ... }
 
 ## 6 编译期
 
-- 编译器必须识别 `type`、顶层 `fn`、`spec` 和成员方法上的泛型声明头。
+- 编译器必须识别 `type`、顶层 `func`、`spec` 和成员方法上的泛型声明头。
 - 编译器必须识别类型参数上的可选约束语法 `T: SomeSpec`。
 - 编译器必须把表达式位置的 `<...>` 识别为显式泛型 target 语法的一部分，并据此解析后续的调用、对象字面量后缀或数组创建。
 - 编译器必须把显式泛型 target 中每个类型实参按普通类型引用解析；例如 `foo<Map<int>>(...)` 合法，而 `foo<Map:<int>>(...)` 必须报错。
@@ -458,13 +458,13 @@ spec Reader<T: Bar> { ... }
 
 ### 9.1 词法分析
 
-- 无需新增关键字；继续复用 `type`、`fn`、`spec`、`:`、`<`、`>`、`,`、标识符等既有 token。
+- 无需新增关键字；继续复用 `type`、`func`、`spec`、`:`、`<`、`>`、`,`、标识符等既有 token。
 - 词法器必须稳定产出显式泛型 target 所需 token 序列，不得把 `<` / `>` 与其它运算符错误合并到无法支撑泛型解析的形态。
 - 若词法器当前把 `>>`、`>>>` 视为单个移位 token，则必须为嵌套泛型实参列表提供可消费策略；否则 `Map<string, List<int>>` 这类写法无法稳定解析。
 
 ### 9.2 语法分析
 
-- 扩展声明语法，使 `type`、顶层 `fn`、`spec` 和成员方法都可携带类型参数列表。
+- 扩展声明语法，使 `type`、顶层 `func`、`spec` 和成员方法都可携带类型参数列表。
 - 扩展类型参数语法，使单个类型参数可携带可选泛型约束 `T: SomeSpec`；参数定义位置本身必须是参数名。
 - 扩展类型引用语法，使类型位置可解析 `Name<T>`、`Name<T, U>` 这类实例化写法。
 - 扩展 `spec` 父列表语法，使 `spec Child: Parent<int>`、`spec Child<T>: Parent<T>` 这类父泛型 `spec` 使用可被稳定解析为“父 `spec` 引用 + 类型实参列表”。
@@ -505,7 +505,7 @@ spec Reader<T: Bar> { ... }
 - 当前阶段公开符号表无需导出 variance 元信息；泛型实例兼容性统一按不变规则处理即可。
 - 若公开泛型声明支持省略显式类型实参的调用，则 `.ft` / `.fb` 导出层还必须保留支撑推导所需的参数类型、返回类型与约束事实，不能只保留“已推导后的使用结果”。
 - 由于 `.fb` 二进制分发是重要路径，跨包消费泛型时不得把“读取 provider 源码后再由 consumer 重新全量单态化”当作唯一成立方式。
-- 导入外部包中的泛型 `type`、`fn`、`spec` 后，语义分析对其使用方式应与本地声明尽量保持一致；“本地/外部”的差异应尽量留在导出、链接和发码阶段，而不是复制两套泛型语义规则。
+- 导入外部包中的泛型 `type`、`func`、`spec` 后，语义分析对其使用方式应与本地声明尽量保持一致；“本地/外部”的差异应尽量留在导出、链接和发码阶段，而不是复制两套泛型语义规则。
 
 ### 9.5 发码
 

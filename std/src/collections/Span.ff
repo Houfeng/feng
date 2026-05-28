@@ -1,163 +1,162 @@
-pu mod std.collections;
+open module std.collections;
 
-use std;
+import std;
 
 /**
  * Extends immutable arrays with read-only slicing operations.
  * @param <T> - the element type
  */
-pu fit T[] {
-  /**
-   * Returns a read-only view over a contiguous range of this array.
-   * @param start - zero-based index of the first element in the view
-   * @param end - zero-based exclusive end offset of the view
-   * @return view over the specified range
-   */
-  pu fn slice(start: long, end: long): Span<T> {
-    return Span<T>(self, start, end);
-  }
+open fit T[] {
+	/**
+	 * Returns a read-only view over a contiguous range of this array.
+	 * @param start - zero-based index of the first element in the view
+	 * @param end - zero-based exclusive end offset of the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long, end: long): Span<T> {
+		return Span<T>(self, start, end);
+	}
 
-  /**
-   * Returns a read-only view over a contiguous range of this array.
-   * @param start - zero-based index of the first element in the view
-   * @return view over the specified range
-   */
-  pu fn slice(start: long): Span<T> {
-    return self.slice(start, self.length());
-  }
+	/**
+	 * Returns a read-only view over a contiguous range of this array.
+	 * @param start - zero-based index of the first element in the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long): Span<T> {
+		return self.slice(start, self.length());
+	}
 }
 
 /**
  * Extends writable arrays with read-only slicing operations.
  * @param <T> - the element type
  */
-pu fit T[!] {
-  /**
-   * Returns a read-only view over a contiguous range of this array.
-   * @param start - zero-based index of the first element in the view
-   * @param end - zero-based exclusive end offset of the view
-   * @return view over the specified range
-   */
-  pu fn slice(start: long, end: long): Span<T> {
-    return Span<T>((T[])self, start, end);
-  }
+open fit T[!] {
+	/**
+	 * Returns a read-only view over a contiguous range of this array.
+	 * @param start - zero-based index of the first element in the view
+	 * @param end - zero-based exclusive end offset of the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long, end: long): Span<T> {
+		return Span<T>((T[])self, start, end);
+	}
 
-  /**
-   * Returns a read-only view over a contiguous range of this array.
-   * @param start - zero-based index of the first element in the view
-   * @return view over the specified range
-   */
-  pu fn slice(start: long): Span<T> {
-    return self.slice(start, self.length());
-  }
+	/**
+	 * Returns a read-only view over a contiguous range of this array.
+	 * @param start - zero-based index of the first element in the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long): Span<T> {
+		return self.slice(start, self.length());
+	}
 }
 
 /**
  * A Span is a read-only view over a contiguous sub range of an array.
  * @param <T> - the element type
  */
-pu type Span<T> {
-  pr let origin: T[];
-  pr let start: long;
-  pr let end: long;
+open type Span<T> {
+	seal let origin: T[];
+	seal let start: long;
+	seal let end: long;
 
-  /**
-   * Creates a span covering the right-open range `[start, end)`.
-   * @param origin - source array shared by this view
-   * @param start - zero-based inclusive start offset
-   * @param end - zero-based exclusive end offset
-   * @throws IllegalArgumentException if `start` or `end` are out of bounds
-   */
-  pu fn Span(origin: T[], start: long, end: long) {
-    if start < (long)0 {
-      throw "Span start out of bounds";
-    }
-    if end < start {
-      throw "Span end out of bounds";
-    }
-    if end > origin.length() {
-      throw "Span end out of bounds";
-    }
-    self.origin = origin;
-    self.start = start;
-    self.end = end;
-  }
+	/**
+	 * Creates a span covering the right-open range `[start, end)`.
+	 * @param origin - source array shared by this view
+	 * @param start - zero-based inclusive start offset
+	 * @param end - zero-based exclusive end offset
+	 * @throws IllegalArgumentException if `start` or `end` are out of bounds
+	 */
+	open func Span(origin: T[], start: long, end: long) {
+		if start < (long)0 {
+			throw "Span start out of bounds";
+		}
+		if end < start {
+			throw "Span end out of bounds";
+		}
+		if end > origin.length() {
+			throw "Span end out of bounds";
+		}
+		self.origin = origin;
+		self.start = start;
+		self.end = end;
+	}
 
-  /**
-   * Returns the number of elements covered by this span.
-   * @return element count inside the view
-   */
-  pu fn length(): long {
-    return self.end - self.start;
-  }
+	/**
+	 * Returns the number of elements covered by this span.
+	 * @return element count inside the view
+	 */
+	open func length(): long {
+		return self.end - self.start;
+	}
 
-  /**
-   * Returns the element at the span-relative position `index`.
-   * @param index - zero-based index relative to the span start
-   * @return element at the specified position
-   */
-  pu fn at(index: long): T {
-    if index < (long)0 {
-      throw "Span index out of bounds";
-    }
-    if index >= self.length() {
-      throw "Span index out of bounds";
-    }
-    return self.origin[self.start + index];
-  }
+	/**
+	 * Returns the element at the span-relative position `index`.
+	 * @param index - zero-based index relative to the span start
+	 * @return element at the specified position
+	 */
+	open func at(index: long): T {
+		if index < (long)0 {
+			throw "Span index out of bounds";
+		}
+		if index >= self.length() {
+			throw "Span index out of bounds";
+		}
+		return self.origin[self.start + index];
+	}
 
 
-  /**
-   * Returns a read-only sub view relative to this span.
-   * @param start - zero-based start offset relative to this span
-   * @param end - zero-based exclusive end offset relative to this span
-   * @return view over the specified range
-   */
-  pu fn slice(start: long, end: long): Span<T> {
-    if start < (long)0 {
-      throw "Span slice start out of bounds";
-    }
-    if end < start {
-      throw "Span slice end out of bounds";
-    }
-    if end > self.length() {
-      throw "Span slice end out of bounds";
-    }
+	/**
+	 * Returns a read-only sub view relative to this span.
+	 * @param start - zero-based start offset relative to this span
+	 * @param end - zero-based exclusive end offset relative to this span
+	 * @return view over the specified range
+	 */
+	open func slice(start: long, end: long): Span<T> {
+		if start < (long)0 {
+			throw "Span slice start out of bounds";
+		}
+		if end < start {
+			throw "Span slice end out of bounds";
+		}
+		if end > self.length() {
+			throw "Span slice end out of bounds";
+		}
+		return Span<T>(self.origin, self.start + start, self.start + end);
+	}
 
-    return Span<T>(self.origin, self.start + start, self.start + end);
-  }
+	/**
+	 * Returns a read-only sub view relative to this span.
+	 * @param start - zero-based start offset relative to this span
+	 * @return view over the specified range
+	 */
+	open func slice(start: long): Span<T> {
+		return self.slice(start, self.length());
+	}
 
-  /**
-   * Returns a read-only sub view relative to this span.
-   * @param start - zero-based start offset relative to this span
-   * @return view over the specified range
-   */
-  pu fn slice(start: long): Span<T> {
-    return self.slice(start, self.length());
-  }
+	/**
+	 * Returns a read-only new view relative to this span.
+	 * @return view over the specified range
+	 */
+	open func slice(): Span<T> {
+		return self.slice(0, self.length());
+	}
 
-  /**
-   * Returns a read-only new view relative to this span.
-   * @return view over the specified range
-   */
-  pu fn slice(): Span<T> {
-    return self.slice(0, self.length());
-  }
+	/**
+	 * Returns the element at the span-relative position `index`.
+	 * @param index - zero-based index relative to the span start
+	 * @return element at the specified position
+	 */
+	open func get(index: long): T {
+		return self.at(index);
+	}
 
-  /**
-   * Returns the element at the span-relative position `index`.
-   * @param index - zero-based index relative to the span start
-   * @return element at the specified position
-   */
-  pu fn get(index: long): T {
-    return self.at(index);
-  }
-
-  /**
-   * Returns a dense array copy of this span.
-   * @return copied array containing all elements in this span
-   */
-  pu fn toArray(): T[] {
-    return self.origin.clone(self.start, self.end);
-  }
+	/**
+	 * Returns a dense array copy of this span.
+	 * @return copied array containing all elements in this span
+	 */
+	open func toArray(): T[] {
+		return self.origin.clone(self.start, self.end);
+	}
 }

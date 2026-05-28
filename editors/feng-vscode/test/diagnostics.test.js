@@ -292,7 +292,7 @@ async function run() {
         const sourceDocument = {
             languageId: 'feng',
             getText() {
-                return 'fn main(args:string[]):void {}\n';
+                return 'func main(args:string[]):void {}\n';
             }
         };
         const manifestDocument = {
@@ -304,7 +304,7 @@ async function run() {
 
         assert.strictEqual(
             formatDocumentSource(sourceDocument, { insertSpaces: true, tabSize: 4 }),
-            'fn main(args: string[]): void {}\n'
+            'func main(args: string[]): void {}\n'
         );
         assert.strictEqual(
             formatDocumentSource(manifestDocument, { insertSpaces: true, tabSize: 4 }),
@@ -321,8 +321,8 @@ async function run() {
 
         fs.mkdirSync(srcDir, { recursive: true });
         fs.writeFileSync(path.join(projectDir, 'feng.fm'), '[package]\nname: "demo"\nversion: "0.1.0"\n');
-        fs.writeFileSync(sourcePath, 'fn main(args: string[]) {}\n');
-        fs.writeFileSync(standalonePath, 'fn main(args: string[]) {}\n');
+        fs.writeFileSync(sourcePath, 'func main(args: string[]) {}\n');
+        fs.writeFileSync(standalonePath, 'func main(args: string[]) {}\n');
 
         assert.strictEqual(findProjectManifestPath(sourcePath), path.join(projectDir, 'feng.fm'));
         assert.strictEqual(findProjectManifestPath(standalonePath), null);

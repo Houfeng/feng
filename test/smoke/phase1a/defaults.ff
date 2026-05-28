@@ -1,7 +1,7 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 type Point {
     let x: i32;
@@ -19,7 +19,7 @@ let g_s: string;
 let g_a: i32[];
 let g_box: Box;
 
-fn main(args: string[]) {
+func main(args: string[]) {
     /* Local scalar defaults are zero. */
     let i: i32;
     let f: f64;

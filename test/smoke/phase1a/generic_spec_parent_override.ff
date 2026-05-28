@@ -1,23 +1,23 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
-    fn size(): int;
+    func size(): int;
 }
 
 spec IntSequence: Sequence<int> {
-    fn size(): int;
+    func size(): int;
 }
 
 type Counter: IntSequence {
-    fn size(): int {
+    func size(): int {
         return 1;
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let counter: IntSequence = Counter{};
     if counter.size() == 1 {
         puts(&"generic spec parent override ok");

@@ -10,10 +10,10 @@
 - 当前规则已明确：不支持任何形式的 `int -> enum` 显式转换，包括整数字面量与常量表达式 cast。
 - lexer 侧已经把 `enum` 识别为关键字；首版实现不需要新增关键字扫描逻辑，但需要补回归测试。
 - parser / AST 目前没有 enum 顶层声明种类；`FengDeclKind` 只有 binding / type / spec / fit / function。
-- symbol table 目前没有 enum 声明种类；包表导入/导出、provider 查询视图和 LSP 仍只围绕 `type` / `spec` / `fit` / `fn` 等已支持声明。
+- symbol table 目前没有 enum 声明种类；包表导入/导出、provider 查询视图和 LSP 仍只围绕 `type` / `spec` / `fit` / `func` 等已支持声明。
 - 现有值模型只有 `TRIVIAL` / `MANAGED_POINTER` / `AGGREGATE` 三类；首版 enum 应作为“具名的 `int` 标量”进入 `TRIVIAL` 路径，不新增 runtime 值模型或专用 runtime API。
 - enum 的实现目标是“语义上独立、表示上零成本”：前端保持名义类型与枚举项规则，codegen 固定降为 Feng `int` 对应的稳定标量表示，不依赖 C 原生 `enum` 宽度或 ABI 细节。
-- ABI 侧已收敛：enum 在 ABI 边界视为与 `int` 相同的 ABI 标量，可直接进入 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置。
+- ABI 侧已收敛：enum 在 ABI 边界视为与 `int` 相同的 ABI 标量，可直接进入 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置。
 - 现有测试入口已经具备分层落地条件：`test_lexer`、`test_parser`、`test_semantic`、`test_codegen`、`test_symbol`、`test_cli` 以及最终 `make test`。
 
 ## 2. 分步 TODO
@@ -30,7 +30,7 @@
 
 验收口径：
 
-- parser 能稳定区分 `type` / `spec` / `fit` / `fn` / `enum`。
+- parser 能稳定区分 `type` / `spec` / `fit` / `func` / `enum`。
 - 合法的“全隐式”与“全显式” enum 能成功建树。
 - 非法的成员块体与 `= 1 + 2` 这类非字面量初始化在 parser 阶段直接报错。
 
@@ -75,7 +75,7 @@
 - [x] 禁止不同 enum 之间直接赋值、比较与转换。
 - [x] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为 `int`。
 - [x] 让 enum 能出现在变量、参数、返回值、成员、数组元素等普通类型位置，并沿用 trivial 值复制路径。
-- [x] 让 enum 能直接出现在 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
+- [x] 让 enum 能直接出现在 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
 - [x] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&int_value` 一致。
 
 验收口径：
@@ -83,7 +83,7 @@
 - `let x: Status = Status.Ok;` 这类基本写法通过。
 - `let x: int = (int)Status.Ok;` 通过；`let x: Status = (Status)1;` 报错。
 - `Status.Ok == Status.NotFound` 合法；`Status.Ok < Status.NotFound` 非法，除非先转成 `int`。
-- `extern fn use_status(s: Status): void;`、`@abi fn export_status(): Status` 与 `@abi type Box { var status: Status; }` 这类 ABI surface 合法并按 `int` 标量处理。
+- `extern func use_status(s: Status): void;`、`@abi func export_status(): Status` 与 `@abi type Box { var status: Status; }` 这类 ABI surface 合法并按 `int` 标量处理。
 
 建议验证：
 
@@ -100,7 +100,7 @@
 - [x] 让 enum 在局部变量、参数、返回值、数组、对象字段中都走 trivial copy 路径。
 - [x] 复核 enum 到 `int` 的显式转换发码，避免引入多余 runtime 调用。
 - [x] 在 ABI surface 上把 enum 按 `int32_t` / Feng `int` 的固定标量表示发码，不单独生成另一套 ABI layout。
-- [x] 复核 enum 进入 `extern fn`、顶层 `@abi fn`、callable-form `@abi spec` 与 `@abi type` 字段位置时的 C surface 一致性。
+- [x] 复核 enum 进入 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置时的 C surface 一致性。
 
 验收口径：
 
@@ -128,7 +128,7 @@
 - [x] 在 `src/symbol/symbol.h` 中为 enum 增加声明种类；若需要，也为 enum item 增加独立声明种类或等价的稳定属性表达。
 - [x] 在 `src/symbol/ft_write.c` / `ft_read.c` / `export.c` / `provider.c` 中补齐 enum 的导出、读取与查询视图接入。
 - [x] 导出 enum 的名称、可见性、声明顺序、各枚举项名称及其底层值。
-- [x] 让跨模块 / 跨包 `use` 后的 enum 类型引用与枚举项访问可被正确解析。
+- [x] 让跨模块 / 跨包 `import` 后的 enum 类型引用与枚举项访问可被正确解析。
 - [x] 把 enum 纳入 imported-module 的重名冲突检查与可见性查询。
 - [x] 让 LSP completion / hover / definition 至少能识别 enum 声明与 `Enum.` 后的枚举项候选。
 - [x] 若 `.ft` 格式需要新增 decl kind / attr kind / relation kind，先回写 `docs/feng-symbol-table.md`，再落代码。

@@ -101,9 +101,9 @@ extlib: "lib/"
 
 - [x] 5.1 feng 库链接来源：
 	- `.fb` 的 `lib/<platform>`
-	- `extern fn` 元信息解析出的原生库
+	- `extern func` 元信息解析出的原生库
 - [x] 5.2 禁止新增隐式扫描来源（磁盘全盘扫描、未声明目录自动注入）。
-- [x] 5.3 `extlib` 中静态库若参与链接，必须通过显式规则接入（例如 `extern fn` 元信息），不做目录自动注入。
+- [x] 5.3 `extlib` 中静态库若参与链接，必须通过显式规则接入（例如 `extern func` 元信息），不做目录自动注入。
 
 验收：
 
@@ -133,4 +133,4 @@ extlib: "lib/"
 - `[assets].extlib` 在 `target=lib` 下直接 staging 到 `build/extlib/`,打包后对应 `.fb/extlib/`,不额外插入 `assets/` 目录层。
 - `target=bin` 仅从依赖包 `.fb/extlib/<当前平台>/` 释放动态库到可执行文件同级目录；`extlib` 静态库与 `.fb/lib/<平台>/` 正式静态库都不会被运行期释放。
 - 运行期释放若遇到多个依赖包提供同名动态库,构建直接报错,避免输出目录静默覆盖。
-- 链接来源边界维持为 `.fb/lib/<平台>` 与 `extern fn` 元信息；`extlib` 不做目录自动注入。
+- 链接来源边界维持为 `.fb/lib/<平台>` 与 `extern func` 元信息；`extlib` 不做目录自动注入。

@@ -218,10 +218,10 @@ static void write_bundle_with_bytes_or_die(const char *bundle_path,
 /* Round-trip: write graph -> read back -> provider answers public queries. */
 static void test_roundtrip_public_module(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.roundtrip;\n"
+        "open module feng.test.symbol.roundtrip;\n"
         "\n"
-        "pu fn add(a: int, b: int): int { return a + b; }\n"
-        "pu fn greet(name: string): string { return name; }\n";
+        "open func add(a: int, b: int): int { return a + b; }\n"
+        "open func greet(name: string): string { return name; }\n";
 
     FengProgram *program = parse_or_die("roundtrip.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -330,16 +330,16 @@ static void test_roundtrip_public_module(void) {
 
 static void test_roundtrip_public_module_docs(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.docs;\n"
+        "open module feng.test.symbol.docs;\n"
         "/**\n"
         " * Adds two integers.\n"
         " * Keeps Feng doc newlines.\n"
         " */\n"
-        "pu fn add(a: int, b: int): int { return a + b; }\n"
+        "open func add(a: int, b: int): int { return a + b; }\n"
         "/** User record */\n"
-        "pu type User {\n"
+        "open type User {\n"
         "    /** Stable identifier */\n"
-        "    pu let id: int;\n"
+        "    open let id: int;\n"
         "}\n";
 
     FengProgram *program = parse_or_die("docs_roundtrip.ff", kSource);
@@ -397,8 +397,8 @@ static void test_roundtrip_public_module_docs(void) {
 /* Private modules must not produce a public .ft file. */
 static void test_private_module_skipped(void) {
     static const char *kSource =
-        "mod feng.test.symbol.private_only;\n"
-        "fn local(): int { return 0; }\n";
+        "module feng.test.symbol.private_only;\n"
+        "func local(): int { return 0; }\n";
 
     FengProgram *program = parse_or_die("private.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -468,8 +468,8 @@ static void test_reader_rejects_bad_magic(void) {
 
 static void test_provider_loads_bundle_public_module(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.bundle;\n"
-        "pu fn answer(): int { return 42; }\n";
+        "open module feng.test.symbol.bundle;\n"
+        "open func answer(): int { return 42; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -529,9 +529,9 @@ static void test_provider_loads_bundle_public_module(void) {
 
 static void test_enum_ft_roundtrip_exports_items_and_values(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.enum_roundtrip;\n"
+        "open module feng.test.symbol.enum_roundtrip;\n"
         "\n"
-        "pu enum HttpStatus {\n"
+        "open enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
@@ -591,8 +591,8 @@ static void test_enum_ft_roundtrip_exports_items_and_values(void) {
 
 static void test_provider_rejects_duplicate_bundle_module(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.conflict;\n"
-        "pu fn marker(): int { return 1; }\n";
+        "open module feng.test.symbol.conflict;\n"
+        "open func marker(): int { return 1; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -664,8 +664,8 @@ static void test_provider_rejects_bad_bundle_symbol_entry(void) {
 
 static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.imported_cache;\n"
-        "pu fn answer(): int { return 42; }\n";
+        "open module feng.test.symbol.imported_cache;\n"
+        "open func answer(): int { return 42; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -735,8 +735,8 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
 
 static void test_imported_module_cache_preserves_enum_items(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.imported_enum_cache;\n"
-        "pu enum HttpStatus {\n"
+        "open module feng.test.symbol.imported_enum_cache;\n"
+        "open enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
@@ -805,15 +805,15 @@ static void test_imported_module_cache_preserves_enum_items(void) {
 
 static void test_imported_enum_value_participates_in_semantic_analysis(void) {
     static const char *kExternalSource =
-        "pu mod vendor.status;\n"
-        "pu enum HttpStatus {\n"
+        "open module vendor.status;\n"
+        "open enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n";
     static const char *kMainSource =
-        "mod demo.main;\n"
-        "use vendor.status as status;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "import vendor.status as status;\n"
+        "func run(): int {\n"
         "    let value: status.HttpStatus = status.HttpStatus.NotFound;\n"
         "    return (int)value;\n"
         "}\n";
@@ -875,9 +875,9 @@ static void test_imported_enum_value_participates_in_semantic_analysis(void) {
 
 static void test_imported_module_cache_keeps_bundle_fit_modules_alive(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.bundle_fit;\n"
-        "pu fit string {\n"
-        "    pu fn length(): i64 { return 1; }\n"
+        "open module feng.test.symbol.bundle_fit;\n"
+        "open fit string {\n"
+        "    open func length(): i64 { return 1; }\n"
         "}\n";
 
     char *tmp_dir = make_temp_dir();
@@ -944,11 +944,11 @@ static void test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive
         "bundle_multi_fit_ext.ff",
     };
     static const char *kSources[] = {
-        "pu mod feng.test.symbol.bundle_multi_fit;\n"
-        "pu type Marker {}\n",
-        "pu mod feng.test.symbol.bundle_multi_fit;\n"
-        "pu fit string {\n"
-        "    pu fn length(): i64 { return 1; }\n"
+        "open module feng.test.symbol.bundle_multi_fit;\n"
+        "open type Marker {}\n",
+        "open module feng.test.symbol.bundle_multi_fit;\n"
+        "open fit string {\n"
+        "    open func length(): i64 { return 1; }\n"
         "}\n",
     };
 
@@ -1023,13 +1023,13 @@ static void test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive
 }
 
 static void test_generic_function_ft_roundtrip(void) {
-    /* pu fn identity<T>(x: T): T
+    /* open fn identity<T>(x: T): T
      * After roundtrip: function decl should have type_param_count == 1,
      * and the parameter type / return type should be TYPE_PARAM_REF with name "T". */
     static const char *kSource =
-        "pu mod feng.test.symbol.generic_fn;\n"
+        "open module feng.test.symbol.generic_fn;\n"
         "\n"
-        "pu fn identity<T>(x: T): T { return x; }\n";
+        "open func identity<T>(x: T): T { return x; }\n";
 
     FengProgram *program = parse_or_die("generic_fn.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -1090,13 +1090,13 @@ static void test_generic_function_ft_roundtrip(void) {
 }
 
 static void test_generic_type_ft_roundtrip(void) {
-    /* pu type Box<T> { pu let value: T; }
+    /* open type Box<T> { open let value: T; }
      * After roundtrip: type decl should have type_param_count == 1,
      * and the field type should be TYPE_PARAM_REF with name "T". */
     static const char *kSource =
-        "pu mod feng.test.symbol.generic_type;\n"
+        "open module feng.test.symbol.generic_type;\n"
         "\n"
-        "pu type Box<T> { pu let value: T; }\n";
+        "open type Box<T> { open let value: T; }\n";
 
     FengProgram *program = parse_or_die("generic_type.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -1156,12 +1156,12 @@ static void test_generic_type_ft_roundtrip(void) {
 
 static void test_generic_fit_ft_roundtrip(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.generic_fit;\n"
+        "open module feng.test.symbol.generic_fit;\n"
         "\n"
-        "pu spec Reader<T> { fn read(): T; }\n"
-        "pu type Box<T> { pu let value: T; }\n"
-        "pu fit Box<T>: Reader<T> {\n"
-        "    pu fn read(): T { return self.value; }\n"
+        "open spec Reader<T> { func read(): T; }\n"
+        "open type Box<T> { open let value: T; }\n"
+        "open fit Box<T>: Reader<T> {\n"
+        "    open func read(): T { return self.value; }\n"
         "}\n";
 
     FengProgram *program = parse_or_die("generic_fit.ff", kSource);
@@ -1248,12 +1248,12 @@ static void test_generic_fit_ft_roundtrip(void) {
 
 static void test_generic_fit_named_generic_return_ft_roundtrip(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.generic_fit_named_generic_return;\n"
+        "open module feng.test.symbol.generic_fit_named_generic_return;\n"
         "\n"
-        "pu spec Slicer<T> { fn slice(from: i32, to: i32): Span<T>; }\n"
-        "pu type Span<T> {}\n"
-        "pu fit Span<T>: Slicer<T> {\n"
-        "    pu fn slice(from: i32, to: i32): Span<T> { return self; }\n"
+        "open spec Slicer<T> { func slice(from: i32, to: i32): Span<T>; }\n"
+        "open type Span<T> {}\n"
+        "open fit Span<T>: Slicer<T> {\n"
+        "    open func slice(from: i32, to: i32): Span<T> { return self; }\n"
         "}\n";
 
     FengProgram *program = parse_or_die("generic_fit_named_generic_return.ff", kSource);
@@ -1324,20 +1324,20 @@ static void test_generic_fit_named_generic_return_ft_roundtrip(void) {
 
 static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.fit_target_nodes;\n"
+        "open module feng.test.symbol.fit_target_nodes;\n"
         "\n"
-        "pu spec Label { fn label(): string; }\n"
-        "pu fit int: Label {\n"
-        "    pu fn label(): string { return \"i32\"; }\n"
+        "open spec Label { func label(): string; }\n"
+        "open fit int: Label {\n"
+        "    open func label(): string { return \"i32\"; }\n"
         "}\n"
-        "pu fit string: Label {\n"
-        "    pu fn label(): string { return self; }\n"
+        "open fit string: Label {\n"
+        "    open func label(): string { return self; }\n"
         "}\n"
-        "pu fit int[]: Label {\n"
-        "    pu fn label(): string { return \"arr_ro\"; }\n"
+        "open fit int[]: Label {\n"
+        "    open func label(): string { return \"arr_ro\"; }\n"
         "}\n"
-        "pu fit int[!]: Label {\n"
-        "    pu fn label(): string { return \"arr_rw\"; }\n"
+        "open fit int[!]: Label {\n"
+        "    open func label(): string { return \"arr_rw\"; }\n"
         "}\n";
 
     FengProgram *program = parse_or_die("fit_target_nodes.ff", kSource);
@@ -1428,11 +1428,11 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
 
 static void test_fit_array_type_param_target_ft_roundtrip(void) {
     static const char *kSource =
-        "pu mod feng.test.symbol.fit_array_type_param_target;\n"
+        "open module feng.test.symbol.fit_array_type_param_target;\n"
         "\n"
-        "pu spec ArrTag<T> { fn count(): int; }\n"
-        "pu fit T[!]: ArrTag<T> {\n"
-        "    pu fn count(): int { return 0; }\n"
+        "open spec ArrTag<T> { func count(): int; }\n"
+        "open fit T[!]: ArrTag<T> {\n"
+        "    open func count(): int { return 0; }\n"
         "}\n";
 
     FengProgram *program = parse_or_die("fit_array_type_param_target.ff", kSource);

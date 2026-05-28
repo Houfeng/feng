@@ -34,9 +34,9 @@ static void dump_path(FILE *stream, FengSlice *segments, size_t count) {
 static const char *visibility_name(FengVisibility visibility) {
     switch (visibility) {
         case FENG_VISIBILITY_PRIVATE:
-            return "pr";
+            return "seal";
         case FENG_VISIBILITY_PUBLIC:
-            return "pu";
+            return "open";
         case FENG_VISIBILITY_DEFAULT:
         default:
             return "default";
@@ -511,7 +511,7 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
 
     for (index = 0U; index < program->use_count; ++index) {
         dump_indent(stream, 1);
-        fputs("use ", stream);
+        fputs("import ", stream);
         dump_path(stream, program->uses[index].segments, program->uses[index].segment_count);
         if (program->uses[index].has_alias) {
             fputs(" as ", stream);

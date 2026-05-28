@@ -1,11 +1,11 @@
-mod test.cli.localdepapp;
+module test.cli.localdepapp;
 
-use test.cli.localdep;
+import test.cli.localdep;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn main(args: string[]) {
+func main(args: string[]) {
   if dep_value() == 7 {
     puts(&"local dep ok");
   } else {

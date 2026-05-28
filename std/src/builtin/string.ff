@@ -1,17 +1,17 @@
-pu mod std;
+open module std;
 
 @runtime
-extern fn feng_string_utf8_length(value: string): long;
+extern func feng_string_utf8_length(value: string): long;
 
 /**
  * Extends `string` with standard length-related operations.
  */
-pu fit string {
+open fit string {
   /**
    * Returns the UTF-8 byte length of this string.
    * @return number of bytes in this string
    */
-  pu fn length(): long {
+  open func length(): long {
     return feng_string_utf8_length(self);
   }
 

@@ -1,13 +1,13 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn fail_void() {
+func fail_void() {
     throw "boom";
 }
 
-fn break_from_catch(): string {
+func break_from_catch(): string {
     while true {
         try fail_void() catch ex: string {
             break;
@@ -16,7 +16,7 @@ fn break_from_catch(): string {
     return "after-break";
 }
 
-fn continue_from_catch(): string {
+func continue_from_catch(): string {
     var index: int = 0;
     var skipped: int = 0;
 
@@ -35,7 +35,7 @@ fn continue_from_catch(): string {
     return "bad-continue";
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let first = break_from_catch();
     puts(&first);
 

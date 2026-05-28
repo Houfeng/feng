@@ -27,12 +27,12 @@ static void assert_slice_text(FengSlice slice, const char *expected) {
 
 static void test_top_level_declarations(void) {
     const char *source =
-        "pu mod libc.math;\n"
-        "use libc.base;\n"
-        "use libc.extra as extra;\n"
+        "open module libc.math;\n"
+        "import libc.base;\n"
+        "import libc.extra as extra;\n"
         "let point_lib = \"./libpoint.so\";\n"
         "@cdecl(point_lib)\n"
-        "extern fn point_distance(p1: Point, p2: Point): float;\n"
+        "extern func point_distance(p1: Point, p2: Point): float;\n"
         "@union\n"
         "type Point {\n"
         "    var x: int;\n"
@@ -75,11 +75,11 @@ static void test_top_level_declarations(void) {
 
 static void test_extern_rejects_non_function_top_level_declarations(void) {
     static const char *kCases[] = {
-        "mod demo.main;\nextern let value: int;\n",
-        "mod demo.main;\nextern type Point {\n    var x: int;\n}\n",
-        "mod demo.main;\nextern enum Status {\n    ok = 0;\n}\n",
-        "mod demo.main;\nextern spec Reader {\n}\n",
-        "mod demo.main;\nextern fit User: Named {\n}\n"
+        "module demo.main;\nextern let value: int;\n",
+        "module demo.main;\nextern type Point {\n    var x: int;\n}\n",
+        "module demo.main;\nextern enum Status {\n    ok = 0;\n}\n",
+        "module demo.main;\nextern spec Reader {\n}\n",
+        "module demo.main;\nextern fit User: Named {\n}\n"
     };
 
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
@@ -90,14 +90,14 @@ static void test_extern_rejects_non_function_top_level_declarations(void) {
         ASSERT(program == NULL);
         ASSERT(error.message != NULL);
         ASSERT(strstr(error.message,
-                      "'extern' can only be applied to top-level 'fn' declarations") != NULL);
+                      "'extern' can only be applied to top-level 'func' declarations") != NULL);
     }
 }
 
 static void test_statements_and_expressions(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.main;\n"
+        "func main(args: string[]) {\n"
         "    let label = if age >= 18 { \"adult\"; } else { \"minor\"; };\n"
         "    let stage = if age { 0 { \"婴儿\"; } 18 { \"成年\"; } else { \"青年\"; } };\n"
         "    for var i = 0; i < 3; i = i + 1 {\n"
@@ -109,7 +109,7 @@ static void test_statements_and_expressions(void) {
         "    }\n"
         "    return (i32)1;\n"
         "}\n"
-        "fn make_adder(base: int): IntToInt {\n"
+        "func make_adder(base: int): IntToInt {\n"
         "    return (x: int) -> base + x;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -145,8 +145,8 @@ static void test_statements_and_expressions(void) {
 
 static void test_try_block_form_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    try {\n"
         "        1;\n"
         "    }\n"
@@ -162,8 +162,8 @@ static void test_try_block_form_is_rejected(void) {
 
 static void test_try_expression_with_typed_catches(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "func run(): int {\n"
         "    let value = try parse() catch err: ParseError { 8080; } catch problem: unknown { 9090; };\n"
         "    return value;\n"
         "}\n";
@@ -200,8 +200,8 @@ static void test_try_expression_with_typed_catches(void) {
 
 static void test_try_without_catch_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run() {\n"
+        "module demo.main;\n"
+        "func run() {\n"
         "    try init_runtime();\n"
         "}\n";
     FengProgram *program = NULL;
@@ -214,9 +214,9 @@ static void test_try_without_catch_is_rejected(void) {
 
 static void test_runtime_annotation_on_extern_function(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@runtime\n"
-        "extern fn feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): long;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -235,15 +235,15 @@ static void test_runtime_annotation_on_extern_function(void) {
 
 static void test_member_annotations_and_constructors(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type User {\n"
-        "    pu var name: string;\n"
+        "    open var name: string;\n"
         "    @bounded\n"
-        "    pu let id: int;\n"
-        "    pu let created_at: int;\n"
+        "    open let id: int;\n"
+        "    open let created_at: int;\n"
         "    @bounded(created_at)\n"
-        "    fn User(ts: int) {}\n"
-        "    pu fn info(): string {\n"
+        "    func User(ts: int) {}\n"
+        "    open func info(): string {\n"
         "        return self.name;\n"
         "    }\n"
         "}\n";
@@ -271,8 +271,8 @@ static void test_member_annotations_and_constructors(void) {
 
 static void test_enum_declarations_parse(void) {
     const char *source =
-        "mod demo.enums;\n"
-        "pu enum Status {\n"
+        "module demo.enums;\n"
+        "open enum Status {\n"
         "    Ok,\n"
         "    NotFound\n"
         "}\n"
@@ -309,16 +309,16 @@ static void test_enum_declarations_parse(void) {
 
 static void test_ast_source_tokens(void) {
     const char *source =
-        "pu mod demo.main;\n"
-        "use demo.base;\n"
+        "open module demo.main;\n"
+        "import demo.base;\n"
         "@bounded\n"
-        "fn main(arg: int) {\n"
+        "func main(arg: int) {\n"
         "    let answer: int = 42;\n"
         "    return answer;\n"
         "}\n"
         "type User {\n"
-        "    pu let id: int = 1;\n"
-        "    fn User(value: int) {\n"
+        "    open let id: int = 1;\n"
+        "    func User(value: int) {\n"
         "        self.id = value;\n"
         "    }\n"
         "}\n";
@@ -348,7 +348,7 @@ static void test_ast_source_tokens(void) {
 
 static void test_type_field_inferred_initializers(void) {
     const char *source =
-        "mod demo.fields;\n"
+        "module demo.fields;\n"
         "type UserType {}\n"
         "type User {\n"
         "    let id: int = 0;\n"
@@ -382,27 +382,27 @@ static void test_type_field_inferred_initializers(void) {
 
 static void test_doc_comments_bind_to_declarations_and_members(void) {
     const char *source =
-        "mod demo.docs;\n"
-        "/** top fn doc */\n"
+        "module demo.docs;\n"
+        "/** top func doc */\n"
         "@bounded\n"
-        "pu fn run() {}\n"
+        "open func run() {}\n"
         "/** type doc */\n"
         "type User {\n"
         "    /** field doc */\n"
         "    @bounded\n"
-        "    pu let id: int;\n"
+        "    open let id: int;\n"
         "    /** method doc */\n"
-        "    pu fn info(): int {\n"
+        "    open func info(): int {\n"
         "        return self.id;\n"
         "    }\n"
         "}\n"
         "spec Named {\n"
         "    /** spec member doc */\n"
-        "    fn name(): int;\n"
+        "    func name(): int;\n"
         "}\n"
         "fit User {\n"
         "    /** fit member doc */\n"
-        "    fn extra(): int {\n"
+        "    func extra(): int {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
@@ -413,7 +413,7 @@ static void test_doc_comments_bind_to_declarations_and_members(void) {
     ASSERT(program != NULL);
     ASSERT(program->declaration_count == 4U);
 
-    assert_slice_text(program->declarations[0]->doc_comment, "/** top fn doc */");
+    assert_slice_text(program->declarations[0]->doc_comment, "/** top func doc */");
     assert_slice_text(program->declarations[1]->doc_comment, "/** type doc */");
     assert_slice_text(program->declarations[1]->as.type_decl.members[0]->doc_comment,
                       "/** field doc */");
@@ -429,13 +429,13 @@ static void test_doc_comments_bind_to_declarations_and_members(void) {
 
 static void test_doc_comments_require_immediate_declaration(void) {
     const char *source =
-        "mod demo.docs;\n"
+        "module demo.docs;\n"
         "/** blank line breaks */\n"
         "\n"
-        "fn first() {}\n"
+        "func first() {}\n"
         "/** normal comment breaks */\n"
         "// separator\n"
-        "fn second() {}\n";
+        "func second() {}\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -449,7 +449,7 @@ static void test_doc_comments_require_immediate_declaration(void) {
 }
 
 static void test_parse_error(void) {
-    const char *source = "fn main(args: string[]) {}\n";
+    const char *source = "func main(args: string[]) {}\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -460,9 +460,9 @@ static void test_parse_error(void) {
 
 static void test_parse_error_after_annotation_semicolon(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "@cdecl(\"libc\");\n"
-        "extern fn print(msg: string*): void;\n";
+        "extern func print(msg: string*): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -475,8 +475,8 @@ static void test_parse_error_after_annotation_semicolon(void) {
 
 static void test_parse_error_top_level_fn_missing_body(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn point_sum(a: int, b: int): int;\n";
+        "module demo.main;\n"
+        "func point_sum(a: int, b: int): int;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -489,8 +489,8 @@ static void test_parse_error_top_level_fn_missing_body(void) {
 
 static void test_parse_error_top_level_fn_missing_body_without_return_type(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn print(msg: string);\n";
+        "module demo.main;\n"
+        "func print(msg: string);\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -503,8 +503,8 @@ static void test_parse_error_top_level_fn_missing_body_without_return_type(void)
 
 static void test_parse_error_top_level_fn_missing_body_with_void_return(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn print(msg: string): void;\n";
+        "module demo.main;\n"
+        "func print(msg: string): void;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -517,8 +517,8 @@ static void test_parse_error_top_level_fn_missing_body_with_void_return(void) {
 
 static void test_parse_error_extern_fn_with_body(void) {
     const char *source =
-        "mod demo.main;\n"
-        "extern fn point_sum(a: int, b: int): int {\n"
+        "module demo.main;\n"
+        "extern func point_sum(a: int, b: int): int {\n"
         "    return a + b;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -534,9 +534,9 @@ static void test_parse_error_extern_fn_with_body(void) {
 
 static void test_parse_error_member_fn_missing_body(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type User {\n"
-        "    fn info(): string;\n"
+        "    func info(): string;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -550,9 +550,9 @@ static void test_parse_error_member_fn_missing_body(void) {
 
 static void test_parse_error_extern_fn_inside_type(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type User {\n"
-        "    extern fn info(): string*;\n"
+        "    extern func info(): string*;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -560,13 +560,13 @@ static void test_parse_error_extern_fn_inside_type(void) {
     ASSERT(!feng_parse_source(source, strlen(source), "extern_fn_in_type.f", &program, &error));
     ASSERT(program == NULL);
     ASSERT(error.message != NULL);
-    ASSERT(strstr(error.message, "type members cannot use 'extern fn'") != NULL);
+    ASSERT(strstr(error.message, "type members cannot use 'extern func'") != NULL);
     ASSERT(error.token.kind == FENG_TOKEN_KW_EXTERN);
 }
 
 static void test_parse_error_enum_member_declaration(void) {
     const char *source =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Bad {\n"
         "    let code: int;\n"
         "}\n";
@@ -583,7 +583,7 @@ static void test_parse_error_enum_member_declaration(void) {
 
 static void test_parse_error_enum_initializer_expression(void) {
     const char *source =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Bad {\n"
         "    Value = 1 + 2\n"
         "}\n";
@@ -599,7 +599,7 @@ static void test_parse_error_enum_initializer_expression(void) {
 
 static void test_parse_error_empty_enum(void) {
     const char *source =
-        "mod demo.enums;\n"
+        "module demo.enums;\n"
         "enum Empty {}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -613,7 +613,7 @@ static void test_parse_error_empty_enum(void) {
 
 static void test_parse_error_missing_top_level_fn_keyword(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "main(args: string[]) {}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -621,13 +621,13 @@ static void test_parse_error_missing_top_level_fn_keyword(void) {
     ASSERT(!feng_parse_source(source, strlen(source), "missing_fn.f", &program, &error));
     ASSERT(program == NULL);
     ASSERT(error.message != NULL);
-    ASSERT(strstr(error.message, "top-level function declarations must start with 'fn'") != NULL);
+    ASSERT(strstr(error.message, "top-level function declarations must start with 'func'") != NULL);
     ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
 }
 
 static void test_parse_error_missing_member_fn_keyword(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type User {\n"
         "    info(): string {\n"
         "        return self.name;\n"
@@ -639,13 +639,13 @@ static void test_parse_error_missing_member_fn_keyword(void) {
     ASSERT(!feng_parse_source(source, strlen(source), "missing_member_fn.f", &program, &error));
     ASSERT(program == NULL);
     ASSERT(error.message != NULL);
-    ASSERT(strstr(error.message, "type methods and constructors must start with 'fn'") != NULL);
+    ASSERT(strstr(error.message, "type methods and constructors must start with 'func'") != NULL);
     ASSERT(error.token.kind == FENG_TOKEN_IDENTIFIER);
 }
 
 static void test_parse_error_missing_member_binding_keyword(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type User {\n"
         "    name: string;\n"
         "}\n";
@@ -661,8 +661,8 @@ static void test_parse_error_missing_member_binding_keyword(void) {
 
 static void test_parse_error_missing_local_binding_keyword(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.main;\n"
+        "func main(args: string[]) {\n"
         "    name: string = \"Houfeng\";\n"
         "}\n";
     FengProgram *program = NULL;
@@ -677,7 +677,7 @@ static void test_parse_error_missing_local_binding_keyword(void) {
 
 static void test_parse_error_missing_identifier_in_qualified_name(void) {
     const char *source =
-        "mod demo.;\n";
+        "module demo.;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -689,8 +689,8 @@ static void test_parse_error_missing_identifier_in_qualified_name(void) {
 
 static void test_parse_error_missing_identifier_in_member_access(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.main;\n"
+        "func main(args: string[]) {\n"
         "    return user.;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -704,11 +704,11 @@ static void test_parse_error_missing_identifier_in_member_access(void) {
 
 static void test_finalizer_declaration(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Buffer {\n"
-        "    pu var size: int;\n"
-        "    fn Buffer(s: int) {}\n"
-        "    fn ~Buffer() {}\n"
+        "    open var size: int;\n"
+        "    func Buffer(s: int) {}\n"
+        "    func ~Buffer() {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -729,9 +729,9 @@ static void test_finalizer_declaration(void) {
 
 static void test_finalizer_declaration_with_void_return(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Buffer {\n"
-        "    fn ~Buffer(): void {}\n"
+        "    func ~Buffer(): void {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -743,9 +743,9 @@ static void test_finalizer_declaration_with_void_return(void) {
 
 static void test_constructor_with_void_return_type(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Box {\n"
-        "    fn Box(): void {}\n"
+        "    func Box(): void {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -757,9 +757,9 @@ static void test_constructor_with_void_return_type(void) {
 
 static void test_parse_error_constructor_with_non_void_return(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Box {\n"
-        "    fn Box(): int { return 0; }\n"
+        "    func Box(): int { return 0; }\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -772,9 +772,9 @@ static void test_parse_error_constructor_with_non_void_return(void) {
 
 static void test_parse_error_finalizer_with_params(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Box {\n"
-        "    fn ~Box(x: int) {}\n"
+        "    func ~Box(x: int) {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -787,9 +787,9 @@ static void test_parse_error_finalizer_with_params(void) {
 
 static void test_parse_error_finalizer_with_non_void_return(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Box {\n"
-        "    fn ~Box(): int { return 0; }\n"
+        "    func ~Box(): int { return 0; }\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -802,9 +802,9 @@ static void test_parse_error_finalizer_with_non_void_return(void) {
 
 static void test_parse_error_finalizer_name_mismatch(void) {
     const char *source =
-        "mod demo.user;\n"
+        "module demo.user;\n"
         "type Box {\n"
-        "    fn ~Other() {}\n"
+        "    func ~Other() {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -817,8 +817,8 @@ static void test_parse_error_finalizer_name_mismatch(void) {
 
 static void test_parse_error_direct_finalizer_call(void) {
     const char *source =
-        "mod demo.user;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.user;\n"
+        "func main(args: string[]) {\n"
         "    let b: Box = Box();\n"
         "    b.~Box();\n"
         "}\n";
@@ -834,8 +834,8 @@ static void test_parse_error_direct_finalizer_call(void) {
 static void test_bitwise_expr_parsing(void) {
     /* Expected precedence: a | b ^ c & d == e << f   (shift > equality > & > ^ > |) */
     const char *source =
-        "mod demo.bits;\n"
-        "fn f(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32): bool {\n"
+        "module demo.bits;\n"
+        "func f(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32): bool {\n"
         "    return a | b ^ c & d == e << f;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -866,8 +866,8 @@ static void test_bitwise_expr_parsing(void) {
 
 static void test_tilde_unary_parsing(void) {
     const char *source =
-        "mod demo.bits;\n"
-        "fn f(a: i32): i32 {\n"
+        "module demo.bits;\n"
+        "func f(a: i32): i32 {\n"
         "    return ~a;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -884,16 +884,16 @@ static void test_tilde_unary_parsing(void) {
 
 static void test_address_of_unary_parsing(void) {
     const char *source =
-        "mod demo.addr;\n"
+        "module demo.addr;\n"
         "@abi\n"
         "type Point {\n"
         "    var x: i32;\n"
         "}\n"
         "@abi\n"
-        "fn cmp(a: i32, b: i32): i32 {\n"
+        "func cmp(a: i32, b: i32): i32 {\n"
         "    return a - b;\n"
         "}\n"
-        "fn run(point: Point, msg: string, arr: i32[], value: i32) {\n"
+        "func run(point: Point, msg: string, arr: i32[], value: i32) {\n"
         "    let data_ptr = &value;\n"
         "    let point_ptr = &point;\n"
         "    let str_ptr = &msg;\n"
@@ -926,8 +926,8 @@ static void test_address_of_unary_parsing(void) {
 
 static void test_address_of_and_bitwise_and_disambiguation(void) {
     const char *source =
-        "mod demo.addr;\n"
-        "fn run(a: i32, b: i32) {\n"
+        "module demo.addr;\n"
+        "func run(a: i32, b: i32) {\n"
         "    let mixed = &a & b;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -953,8 +953,8 @@ static void test_address_of_and_bitwise_and_disambiguation(void) {
 
 static void test_compound_assignment_parsing(void) {
     const char *source =
-        "mod demo.ops;\n"
-        "fn run() {\n"
+        "module demo.ops;\n"
+        "func run() {\n"
         "    var total: float = 7.8;\n"
         "    total %= 3.2;\n"
         "    var mask: i32 = 1;\n"
@@ -989,8 +989,8 @@ static void test_compound_assignment_parsing(void) {
 
 static void test_lambda_block_body_parses(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "func run(): int {\n"
         "    let f = (a: int) {\n"
         "        let b = a + 1;\n"
         "        return b;\n"
@@ -1019,8 +1019,8 @@ static void test_lambda_block_body_parses(void) {
 
 static void test_lambda_block_body_with_arrow_is_rejected(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): int {\n"
+        "module demo.main;\n"
+        "func run(): int {\n"
         "    let f = (a: int) -> {\n"
         "        return a;\n"
         "    };\n"
@@ -1036,8 +1036,8 @@ static void test_lambda_block_body_with_arrow_is_rejected(void) {
 
 static void test_match_with_range_and_list_labels(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(age: int): string {\n"
+        "module demo.main;\n"
+        "func run(age: int): string {\n"
         "    return if age {\n"
         "        0 { \"婴儿\"; }\n"
         "        1...17 { \"未成年\"; }\n"
@@ -1075,8 +1075,8 @@ static void test_match_with_range_and_list_labels(void) {
 
 static void test_match_statement_form(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(age: int) {\n"
+        "module demo.main;\n"
+        "func run(age: int) {\n"
         "    if age {\n"
         "        0 { print(\"zero\"); }\n"
         "        1...10 { print(\"small\"); }\n"
@@ -1099,8 +1099,8 @@ static void test_match_statement_form(void) {
 
 static void test_for_in_loop(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(items: int[]) {\n"
+        "module demo.main;\n"
+        "func run(items: int[]) {\n"
         "    for let it in items {\n"
         "        print(it);\n"
         "    }\n"
@@ -1124,8 +1124,8 @@ static void test_block_yield_omits_trailing_semicolon(void) {
     /* Per docs/feng-flow.md: trailing ';' on the last expression statement
      * of a block may be omitted. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(value: int): int {\n"
+        "module demo.main;\n"
+        "func run(value: int): int {\n"
         "    let x = if value > 0 { 1 } else { 2 };\n"
         "    return x;\n"
         "}\n";
@@ -1140,11 +1140,11 @@ static void test_block_yield_omits_trailing_semicolon(void) {
 
 static void test_non_generic_array_new_uses_colon_dimension_syntax(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Counter {\n"
         "    var value: int;\n"
         "}\n"
-        "fn run(n: int) {\n"
+        "func run(n: int) {\n"
         "    let a: Counter[!] = Counter[:3];\n"
         "    let b: int[!] = int[:n];\n"
         "}\n";
@@ -1172,12 +1172,12 @@ static void test_non_generic_array_new_uses_colon_dimension_syntax(void) {
 
 static void test_generic_array_new_uses_colon_dimension_syntax(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Pair<A, B> {\n"
         "    var left: A;\n"
         "    var right: B;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let pairs: Pair<int, int>[!] = Pair<int, int>[:2];\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1201,8 +1201,8 @@ static void test_generic_array_new_uses_colon_dimension_syntax(void) {
 
 static void test_index_expression_is_unambiguous_and_remains_value_brackets(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(items: int[]): int {\n"
+        "module demo.main;\n"
+        "func run(items: int[]): int {\n"
         "    return items[0];\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1219,11 +1219,11 @@ static void test_index_expression_is_unambiguous_and_remains_value_brackets(void
 
 static void test_non_generic_type_brackets_without_colon_parses_as_index(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Counter {\n"
         "    var value: int;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let x: Counter[!] = Counter[3];\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1244,12 +1244,12 @@ static void test_non_generic_type_brackets_without_colon_parses_as_index(void) {
 
 static void test_generic_type_brackets_without_colon_parses_as_index(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Pair<A, B> {\n"
         "    var left: A;\n"
         "    var right: B;\n"
         "}\n"
-        "fn run() {\n"
+        "func run() {\n"
         "    let pairs: Pair<int, int>[!] = Pair<int, int>[2];\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1279,7 +1279,7 @@ static void test_generic_type_brackets_without_colon_parses_as_index(void) {
 static void test_generic_type_declaration(void) {
     /* type Box<T> with one unconstrained type parameter */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
         "    var value: T;\n"
         "}\n";
@@ -1300,7 +1300,7 @@ static void test_generic_type_declaration(void) {
 static void test_generic_type_declaration_with_constraint(void) {
     /* type Wrapper<T: Named> with a constrained type parameter */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Wrapper<T: Named> {\n"
         "    var inner: T;\n"
         "}\n";
@@ -1321,9 +1321,9 @@ static void test_generic_type_declaration_with_constraint(void) {
 static void test_generic_spec_declaration(void) {
     /* spec Container<T> with one type parameter */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "spec Container<T> {\n"
-        "    fn fetch(): T;\n"
+        "    func fetch(): T;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1339,10 +1339,10 @@ static void test_generic_spec_declaration(void) {
 }
 
 static void test_generic_function_declaration(void) {
-    /* fn identity<T>(value: T): T with one type parameter */
+    /* func identity<T>(value: T): T with one type parameter */
     const char *source =
-        "mod demo.main;\n"
-        "fn identity<T>(value: T): T {\n"
+        "module demo.main;\n"
+        "func identity<T>(value: T): T {\n"
         "    return value;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1360,10 +1360,10 @@ static void test_generic_function_declaration(void) {
 }
 
 static void test_generic_function_multi_type_params(void) {
-    /* fn zip<A, B: Named>(a: A, b: B): A with two type parameters */
+    /* func zip<A, B: Named>(a: A, b: B): A with two type parameters */
     const char *source =
-        "mod demo.main;\n"
-        "fn zip<A, B: Named>(a: A, b: B): A {\n"
+        "module demo.main;\n"
+        "func zip<A, B: Named>(a: A, b: B): A {\n"
         "    return a;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1383,8 +1383,8 @@ static void test_generic_function_multi_type_params(void) {
 static void test_generic_type_ref_with_args(void) {
     /* Let binding with generic type ref: let x: Map<string, int>; */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let x: Map<string, int>;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1411,8 +1411,8 @@ static void test_generic_type_ref_with_args(void) {
 static void test_generic_type_ref_nested(void) {
     /* Nested generic type ref: Map<string, List<int>> handled via pending_gt */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    let x: Map<string, List<int>>;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1439,12 +1439,12 @@ static void test_generic_type_ref_nested(void) {
 
 static void test_cast_with_generic_array_target(void) {
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Entry<K, V> {\n"
         "    let key: K;\n"
         "    let value: V;\n"
         "}\n"
-        "fn run<K, V>(items: Entry<K, V>[!]): Entry<K, V>[] {\n"
+        "func run<K, V>(items: Entry<K, V>[!]): Entry<K, V>[] {\n"
         "    return (Entry<K, V>[])items;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1472,8 +1472,8 @@ static void test_cast_with_generic_array_target(void) {
 static void test_explicit_generic_call(void) {
     /* Explicit generic call: callee<int>(arg) */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    callee<int>(42);\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1499,8 +1499,8 @@ static void test_explicit_generic_call(void) {
 static void test_explicit_generic_call_multi_type_args(void) {
     /* Explicit generic call with two type args: callee<A, B>(x, y) */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    callee<A, B>(x, y);\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1527,8 +1527,8 @@ static void test_explicit_generic_call_multi_type_args(void) {
 static void test_explicit_generic_type_constructor_call(void) {
     /* 正确语法六-b: Type<T1, T2>() generic type constructor call. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    Map<string, int>();\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1553,8 +1553,8 @@ static void test_explicit_generic_type_constructor_call(void) {
 
 static void test_postfix_pointer_type_refs(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(a: Point*[], b: int[]*, c: byte*) {}\n";
+        "module demo.main;\n"
+        "func run(a: Point*[], b: int[]*, c: byte*) {}\n";
     FengProgram *program = NULL;
     FengParseError error;
     const FengDecl *fn_decl;
@@ -1601,10 +1601,10 @@ static void test_postfix_pointer_type_refs(void) {
 static void test_generic_method_uses_both_outer_and_method_type_params(void) {
     /* 正确语法二: method in generic type uses outer type param T and own param U. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T> {\n"
-        "    pu let value: T;\n"
-        "    fn map<U>(x: U): T {\n"
+        "    open let value: T;\n"
+        "    func map<U>(x: U): T {\n"
         "        return self.value;\n"
         "    }\n"
         "}\n";
@@ -1630,9 +1630,9 @@ static void test_generic_method_uses_both_outer_and_method_type_params(void) {
 static void test_generic_parse_error_colon_angle_in_type_position(void) {
     /* 旧语法 `:<T>` in non-call position (type declaration head) must fail. */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box:<T> {\n"
-        "    pu let value: int;\n"
+        "    open let value: int;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1645,8 +1645,8 @@ static void test_generic_parse_error_colon_angle_in_type_position(void) {
 static void test_generic_parse_error_nested_colon_angle_in_type_arg(void) {
     /* 旧语法 `foo<Map:<int>>(x)` — nested `:<` inside type arg list must fail. */
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    foo<Map:<int>>(x);\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1660,7 +1660,7 @@ static void test_generic_parse_error_nested_colon_angle_in_type_arg(void) {
 static void test_generic_parse_error_missing_closing_gt(void) {
     /* type Box<T { ... } — missing `>` */
     const char *source =
-        "mod demo.main;\n"
+        "module demo.main;\n"
         "type Box<T {\n"
         "    var value: T;\n"
         "}\n";
@@ -1673,10 +1673,10 @@ static void test_generic_parse_error_missing_closing_gt(void) {
 }
 
 static void test_generic_parse_error_missing_type_param_name(void) {
-    /* fn foo<, T>() — missing type parameter name */
+    /* func foo<, T>() — missing type parameter name */
     const char *source =
-        "mod demo.main;\n"
-        "fn foo<, T>(): void {\n"
+        "module demo.main;\n"
+        "func foo<, T>(): void {\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1688,8 +1688,8 @@ static void test_generic_parse_error_missing_type_param_name(void) {
 
 static void test_generic_target_expression_argument_parses(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn run(): void {\n"
+        "module demo.main;\n"
+        "func run(): void {\n"
         "    callee(a<b>);\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1712,12 +1712,12 @@ static void test_generic_target_expression_argument_parses(void) {
     feng_program_free(program);
 }
 
-/* T1: fn sum(values: int...): int — variadic parameter parses and is
+/* T1: func sum(values: int...): int — variadic parameter parses and is
  * normalised to is_variadic=true with type int[]. */
 static void test_variadic_parameter_parses(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn sum(values: int...): int {\n"
+        "module demo.main;\n"
+        "func sum(values: int...): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1749,8 +1749,8 @@ static void test_variadic_parameter_parses(void) {
 /* T4: variadic parameter must be the last parameter. */
 static void test_parse_error_variadic_not_last(void) {
     const char *source =
-        "mod demo.main;\n"
-        "fn bad(x: int..., y: int): int {\n"
+        "module demo.main;\n"
+        "func bad(x: int..., y: int): int {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1762,11 +1762,11 @@ static void test_parse_error_variadic_not_last(void) {
     ASSERT(strstr(error.message, "variadic parameter must be the last parameter") != NULL);
 }
 
-/* T5: extern fn cannot use variadic parameters. */
+/* T5: extern func cannot use variadic parameters. */
 static void test_parse_error_extern_fn_variadic(void) {
     const char *source =
-        "mod demo.main;\n"
-        "extern fn bad(x: int...): int;\n";
+        "module demo.main;\n"
+        "extern func bad(x: int...): int;\n";
     FengProgram *program = NULL;
     FengParseError error;
 

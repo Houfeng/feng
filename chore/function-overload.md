@@ -11,8 +11,8 @@
 ### 场景：具体类型 vs 接口/Trait
 
 ```feng
-fn inspect(x: int) { ... }       // 重载 A (具体类型)
-fn inspect(x: AnyTrait) { ... }  // 重载 B (接口)
+func inspect(x: int) { ... }       // 重载 A (具体类型)
+func inspect(x: AnyTrait) { ... }  // 重载 B (接口)
 
 ```
 
@@ -33,8 +33,8 @@ fn inspect(x: AnyTrait) { ... }  // 重载 B (接口)
 ### 致命死角案例 1：无法自救的空调用
 
 ```feng
-fn test(x: int...)    // 重载 A
-fn test(y: string...) // 重载 B
+func test(x: int...)    // 重载 A
+func test(y: string...) // 重载 B
 
 ```
 
@@ -45,8 +45,8 @@ fn test(y: string...) // 重载 B
 ### 致命死角案例 2：无法自救的单参数变参碰撞
 
 ```feng
-fn test(x: string)    // 重载 A
-fn test(x: string...) // 重载 B
+func test(x: string)    // 重载 A
+func test(x: string...) // 重载 B
 
 ```
 

@@ -150,7 +150,7 @@ libunwind 要求抛出对象首字段为 `_Unwind_Exception`，Feng 在其后追
 
 ```c
 typedef struct FengUnwindException {
-    struct _Unwind_Exception  unwind;         // libunwind 要求，必须首字段，含 exception_class 与 cleanup fn
+    struct _Unwind_Exception  unwind;         // libunwind 要求，必须首字段，含 exception_class 与 cleanup func
     void                     *value;          // 规范化后的抛出值（托管指针，见 §2）
     const FengTypeDescriptor *desc;           // 抛出值的类型描述符，用于 catch 匹配
     int                       matched_clause; // personality 在 CLEANUP_PHASE 写入命中子句索引，landing pad 读取后分派

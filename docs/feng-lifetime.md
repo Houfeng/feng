@@ -64,7 +64,7 @@
 
 ## 7 C 互操作边界
 
-- 托管对象在 `extern fn`、`@abi fn` 以及与 callable-form `@abi spec` 对应的 ABI 回调边界上的允许位置、借用规则与禁止位置统一见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
+- 托管对象在 `extern func`、`@abi func` 以及与 callable-form `@abi spec` 对应的 ABI 回调边界上的允许位置、借用规则与禁止位置统一见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 - ARC 的 retain/release 语义可按约定暴露给 C 侧：C 代码通过调用约定的 retain/release 函数管理对 Feng 对象的引用，不需要 barrier 机制。
 - C 代码长期持有 Feng 对象引用时，必须在持有期间保持相应的 retain；未按约定 retain 而直接持有 Feng 对象引用属于未定义行为。
 - 若 C 侧长期持有的是通过一元 `&` 借出的裸指针,则该值不是 Feng 对象引用; 调用方必须自行保持 owner 存活。

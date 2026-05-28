@@ -1,21 +1,21 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 fit i32 {
-  fn double(): i32 {
+  func double(): i32 {
     return self * 2;
   }
 }
 
 fit int[] {
-  fn head(): int {
+  func head(): int {
     return self[0];
   }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
   if 21.double() != 42 {
     puts(&"fit builtin fail");
     return;

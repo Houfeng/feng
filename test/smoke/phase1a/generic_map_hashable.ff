@@ -1,21 +1,21 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Hashable {
-    fn hash(): int;
-    fn sameHash(hash: int): bool;
+    func hash(): int;
+    func sameHash(hash: int): bool;
 }
 
 type Key: Hashable {
     var id: int;
 
-    fn hash(): int {
+    func hash(): int {
         return self.id + 1;
     }
 
-    fn sameHash(hash: int): bool {
+    func sameHash(hash: int): bool {
         return self.hash() == hash;
     }
 }
@@ -24,16 +24,16 @@ type MiniMap<K: Hashable, V> {
     var key: K;
     var value: V;
 
-    fn put(key: K, value: V) {
+    func put(key: K, value: V) {
         self.key = key;
         self.value = value;
     }
 
-    fn hasKey(key: K): bool {
+    func hasKey(key: K): bool {
         return key.sameHash(self.key.hash());
     }
 
-    fn getValue(key: K): V {
+    func getValue(key: K): V {
         if self.hasKey(key) {
             return self.value;
         }
@@ -41,7 +41,7 @@ type MiniMap<K: Hashable, V> {
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let key: Key = Key{id: 41};
     let map: MiniMap<Key, string> = MiniMap<Key, string>();
     map.put(key, "answer");

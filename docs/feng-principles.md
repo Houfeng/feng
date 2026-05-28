@@ -6,17 +6,17 @@
 
 - 关键字决定语法类别。凡属于语法结构的问题,都应能在 parse 阶段被检查并报错。
 - 注解只影响语义分析与代码生成,不改变语法产生式,也不决定某条语句在 parse 阶段是否合法。
-- `extern fn` 保留为关键字语法,因为它表达的是“外部函数声明、没有 Feng 实现、不能有函数体”这一语法类别; `extern` 不形成独立可复用修饰符,只能与顶层 `fn` 组合使用。
+- `extern func` 保留为关键字语法,因为它表达的是“外部函数声明、没有 Feng 实现、不能有函数体”这一语法类别; `extern` 不形成独立可复用修饰符,只能与顶层 `func` 组合使用。
 - `@abi` 保留为内建注解,因为它表达的是“声明希望接受 ABI 兼容性检查”这一语义资格,而不是新的语法类别。
 - 未来若引入自定义注解,也应遵循同一分层原则: 自定义注解可以增加语义和代码生成约束,但不应改写核心语法。
 
 ## 2 C互操作原则
 
-- `extern fn` 用于声明无函数体的外部函数; `extern` 只能用于顶层 `fn`,不得用于 `type`、`enum`、`spec`、`fit`、模块级 `let` / `var` 或其他声明。当前公共规范明确定义的目标路径是 C ABI 导入。
-- `@abi` 仅用于标记对象形式的 `type`、callable-form 的 `spec` 与顶层 `fn` 需要接受 ABI 兼容性检查; `@abi` 不改变运行时表示。
+- `extern func` 用于声明无函数体的外部函数; `extern` 只能用于顶层 `func`,不得用于 `type`、`enum`、`spec`、`fit`、模块级 `let` / `var` 或其他声明。当前公共规范明确定义的目标路径是 C ABI 导入。
+- `@abi` 仅用于标记对象形式的 `type`、callable-form 的 `spec` 与顶层 `func` 需要接受 ABI 兼容性检查; `@abi` 不改变运行时表示。
 - 对象形式的 `@abi type` 用于声明可导出 ABI payload 的对象类型; `@abi @union type` 用于声明 ABI 联合体 payload。
 - callable-form 的 `@abi spec` 用于声明 ABI 函数签名; 对应的原生函数指针类型写作 `Foo*`。
-- 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 定义 `extern fn` 的 C ABI 导入路径; 无参数形式只用于描述顶层 `@abi fn` 进入 ABI 边界时的调用方式,不改变其“由 Feng 提供实现”的语义身份。
+- 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 定义 `extern func` 的 C ABI 导入路径; 无参数形式只用于描述顶层 `@abi func` 进入 ABI 边界时的调用方式,不改变其“由 Feng 提供实现”的语义身份。
 - 哪些声明与类型能够进入 C ABI 边界,以及对应的兼容资格、借用规则与函数指针规则,统一见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 
 ## 3 ABI资格原则
@@ -44,19 +44,19 @@
 
 ## 6 诊断原则
 
-- `extern fn` 的错误属于语法错误,应描述为“`extern fn` 不能有函数体”之类的结构性问题。
+- `extern func` 的错误属于语法错误,应描述为“`extern func` 不能有函数体”之类的结构性问题。
 - `@abi` 的错误属于语义资格错误,应描述为“该声明不能标记为 `@abi`”,而不是“`@abi` 改变了这种语法可写的成员种类”。
 - 诊断信息应尽量指出不满足资格的具体原因,例如字段、参数或返回类型中存在非 ABI 兼容类型,或函数指针缺少显式 `Foo*` 目标类型。
 
 推荐诊断风格示例:
 
 - `type PointList` 含有不能直接内联到 `@abi type` 的成员 `items`,因此不能标记为 `@abi`。
-- `fn point_sum` 的参数 `user` 类型不是 ABI 兼容类型,因此该函数不能标记为 `@abi`。
+- `func point_sum` 的参数 `user` 类型不是 ABI 兼容类型,因此该函数不能标记为 `@abi`。
 - `let cb = &int_cmp` 缺少显式目标 `Foo*` 类型,因此不能确定函数指针类型。
 
 ## 7 与其他规范的关系
 
 - [feng-language.md](./feng-language.md): 总规范入口,提供摘要性说明并引用本文档。
-- [feng-interop.md](./feng-interop.md): ABI 互操作的具体规则,包括 `extern fn` 导入、`@abi`、`Foo*`、借用规则和 ABI 调用方式注解。
+- [feng-interop.md](./feng-interop.md): ABI 互操作的具体规则,包括 `extern func` 导入、`@abi`、`Foo*`、借用规则和 ABI 调用方式注解。
 - [feng-type.md](./feng-type.md): 普通类型与 `@abi type` 的类型系统位置与边界。
 - [feng-lifetime.md](./feng-lifetime.md): 托管对象、原始指针与 ABI 借用边界的内存边界。

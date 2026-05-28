@@ -1,8 +1,8 @@
-mod std_test;
+module std_test;
 
-use std;
+import std;
 
-fn read_reads_into_buffer() {
+func read_reads_into_buffer() {
   let head: byte[!] = byte[: (long)3];
   let readCount = stdio.read(head);
 
@@ -12,7 +12,7 @@ fn read_reads_into_buffer() {
   check(head[2] == (byte)67, "stdio/read-head-2");
 }
 
-fn readLine_uses_remaining_input() {
+func readLine_uses_remaining_input() {
   let first = stdio.readLine();
   let second = stdio.readLine();
   let third = stdio.readLine();
@@ -30,42 +30,42 @@ fn readLine_uses_remaining_input() {
   writeLine("__STDIO_READLINE3__=" + third);
 }
 
-fn write_writes_stdout() {
+func write_writes_stdout() {
   let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 87, 82, 73, 84, 69, 95, 95, 10];
   let written = stdio.write(marker);
 
   check(written == (long)16, "stdio/write-return");
 }
 
-fn write_text_writes_stdout() {
+func write_text_writes_stdout() {
   let marker = "__STDIO_WRITE_TEXT__\n";
   let written = stdio.write(marker);
 
   check(written == marker.length(), "stdio/write-text-return");
 }
 
-fn writeLine_writes_stdout() {
+func writeLine_writes_stdout() {
   let marker = "__STDIO_LINE__";
   let written = stdio.writeLine(marker);
 
   check(written == (long)15, "stdio/writeLine-return");
 }
 
-fn writeError_writes_stderr() {
+func writeError_writes_stderr() {
   let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 69, 82, 82, 79, 82, 95, 95, 10];
   let written = stdio.writeError(marker);
 
   check(written == (long)16, "stdio/writeError-return");
 }
 
-fn writeError_text_writes_stderr() {
+func writeError_text_writes_stderr() {
   let marker = "__STDIO_ERROR_TEXT__\n";
   let written = stdio.writeError(marker);
 
   check(written == marker.length(), "stdio/writeError-text-return");
 }
 
-fn writeErrorLine_writes_stderr() {
+func writeErrorLine_writes_stderr() {
   let empty: byte[!] = byte[: (long)0];
   let text = "__STDIO_ERROR_LINE_TEXT__";
   let bytesWritten = stdio.writeErrorLine((byte[])empty);
@@ -75,7 +75,7 @@ fn writeErrorLine_writes_stderr() {
   check(textWritten == text.length() + (long)1, "stdio/writeErrorLine-text-return");
 }
 
-fn print_formats_output() {
+func print_formats_output() {
   let topWritten = print("__STDIO_TOP_PRINT__ {0}/{1}\n", "left", "right");
   let literalWritten = print("__STDIO_LITERAL__ {2}\n", "left", "right");
   let printlnWritten = println("__STDIO_PRINTLN__ {0}/{1}", "left", "right");
@@ -85,7 +85,7 @@ fn print_formats_output() {
   check(printlnWritten == "__STDIO_PRINTLN__ left/right".length() + (long)1, "stdio/println-return");
 }
 
-pu fn run_stdio_api_tests() {
+open func run_stdio_api_tests() {
   read_reads_into_buffer();
   readLine_uses_remaining_input();
   write_writes_stdout();

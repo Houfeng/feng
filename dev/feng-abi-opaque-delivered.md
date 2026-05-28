@@ -18,10 +18,10 @@
 type TheCStruct {}
 
 @cdecl("c")
-extern fn c_make(): TheCStruct*;
+extern func c_make(): TheCStruct*;
 
 @cdecl("c")
-extern fn c_drop(v: TheCStruct*): void;
+extern func c_drop(v: TheCStruct*): void;
 ```
 
 本文定义 C incomplete struct handle 场景的类型表达与 ABI 规则。
@@ -52,19 +52,19 @@ extern fn c_drop(v: TheCStruct*): void;
 
 ## 4. ABI 可观察规则
 
-### 4.1 `extern fn` 中的出现形状
+### 4.1 `extern func` 中的出现形状
 
 对无字段的 `@abi type T`：
 
-- `extern fn f(x: T)` 非法。
-- `extern fn f(): T` 非法。
-- `@abi fn f(x: T): void` 非法。
-- `@abi fn f(): T` 非法。
+- `extern func f(x: T)` 非法。
+- `extern func f(): T` 非法。
+- `@abi func f(x: T): void` 非法。
+- `@abi func f(): T` 非法。
 - `@abi spec F(x: T): void;` 非法。
 - `@abi spec F(): T;` 非法。
-- `extern fn f(x: T*): void` 合法。
-- `extern fn f(): T*` 合法。
-- `@abi fn f(x: T*): T*` 合法。
+- `extern func f(x: T*): void` 合法。
+- `extern func f(): T*` 合法。
+- `@abi func f(x: T*): T*` 合法。
 - `@abi spec F(x: T*): T*;` 合法。
 
 也就是说，在任何 ABI callable surface 中，无字段 `@abi type` 只能以 `T*` 形式出现，不能按值出现。
@@ -80,7 +80,7 @@ extern fn c_drop(v: TheCStruct*): void;
 
 因此，无字段 `@abi type` 的 `T*` 合法来源仅包括：
 
-- `extern fn` 返回值。
+- `extern func` 返回值。
 - 作为参数从外部 ABI 边界传入。
 - 已存在的 `T*` 绑定、字段或返回值的传递。
 
@@ -104,7 +104,7 @@ extern fn c_drop(v: TheCStruct*): void;
 
 - 不新增新的注解、关键字或声明形式。
 - 不额外增加“不得有方法”“不得有终结器”“不得参与普通构造/绑定/成员访问”之类限制。
-- 除“无字段 `@abi type` 不能按值出现在 `extern fn` 中，且不能通过 `&` 形成 `T*`”之外，不新增新的专门校验。
+- 除“无字段 `@abi type` 不能按值出现在 `extern func` 中，且不能通过 `&` 形成 `T*`”之外，不新增新的专门校验。
 
 若某种写法已被其他语言规则禁止，则按那些规则处理；本文不重定义这些规则。
 
@@ -117,12 +117,12 @@ extern fn c_drop(v: TheCStruct*): void;
 type TheCStruct {}
 
 @cdecl("c")
-extern fn c_make(): TheCStruct*;
+extern func c_make(): TheCStruct*;
 
 @cdecl("c")
-extern fn c_drop(v: TheCStruct*): void;
+extern func c_drop(v: TheCStruct*): void;
 
-fn run() {
+func run() {
     let p: TheCStruct* = c_make();
     c_drop(p);
 }
@@ -140,10 +140,10 @@ fn run() {
 应覆盖以下错误：
 
 - 没有 `@abi` 的 `type` 出现在 C 边界
-- `extern fn f(x: T)` 试图按值传递无字段 `@abi type`
-- `extern fn f(): T` 试图按值返回无字段 `@abi type`
-- `@abi fn f(x: T)` 试图按值传递无字段 `@abi type`
-- `@abi fn f(): T` 试图按值返回无字段 `@abi type`
+- `extern func f(x: T)` 试图按值传递无字段 `@abi type`
+- `extern func f(): T` 试图按值返回无字段 `@abi type`
+- `@abi func f(x: T)` 试图按值传递无字段 `@abi type`
+- `@abi func f(): T` 试图按值返回无字段 `@abi type`
 - `@abi spec F(x: T)` 试图按值传递无字段 `@abi type`
 - `@abi spec F(): T` 试图按值返回无字段 `@abi type`
 - `let p: T* = &x` 试图通过 `&` 形成无字段 `@abi type` 的指针
@@ -169,7 +169,7 @@ fn run() {
 - [src/semantic/analyzer.c](../src/semantic/analyzer.c)：调整 `validate_extern_function_signature`、`validate_abi_callable_signature`、`validate_abi_type_declaration`、`inferred_expr_type_is_data_addressable_abi_value`、`type_ref_is_abi_stable` / `type_decl_is_abi_stable` 相关判定。
 
 - [x] 在 ABI callable 签名校验中区分“有字段 `@abi type`”与“无字段 `@abi type`”。
-- [x] 拒绝无字段 `@abi type` 以按值 `T` 形态出现在 `extern fn`、顶层 `@abi fn` 与 callable-form `@abi spec` 的参数位与返回位。
+- [x] 拒绝无字段 `@abi type` 以按值 `T` 形态出现在 `extern func`、顶层 `@abi func` 与 callable-form `@abi spec` 的参数位与返回位。
 - [x] 调整一元 `&` 的判定，使对象形式 `type` 只有在“带 `@abi` 且声明了字段”时才能形成 `T*`。
 - [x] 保持没有 `@abi` 的 `type` 不能进入 C 边界。
 
@@ -186,13 +186,13 @@ fn run() {
 
 ### 9.4 测试补齐
 
-- [x] 为无字段 `@abi type` 增加 `extern fn` 返回 `T*` 的正例。
-- [x] 为无字段 `@abi type` 增加 `extern fn` 参数 `T*` 的正例。
-- [x] 为无字段 `@abi type` 增加顶层 `@abi fn` 参数/返回 `T*` 的正例。
+- [x] 为无字段 `@abi type` 增加 `extern func` 返回 `T*` 的正例。
+- [x] 为无字段 `@abi type` 增加 `extern func` 参数 `T*` 的正例。
+- [x] 为无字段 `@abi type` 增加顶层 `@abi func` 参数/返回 `T*` 的正例。
 - [x] 为无字段 `@abi type` 增加 callable-form `@abi spec` 参数/返回 `T*` 的正例。
 - [x] 为无字段 `@abi type` 增加按值参数 `T` 的反例。
 - [x] 为无字段 `@abi type` 增加按值返回 `T` 的反例。
-- [x] 为无字段 `@abi type` 增加顶层 `@abi fn` 按值参数/返回 `T` 的反例。
+- [x] 为无字段 `@abi type` 增加顶层 `@abi func` 按值参数/返回 `T` 的反例。
 - [x] 为无字段 `@abi type` 增加 callable-form `@abi spec` 按值参数/返回 `T` 的反例。
 - [x] 为无字段 `@abi type` 增加通过 `&` 形成 `T*` 的反例。
 - [x] 回归验证有字段 `@abi type` 仍可按值进入 ABI，且仍可通过 `&` 形成 `T*`。

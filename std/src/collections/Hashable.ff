@@ -1,22 +1,22 @@
-pu mod std.collections;
+open module std.collections;
 
 /**
  * Hashable is a constraint spec for types that can be used as map or set keys.
  * A type implementing Hashable must provide a stable hash function and an equality check.
  * @param <T> - the concrete type implementing this spec
  */
-pu spec Hashable<T> {
+open spec Hashable<T> {
   /**
    * Returns the hash code for this value.
    * The returned value must be stable: equal values must return equal hashes.
    * @return a 64-bit unsigned hash code
    */
-  fn hash(): u64;
+  func hash(): u64;
 
   /**
    * Returns true if this value is considered the same as `other`.
    * Must be consistent with `hash`: if `same` returns true, both hashes must be equal.
    * @param other - the value to compare with
    */
-  fn same(other: T): bool;
+  func same(other: T): bool;
 }

@@ -25,7 +25,7 @@
 spec CelsiusToFahrenheit(c: float): float;
 spec KilogramsToPounds(kg: float): float;
 
-fn convert_impl(v: float): float { return v * 1.8 + 32.0; }
+func convert_impl(v: float): float { return v * 1.8 + 32.0; }
 
 let c2f: CelsiusToFahrenheit = convert_impl;   // ✓ 结构匹配
 let k2p: KilogramsToPounds = c2f;              // ✓ 当前：结构匹配通过
@@ -74,8 +74,8 @@ let k2p: KilogramsToPounds = c2f;              // ✓ 当前：结构匹配通�
 ```feng
 spec Transform<T>(x: T): T;
 
-fn double(x: int): int { return x * 2; }
-fn identity<T>(x: T): T { return x; }
+func double(x: int): int { return x * 2; }
+func identity<T>(x: T): T { return x; }
 
 let t1: Transform<int> = double;     // 结构匹配：函数 → spec ✓
 let t2: Transform<int> = identity;  // 结构匹配：泛型函数实例化 → spec ✓
@@ -91,7 +91,7 @@ let t4: Transform<float> = t1;      // 名义匹配：Transform<float> ≠ Trans
 spec A(x: int): int;
 spec B(x: int): int;
 
-fn foo(x: int): int { return x; }
+func foo(x: int): int { return x; }
 
 let a: A = foo;   // 结构匹配：函数 → spec ✓
 let b: B = a;     // 名义匹配：a 已绑定到 A，A ≠ B ✗
@@ -103,11 +103,11 @@ let c: A = a;     // 名义匹配：同一 spec ✓
 ### 3.5 参数传递
 
 ```feng
-fn use_mapper(m: Mapper): void { ... }
+func use_mapper(m: Mapper): void { ... }
 
 spec Mapper(x: int): int;
 
-fn double(x: int): int { return x * 2; }
+func double(x: int): int { return x * 2; }
 let m: Mapper = double;
 
 use_mapper(double);  // 结构匹配：函数 → spec ✓
@@ -206,7 +206,7 @@ error: cannot assign value of spec 'CelsiusToFahrenheit' to 'KilogramsToPounds'
 ```feng
 // 1. 结构匹配：函数 → spec（保持）
 spec Mapper(x: int): int;
-fn double(x: int): int { return x * 2; }
+func double(x: int): int { return x * 2; }
 let m: Mapper = double;  // ✓
 
 // 2. 结构匹配：lambda → spec（保持）
@@ -216,7 +216,7 @@ let m2: Mapper = (x: int) -> x + 1;  // ✓
 let m3: Mapper = m;  // ✓ 同一 spec
 
 // 4. 参数传递：函数 → spec（保持）
-fn use_mapper(m: Mapper): void {}
+func use_mapper(m: Mapper): void {}
 use_mapper(double);  // ✓
 
 // 5. 泛型：结构匹配
@@ -235,7 +235,7 @@ let a: A = double;
 let b: B = a;  // ✗ A ≠ B
 
 // 2. 名义匹配：通过参数传递不同 spec
-fn use_b(b: B): void {}
+func use_b(b: B): void {}
 use_b(a);  // ✗ A ≠ B
 
 // 3. 名义匹配：泛型不同实例化

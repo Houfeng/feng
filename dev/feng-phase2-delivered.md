@@ -22,7 +22,7 @@
 ## P3 多文件 codegen（已交付）
 
 - `feng_codegen_emit_program` 接受程序数组，由内部 `cg_emit_all_programs` 协调"类型壳 → 类型成员 → spec → fit → 模块 binding → 函数体"等多遍处理。
-- 支持同模块多文件聚合（fit/方法、模块级 let/var、free fn 都能跨文件共存）。
+- 支持同模块多文件聚合（fit/方法、模块级 let/var、free func 都能跨文件共存）。
 - 新增 `test/codegen/test_codegen.c`，覆盖 bin / lib 双 target 的多文件回归。
 
 ## P4 顶层直接编译驱动（已交付）
@@ -35,7 +35,7 @@
 
 - 新增 `src/cli/compile/driver.{h,c}`：
   - 通过 `_NSGetExecutablePath` / `/proc/self/exe` 解析 feng 自身路径，再向上探测 `build/lib/libfeng_runtime.a` 与 `src/runtime/feng_runtime.h`；环境变量 `FENG_RUNTIME_LIB` / `FENG_RUNTIME_INCLUDE` 可覆盖，缺失或不存在时给出明确诊断。
-  - 扫描程序的 `extern fn` 上的 `@cdecl("xxx")` 注解作为额外链接库，自动跳过 `libc`、剥掉 `lib` 前缀，保证 `-l<x>` 干净去重。
+  - 扫描程序的 `extern func` 上的 `@cdecl("xxx")` 注解作为额外链接库，自动跳过 `libc`、剥掉 `lib` 前缀，保证 `-l<x>` 干净去重。
   - 用 `fork + execvp + waitpid` 调起 `${CC:-cc}`，失败时打印 `host C compiler failed (exit=N)` 并保留 `<out>/ir/c/feng.c` 便于排查；成功且未指定 `--keep-ir` 时清理 IR。
 - 新增 `--name=<artifact>` 选项，统一指定本次编译产物基名，便于未来 `bin` / `lib` 共用同一命名语义。
 - 端到端验证：`feng test/smoke/phase1a/hello.ff --out=/tmp/X` 直接产出 `/tmp/X/bin/hello` 并可运行。
@@ -54,4 +54,4 @@
 
 ### 已知后续工作
 
-- Codegen 多文件 Pass 4 目前按程序顺序逐个发射函数体，跨文件 free fn 调用要求被调方文件先于调用方处理。当前依赖 smoke 脚本对目录内 `.ff` 排序解决；正式修复方案是把"注册全部 free fn"拆成独立的前置子 pass，与类型/spec 的两阶段结构对齐。该项不在 Phase 2 P0–P6 验收范围内，仅记录在 `/memories/repo/feng-codegen-multi-file-order.md` 中作为后续待办。
+- Codegen 多文件 Pass 4 目前按程序顺序逐个发射函数体，跨文件 free func 调用要求被调方文件先于调用方处理。当前依赖 smoke 脚本对目录内 `.ff` 排序解决；正式修复方案是把"注册全部 free func"拆成独立的前置子 pass，与类型/spec 的两阶段结构对齐。该项不在 Phase 2 P0–P6 验收范围内，仅记录在 `/memories/repo/feng-codegen-multi-file-order.md` 中作为后续待办。

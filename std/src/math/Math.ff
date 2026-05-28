@@ -1,12 +1,12 @@
-pu mod std.math;
+open module std.math;
 
 @cdecl("libm")
-extern fn sin(x: f64): f64;
+extern func sin(x: f64): f64;
 
-pu type Math {
-  pu fn sin(x: f64): f64 {
+open type Math {
+  open func sin(x: f64): f64 {
     return sin(x);
   }
 }
 
-pu let math = Math();
+open let math = Math();

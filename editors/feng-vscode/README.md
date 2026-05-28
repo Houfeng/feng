@@ -54,7 +54,7 @@ The formatter is designed to cover the most common cleanup tasks in everyday dev
 - Remove trailing whitespace at the end of each line
 - Normalize line endings to `\n`
 - Normalize binary and compound operator spacing, for example `a+b` → `a + b`, `total+=1` → `total += 1`, `mask>>=1` → `mask >>= 1`
-- Normalize parameter and argument lists, for example `fn add(a:int,b:int)` → `fn add(a: int, b: int)`
+- Normalize parameter and argument lists, for example `func add(a:int,b:int)` → `func add(a: int, b: int)`
 - Normalize spacing around `:`, `,`, and `{}` in object literals and type annotations
 
 For `.fm` manifest files, the formatter additionally:

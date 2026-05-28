@@ -1,8 +1,8 @@
-mod std_test;
+module std_test;
 
-use std.collections;
+import std.collections;
 
-fn map_set_get() {
+func map_set_get() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 10 };
   m.set(k, 100);
@@ -10,27 +10,27 @@ fn map_set_get() {
   check(v == 100, "map/set-get");
 }
 
-fn map_get_missing_default() {
+func map_get_missing_default() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 99 };
   let v: i32 = m.get(k);
   check(v == 0, "map/get-missing-default");
 }
 
-fn map_has_true() {
+func map_has_true() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 5 };
   m.set(k, 5);
   check(m.has(k), "map/has-true");
 }
 
-fn map_has_false() {
+func map_has_false() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 7 };
   check(!m.has(k), "map/has-false");
 }
 
-fn map_overwrite() {
+func map_overwrite() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 3 };
   m.set(k, 1);
@@ -39,7 +39,7 @@ fn map_overwrite() {
   check(v == 2, "map/overwrite");
 }
 
-fn map_remove() {
+func map_remove() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 8 };
   m.set(k, 8);
@@ -47,14 +47,14 @@ fn map_remove() {
   check(!m.has(k), "map/remove");
 }
 
-fn map_remove_absent() {
+func map_remove_absent() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 42 };
   m.remove(k);
   check(!m.has(k), "map/remove-absent");
 }
 
-fn map_multiple_keys() {
+func map_multiple_keys() {
   let m = Map<IntKey, i32>();
   for var i: i32 = 0; i < 20; i = i + 1 {
     let k = IntKey { value: i };
@@ -75,7 +75,7 @@ fn map_multiple_keys() {
   check(m.has(IntKey { value: 10 }), "map/multiple-survivor");
 }
 
-fn map_count() {
+func map_count() {
   let m = Map<IntKey, i32>();
   check(m.count() == 0, "map/count-empty");
   m.set(IntKey { value: 1 }, 1);
@@ -86,7 +86,7 @@ fn map_count() {
   check(m.count() == 2, "map/count-after-remove");
 }
 
-pu fn run_map_tests() {
+open func run_map_tests() {
   map_set_get();
   map_get_missing_default();
   map_has_true();

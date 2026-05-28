@@ -1,6 +1,6 @@
-mod std_test;
+module std_test;
 
-fn main(args: string[]) {
+func main(args: string[]) {
   replaceStdin("ABCDE\nFG");
   run_map_tests();
   run_set_tests();

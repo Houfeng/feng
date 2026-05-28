@@ -84,8 +84,8 @@ if (has_variadic) {
 
 - [x] **P3**：`src/parser/parser.c`，`parse_callable_signature()`（line ~744-760）  
   **目标**：将 `is_variadic` 信息透传，使 `spec` 声明同样支持变参。  
-  `spec` 声明与 `fn` 走同一参数解析路径（`parse_parameters()`），P2 完成后此处应自动获得支持；确认 `FengCallableSignature` 的构建路径正确保留 `is_variadic` 即可。  
-  同时在此处对 `extern fn` 检查：若 `extern fn` 的参数含 `is_variadic=true`，报错并阻止通过。
+  `spec` 声明与 `func` 走同一参数解析路径（`parse_parameters()`），P2 完成后此处应自动获得支持；确认 `FengCallableSignature` 的构建路径正确保留 `is_variadic` 即可。  
+  同时在此处对 `extern func` 检查：若 `extern func` 的参数含 `is_variadic=true`，报错并阻止通过。
 
 ### Phase 3：Semantic
 
@@ -133,7 +133,7 @@ if (has_variadic) {
 
 - [x] **T1**：仅含变参参数的函数，以 0/1/N 实参调用
   ```feng
-  fn sum(args: int...): int { ... }
+  func sum(args: int...): int { ... }
   sum()          // 合法，args=[]
   sum(1)         // 合法，args=[1]
   sum(1, 2, 3)   // 合法，args=[1,2,3]
@@ -141,26 +141,26 @@ if (has_variadic) {
 
 - [x] **T2**：固定参数 + 变参参数
   ```feng
-  fn log(level: int, args: string...): void { ... }
+  func log(level: int, args: string...): void { ... }
   log(0)             // 合法，args=[]
   log(1, "a", "b")   // 合法，args=["a","b"]
   ```
 
 - [x] **T3**：变参位类型不匹配 → 编译期报错
   ```feng
-  fn f(args: int...): void { }
+  func f(args: int...): void { }
   f("bad")   // 错误：string 不匹配 int
   ```
 
 - [x] **T4**：变参不在最后 → 编译期报错
   ```feng
-  fn bad(args: int..., x: int): void { }   // 错误
+  func bad(args: int..., x: int): void { }   // 错误
   ```
 
 - [x] **T5**：将已有数组传入变参位 → 编译期报错
   ```feng
   let arr: int[] = [1, 2];
-  fn f(args: int...): void { }
+  func f(args: int...): void { }
   f(arr)   // 错误：变参位不接受已有数组
   ```
 
@@ -173,8 +173,8 @@ if (has_variadic) {
 
 - [x] **T7**：重载冲突验证
   ```feng
-  fn f(x: int): void { }
-  fn f(args: int...): void { }
+  func f(x: int): void { }
+  func f(args: int...): void { }
   // 错误：声明冲突；`(int)` 落入变参的等效展开范围
   ```
 
@@ -188,7 +188,7 @@ if (has_variadic) {
 |------|------|------|---------|
 | Parser 结构 | `src/parser/parser.h` | `FengParameter`（line ~65） | 新增 `bool is_variadic` |
 | Parser 解析 | `src/parser/parser.c` | `parse_parameters()`（line ~616） | 识别 `T...`，规范化为 `T[]`，验证位置 |
-| Parser 传播 | `src/parser/parser.c` | `parse_callable_signature()`（line ~744） | 确认 spec/extern 路径，extern fn 拒绝 |
+| Parser 传播 | `src/parser/parser.c` | `parse_callable_signature()`（line ~744） | 确认 spec/extern 路径，extern func 拒绝 |
 | Semantic 匹配 | `src/semantic/analyzer.c` | `function_type_parameters_match_args()`（line ~7890） | 计数松弛 + 元素类型逐一检查 |
 | Semantic 间接 | `src/semantic/analyzer.c` | `callable_parameters_match_args()`（line ~7000） | spec 值调用路径同步 |
 | Semantic 结构 | `src/semantic/analyzer.c` | 结构匹配路径 | 变参标志一致性检查 |

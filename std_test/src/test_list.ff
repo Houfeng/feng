@@ -1,19 +1,19 @@
-mod std_test;
+module std_test;
 
-use std.collections;
+import std.collections;
 
 type RefBox {
   var value: i32;
 }
 
-fn list_add_get() {
+func list_add_get() {
   let l = List<i32>();
   let v0: i32 = 42;
   l.add(v0);
   check(l.get(0) == 42, "list/add-get");
 }
 
-fn list_size() {
+func list_size() {
   let l = List<i32>();
   check(l.size() == 0, "list/size-empty");
   let v1: i32 = 1;
@@ -25,7 +25,7 @@ fn list_size() {
   check(l.size() == 3, "list/size-after-add");
 }
 
-fn list_set_index() {
+func list_set_index() {
   let l = List<i32>();
   let a: i32 = 10;
   let b: i32 = 20;
@@ -37,7 +37,7 @@ fn list_set_index() {
   check(l.get(1) == 20, "list/set-index-other-unchanged");
 }
 
-fn list_remove_shifts() {
+func list_remove_shifts() {
   let l = List<i32>();
   let a: i32 = 10;
   let b: i32 = 20;
@@ -50,7 +50,7 @@ fn list_remove_shifts() {
   check(l.get(1) == 30, "list/remove-shifts-second");
 }
 
-fn list_size_after_remove() {
+func list_size_after_remove() {
   let l = List<i32>();
   let a: i32 = 1;
   let b: i32 = 2;
@@ -62,7 +62,7 @@ fn list_size_after_remove() {
   check(l.size() == 2, "list/size-after-remove");
 }
 
-fn list_multiple_elements() {
+func list_multiple_elements() {
   let l = List<i32>();
   for var i: i32 = 0; i < 20; i = i + 1 {
     l.add(i);
@@ -77,7 +77,7 @@ fn list_multiple_elements() {
   check(allOk, "list/multiple-values");
 }
 
-fn list_entities_order() {
+func list_entities_order() {
   let l = List<i32>();
   l.add(100);
   l.add(200);
@@ -88,14 +88,14 @@ fn list_entities_order() {
   check(ents[2] == 300, "list/entities-order-2");
 }
 
-fn list_entities_count() {
+func list_entities_count() {
   let l = List<i32>();
   l.add(1);
   l.add(2);
   check(l.size() == 2, "list/entities-count");
 }
 
-fn list_reference_semantics() {
+func list_reference_semantics() {
   let l = List<RefBox>();
   let b = RefBox { value: 10 };
   l.add(b);
@@ -103,7 +103,7 @@ fn list_reference_semantics() {
   check(l.get(0).value == 99, "list/reference-semantics");
 }
 
-pu fn run_list_tests() {
+open func run_list_tests() {
   list_add_get();
   list_size();
   list_set_index();

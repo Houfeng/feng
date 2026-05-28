@@ -338,7 +338,7 @@ struct FengScalarBox {
 
 - `self` 在用户 type、builtin 标量、string、array 四类 target 上都能稳定推断出正确类型。
 - 数组 `T` 在整个 fit 声明内可见且不泄漏。
-- `pu fit i32: LocalSpec` 可导出；`pu fit i32: ExternalSpec` 会被移除导出并输出肯定式提示。
+- `open fit i32: LocalSpec` 可导出；`open fit i32: ExternalSpec` 会被移除导出并输出肯定式提示。
 - 用户 `type` 的原有孤儿规则不回归。
 
 ### 批次 C：收口 witness / subject 模型

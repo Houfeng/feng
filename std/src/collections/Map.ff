@@ -1,11 +1,11 @@
-pu mod std.collections;
+open module std.collections;
 
 /**
  * A map entity stores one key-value pair.
  * @param <K> - the key type
  * @param <V> - the value type
  */
-pu type MapEntity<K, V> {
+open type MapEntity<K, V> {
   let key: K;
   let value: V;
 }
@@ -22,19 +22,19 @@ pu type MapEntity<K, V> {
  * - `get` returns the default zero value of `V` when key is missing.
  * - `entities` returns an immutable dense array of occupied entries.
  */
-pu type Map<K: Hashable<K>, V> {
+open type Map<K: Hashable<K>, V> {
   // Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
-  pr var states: i32[!];
-  pr var hashes: u64[!];
-  pr var keys: K[!];
-  pr var values: V[!];
-  pr var size: i32;
-  pr var used: i32;
-  pr var capacity: i32;
-  pr var missingKey: K;
-  pr var missingValue: V;
+  seal var states: i32[!];
+  seal var hashes: u64[!];
+  seal var keys: K[!];
+  seal var values: V[!];
+  seal var size: i32;
+  seal var used: i32;
+  seal var capacity: i32;
+  seal var missingKey: K;
+  seal var missingValue: V;
 
-  pr fn nextSlot(slot: i32): i32 {
+  seal func nextSlot(slot: i32): i32 {
     let next: i32 = slot + 1;
     if next >= self.capacity {
       return 0;
@@ -42,11 +42,11 @@ pu type Map<K: Hashable<K>, V> {
     return next;
   }
 
-  pr fn slotForHash(hash: u64): i32 {
+  seal func slotForHash(hash: u64): i32 {
     return (i32)(hash % (u64)self.capacity);
   }
 
-  pr fn insertRehashed(hash: u64, key: K, value: V) {
+  seal func insertRehashed(hash: u64, key: K, value: V) {
     var slot: i32 = self.slotForHash(hash);
     for var step: i32 = 0; step < self.capacity; step = step + 1 {
       if self.states[slot] != 1 {
@@ -62,7 +62,7 @@ pu type Map<K: Hashable<K>, V> {
     }
   }
 
-  pr fn rehash(newCapacity: i32) {
+  seal func rehash(newCapacity: i32) {
     let oldStates: i32[!] = self.states;
     let oldHashes: u64[!] = self.hashes;
     let oldKeys: K[!] = self.keys;
@@ -82,7 +82,7 @@ pu type Map<K: Hashable<K>, V> {
     }
   }
 
-  pr fn ensureWritableForInsert() {
+  seal func ensureWritableForInsert() {
     if self.capacity == 0 {
       self.rehash(8);
       return;
@@ -98,7 +98,7 @@ pu type Map<K: Hashable<K>, V> {
     }
   }
 
-  pr fn maybeShrinkAfterRemove() {
+  seal func maybeShrinkAfterRemove() {
     if self.capacity <= 8 {
       return;
     }
@@ -115,7 +115,7 @@ pu type Map<K: Hashable<K>, V> {
     }
   }
 
-  pr fn findSlot(key: K, keyHash: u64): i32 {
+  seal func findSlot(key: K, keyHash: u64): i32 {
     if self.capacity == 0 {
       return -1;
     }
@@ -142,7 +142,7 @@ pu type Map<K: Hashable<K>, V> {
    * If `key` does not exist, returns the zero default value of `V`.
    * @param key - lookup key
    */
-  pu fn get(key: K): V {
+  open func get(key: K): V {
     let keyHash: u64 = key.hash();
     let slot: i32 = self.findSlot(key, keyHash);
     if slot >= 0 {
@@ -157,7 +157,7 @@ pu type Map<K: Hashable<K>, V> {
    * @param key - map key
    * @param value - value to insert or replace
    */
-  pu fn set(key: K, value: V) {
+  open func set(key: K, value: V) {
     self.ensureWritableForInsert();
     let keyHash: u64 = key.hash();
     var slot: i32 = self.slotForHash(keyHash);
@@ -204,7 +204,7 @@ pu type Map<K: Hashable<K>, V> {
    * If `key` does not exist, this method has no effect.
    * @param key - key to remove
    */
-  pu fn remove(key: K) {
+  open func remove(key: K) {
     let keyHash: u64 = key.hash();
     let slot: i32 = self.findSlot(key, keyHash);
     if slot < 0 {
@@ -222,7 +222,7 @@ pu type Map<K: Hashable<K>, V> {
    * Returns true if `key` exists in the map, otherwise false.
    * @param key - key to test
    */
-  pu fn has(key: K): bool {
+  open func has(key: K): bool {
     let keyHash: u64 = key.hash();
     return self.findSlot(key, keyHash) >= 0;
   }
@@ -230,7 +230,7 @@ pu type Map<K: Hashable<K>, V> {
   /**
    * Returns the number of occupied entries in the map.
    */
-  pu fn count(): i32 {
+  open func count(): i32 {
     return self.size;
   }
 
@@ -238,7 +238,7 @@ pu type Map<K: Hashable<K>, V> {
    * Returns all occupied entries as an immutable dense array.
    * @return immutable array of map entries
    */
-  pu fn entries(): MapEntity<K, V>[] {
+  open func entries(): MapEntity<K, V>[] {
     let items: MapEntity<K, V>[!] = MapEntity<K, V>[:self.size];
     var outputIndex: i32 = 0;
     for var i: i32 = 0; i < self.capacity; i = i + 1 {
@@ -251,4 +251,4 @@ pu type Map<K: Hashable<K>, V> {
   }
 }
 
-pu let test_top_binding = "test";
+open let test_top_binding = "test";

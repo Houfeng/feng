@@ -65,11 +65,18 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(!feng_is_reserved_word("enum", 4U));
     ASSERT(feng_is_reserved_word("const", 5U));
     ASSERT(feng_is_reserved_word("export", 6U));
-    ASSERT(feng_is_reserved_word("import", 6U));
-    ASSERT(feng_is_reserved_word("module", 6U));
-    ASSERT(feng_is_reserved_word("open", 4U));
-    ASSERT(feng_is_reserved_word("seal", 4U));
-    ASSERT(feng_is_reserved_word("func", 4U));
+    ASSERT(feng_lookup_keyword("import", 6U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_IMPORT);
+    ASSERT(feng_lookup_keyword("module", 6U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_MODULE);
+    ASSERT(feng_lookup_keyword("open", 4U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_OPEN);
+    ASSERT(feng_lookup_keyword("seal", 4U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_SEAL);
+    ASSERT(feng_is_reserved_word("pu", 2U));
+    ASSERT(feng_is_reserved_word("pr", 2U));
+    ASSERT(feng_lookup_keyword("func", 4U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_FUNC);
     ASSERT(feng_is_reserved_word("prop", 4U));
     ASSERT(!feng_is_reserved_word("self", 4U));
     ASSERT(feng_lookup_builtin_annotation("abi", 3U, &annotation_kind));
@@ -89,11 +96,11 @@ static void test_reserved_words_rejected(void) {
         "static",
         "const",
         "export",
-        "import",
-        "module",
-        "open",
-        "seal",
-        "func",
+        "fn",
+        "mod",
+        "pu",
+        "pr",
+        "use",
         "prop"
     };
     size_t index;
@@ -114,7 +121,7 @@ static void test_reserved_words_rejected(void) {
 
 static void test_new_keywords_and_builtin_type_names(void) {
     const char *source =
-        "enum spec fit unknown bool string int long byte float double i32 u8 f64\n";
+        "enum spec fit func module import unknown bool string int long byte float double i32 u8 f64\n";
     FengLexer lexer;
     FengToken token;
 
@@ -126,6 +133,12 @@ static void test_new_keywords_and_builtin_type_names(void) {
     assert_lexeme(&token, "spec");
     token = next_token(&lexer, FENG_TOKEN_KW_FIT);
     assert_lexeme(&token, "fit");
+    token = next_token(&lexer, FENG_TOKEN_KW_FUNC);
+    assert_lexeme(&token, "func");
+    token = next_token(&lexer, FENG_TOKEN_KW_MODULE);
+    assert_lexeme(&token, "module");
+    token = next_token(&lexer, FENG_TOKEN_KW_IMPORT);
+    assert_lexeme(&token, "import");
     token = next_token(&lexer, FENG_TOKEN_KW_UNKNOWN);
     assert_lexeme(&token, "unknown");
 
@@ -154,20 +167,20 @@ static void test_new_keywords_and_builtin_type_names(void) {
 
 static void test_basic_module_tokens(void) {
     const char *source =
-        "pu mod libc.math;\n"
+        "open module libc.math;\n"
         "@cdecl(point_lib)\n"
-        "extern fn sin(x: float): float;\n";
+        "extern func sin(x: float): float;\n";
     FengLexer lexer;
     FengToken token;
 
     feng_lexer_init(&lexer, source, strlen(source), "basic.f");
 
-    token = next_token(&lexer, FENG_TOKEN_KW_PU);
-    assert_lexeme(&token, "pu");
+    token = next_token(&lexer, FENG_TOKEN_KW_OPEN);
+    assert_lexeme(&token, "open");
     ASSERT(token.line == 1U && token.column == 1U);
 
-    token = next_token(&lexer, FENG_TOKEN_KW_MOD);
-    assert_lexeme(&token, "mod");
+    token = next_token(&lexer, FENG_TOKEN_KW_MODULE);
+    assert_lexeme(&token, "module");
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "libc");
     token = next_token(&lexer, FENG_TOKEN_DOT);
@@ -187,7 +200,7 @@ static void test_basic_module_tokens(void) {
     assert_lexeme(&token, "point_lib");
     token = next_token(&lexer, FENG_TOKEN_RPAREN);
     token = next_token(&lexer, FENG_TOKEN_KW_EXTERN);
-    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_KW_FUNC);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "sin");
     token = next_token(&lexer, FENG_TOKEN_LPAREN);
@@ -208,7 +221,7 @@ static void test_basic_module_tokens(void) {
 static void test_runtime_annotation_token(void) {
     const char *source =
         "@runtime\n"
-        "extern fn feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): long;\n";
     FengLexer lexer;
     FengToken token;
 
@@ -219,7 +232,7 @@ static void test_runtime_annotation_token(void) {
     assert_lexeme(&token, "@runtime");
 
     token = next_token(&lexer, FENG_TOKEN_KW_EXTERN);
-    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_KW_FUNC);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "feng_string_length");
     token = next_token(&lexer, FENG_TOKEN_LPAREN);
@@ -314,7 +327,7 @@ static void test_comments_crlf_and_custom_annotations(void) {
         "// comment\r\n"
         "let name = \"feng\\nlang\"; /* block\r\ncomment */\r\n"
         "@memoize\r\n"
-        "fn noop() {}\r\n";
+        "func noop() {}\r\n";
     FengLexer lexer;
     FengToken token;
 
@@ -331,7 +344,7 @@ static void test_comments_crlf_and_custom_annotations(void) {
     token = next_token(&lexer, FENG_TOKEN_ANNOTATION);
     ASSERT(token.annotation_kind == FENG_ANNOTATION_CUSTOM);
     assert_lexeme(&token, "@memoize");
-    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_KW_FUNC);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "noop");
     token = next_token(&lexer, FENG_TOKEN_LPAREN);
@@ -345,7 +358,7 @@ static void test_doc_comment_attaches_to_next_token(void) {
     const char *source =
         "/** doc for run */\n"
         "@bounded\n"
-        "pu fn run() {}\n";
+        "open func run() {}\n";
     FengLexer lexer;
     FengToken token;
 
@@ -353,9 +366,9 @@ static void test_doc_comment_attaches_to_next_token(void) {
 
     token = next_token(&lexer, FENG_TOKEN_ANNOTATION);
     assert_leading_doc(&token, "/** doc for run */");
-    token = next_token(&lexer, FENG_TOKEN_KW_PU);
+    token = next_token(&lexer, FENG_TOKEN_KW_OPEN);
     assert_leading_doc(&token, NULL);
-    token = next_token(&lexer, FENG_TOKEN_KW_FN);
+    token = next_token(&lexer, FENG_TOKEN_KW_FUNC);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "run");
     token = next_token(&lexer, FENG_TOKEN_LPAREN);

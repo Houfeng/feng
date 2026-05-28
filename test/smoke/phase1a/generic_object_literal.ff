@@ -1,13 +1,13 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let box: Box<i32> = Box<i32>() { value: 7 };
     if box.value == 7 {
         puts(&"generic object literal ok");

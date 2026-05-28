@@ -20,7 +20,7 @@
 正确语法一，仅含变长参数的函数：
 
 ```feng
-fn print_all(args: string...): void {
+func print_all(args: string...): void {
     // args 的类型为 string[]，可使用全部数组操作
 }
 ```
@@ -28,7 +28,7 @@ fn print_all(args: string...): void {
 正确语法二，固定参数 + 变长参数：
 
 ```feng
-fn log(level: int, args: string...): void {
+func log(level: int, args: string...): void {
     // level 是普通 int 参数，args 类型为 string[]
 }
 ```
@@ -49,7 +49,7 @@ log(0)                            // level=0，args=[]（空数组）
 ```feng
 spec Printer(args: string...): void;
 
-fn make_printer(): Printer {
+func make_printer(): Printer {
     return (args: string...) {
         // args 类型为 string[]
     };
@@ -60,14 +60,14 @@ fn make_printer(): Printer {
 
 ```feng
 // 错误：args 不是最后一个参数
-fn bad(args: string..., level: int): void { }
+func bad(args: string..., level: int): void { }
 ```
 
 错误语法二，参数列表中出现多个变长参数：
 
 ```feng
 // 错误：一个函数只能有一个变长参数
-fn bad(names: string..., counts: int...): void { }
+func bad(names: string..., counts: int...): void { }
 ```
 
 错误语法三，将已有数组直接传入变参位：
@@ -77,11 +77,11 @@ let arr: string[] = ["a", "b"];
 print_all(arr)   // 错误：变参位不接受已有数组；应逐个展开或另行设计接口
 ```
 
-错误语法四，`extern fn` 声明变长参数：
+错误语法四，`extern func` 声明变长参数：
 
 ```feng
-// 错误：extern fn 不支持变长参数
-extern fn printf(fmt: string...): int;
+// 错误：extern func 不支持变长参数
+extern func printf(fmt: string...): int;
 ```
 
 ## 4 语义
@@ -102,7 +102,7 @@ extern fn printf(fmt: string...): int;
 
 ### 4.3 `spec` 中的变长参数
 
-- callable-form `spec` 可以在最后一个参数位声明变长参数，语法与 `fn` 声明相同：`spec Name(args: T...): R;`。
+- callable-form `spec` 可以在最后一个参数位声明变长参数，语法与 `func` 声明相同：`spec Name(args: T...): R;`。
 - 未绑定的函数或 lambda 进入变参 callable-form `spec` 位置时，结构匹配要求：参数个数、参数类型、变参标志与返回类型完全一致；具体实参为 `T...` 的参数必须对应 `spec` 的 `T...` 参数，不允许以 `T[]` 参数匹配变参位。
 - 通过变参 callable-form `spec` 值发起调用时，编译器按 spec 的变参声明执行相同的调用侧打包，不需要调用者感知底层实现是否使用 `...`。
 
@@ -116,23 +116,23 @@ extern fn printf(fmt: string...): int;
 2. **若含变参的一方固定参数较多**（`nf > ng`，且 F 为变参）：丢弃 F 的变参标记，仅保留固定参数列表；两者长度不同，必然不冲突。
 3. **固定参数数量相等**（`nf == ng`）：直接逐位比较固定参数列表；若完全一致则冲突（两个非变参相同、或两个变参固定前缀相同均适用此情形）。
 
-示例（冲突）：`fn f(x: int, y: string)` 与 `fn f(x: int, args: string...)` — 后者固定数 1 < 前者 2，填充后得 `(int, string)`，与 `(int, string)` 一致 → 冲突。
+示例（冲突）：`func f(x: int, y: string)` 与 `func f(x: int, args: string...)` — 后者固定数 1 < 前者 2，填充后得 `(int, string)`，与 `(int, string)` 一致 → 冲突。
 
-示例（不冲突）：`fn f(x: int, y: float)` 与 `fn f(x: int, args: string...)` — 填充后得 `(int, string)`，与 `(int, float)` 不一致 → 不冲突。
+示例（不冲突）：`func f(x: int, y: float)` 与 `func f(x: int, args: string...)` — 填充后得 `(int, string)`，与 `(int, float)` 不一致 → 不冲突。
 
-示例（冲突）：`fn f()` 与 `fn f(args: string...)` — 固定数均为 0，直接比较 `()` 与 `()` 一致 → 冲突（`f()` 两者均匹配）。
+示例（冲突）：`func f()` 与 `func f(args: string...)` — 固定数均为 0，直接比较 `()` 与 `()` 一致 → 冲突（`f()` 两者均匹配）。
 
-示例（冲突）：`fn f(x: int, args: string...)` 与 `fn f(x: int, args: float...)` — 固定数均为 1，`(int)` 与 `(int)` 一致 → 冲突（`f(0)` 两者均匹配，变参均为空）。
+示例（冲突）：`func f(x: int, args: string...)` 与 `func f(x: int, args: float...)` — 固定数均为 1，`(int)` 与 `(int)` 一致 → 冲突（`f(0)` 两者均匹配，变参均为空）。
 
-示例（不冲突）：`fn f(x: int)` 与 `fn f(x: int, y: string, args: float...)` — 后者固定数 2 > 前者 1，丢弃变参后长度 2 ≠ 1 → 不冲突。
+示例（不冲突）：`func f(x: int)` 与 `func f(x: int, y: string, args: float...)` — 后者固定数 2 > 前者 1，丢弃变参后长度 2 ≠ 1 → 不冲突。
 
 **调用侧消歧**
 
 经过声明侧严格冲突检测后，存活的重载候选在同一调用位置上不存在类型重叠，调用侧仅按类型精确匹配唯一确定候选。若经以上步骤仍存在多个候选，编译期报歧义调用错误。
 
-### 4.5 `extern fn` 限制
+### 4.5 `extern func` 限制
 
-- `extern fn` 不支持 `T...` 变长参数语法；`extern fn` 与 C 可变参数（`printf` 风格）的 ABI 互操作通过单独的 C ABI 扩展机制处理，不属于本规范范围。
+- `extern func` 不支持 `T...` 变长参数语法；`extern func` 与 C 可变参数（`printf` 风格）的 ABI 互操作通过单独的 C ABI 扩展机制处理，不属于本规范范围。
 
 ## 5 规则
 
@@ -145,7 +145,7 @@ extern fn printf(fmt: string...): int;
 - [必须] 调用侧变参位的每个实参类型必须与变参元素类型 `T` 精确匹配；字面量数值可按目标元素类型贴合，已具有静态类型的值须完全匹配。
 - [必须] 零变参调用合法：编译器为变参位生成空数组并传入。
 - [禁止] 将已有 `T[]` 直接传入变参参数位；必须逐个传入元素。
-- [禁止] `extern fn` 使用 `T...` 变长参数语法。
+- [禁止] `extern func` 使用 `T...` 变长参数语法。
 - [禁止] `spec` 参数位使用 `let` 或 `var` 修饰（继承自 `spec` 通用规则；变参位同样禁止）。
 - [必须] 未绑定函数或 lambda 进入变参 callable-form `spec` 位置时，变参标志必须与 spec 声明一致；以 `T[]` 参数匹配变参 `spec` 位不合法。
 - [必须] 非变参重载与变参重载同名共存时，若存在某个实参序列能同时匹配两者，编译期在声明处报冲突错误；不依赖调用侧优先级规则消歧。
@@ -160,7 +160,7 @@ extern fn printf(fmt: string...): int;
 - 编译器必须在调用侧按变参元素类型将零个或多个实参打包为 `T[]`，生成对应的数组构造代码，并将其作为最后一个参数传递。
 - 编译器必须在结构匹配阶段检查函数或 lambda 的变参标志是否与目标 callable-form `spec` 一致；`T[]` 参数不匹配变参 `spec` 位。
 - 编译器必须检查非变参重载与变参重载是否存在参数类型重叠（即非变参的参数序列落在变参的等效展开范围内），若存在则在声明处报冲突错误。
-- 编译器必须拒绝 `extern fn` 使用 `T...` 语法。
+- 编译器必须拒绝 `extern func` 使用 `T...` 语法。
 
 ## 7 运行时
 

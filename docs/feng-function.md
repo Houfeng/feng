@@ -1,6 +1,6 @@
 # Feng 语言函数规范
 
-本文档补充 [feng-language.md](./feng-language.md) 中的函数系统概要,聚焦 `fn`、程序入口、Lambda 与闭包规则。可调用形状的声明见 [feng-spec.md](./feng-spec.md),参数绑定细节见 [feng-binding.md](./feng-binding.md)。
+本文档补充 [feng-language.md](./feng-language.md) 中的函数系统概要,聚焦 `func`、程序入口、Lambda 与闭包规则。可调用形状的声明见 [feng-spec.md](./feng-spec.md),参数绑定细节见 [feng-binding.md](./feng-binding.md)。
 
 ## 1 职责
 
@@ -11,10 +11,10 @@
 
 ## 2 术语
 
-- 顶层函数: 声明在模块级顶层的 `fn`。
-- 成员方法: 声明在 `type` 内部的 `fn`。
-- 构造函数: `type` 的特殊成员 `fn`,用于实例初始化; 声明与约束细节见 [Feng 语言类型规范](./feng-type.md)。
-- 终结器函数: `type` 的特殊成员 `fn`,用于对象释放前的清理; 声明与约束细节见 [Feng 语言类型规范](./feng-type.md)。
+- 顶层函数: 声明在模块级顶层的 `func`。
+- 成员方法: 声明在 `type` 内部的 `func`。
+- 构造函数: `type` 的特殊成员 `func`,用于实例初始化; 声明与约束细节见 [Feng 语言类型规范](./feng-type.md)。
+- 终结器函数: `type` 的特殊成员 `func`,用于对象释放前的清理; 声明与约束细节见 [Feng 语言类型规范](./feng-type.md)。
 - 入口函数: 程序唯一入口 `main(args: string[])`。
 - 可调用形状: 由 `spec Name(args): ReturnType;` 声明的可调用契约。
 - Lambda: 函数实现或函数字面量的简写形式,不是独立的可调用形状声明,也不产生匿名函数类型; 单表达式 Lambda 使用 `->`,多行 Lambda 直接使用块体。
@@ -26,18 +26,18 @@
 正确语法一,顶层函数、成员方法与构造函数:
 
 ```feng
-pu fn add(a: int, b: int): int {
+open func add(a: int, b: int): int {
     return a + b;
 }
 
 type User {
     let name: string;
 
-    fn User(name: string) {
+    func User(name: string) {
         self.name = name;
     }
 
-    pu fn info(): string {
+    open func info(): string {
         return self.name;
     }
 }
@@ -48,11 +48,11 @@ type User {
 ```feng
 spec IntMapper(x: int): int;
 
-fn make_adder(base: int): IntMapper {
+func make_adder(base: int): IntMapper {
     return (x: int) -> base + x;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let add10: IntMapper = make_adder(10);
     print(add10(2));
 }
@@ -64,17 +64,17 @@ fn main(args: string[]) {
 spec M0(): void;
 
 type User {
-    fn say() {}
-    fn say(msg: string) {}
+    func say() {}
+    func say(msg: string) {}
 
-    fn binder(): M0 {
+    func binder(): M0 {
         return () {
             self.say();
         };
     }
 }
 
-fn test(m: M0) {
+func test(m: M0) {
     m();
 }
 
@@ -86,15 +86,15 @@ let s_ok: M0 = u.say;
 正确语法四,`void` 省略、返回类型推导与显式 `let` 参数:
 
 ```feng
-fn touch(x: int, var y: int) {
+func touch(x: int, var y: int) {
     y = y + 1;
 }
 
-fn add(a: int, b: int) {
+func add(a: int, b: int) {
     return a + b;
 }
 
-fn visit(let name: string) {
+func visit(let name: string) {
     print(name);
 }
 ```
@@ -102,7 +102,7 @@ fn visit(let name: string) {
 错语法一,参数省略类型:
 
 ```feng
-fn sum(a, b: int): int {
+func sum(a, b: int): int {
     return a + b;
 }
 ```
@@ -110,11 +110,11 @@ fn sum(a, b: int): int {
 错语法二,仅以返回值区分重载:
 
 ```feng
-fn parse(x: int): int {
+func parse(x: int): int {
     return x;
 }
 
-fn parse(x: int): string {
+func parse(x: int): string {
     return "ok";
 }
 ```
@@ -132,8 +132,8 @@ let add: AddSpec = (x: int) -> {
 
 ```feng
 type User {
-    fn say() {}
-    fn say(msg: string) {}
+    func say() {}
+    func say(msg: string) {}
 }
 
 let u = User {};
@@ -144,17 +144,17 @@ let s = u.say; // 错误: say 的重载本身合法,但 let s 无法推导唯一
 
 ### 4.1 通用语义
 
-- `fn` 用于提供可执行实现; 可调用形状由 `spec` 定义,而不是由 `fn` 或 `Lambda` 单独声明。
+- `func` 用于提供可执行实现; 可调用形状由 `spec` 定义,而不是由 `func` 或 `Lambda` 单独声明。
 - Lambda 作为值参与绑定、参数传递或返回时,必须由显式 callable-form `spec` 提供目标类型: 绑定位置需要显式绑定类型,参数位置需要形参类型为 callable-form `spec`,返回位置需要当前函数显式声明 callable-form `spec` 返回类型。`return (x: int, y: int) -> x + y;` 是合法写法,前提是当前函数的返回类型已经显式声明为匹配的 callable-form `spec`; 函数省略返回类型时不得通过返回 Lambda 推导匿名函数类型。
-- 顶层函数、成员方法、构造函数与终结器函数都使用 `fn` 进入函数系统,但构造函数与终结器函数作为 `type` 特殊成员,其声明与补充约束统一见 [Feng 语言类型规范](./feng-type.md)。
+- 顶层函数、成员方法、构造函数与终结器函数都使用 `func` 进入函数系统,但构造函数与终结器函数作为 `type` 特殊成员,其声明与补充约束统一见 [Feng 语言类型规范](./feng-type.md)。
 - `void` 表示无返回值; 无返回值的顶层函数、普通成员方法与 Lambda 可省略 `: void`。未显式声明返回类型时,返回类型按以下规则推导: 无 `return` 语句,或所有 `return` 均不带表达式（`return;`）则推导为 `void`; 所有 `return` 路径类型一致则推导为该类型; 多条 `return` 路径类型不一致则编译期报错。有返回值函数也可显式声明返回类型，显式声明时编译器将所有 `return` 表达式与应声明类型进行对照检查。构造函数与终结器函数不直接适用本条的声明细节,相关规则见 [Feng 语言类型规范](./feng-type.md)。
 - 所有参数都必须显式标注类型; 参数上的 `let`/`var` 可省略,省略时默认按 `let` 处理。
-- 顶层 `fn` 默认等价于 `pr fn`,需要跨模块暴露时必须显式写为 `pu fn`; 成员方法可见性规则见 [Feng 语言类型规范](./feng-type.md)。
+- 顶层 `func` 默认等价于 `seal func`,需要跨模块暴露时必须显式写为 `open func`; 成员方法可见性规则见 [Feng 语言类型规范](./feng-type.md)。
 - `Lambda` 支持捕获外部作用域变量形成闭包; 闭包对外部绑定的捕获是引用捕获——被捕获的 `var` 绑定与外层作用域共享同一存储,闭包内对该绑定的赋值对外层可见; 多个闭包捕获同一 `var` 时互相共享该绑定; 被捕获的 `let` 绑定在闭包内仍不可重新赋值。闭包可用位置与可赋值性由目标可调用形状决定。
 - 单表达式 Lambda 使用 `->` 连接参数列表与表达式结果; 多行 Lambda 直接使用块体,不使用 `->`。
 - 参数可显式写为 `let` 参数; 省略 `let`/`var` 时只是默认按 `let` 处理,并不禁止显式书写 `let`。
 - 参数传递中的数值类型匹配遵循 [Feng 内建类型规范](./feng-builtin-type.md): 数值字面量与纯字面量数值常量表达式可按已确定目标数值类型贴合; 已具备静态类型的绑定值在不同数值类型间传递必须显式转换。
-- `extern fn` 可以声明类型参数,但仅当其每个参数位与返回位在抹除类型参数后都对应唯一且固定的外部调用 surface 时才合法; 若某一位置会因具体类型实参而改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,则该声明非法。调用这类泛型 `extern fn` 时,既可以显式提供类型实参,也可以在类型实参能由实参类型唯一确定时省略; 若无法唯一确定,则编译期报错。当前这条“按包裹形状递归推导”的省略规则只适用于泛型 `extern fn` 调用,不改变普通函数、方法或构造函数既有的泛型调用匹配规则。
+- `extern func` 可以声明类型参数,但仅当其每个参数位与返回位在抹除类型参数后都对应唯一且固定的外部调用 surface 时才合法; 若某一位置会因具体类型实参而改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,则该声明非法。调用这类泛型 `extern func` 时,既可以显式提供类型实参,也可以在类型实参能由实参类型唯一确定时省略; 若无法唯一确定,则编译期报错。当前这条“按包裹形状递归推导”的省略规则只适用于泛型 `extern func` 调用,不改变普通函数、方法或构造函数既有的泛型调用匹配规则。
 - `self` 只由定义于 `type` 或 `fit` 块中的成员方法或构造函数引入; Lambda 本身不会声明新的 `self`,但可像捕获其他外层绑定一样捕获所在成员方法或构造函数作用域中的 `self`。
 - `type` 字段的初始化器表达式本身不得直接引用 `self`; 但当字段类型解析为 `spec` 定义的可调用形状,且初始化器是 Lambda 时,该 Lambda 体可捕获外层 `type` 的 `self`(捕获在对象构造完成后才生效)。
 - 方法值在取值时会把所属对象实例稳定绑定到对应方法的 `self`; 若方法存在重载,则仍需由上下文唯一确定目标可调用形状。
@@ -166,14 +166,14 @@ let s = u.say; // 错误: say 的重载本身合法,但 let s 无法推导唯一
 
 - 一个编译目标为可执行文件的包中，有且只能有一个顶层 `main` 函数。
 - `main` 的返回类型固定为 `void`，可省略声明；不得显式声明为非 `void` 类型，否则编译期报错。
-- `main` 函数的可见性（`pu`/`pr` 或省略）以及其所在 `mod` 的可见性，均不影响其作为程序入口的资格。
+- `main` 函数的可见性（`open`/`seal` 或省略）以及其所在 `module` 的可见性，均不影响其作为程序入口的资格。
 - 编译器仅将当前包中的顶层 `main` 函数识别为程序入口，不会跨包搜索入口。
 - 若编译器在同一包中发现多个顶层 `main` 函数声明，必须在编译期报错并阻止通过。
 
 正确示例,入口函数声明（编译目标为可执行文件）:
 
 ```feng
-fn main(args: string[]) {
+func main(args: string[]) {
     print("hello");
 }
 ```
@@ -181,24 +181,24 @@ fn main(args: string[]) {
 错误示例,同一包中存在多个顶层 `main`:
 
 ```feng
-fn main(args: string[]) { }  // 第一个 main
+func main(args: string[]) { }  // 第一个 main
 
-fn main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不允许重复声明
+func main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不允许重复声明
 ```
 
 ## 5 规则
 
 分为「必须、禁止、建议」。
 
-- [必须] 顶层函数与成员方法使用 `fn` 关键字声明实现体; 构造函数与终结器函数作为 `type` 特殊成员,其声明规则见 [Feng 语言类型规范](./feng-type.md)。
+- [必须] 顶层函数与成员方法使用 `func` 关键字声明实现体; 构造函数与终结器函数作为 `type` 特殊成员,其声明规则见 [Feng 语言类型规范](./feng-type.md)。
 - [必须] 构造函数与终结器函数的命名、返回类型及其他声明约束统一遵循 [Feng 语言类型规范](./feng-type.md)。
 - [必须] 所有函数参数与 Lambda 参数都必须显式标注类型。
 - [必须] 参数省略 `let`/`var` 时默认等价于 `let`; 需要在函数体内修改参数时必须显式使用 `var`。
 - [必须] 如需显式声明参数不可变,可以直接写为 `let` 参数。
 - [必须] 参数传递时，数值字面量或纯字面量数值常量表达式可按目标数值类型贴合；包含已具备静态类型绑定值的跨类型传递必须显式转换（详见 [Feng 内建类型规范](./feng-builtin-type.md)）。
-- [必须] 需要跨模块暴露的顶层函数必须显式标注 `pu`; 未显式标注时默认按 `pr` 处理。成员方法可见性规则见 [Feng 语言类型规范](./feng-type.md)。
-- [必须] 泛型 `extern fn` 仅在每个参数位与返回位都可抹除为唯一且固定的外部调用 surface 时才合法; 若某一位置会随具体类型实参改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,则必须拒绝该声明。
-- [必须] 调用泛型 `extern fn` 时,若未显式提供类型实参,则必须仅在可由实参类型唯一推导出全部类型参数时才允许省略; 不能唯一推导时必须报错。该省略规则仅适用于泛型 `extern fn` 调用,不得借此扩大普通函数、方法或构造函数的既有泛型匹配范围。
+- [必须] 需要跨模块暴露的顶层函数必须显式标注 `open`; 未显式标注时默认按 `seal` 处理。成员方法可见性规则见 [Feng 语言类型规范](./feng-type.md)。
+- [必须] 泛型 `extern func` 仅在每个参数位与返回位都可抹除为唯一且固定的外部调用 surface 时才合法; 若某一位置会随具体类型实参改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,则必须拒绝该声明。
+- [必须] 调用泛型 `extern func` 时,若未显式提供类型实参,则必须仅在可由实参类型唯一推导出全部类型参数时才允许省略; 不能唯一推导时必须报错。该省略规则仅适用于泛型 `extern func` 调用,不得借此扩大普通函数、方法或构造函数的既有泛型匹配范围。
 - [必须] 顶层函数与成员方法的重载只按“名称 + 参数个数 + 参数类型”区分,返回值不参与重载; 构造函数的重载规则见 [Feng 语言类型规范](./feng-type.md)。
 - [必须] 若两个候选仅返回值不同而参数列表完全相同,必须视为签名冲突。
 - [必须] 若同一重载集合中的两个候选在当前可见的显式契约关系下可能同时匹配同一实参类型,必须视为签名冲突。
@@ -207,7 +207,7 @@ fn main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不�
 - [必须] Lambda 作为绑定值、实参或返回值时,必须存在显式 callable-form `spec` 目标类型; 绑定位置来自显式绑定类型,参数位置来自形参类型,返回位置来自当前函数的显式返回类型。
 - [必须] Lambda 可以捕获其外层作用域中的普通绑定,也可以在存在外层 `self` 绑定时捕获该 `self`。
 - [必须] 当重载函数或重载方法以函数值形式出现时,必须存在足以唯一确定目标可调用形状的上下文,例如参数位置的目标类型、显式绑定类型或已声明返回类型。
-- [禁止] 通过 `use` 导入的同名函数与当前模块内声明的顶层函数或其他导入来源共同组成新的重载集合。
+- [禁止] 通过 `import` 导入的同名函数与当前模块内声明的顶层函数或其他导入来源共同组成新的重载集合。
 - [禁止] 多行 Lambda 使用 `->`。
 - [禁止] 通过未标注类型的绑定、函数返回类型推导或其他无 callable-form `spec` 目标类型的表达式上下文为 Lambda 推导匿名函数类型。
 - [禁止] 在不存在外层 `self` 绑定的上下文中直接引用 `self`。
@@ -218,10 +218,10 @@ fn main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不�
 - 编译器必须检查所有函数参数与 Lambda 参数是否显式标注类型。
 - 编译器必须检查参数 `let`/`var` 的使用是否合法,并按绑定规则验证参数赋值路径。
 - 编译器必须检查构造函数与终结器函数是否满足 [Feng 语言类型规范](./feng-type.md) 中的声明约束。
-- 编译器必须检查泛型 `extern fn` 的每个参数位与返回位是否都可抹除为唯一且固定的外部调用 surface; 若某一位置会随具体类型实参改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,必须报错并阻止通过。
-- 编译器必须检查泛型 `extern fn` 调用点的类型实参是否完整且可确定: 显式提供时必须与类型参数个数一致; 省略时必须能由实参类型唯一推导出全部类型参数,否则必须报错并阻止通过。
+- 编译器必须检查泛型 `extern func` 的每个参数位与返回位是否都可抹除为唯一且固定的外部调用 surface; 若某一位置会随具体类型实参改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,必须报错并阻止通过。
+- 编译器必须检查泛型 `extern func` 调用点的类型实参是否完整且可确定: 显式提供时必须与类型参数个数一致; 省略时必须能由实参类型唯一推导出全部类型参数,否则必须报错并阻止通过。
 - 编译器必须检查顶层函数与成员方法的重载集合是否存在返回值冲突或重叠匹配冲突; 构造函数相关检查见 [Feng 语言类型规范](./feng-type.md)。
-- 编译器必须检查 `use` 导入的同名函数不会与本地声明或其他导入来源形成新的重载集合; 若形成重名冲突,必须报错。
+- 编译器必须检查 `import` 导入的同名函数不会与本地声明或其他导入来源形成新的重载集合; 若形成重名冲突,必须报错。
 - 编译器必须检查入口函数是否唯一且签名严格为 `main(args: string[])`,返回类型为 `void`。
 - 编译器必须检查同一包中是否出现多个顶层 `main` 声明,超出一个则报错。
 - 编译器必须检查 Lambda 的语法形式是否一致: 单表达式 Lambda 使用 `->`,多行 Lambda 使用块体且不写 `->`。

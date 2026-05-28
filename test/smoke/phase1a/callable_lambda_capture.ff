@@ -1,7 +1,7 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Mapper(x: int): int;
 spec Reader(): int;
@@ -9,12 +9,12 @@ spec Reader(): int;
 type Box {
     var n: int;
 
-    fn makeReader(): Reader {
+    func makeReader(): Reader {
         return () -> self.n;
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     var base: int = 1;
     let mapper: Mapper = (x: int) -> x + base;
     base = 2;

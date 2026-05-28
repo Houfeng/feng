@@ -1,9 +1,9 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn label_for(score: i32): string {
+func label_for(score: i32): string {
     let s = if score >= 60 {
         "pass";
     } else {
@@ -12,7 +12,7 @@ fn label_for(score: i32): string {
     return s;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     puts(&label_for(80));
     puts(&label_for(40));
 }

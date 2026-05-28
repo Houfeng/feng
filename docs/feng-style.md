@@ -45,7 +45,7 @@ type UserProfile {
   let displayName: string;
   var loginCount: i32;
 
-  fn incrementLoginCount(): void {
+  func incrementLoginCount(): void {
     self.loginCount = self.loginCount + 1;
   }
 }
@@ -59,7 +59,7 @@ type UserProfile {
 推荐示例:
 
 ```feng
-fn commit(message: string): void {
+func commit(message: string): void {
   let trimmedMessage = message;
   var retryCount = 0;
 }
@@ -80,7 +80,7 @@ let MAX_RETRY_COUNT = 3;
 不推荐把普通局部绑定写成同样风格:
 
 ```feng
-fn run(): void {
+func run(): void {
   let TEMP_VALUE = 1;
 }
 ```
@@ -96,22 +96,22 @@ fn run(): void {
 推荐示例:
 
 ```feng
-fn load(): void {
+func load(): void {
   sync();
 }
 
-fn save(): void {
+func save(): void {
   flush();
 }
 ```
 
 ```feng
 type User {
-  fn open(): void {
+  func open(): void {
     sync();
   }
 
-  fn close(): void {
+  func close(): void {
     flush();
   }
 }
@@ -126,7 +126,7 @@ type User {
 推荐示例:
 
 ```feng
-fn commit(message: string): void {
+func commit(message: string): void {
   let normalizedMessage = message;
   writeLog(normalizedMessage);
   flush();
@@ -144,7 +144,7 @@ fn commit(message: string): void {
 推荐示例:
 
 ```feng
-fn main(args: string[]) {
+func main(args: string[]) {
   if true {
     print(args);
   }
@@ -154,13 +154,13 @@ fn main(args: string[]) {
 ### 4.2 花括号位置
 
 - 花括号块建议采用“前括号跟在上一行之后”的写法。
-- 适用于 `fn`、`type`、`if`、`else`、`for`、`while`、`try`、`catch`、`finally` 等块结构。
+- 适用于 `func`、`type`、`if`、`else`、`for`、`while`、`try`、`catch`、`finally` 等块结构。
 
 推荐示例:
 
 ```feng
 type User {
-  fn commit(message: i32): i32 {
+  func commit(message: i32): i32 {
     return message;
   }
 }
@@ -195,7 +195,7 @@ if ready {
 ### 6.1 公开 API 文档注释
 
 - 对外公开的 API 建议始终提供紧邻声明的 `/** */` 文档注释,尤其是标准库 `std` 与官方包中的公开声明。
-- 顶层 `pu type`、`pu spec`、`pu fit`、`pu fn` 以及公开成员方法,都建议提供简洁准确的摘要说明。
+- 顶层 `open type`、`open spec`、`open fit`、`open func` 以及公开成员方法,都建议提供简洁准确的摘要说明。
 - 当参数、返回值、复杂度、零值行为或可见副作用会影响调用方理解时,建议在文档注释中补充 `@param`、`@return` 或实现说明。
 - 文档注释应描述调用方需要知道的稳定语义,避免把容易过时的内部实现细节写成 API 契约。
 

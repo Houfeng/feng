@@ -1,10 +1,10 @@
-mod feng.smoke.abi_pointers;
+module feng.smoke.abi_pointers;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 @cdecl("libc")
-extern fn write(fd: int, buf: byte*, count: long): long;
+extern func write(fd: int, buf: byte*, count: long): long;
 
 @abi
 spec Cmp(a: int, b: int): int;
@@ -16,11 +16,11 @@ type Holder {
 }
 
 @abi
-fn cmp(a: int, b: int): int {
+func cmp(a: int, b: int): int {
     return a - b;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let text: string = "phase6 abi ok";
     let values: byte[] = [111, 107, 10];
     let holder: Holder = Holder{cb: &cmp, tag: 7};

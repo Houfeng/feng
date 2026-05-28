@@ -1,20 +1,20 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-// Exercises codegen for user-defined finalizers (`fn ~T()`):
+// Exercises codegen for user-defined finalizers (`func ~T()`):
 // the runtime invokes the finalizer through descriptor.finalizer when
 // ARC reclaims the instance at end of scope.
 type Greeter {
     let label: string;
 
-    fn ~Greeter() {
+    func ~Greeter() {
         puts(&self.label);
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let g = Greeter { label: "fin" };
     puts(&"built");
 }

@@ -1,47 +1,47 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn throw_text(): string {
+func throw_text(): string {
     throw "primary";
     return "unreachable";
 }
 
-fn throw_i32(): i32 {
+func throw_i32(): i32 {
     let value: i32 = 7;
     throw value;
     return 0;
 }
 
-fn throw_i32_text(): string {
+func throw_i32_text(): string {
     let value: i32 = 7;
     throw value;
     return "unreachable";
 }
 
-fn throw_bool(): bool {
+func throw_bool(): bool {
     throw true;
     return false;
 }
 
-fn throw_bool_text(): string {
+func throw_bool_text(): string {
     throw true;
     return "unreachable";
 }
 
-fn add_i32(left: i32, right: i32): i32 {
+func add_i32(left: i32, right: i32): i32 {
     return left + right;
 }
 
-fn catch_string(): string {
+func catch_string(): string {
     let value = try throw_text() catch ex: string {
         ex;
     };
     return value;
 }
 
-fn catch_scalar(): string {
+func catch_scalar(): string {
     let value = try throw_i32() catch ex: i32 {
         add_i32(ex, 35);
     };
@@ -51,7 +51,7 @@ fn catch_scalar(): string {
     return "scalar-miss";
 }
 
-fn catch_order(): string {
+func catch_order(): string {
     let value = try throw_i32_text() catch ex: bool {
         "wrong-bool";
     } catch ex: i32 {
@@ -60,7 +60,7 @@ fn catch_order(): string {
     return value;
 }
 
-fn unknown_rethrow(): string {
+func unknown_rethrow(): string {
     let value = try (try throw_text() catch ex: unknown {
         throw ex;
     }) catch ex: string {
@@ -69,14 +69,14 @@ fn unknown_rethrow(): string {
     return value;
 }
 
-fn auto_upthrow(): string {
+func auto_upthrow(): string {
     let value = try throw_bool_text() catch ex: bool {
         "auto-upthrow";
     };
     return value;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     puts(&catch_string());
     puts(&catch_scalar());
     puts(&catch_order());

@@ -1,5 +1,5 @@
-pu mod feng.cli.project.lib;
+open module feng.cli.project.lib;
 
-pu fn helper(): int {
+open func helper(): int {
     return 42;
 }

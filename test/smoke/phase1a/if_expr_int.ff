@@ -1,9 +1,9 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn classify(n: i32): string {
+func classify(n: i32): string {
     let label = if n >= 0 {
         "non-negative";
     } else {
@@ -12,7 +12,7 @@ fn classify(n: i32): string {
     return label;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     puts(&classify(7));
     puts(&classify(-3));
 }

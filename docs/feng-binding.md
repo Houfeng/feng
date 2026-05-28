@@ -38,12 +38,12 @@ var total: int;
 正确语法二,模块级与函数内局部变量:
 
 ```feng
-pu mod demo.binding;
+open module demo.binding;
 
 let app_name = "feng";
 var total: int;
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let user = "guest";
     var retry = 0;
     retry = retry + 1;
@@ -54,17 +54,17 @@ fn main(args: string[]) {
 
 ```feng
 // 省略 let / var,默认等价于 let 参数
-fn sum(a: int, b: int): int {
+func sum(a: int, b: int): int {
     return a + b;
 }
 
 // 显式 var 参数,函数体内可修改
-fn increase(step: int, var total: int) {
+func increase(step: int, var total: int) {
     total = total + step;
 }
 
 // 显式 let 参数
-fn visit(let name: string) {
+func visit(let name: string) {
     print(name);
 }
 ```
@@ -74,7 +74,7 @@ fn visit(let name: string) {
 ```feng
 type User {
     var name: string;
-    pr let id: int;
+    seal let id: int;
 }
 
 @abi
@@ -87,7 +87,7 @@ type Point {
 正确语法五,块作用域与名称屏蔽:
 
 ```feng
-fn show_scope(name: string) {
+func show_scope(name: string) {
     let label = "outer";
 
     if name != "" {
@@ -112,7 +112,7 @@ total: int;
 
 ```feng
 // 错误: 参数即使省略 let / var 也不能省略类型
-fn sum(a, b): int {
+func sum(a, b): int {
     return a + b;
 }
 ```
@@ -126,8 +126,8 @@ fn sum(a, b): int {
 - `Lambda` 参数沿用相同规则: 可省略 `let` / `var`,省略时默认按 `let` 处理。
 - `let` 与 `var` 都遵循块作用域规则; 子级块中声明同名变量时,编译器优先解析到最近作用域中的绑定,从而屏蔽外层同名变量; 子级块结束后外层被屏蔽的同名变量重新可见。
 - 是否允许重新赋值只由当前实际引用到的绑定是 `let` 还是 `var` 决定。
-- 模块级 `let` / `var` 可与 `pu` / `pr` 组合使用; 公开模块中的公开模块级绑定可被其他模块通过 `use` 引入; 被引入后按其原始 `let` / `var` 语义进入使用方可见作用域,不参与函数重载。
-- `type` / `@abi type` 成员的 `let` / `var` 同样可与 `pu` / `pr` 访问控制组合使用; 成员的可变性由成员自身的 `let` / `var` 决定,与可见性控制相互独立。
+- 模块级 `let` / `var` 可与 `open` / `seal` 组合使用; 公开模块中的公开模块级绑定可被其他模块通过 `import` 引入; 被引入后按其原始 `let` / `var` 语义进入使用方可见作用域,不参与函数重载。
+- `type` / `@abi type` 成员的 `let` / `var` 同样可与 `open` / `seal` 访问控制组合使用; 成员的可变性由成员自身的 `let` / `var` 决定,与可见性控制相互独立。
 
 ## 5 规则
 

@@ -1,41 +1,41 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Named {
-    fn greet(): string;
+    func greet(): string;
 }
 
 type User: Named {
     let name: string;
 
-    fn greet(): string {
+    func greet(): string {
         return self.name;
     }
 }
 
-fn idNamed<T: Named>(value: T): T {
+func idNamed<T: Named>(value: T): T {
     return value;
 }
 
 type Holder<T: Named> {
     var value: T;
 
-    fn set(next: T) {
+    func set(next: T) {
         self.value = next;
     }
 
-    fn read(): string {
+    func read(): string {
         return self.value.greet();
     }
 
-    fn relay<U: Named>(item: U): string {
+    func relay<U: Named>(item: U): string {
         return item.greet();
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let named: Named = User{name: "phase-e-ok"};
 
     let fromFn: Named = idNamed<Named>(named);

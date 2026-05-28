@@ -1,12 +1,12 @@
-mod feng.examples;
+module feng.examples;
 
-use std;
+import std;
 
 
 /**
  * The main function.
  */
-fn main(args: string[]) {
+func main(args: string[]) {
   print("Please enter your name: ");
   let msg = readLine();
   for var i = 0; i < 10; i += 1 {

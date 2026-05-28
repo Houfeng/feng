@@ -1,23 +1,23 @@
-mod feng.probe;
+module feng.probe;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
-  fn size(): int;
+  func size(): int;
 }
 
 spec IntSequence: Sequence<int> {
-  fn size(): int;
+  func size(): int;
 }
 
 type Counter: IntSequence {
-  fn size(): int {
+  func size(): int {
     return 1;
   }
 }
 
-fn generic_example(args: string[]) {
+func generic_example(args: string[]) {
   let counter: IntSequence = Counter();
   if counter.size() == 1 {
     puts(&"generic spec parent ok");

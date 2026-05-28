@@ -123,16 +123,16 @@ assert(colonAngleRegex.test('identity<int>'), 'explicit generic call pattern sho
 const fnPatterns = findFunctionDefinitionPatterns();
 const fnGenericPattern = fnPatterns.find(p => p.begin && p.begin.includes('<'));
 assert(fnGenericPattern, 'expected a begin/end pattern in functionDefinitions for generic functions');
-assert(fnGenericPattern.beginCaptures && fnGenericPattern.beginCaptures['1'], 'fn generic pattern should capture group 1 (fn keyword)');
+assert(fnGenericPattern.beginCaptures && fnGenericPattern.beginCaptures['1'], 'func generic pattern should capture group 1 (func keyword)');
 assert.strictEqual(
     fnGenericPattern.beginCaptures['1'].name,
     'keyword.declaration.function.feng',
-    'fn keyword should have scope keyword.declaration.function.feng'
+    'func keyword should have scope keyword.declaration.function.feng'
 );
 assert.strictEqual(
     fnGenericPattern.beginCaptures['3'].name,
     'entity.name.function.feng',
-    'fn name should have scope entity.name.function.feng'
+    'func name should have scope entity.name.function.feng'
 );
 
 // 4. typeDefinitions has a begin/end pattern with type-param support

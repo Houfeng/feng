@@ -10,7 +10,7 @@
 - `@abi` 可写为无参形式或带一个目标参数；当前无参等价于 `@abi("c")`，本文仅定义 `c` 目标语义；未来可扩展为 `@abi("wasi")` 等其他目标。
 - 指针类型 `T*`（含函数指针 `Foo*`）在 Feng 中是不透明句柄，不能直接解引用/运算/调用。
 - Feng 中不存在面向用户可见的托管对象指针；数据指针 `T*` 表示对应值的 ABI 兼容地址，函数指针 `Foo*` 表示 ABI 兼容原生函数指针。
-- `extern fn` 的 ABI 形状必须在签名中显式表达为 `T` 或 `T*`（含 `Foo*`）；不允许通过入参自动转换把值当作指针传递。
+- `extern func` 的 ABI 形状必须在签名中显式表达为 `T` 或 `T*`（含 `Foo*`）；不允许通过入参自动转换把值当作指针传递。
 
 ## 1. 讨论收敛结论（当前方向）
 
@@ -19,7 +19,7 @@
 - `string` 的 ABI 表达与 0 拷贝
 - ABI 兼容数组的判定与 0 拷贝
 - C API 可能逃逸指针时的生命周期责任划分
-- 通过 `&` 取 `@abi` 顶层 `fn` 获得原生函数指针用于回调
+- 通过 `&` 取 `@abi` 顶层 `func` 获得原生函数指针用于回调
 
 当前收敛方向：
 
@@ -44,13 +44,13 @@
 | 函数指针类型 `Foo*`（`Foo` 为 `@abi spec`） | 是 | 派生自标注了 `@abi` 的 callable-form `spec`；不透明，仅在 ABI 边界传递 |
 | `@abi` 类型 | 是 | 类型本身通过 ABI 稳定校验，且直接字段类型仅允许基本标量或符合白名单的 `T*` |
 | ABI 兼容数组 `T[]` | 有条件 | `T` 为基本标量 / 指针 / 已通过 ABI 校验的 `@abi`，且元素按值连续存储 |
-| `string` | 有条件 | 默认按借用方式参与 ABI 边界；具体 ABI 形状由 `extern fn` 签名显式表达，语言不预设未知 C API |
+| `string` | 有条件 | 默认按借用方式参与 ABI 边界；具体 ABI 形状由 `extern func` 签名显式表达，语言不预设未知 C API |
 
 #### 函数清单
 
 | 类别 | 是否 ABI 兼容 | 条件 |
 | --- | --- | --- |
-| 顶层 `fn` | 有条件 | 必须标注 `@abi`，且全部参数与返回值 ABI 兼容 |
+| 顶层 `func` | 有条件 | 必须标注 `@abi`，且全部参数与返回值 ABI 兼容 |
 
 ---
 
@@ -63,10 +63,10 @@
 结合既有讨论，先采用“可实现、可诊断、可演进”的约束：
 
 1. `@abi` 目标必须通过当前 ABI 目标的兼容性校验；本文当前仅定义 `c`，因此无参 `@abi` 等价于 `@abi("c")` 并按 C ABI 规则检查。
-2. `@abi` 参与 ABI 边界时，传值/传指针规则由签名决定（`T` 或 `T*`）；对 `extern fn` 来说，参数位与返回位必须显式写出指针形状，不允许隐式转为指针。
+2. `@abi` 参与 ABI 边界时，传值/传指针规则由签名决定（`T` 或 `T*`）；对 `extern func` 来说，参数位与返回位必须显式写出指针形状，不允许隐式转为指针。
 3. 对象形式的 `@abi type` 在 C ABI 路径下按是否声明字段分成两类：
     - 有字段：可以按值进入 C ABI surface，也可以按取址规则形成 `T*`。
-    - 无字段：只作为 `T*` 的名义 pointee，不按值进入 `extern fn`、顶层 `@abi fn` 或 callable-form `@abi spec` 的参数位与返回位，也不能通过一元 `&` 形成 `T*`。
+    - 无字段：只作为 `T*` 的名义 pointee，不按值进入 `extern func`、顶层 `@abi func` 或 callable-form `@abi spec` 的参数位与返回位，也不能通过一元 `&` 形成 `T*`。
     - 没有 `@abi` 的 `type` 不能进入 C 边界。
 4. `@abi` 相关限制继续严格执行：
     - 不允许 `@abi` 与泛型交叉：带泛型形参的 `type` 不得标注 `@abi`，任何泛型实例（闭合或未闭合）当前阶段均不参与 ABI 稳定校验。
@@ -113,7 +113,7 @@ type UserType2 {
 | `@abi` 对象 | `&abi_value` | `T*` | 该值对应 ABI payload 的首地址 | `T` 必须是声明了字段并已通过 ABI 校验的 `@abi` 类型 |
 | `string` | `&str` | `string*` | `string` 的 ABI 兼容数据地址；当前 `c` 目标下为 UTF-8 数据区首地址 | 不暴露运行时对象本体；仅暴露 ABI 兼容数据地址 |
 | ABI 兼容数组 | `&arr` | `T*` | 第 0 个元素地址；空数组返回 0 指针 | 当前首版仅覆盖一维 ABI 兼容数组 |
-| 顶层 `@abi fn` | `&abi_fn` | `Foo*` | 与目标签名匹配的原生函数指针 | 目标类型必须显式给出 `Foo*` |
+| 顶层 `@abi func` | `&abi_fn` | `Foo*` | 与目标签名匹配的原生函数指针 | 目标类型必须显式给出 `Foo*` |
 
 其它类型一律报错，不做隐式兜底。
 
@@ -121,8 +121,8 @@ type UserType2 {
 
 补充约束：
 
-- 当 `extern fn` 参数位声明为 `T*`/`Foo*` 时，调用点必须提供显式指针值（如一元 `&` 结果或同类型指针绑定）；不做入参自动取址或自动借用。
-- 当 `extern fn`、顶层 `@abi fn` 或 callable-form `@abi spec` 的参数位或返回位涉及对象形式 `@abi type T` 时，无字段 `T` 只能显式写成 `T*`，不能按值写成 `T`。
+- 当 `extern func` 参数位声明为 `T*`/`Foo*` 时，调用点必须提供显式指针值（如一元 `&` 结果或同类型指针绑定）；不做入参自动取址或自动借用。
+- 当 `extern func`、顶层 `@abi func` 或 callable-form `@abi spec` 的参数位或返回位涉及对象形式 `@abi type T` 时，无字段 `T` 只能显式写成 `T*`，不能按值写成 `T`。
 
 ### 3.3 可写性
 
@@ -155,7 +155,7 @@ type UserType2 {
 
 ```feng
 @cdecl("c_use_i32_ptr")
-extern fn c_use_i32_ptr(p: i32*): void;
+extern func c_use_i32_ptr(p: i32*): void;
 
 let x: i32 = 42;
 let p: i32* = &x;
@@ -166,7 +166,7 @@ c_use_i32_ptr(p);
 
 ```feng
 @cdecl("c_use_array_ptr")
-extern fn c_use_array_ptr(p: i32*): void;
+extern func c_use_array_ptr(p: i32*): void;
 
 let arr: i32[] = [1, 2, 3];
 let p: i32* = &arr;
@@ -194,12 +194,12 @@ let z: i32* = p + 1;  // 编译期报错：不允许指针运算
 2. `Name` 本身仍是普通 callable-form `spec`，不引入运行时差异。
 3. `Name*` 属于指针类型体系，与 `T*` 同级，遵循相同的不透明规则：不可直接调用、不可解引用、不可运算。
 4. `Name*` 可来自以下位置：
-    - 对满足条件的顶层 `@abi fn` 执行 `&` 取址；
-    - `extern fn` 返回值；
+    - 对满足条件的顶层 `@abi func` 执行 `&` 取址；
+    - `extern func` 返回值；
     - 已有 `Name*` 绑定、参数、字段或返回值的继续传递。
-5. `Name*` 可直接用作 `extern fn` 参数类型、返回类型，以及 `@abi type` 成员字段类型。
-6. 除 `&abi_fn` 场景外，编译器通常无法追溯 `Name*` 的真实来源是否匹配 `Name` 签名；这类 ABI 正确性由开发者通过 `extern fn` 声明或外部 API 契约保证。
-7. 对顶层 `@abi fn` 执行 `&` 取址时，目标类型必须显式给出 `Name*`；编译器据此检查该 `fn` 与 `Name` 的参数和返回值完全一致，缺少目标类型或签名不一致时编译期报错。
+5. `Name*` 可直接用作 `extern func` 参数类型、返回类型，以及 `@abi type` 成员字段类型。
+6. 除 `&abi_fn` 场景外，编译器通常无法追溯 `Name*` 的真实来源是否匹配 `Name` 签名；这类 ABI 正确性由开发者通过 `extern func` 声明或外部 API 契约保证。
+7. 对顶层 `@abi func` 执行 `&` 取址时，目标类型必须显式给出 `Name*`；编译器据此检查该 `func` 与 `Name` 的参数和返回值完全一致，缺少目标类型或签名不一致时编译期报错。
 
 语法示例：
 
@@ -208,14 +208,14 @@ let z: i32* = p + 1;  // 编译期报错：不允许指针运算
 spec CmpFunc(a: int, b: int): int;
 
 @abi
-fn int_cmp(a: int, b: int): int {
+func int_cmp(a: int, b: int): int {
     return a - b;
 }
 
 let p: CmpFunc* = &int_cmp;
 
 @cdecl("c_get_cmp")
-extern fn c_get_cmp(): CmpFunc*;
+extern func c_get_cmp(): CmpFunc*;
 
 let q: CmpFunc* = c_get_cmp();
 ```
@@ -256,7 +256,7 @@ type HandlerVTable {
 ### 4.1 基本规则
 
 1. `string` 在 ABI 边界只定义借用与 0 拷贝能力；当 ABI 位写成 `string*` 时，表示该位承载 `string` 的 ABI 兼容数据地址；当前 `c` 目标下该地址为 UTF-8 数据区首地址。
-2. `extern fn` 若需要字符串数据指针，必须在签名中显式声明对应指针类型（如 `string*`），并在调用点显式取址（如 `&str`）；不允许把 `string` 作为入参自动转换为指针。
+2. `extern func` 若需要字符串数据指针，必须在签名中显式声明对应指针类型（如 `string*`），并在调用点显式取址（如 `&str`）；不允许把 `string` 作为入参自动转换为指针。
 3. 这是借用使用，不是所有权转移，不是普通隐式类型转换。
 
 ### 4.2 责任边界
@@ -307,8 +307,8 @@ type HandlerVTable {
 ### 6.0 零假设与可判定性
 
 1. 互操作层不得通过函数名或库习惯推断 C API 行为。
-2. 回调位能力必须在 `extern fn` 签名中显式声明；参数位或返回位写成 `Foo*` 时，表示开发者声明该 ABI 位承载与 `Foo` 签名兼容的原生函数指针。
-3. 编译器只检查 `Foo` 自身是否 ABI 合法、静态类型是否一致，以及 `&abi_fn` 场景下函数签名是否与 `Foo` 完全一致；`extern fn` 实际返回或写入的函数指针是否真实匹配，由开发者负责。
+2. 回调位能力必须在 `extern func` 签名中显式声明；参数位或返回位写成 `Foo*` 时，表示开发者声明该 ABI 位承载与 `Foo` 签名兼容的原生函数指针。
+3. 编译器只检查 `Foo` 自身是否 ABI 合法、静态类型是否一致，以及 `&abi_fn` 场景下函数签名是否与 `Foo` 完全一致；`extern func` 实际返回或写入的函数指针是否真实匹配，由开发者负责。
 4. 所有“可用/不可用”结论必须由签名规则静态判定，不能依赖运行时猜测。
 
 示例：
@@ -318,34 +318,34 @@ type HandlerVTable {
 spec CmpFunc(a: int, b: int): int;
 
 @abi
-fn int_cmp(a: int, b: int): int {
+func int_cmp(a: int, b: int): int {
     return a - b;
 }
 
 @cdecl("c_register_cmp")
-extern fn c_register_cmp(cmp: CmpFunc*): void;
+extern func c_register_cmp(cmp: CmpFunc*): void;
 
 let p: CmpFunc* = &int_cmp;
 c_register_cmp(p);
 
 @cdecl("c_load_cmp")
-extern fn c_load_cmp(): CmpFunc*;
+extern func c_load_cmp(): CmpFunc*;
 
 let q: CmpFunc* = c_load_cmp();
 ```
 
-### 6.1 `@abi spec` 与 `@abi fn` 的检查规则
+### 6.1 `@abi spec` 与 `@abi func` 的检查规则
 
 1. `@abi spec Foo(...)` 仅允许 callable-form `spec`；编译器必须检查其全部参数与返回值 ABI 兼容，其中无字段对象形式 `@abi type` 只能以 `T*` 形态出现。
-2. `@abi fn` 若要出现在 ABI 边界，或作为 `&` 的取址目标，必须是顶层 `fn`，且其全部参数与返回值 ABI 兼容；当涉及无字段对象形式 `@abi type` 时也只能写成 `T*`。
-3. 对顶层 `@abi fn` 执行 `&` 时，目标类型必须显式给出为 `Foo*`；编译器据此检查该 `fn` 与 `Foo` 的参数和返回值完全一致。
-4. 缺少目标类型、存在重载歧义、或 `fn` 与 `Foo` 签名不一致时，编译器必须报错。
+2. `@abi func` 若要出现在 ABI 边界，或作为 `&` 的取址目标，必须是顶层 `func`，且其全部参数与返回值 ABI 兼容；当涉及无字段对象形式 `@abi type` 时也只能写成 `T*`。
+3. 对顶层 `@abi func` 执行 `&` 时，目标类型必须显式给出为 `Foo*`；编译器据此检查该 `func` 与 `Foo` 的参数和返回值完全一致。
+4. 缺少目标类型、存在重载歧义、或 `func` 与 `Foo` 签名不一致时，编译器必须报错。
 
 ### 6.2 `Foo*` 的来源与使用规则
 
 1. `Foo*` 可由 `&top_level_abi_fn` 产生。
-2. `Foo*` 也可来自 `extern fn` 返回值，以及已有 `Foo*` 绑定、参数、字段或返回值的继续传递。
-3. 当 `extern fn` 的参数类型或返回类型写成 `Foo*` 时，编译器只检查静态类型一致，不验证外部实现是否真的提供了与 `Foo` 签名兼容的函数指针。
+2. `Foo*` 也可来自 `extern func` 返回值，以及已有 `Foo*` 绑定、参数、字段或返回值的继续传递。
+3. 当 `extern func` 的参数类型或返回类型写成 `Foo*` 时，编译器只检查静态类型一致，不验证外部实现是否真的提供了与 `Foo` 签名兼容的函数指针。
 4. `Foo*` 在 Feng 中始终是不透明指针，只能存储、传递和返回，不能直接调用。
 
 ### 6.3 禁止项
@@ -365,14 +365,14 @@ let q: CmpFunc* = c_load_cmp();
 1. 函数指针 `Foo*` 本身无生命周期问题（函数代码永不失效）。
 2. 若调用方自行通过 `user_data` 传入指针对象，其生命周期由调用方负责。
 3. 若 C 侧会缓存/异步使用 `user_data` 指针，调用方必须显式保活该对象直到注销。
-4. 若 `Foo*` 来自 `extern fn` 返回值或外部写入字段，是否真实满足 `Foo` 契约由开发者负责。
+4. 若 `Foo*` 来自 `extern func` 返回值或外部写入字段，是否真实满足 `Foo` 契约由开发者负责。
 
 ### 6.5 错误与约束
 
 1. 回调跨 ABI 边界时，Feng 异常不得穿越到 C；需在边界转换为 C 可处理的错误约定。
 2. 编译器必须检查被取址函数的全部参数与返回值均 ABI 兼容。
 3. 凡不符合 `Foo*` 取址规则的表达式，编译器必须拒绝编译并给出固定诊断。
-4. `extern fn` 返回或接收 `Foo*` 的 ABI 真实性不由编译器证明，需由开发者保证声明与外部实现一致。
+4. `extern func` 返回或接收 `Foo*` 的 ABI 真实性不由编译器证明，需由开发者保证声明与外部实现一致。
 
 ---
 
@@ -389,7 +389,7 @@ let q: CmpFunc* = c_load_cmp();
 ## 8. 当前实现裁决（本轮已拍板）
 
 1. 一元 `&` 对临时值：允许取址；编译器不做自动延寿。若调用返回后仍需继续使用，由开发者自行保活 owner（例如挂到 wrapper 成员）。
-2. `string` ABI 传递：语言只定义借用与 0 拷贝能力；具体 ABI 形状由 `extern fn` 签名显式表达，Feng 不预设未知 C API 是 `char*`、`(ptr, len)` 还是其他布局。
+2. `string` ABI 传递：语言只定义借用与 0 拷贝能力；具体 ABI 形状由 `extern func` 签名显式表达，Feng 不预设未知 C API 是 `char*`、`(ptr, len)` 还是其他布局。
 3. ABI 兼容数组首版仅覆盖一维数组。
 4. 声明了字段的 `@abi type` 在 Phase 5 不引入对象内联 payload 成员；`T*` 与 `&abi_value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案：为这类 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 视图和 `T__abi_ptr(...)` helper，helper 的 ABI 数据起点必须锚定为真实对象首 ABI 字段的 `offsetof(struct T, field0)`，并以静态断言锁定后续字段相对偏移；禁止使用 `sizeof(FengManagedHeader)` 之类的裸偏移推断。无字段 `@abi type` 不生成 `T__AbiLayout`，其 `T*` 直接按 opaque pointer 进入 C surface。
 
@@ -408,18 +408,18 @@ let q: CmpFunc* = c_load_cmp();
 1. 新增一元 `&` 合法性检查与类型推导。
 2. 新增 ABI 兼容数组资格谓词（基于元素类型已认证状态）。
 3. 新增 ABI 边界借用生命周期诊断（至少覆盖明显逃逸误用）。
-4. 新增 `@abi spec` / `@abi fn` 的 ABI 签名检查、`Foo*` 目标类型检查与取址合法性检查。
+4. 新增 `@abi spec` / `@abi func` 的 ABI 签名检查、`Foo*` 目标类型检查与取址合法性检查。
 5. 新增 `Foo*` 来源诊断：缺少目标类型、签名不匹配、非顶层函数取址，以及 ABI 位静态类型不一致时给出固定错误码。
-6. 新增 `extern fn` 参数检查：禁止入参自动取址/自动转指针，`T*`/`Foo*` 参数位必须由静态类型已匹配的指针实参提供。
+6. 新增 `extern func` 参数检查：禁止入参自动取址/自动转指针，`T*`/`Foo*` 参数位必须由静态类型已匹配的指针实参提供。
 
 ### 9.2 发码层
 
 1. `&string` 生成数据指针取址路径。
 2. `&abi_array` 生成元素区首地址取址路径。
-3. `&abi_value` 首版对“声明了字段的 `@abi type`”采用隐藏 ABI layout + 首 ABI 字段稳定偏移 helper 方案：为这类 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 与 `T__abi_ptr(...)` helper；`extern fn` 中对应的 `T*` 统一降成 `T__AbiLayout *`；helper 必须以真实对象首 ABI 字段的 `offsetof(struct T, field0)` 为 ABI 起点，并以 `offsetof(struct T, fieldN) - offsetof(struct T, field0) == offsetof(struct T__AbiLayout, fieldN)` 形式锁定布局，禁止使用 `sizeof(FengManagedHeader)` 做裸偏移。无字段 `@abi type` 不生成 `T__AbiLayout`，其 `T*` 直接按 opaque pointer lowering。
+3. `&abi_value` 首版对“声明了字段的 `@abi type`”采用隐藏 ABI layout + 首 ABI 字段稳定偏移 helper 方案：为这类 `@abi type` 生成仅供 ABI 边界使用的 `T__AbiLayout` 与 `T__abi_ptr(...)` helper；`extern func` 中对应的 `T*` 统一降成 `T__AbiLayout *`；helper 必须以真实对象首 ABI 字段的 `offsetof(struct T, field0)` 为 ABI 起点，并以 `offsetof(struct T, fieldN) - offsetof(struct T, field0) == offsetof(struct T__AbiLayout, fieldN)` 形式锁定布局，禁止使用 `sizeof(FengManagedHeader)` 做裸偏移。无字段 `@abi type` 不生成 `T__AbiLayout`，其 `T*` 直接按 opaque pointer lowering。
 4. 当前不在对象结构中引入内联 payload 成员，不改变 Feng 内部 `obj.field` / `self.field` 的普通字段寻址模型。
 5. 不实现 `extern` 调用位自动延寿；若调用返回后仍需继续使用，由开发者自行保活 owner。
-6. 首版仅生成 `&@abi` 顶层函数对应的原生函数指针结果，并允许 `extern fn` 参数/返回位直接按 `Foo*` 传递。
+6. 首版仅生成 `&@abi` 顶层函数对应的原生函数指针结果，并允许 `extern func` 参数/返回位直接按 `Foo*` 传递。
 7. 对成员函数、闭包、绑定方法等禁止路径不生成相关代码，编译期直接拒绝。
 
 ### 9.3 文档与测试
@@ -427,7 +427,7 @@ let q: CmpFunc* = c_load_cmp();
 1. 在 ABI 规范中单列“默认借用 + 显式持有”责任模型。
 2. 增加正反例：同步调用、逃逸调用、可写缓冲误用、临时值取址。
 3. 增加 ABI 兼容数组资格测试：基础类型、指针类型、`@abi` 类型、不兼容元素类型。
-4. 增加函数指针测试：`&@abi` 顶层函数通过、`extern fn` 返回 `Foo*` 通过、`Foo*` 成员字段通过、参数/返回值 ABI 检查通过。
+4. 增加函数指针测试：`&@abi` 顶层函数通过、`extern func` 返回 `Foo*` 通过、`Foo*` 成员字段通过、参数/返回值 ABI 检查通过。
 5. 增加诊断测试：缺少目标 `Foo*` 类型报错、未标注 `@abi` 顶层函数报错、成员函数报错、lambda 取址报错、绑定方法取址报错、ABI 检查失败报错。
 
 ---
@@ -459,8 +459,8 @@ let q: CmpFunc* = c_load_cmp();
 - [x] T3.1 扩展 `@abi type` 字段白名单检查：只允许基本标量、`T*`、`Foo*`。
 - [x] T3.2 拒绝 `@abi type` 直接内联 `string`、数组、`@abi` 对象值和 callable-form `spec` 本体。
 - [x] T3.3 实现 callable-form `@abi spec` 的参数/返回值 ABI 校验。
-- [x] T3.4 实现顶层 `@abi fn` 的 ABI 校验与异常边界检查。
-- [x] T3.5 实现 `Foo*` 目标类型匹配校验：`&@abi fn` 只有在显式目标 `Foo*` 下才成立。
+- [x] T3.4 实现顶层 `@abi func` 的 ABI 校验与异常边界检查。
+- [x] T3.5 实现 `Foo*` 目标类型匹配校验：`&@abi func` 只有在显式目标 `Foo*` 下才成立。
 - [x] T3.6 拒绝成员函数、lambda、闭包、绑定方法值取址为 `Foo*`。
 - [x] T3.7 实现一维 ABI 兼容数组资格判定：元素类型仅允许基本标量、`U*`、已通过 ABI 校验的 `@abi` 类型。
 
@@ -476,21 +476,21 @@ let q: CmpFunc* = c_load_cmp();
 - [x] T5.2 实现 `&string` 发码，只提供借用能力，不默认推断固定 ABI 形状。
 - [x] T5.3 实现 `&abi_array` 发码，生成一维元素区首地址指针。
 - [x] T5.4 实现 `&top_level_abi_fn` 发码，生成 `Foo*` 原生函数指针。
-- [x] T5.5 实现 `Foo*` 在 `extern fn` 参数/返回位与 `@abi type` 字段中的传递和存储。
+- [x] T5.5 实现 `Foo*` 在 `extern func` 参数/返回位与 `@abi type` 字段中的传递和存储。
 - [x] T5.6 确认禁止路径不发码：成员函数、闭包、绑定方法、直接调用 `Foo*`、解引用/运算指针等。
 
-当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern fn feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮补齐了 `&abi_array`、`&top_level_abi_fn`、`&abi_value` 与 `Foo*` ABI 传递链路的发码：callable-form `@abi spec` 现在生成稳定的 C function-pointer typedef，`Foo*` 可在 `extern fn` 参数/返回位与 `@abi type` 字段中传递、存储并从字段再次传出；命名 `@abi type` 的 `T*` / `&value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案，不在对象结构中引入内联 payload，不生成额外 bridge 结构，helper 统一锚定真实对象首字段 `offsetof(struct T, field0)` 并以静态断言锁定后续字段偏移；同时通过 semantic 反例确认 `Foo*` 不能被直接调用，成员函数 / lambda 等禁止来源继续在编译期拒绝。至此 Phase 5 已完成；本轮 focused `test_semantic`、`test_codegen` 与全量 `make test` 均已通过。
+当前增量说明：`std.string.length()` 已从 runtime 导入迁移为 intrinsic 导入，现使用 `@cdecl("feng_intrinsic") extern func feng_string_utf8_length(value: string*): long;`，并通过 `&self` 显式传入 `string*`。本轮补齐了 `&abi_array`、`&top_level_abi_fn`、`&abi_value` 与 `Foo*` ABI 传递链路的发码：callable-form `@abi spec` 现在生成稳定的 C function-pointer typedef，`Foo*` 可在 `extern func` 参数/返回位与 `@abi type` 字段中传递、存储并从字段再次传出；命名 `@abi type` 的 `T*` / `&value` 采用“隐藏 ABI layout + 首 ABI 字段稳定偏移 helper”方案，不在对象结构中引入内联 payload，不生成额外 bridge 结构，helper 统一锚定真实对象首字段 `offsetof(struct T, field0)` 并以静态断言锁定后续字段偏移；同时通过 semantic 反例确认 `Foo*` 不能被直接调用，成员函数 / lambda 等禁止来源继续在编译期拒绝。至此 Phase 5 已完成；本轮 focused `test_semantic`、`test_codegen` 与全量 `make test` 均已通过。
 
 ### 10.7 Phase 6：测试与回归
 
-- [x] T6.1 补 semantic 正例测试：`@abi type`、`@abi spec`、顶层 `@abi fn`、`Foo*` 成员/参数/返回、一维 ABI 数组。
+- [x] T6.1 补 semantic 正例测试：`@abi type`、`@abi spec`、顶层 `@abi func`、`Foo*` 成员/参数/返回、一维 ABI 数组。
 - [x] T6.2 补 semantic 反例测试：缺少目标 `Foo*` 类型、签名不匹配、未标注 `@abi` 顶层函数、成员函数/闭包/lambda 取址、字段白名单违规。
-- [x] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern fn` 返回 `Foo*`。
+- [x] T6.3 补 parser / codegen / integration 测试：一元 `&`、`Foo*` 传递、`string` / 数组借用、`extern func` 返回 `Foo*`。
 - [x] T6.4 执行全量回归，并在本文更新每项完成状态与验收结果。
 
-当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern fn` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。当前进一步收敛不透明指针规则：`T*` / `Foo*` 允许在同类型前提下参与 `==` / `!=`，并按原生指针地址身份比较；其余解引用、调用、运算、跨类型转换与顺序比较继续在编译期拒绝。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
+当前增量说明：本轮补齐了 Phase 6 的测试覆盖：parser 侧把一元 `&` 明确扩展到 `@abi` 对象取址；semantic 侧新增了 `Foo*` 在 `@abi type` 字段、`extern func` 参数/返回位之间流转的正例，以及绑定方法值取址为 `Foo*` 的反例；integration 侧新增 `abi_pointers` smoke case，用 `write(1, &values, 3)` 验证 `&array` 的 extern 借用链路、用 `puts(&text)` 验证 `&string` 的 extern 借用链路，并覆盖 `Foo*` 字段存储。当前进一步收敛不透明指针规则：`T*` / `Foo*` 允许在同类型前提下参与 `==` / `!=`，并按原生指针地址身份比较；其余解引用、调用、运算、跨类型转换与顺序比较继续在编译期拒绝。至此 Phase 6 已完成；focused `test_parser`、`test_semantic`、`test_codegen`、`run_smoke.sh` 与全量 `make test` 均已通过。
 
-补充：此前 hidden `T__AbiLayout` 仅真正支撑了 `T*` / `&abi_value` 的边界 lowering；本轮继续把 by-value ABI surface 补齐到 `extern fn` 与顶层 `@abi fn`。当签名位写成 `T` 时，C surface 统一使用隐藏 `T__AbiLayout` 按值传递；进入 Feng 体内时把 payload 装箱成新的托管 `T` 实例，离开 Feng ABI 边界时再从对象抽取 payload 返回，确保“ABI 传值”与“Feng 托管对象语义”两层职责分离。
+补充：此前 hidden `T__AbiLayout` 仅真正支撑了 `T*` / `&abi_value` 的边界 lowering；本轮继续把 by-value ABI surface 补齐到 `extern func` 与顶层 `@abi func`。当签名位写成 `T` 时，C surface 统一使用隐藏 `T__AbiLayout` 按值传递；进入 Feng 体内时把 payload 装箱成新的托管 `T` 实例，离开 Feng ABI 边界时再从对象抽取 payload 返回，确保“ABI 传值”与“Feng 托管对象语义”两层职责分离。
 
 ---
 

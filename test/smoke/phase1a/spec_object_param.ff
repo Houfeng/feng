@@ -1,25 +1,25 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Named {
-    fn greet(): string;
+    func greet(): string;
 }
 
 type User: Named {
     let name: string;
 
-    fn greet(): string {
+    func greet(): string {
         return self.name;
     }
 }
 
-fn announce(n: Named) {
+func announce(n: Named) {
     puts(&n.greet());
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let u = User { name: "feng" };
     announce(u);
 }

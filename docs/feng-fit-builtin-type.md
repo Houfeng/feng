@@ -48,61 +48,61 @@
 - `fit` 左侧目标除了用户定义的具体 `type`, 还可以是本草案 §2 列出的内建类型。
 - 内建类型上的 `fit` 与用户 `type` 上的 `fit` 在用户可见行为上保持一致。用户仍然通过同一套 `fit` 语法与普通方法调用语法使用这些能力。
 - 内建类型上的 `self` 仍由编译器隐式提供, 仍表示“当前实例”。其中, 标量内建类型中的 `self` 是当前值本身, `string` 中的 `self` 是当前字符串值, 数组目标中的 `self` 是当前数组值。
-- 在孤儿适配判定中, 所有内建类型目标都按外部类型处理, 包括标量、`string` 与数组目标形式 `T[]`、`T[!]`。因此, 当目标 `spec` 定义在当前包内时, `pu fit` 可以公开导出该关系声明；当目标 `spec` 也定义在当前包外时, `pu fit` 必须按 [feng-fit.md](./feng-fit.md) 的孤儿规则移除导出并输出肯定式提示。
+- 在孤儿适配判定中, 所有内建类型目标都按外部类型处理, 包括标量、`string` 与数组目标形式 `T[]`、`T[!]`。因此, 当目标 `spec` 定义在当前包内时, `open fit` 可以公开导出该关系声明；当目标 `spec` 也定义在当前包外时, `open fit` 必须按 [feng-fit.md](./feng-fit.md) 的孤儿规则移除导出并输出肯定式提示。
 
 以下写法应合法:
 
 ```feng
 fit i32 {
-  fn double(): i32 {
+  func double(): i32 {
     return self * 2;
   }
 }
 
 fit T[] {
-  fn same(): T[] {
+  func same(): T[] {
     return self;
   }
 
-  fn clone(): T[] {
+  func clone(): T[] {
     return self;
   }
 
-  fn clone(start: long, length: long): T[] {
+  func clone(start: long, length: long): T[] {
     ...
   }
 
-  fn slice(start: long, length: long): Span<T> {
+  func slice(start: long, length: long): Span<T> {
     ...
   }
 }
 
 fit int[] {
-  fn first(): int {
+  func first(): int {
     return self[0];
   }
 }
 
 fit T2[] {
-  fn head(): T2 {
+  func head(): T2 {
     return self[0];
   }
 }
 
 fit T[!] {
-  fn readonly(): T[] {
+  func readonly(): T[] {
     return (T[])self;
   }
 
-  fn clone(): T[] {
+  func clone(): T[] {
     return (T[])self;
   }
 
-  fn clone(start: long, length: long): T[] {
+  func clone(start: long, length: long): T[] {
     ...
   }
 
-  fn slice(start: long, length: long): Span<T> {
+  func slice(start: long, length: long): Span<T> {
     ...
   }
 }
@@ -112,7 +112,7 @@ fit T[!] {
 
 ```feng
 fit *byte {
-  fn hash(): u64 {
+  func hash(): u64 {
     return 0;
   }
 }
@@ -129,7 +129,7 @@ fit *byte {
 - [必须] 对 `fit X[]` / `fit X[!]` 的 `X` 解析必须遵循“可见符号优先”原则: 若当前可见范围已有同名 `type` 或同名类型参数, 必须绑定已有符号；仅在未命中且 `X` 非内建类型名时, 才可把 `X` 视为由数组目标形式引入的局部元素类型参数。
 - [必须] `[]` 与 `[!]` 必须视为不同 `fit` 目标；`fit X[]` 的声明不得自动覆盖 `fit X[!]`，`fit X[!]` 的声明也不得自动覆盖 `fit X[]`。
 - [必须] 数组目标方法的参数类型与返回类型必须在调用点按接收者数组元素类型实例化；若返回类型包含由数组目标引入的元素类型参数,编译器不得把该返回类型保留为 open 泛型类型。
-- [必须] 在孤儿适配判定中, 内建类型目标一律按外部类型处理；当目标 `spec` 在当前包内时, `pu fit` 可公开导出关系声明；当目标 `spec` 也在当前包外时, `pu fit` 不得导出。
+- [必须] 在孤儿适配判定中, 内建类型目标一律按外部类型处理；当目标 `spec` 在当前包内时, `open fit` 可公开导出关系声明；当目标 `spec` 也在当前包外时, `open fit` 不得导出。
 - [必须] 内建类型上的 `fit` 在用户可见层面不得引入区别于用户 `type` 的独立调用规则或独立语义模型。
 - [必须] 内建类型上的 `fit` 方法继续通过普通方法调用语法使用, 不得引入第二种用户可见调用方式。
 - [必须] 数组目标上的 `clone()` 与 `clone(start, end)` 可返回新的实体数组 `T[]`；它们与返回视图类型 `Span<T>` 的 `slice(start, end)` 必须视为不同能力，不得混淆语义。
@@ -150,7 +150,7 @@ fit *byte {
 - 编译器必须在内建类型的 `fit` 块中把 `self` 解析为对应的内建类型表达式。不得把 `self` 伪装成对象类型, 也不得要求额外用户可见载体。
 - 编译器必须允许内建类型通过 `fit` 建立 object-form `spec` 契约关系, 并继续遵循现有 `spec` 满足性、冲突检测与 witness materialization 主路径。
 - 编译器必须在 object-form spec coercion sidecar 中记录 subject 承载策略（临时借用或稳定 owner）, 并把该策略从语义阶段传递到 codegen 阶段；codegen 不得自行重判该站点的承载语义。
-- 编译器必须在孤儿适配导出判定中把内建类型目标视为外部类型；因此当目标 `spec` 在当前包外时, `pu fit` 必须移除导出, 当目标 `spec` 在当前包内时则允许公开导出关系声明。
+- 编译器必须在孤儿适配导出判定中把内建类型目标视为外部类型；因此当目标 `spec` 在当前包外时, `open fit` 必须移除导出, 当目标 `spec` 在当前包内时则允许公开导出关系声明。
 - 编译器必须按 [feng-symbol-table.md](./feng-symbol-table.md) 的既有类型节点规则导出内建类型 fit 目标: 标量与 `string` 使用 BUILTIN type node, 数组目标使用 ARRAY type node。不得把数组 fit target 错导为 builtin type node, 也不得把任何内建 fit target 错导为普通 named type。
 - 编译器在数组 fit target 的 subject key 构建与 sidecar 查找中, 必须使用结构化数组键（元素类型结构、数组层级 rank、逐层可写位图）进行比较；不得退化为拍平文本比较或 AST 指针比较。
 - 编译器导出 `fit T[]` / `fit T[!]` 的符号类型节点时, 必须保留 ARRAY 节点的元素类型引用与逐层可写位图；读取 `.ft` 后该信息必须可无损还原。

@@ -1,8 +1,8 @@
-mod std_test;
+module std_test;
 
-use std;
+import std;
 
-fn readLine_reads_one_line_per_call() {
+func readLine_reads_one_line_per_call() {
   let first = readLine();
   let second = readLine();
   let third = readLine();
@@ -16,14 +16,14 @@ fn readLine_reads_one_line_per_call() {
   writeLine("__STD_IO_READLINE3__=" + third);
 }
 
-fn writeLine_writes_stdout_with_newline() {
+func writeLine_writes_stdout_with_newline() {
   let marker = "__STD_IO_WRITELINE__";
   let written = writeLine(marker);
 
   check(written == marker.length() + (long)1, "io/writeLine-return");
 }
 
-fn format_returns_text() {
+func format_returns_text() {
   let rendered = format("__STD_IO_FORMAT__ {0}/{1}", "left", "right");
   let literal = format("__STD_IO_FORMAT_LITERAL__ {2}", "left", "right");
 
@@ -34,21 +34,21 @@ fn format_returns_text() {
   writeLine(literal);
 }
 
-fn print_writes_stdout_without_newline() {
+func print_writes_stdout_without_newline() {
   let marker = "__STD_IO_PRINT__\n";
   let written = print(marker);
 
   check(written == marker.length(), "io/print-return");
 }
 
-fn println_writes_stdout_with_newline() {
+func println_writes_stdout_with_newline() {
   let marker = "__STD_IO_PRINTLN__";
   let written = println(marker);
 
   check(written == marker.length() + (long)1, "io/println-return");
 }
 
-pu fn run_io_tests() {
+open func run_io_tests() {
   readLine_reads_one_line_per_call();
   writeLine_writes_stdout_with_newline();
   format_returns_text();

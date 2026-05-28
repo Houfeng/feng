@@ -6,7 +6,7 @@
 
 ## 1 设计哲学
 
-Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式适配**的编程语言，秉持极简主义设计理念，语法紧凑、关键字稀少，兼顾脚本语言的简洁性与 C 语言的高效性；支持闭包、函数式编程与结构化异常处理，全程保障内存安全；以 `type` 与 `enum` 定义具名类型，并通过 `extern fn` 配合 `@abi` 和调用方式注解实现与 C 语言的 ABI 互操作，底层可无缝映射为 C 语言代码；普通 Feng 对象由运行时自动内存管理，`@abi` 仅做 ABI 兼容检查而不改变对象的运行时表示；同时支持统一的 `.fb` 二进制包格式分发，可携带自有 ABI 静态库层与 C ABI 兼容层，兼顾源码保护、编译加速与跨语言复用。
+Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式适配**的编程语言，秉持极简主义设计理念，语法紧凑、关键字稀少，兼顾脚本语言的简洁性与 C 语言的高效性；支持闭包、函数式编程与结构化异常处理，全程保障内存安全；以 `type` 与 `enum` 定义具名类型，并通过 `extern func` 配合 `@abi` 和调用方式注解实现与 C 语言的 ABI 互操作，底层可无缝映射为 C 语言代码；普通 Feng 对象由运行时自动内存管理，`@abi` 仅做 ABI 兼容检查而不改变对象的运行时表示；同时支持统一的 `.fb` 二进制包格式分发，可携带自有 ABI 静态库层与 C ABI 兼容层，兼顾源码保护、编译加速与跨语言复用。
 
 ## 2 语言特性一览
 
@@ -16,13 +16,13 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `type` / `enum` 具名类型系统 | `type` 定义对象类型；`enum` 定义简单 int 枚举；普通对象类型采用托管引用语义；`@abi type` 为可参与 ABI 校验的对象类型 |
 | `spec` / `fit` 显式契约 | `spec` 声明契约形状，`fit` 显式建立"类型满足契约"关系，不做结构隐式匹配 |
 | `let` / `var` 绑定 | 不可变 / 可变绑定，支持类型推导与默认零值初始化 |
-| 函数与重载 | `fn` 定义函数与方法，支持按参数类型重载，返回值不参与重载 |
+| 函数与重载 | `func` 定义函数与方法，支持按参数类型重载，返回值不参与重载 |
 | Lambda 与闭包 | Lambda 是函数字面量简写，闭包可捕获外部变量并延长生命周期 |
-| 模块系统 | `mod` / `use` 实现多级命名空间与可见性控制 |
+| 模块系统 | `module` / `import` 实现多级命名空间与可见性控制 |
 | 流程控制 | 条件分支、`if` 表达式、条件匹配、`while` / `for`、`break` / `continue` |
 | 结构化异常 | `throw` / `try` / `catch`，异常不得穿越 C ABI 边界 |
 | 自动内存管理 | 普通对象由运行时自动管理；`@abi` 不改变对象是否托管，原始指针 `T*` / `Foo*` 不受接管，详见 [feng-lifetime.md](./feng-lifetime.md) |
-| C 互操作 | `extern fn` 声明外部函数；当前公共规范通过调用方式注解定义其 C ABI 导入路径，`@abi` 标记 ABI 兼容类型、函数签名与顶层函数 |
+| C 互操作 | `extern func` 声明外部函数；当前公共规范通过调用方式注解定义其 C ABI 导入路径，`@abi` 标记 ABI 兼容类型、函数签名与顶层函数 |
 | 包分发 | `.fb` 统一包格式，支持闭源复用与跨语言分发 |
 
 文件扩展名:
@@ -56,16 +56,16 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `enum` | 定义简单 int 枚举类型 |
 | `spec` | 声明契约形状（字段与行为签名），不提供实现体 |
 | `fit` | 显式建立"类型满足契约"关系，或为类型补充扩展成员 |
-| `extern` | 仅与顶层 `fn` 组合，声明外部函数；不得用于其他声明 |
-| `fn` | 定义函数、成员方法与构造函数；与 `extern` 组合时可在顶层声明外部函数 |
+| `extern` | 仅与顶层 `func` 组合，声明外部函数；不得用于其他声明 |
+| `func` | 定义函数、成员方法与构造函数；与 `extern` 组合时可在顶层声明外部函数 |
 | `let` | 声明不可变绑定或不可再赋值的成员 |
 | `var` | 声明可变绑定、可写成员或可变参数 |
-| `pu` | 公开可见性 |
-| `pr` | 私有可见性 |
+| `open` | 公开可见性 |
+| `seal` | 私有可见性 |
 | `self` | 在 `type` 及 `fit` 块的成员方法与构造函数中引用当前实例，由编译器隐式提供 |
-| `mod` | 声明文件所属模块 |
-| `use` | 导入源码模块、feng 二进制包或 C ABI 兼容包中的公开模块 |
-| `as` | 为 `use` 导入目标声明当前文件内可见的别名 |
+| `module` | 声明文件所属模块 |
+| `import` | 导入源码模块、feng 二进制包或 C ABI 兼容包中的公开模块 |
+| `as` | 为 `import` 导入目标声明当前文件内可见的别名 |
 | `if` | 条件分支、条件表达式与条件匹配 |
 | `else` | `if` 未命中时的后续分支，可组成 `else if` |
 | `while` | 条件循环 |
@@ -128,11 +128,11 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `static` | 保留，当前不可用 |
 | `const` | 保留，当前不可用 |
 | `export` | 保留，当前不可用 |
-| `import` | 保留，当前不可用 |
-| `module` | 保留，当前不可用 |
-| `open` | 保留，当前不可用 |
-| `seal` | 保留，当前不可用 |
-| `func` | 保留，当前不可用 |
+| `fn` | 保留，当前不可用 |
+| `mod` | 保留，当前不可用 |
+| `pu` | 保留，当前不可用 |
+| `pr` | 保留，当前不可用 |
+| `use` | 保留，当前不可用 |
 | `prop` | 保留，当前不可用 |
 
 ### 3.5 内建注解（共6个）
@@ -141,20 +141,20 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 
 | 内建注解 | 适用位置 | 用途简述 |
 | --- | --- | --- |
-| `@abi` | 对象形式的 `type`、callable-form 的 `spec`、顶层 `fn` 声明前 | 标注该声明接受 ABI 兼容性检查；不改变 Feng 侧语法形式与运行时表示 |
+| `@abi` | 对象形式的 `type`、callable-form 的 `spec`、顶层 `func` 声明前 | 标注该声明接受 ABI 兼容性检查；不改变 Feng 侧语法形式与运行时表示 |
 | `@union` | 对象形式的 `@abi type` 声明前 | 将 `@abi type` 声明为 ABI 联合体 payload；未标注时默认按 ABI 结构体 payload 处理 |
-| `@cdecl` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 指定 `cdecl` 调用方式；带参数时用于 `extern fn` 导入并指定库来源，无参数时用于顶层 `@abi fn` |
-| `@stdcall` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 同上，`stdcall` 版本 |
-| `@fastcall` | `extern fn` 声明前，或顶层 `@abi fn` 定义前 | 同上，`fastcall` 版本 |
+| `@cdecl` | `extern func` 声明前，或顶层 `@abi func` 定义前 | 指定 `cdecl` 调用方式；带参数时用于 `extern func` 导入并指定库来源，无参数时用于顶层 `@abi func` |
+| `@stdcall` | `extern func` 声明前，或顶层 `@abi func` 定义前 | 同上，`stdcall` 版本 |
+| `@fastcall` | `extern func` 声明前，或顶层 `@abi func` 定义前 | 同上，`fastcall` 版本 |
 | `@bounded` | 仅作为编译器导出的符号表语义元信息存在（公开 `.ft` / 本地缓存 `.ft`） | 标注公开 `let` 绑定的显式绑定事实，不属于可手写语法 |
 
 ## 4 模块系统
 
-Feng 用 `mod` 声明文件所属模块，用 `use` 导入外部模块或二进制包，支持多级命名空间与可见性控制。详细规则见 [Feng 语言模块系统规范](./feng-module.md)。
+Feng 用 `module` 声明文件所属模块，用 `import` 导入外部模块或二进制包，支持多级命名空间与可见性控制。详细规则见 [Feng 语言模块系统规范](./feng-module.md)。
 
 ## 5 C 互操作
 
-Feng 通过 `extern fn` 声明外部函数。`extern` 只能用于顶层 `fn` 声明,不能用于 `type`、`enum`、`spec`、`fit`、模块级 `let` / `var` 或其他声明。当前公共规范定义的外部目标路径是 C ABI：通过 `@abi` 标记 ABI 兼容类型、函数签名与顶层函数，并通过调用方式注解指定 `extern fn` 导入的库来源与调用约定。顶层 `@abi fn` 仍是 Feng 自己实现的函数,可作为 C API 回调来源; 其中公开形态在语义上预留为未来的 C ABI 导出 surface。详细规则见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
+Feng 通过 `extern func` 声明外部函数。`extern` 只能用于顶层 `func` 声明,不能用于 `type`、`enum`、`spec`、`fit`、模块级 `let` / `var` 或其他声明。当前公共规范定义的外部目标路径是 C ABI：通过 `@abi` 标记 ABI 兼容类型、函数签名与顶层函数，并通过调用方式注解指定 `extern func` 导入的库来源与调用约定。顶层 `@abi func` 仍是 Feng 自己实现的函数,可作为 C API 回调来源; 其中公开形态在语义上预留为未来的 C ABI 导出 surface。详细规则见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 
 ## 6 类型系统与对象模型
 
@@ -162,7 +162,7 @@ Feng 以 `type` 与 `enum` 定义具名类型；`spec` 声明契约形状；`fit
 
 ## 7 函数、Lambda 与闭包
 
-Feng 用 `fn` 定义函数与成员方法；构造函数与终结器作为 `type` 的特殊成员，规则见 [Feng 语言类型规范](./feng-type.md)；Lambda 是函数字面量的简写形式；闭包可捕获外部变量。其余函数规则见 [Feng 语言函数规范](./feng-function.md)。
+Feng 用 `func` 定义函数与成员方法；构造函数与终结器作为 `type` 的特殊成员，规则见 [Feng 语言类型规范](./feng-type.md)；Lambda 是函数字面量的简写形式；闭包可捕获外部变量。其余函数规则见 [Feng 语言函数规范](./feng-function.md)。
 
 ## 8 表达式与运算
 
@@ -191,7 +191,7 @@ Feng 采用统一的 `.fb` 包格式，支持二进制分发、闭源复用与�
 ### 13.1 c_interop.ff
 
 ```feng
-pu mod libc.interop;
+open module libc.interop;
 
 // ABI 兼容对象类型
 @abi
@@ -208,14 +208,14 @@ let point_lib = "point";
 
 // 声明 C 外部函数
 @cdecl(point_lib)
-extern fn point_add(p1: Point, p2: Point): Point;
+extern func point_add(p1: Point, p2: Point): Point;
 
 @cdecl(point_lib)
-extern fn exec_point_cb(p: Point, cb: PointCB*);
+extern func exec_point_cb(p: Point, cb: PointCB*);
 
 // 定义 feng 回调函数
 @abi
-fn on_point(p: Point) {
+func on_point(p: Point) {
   print("Point:x=", p.x, " y=", p.y);
 }
 ```
@@ -223,19 +223,19 @@ fn on_point(p: Point) {
 ### 13.2 main.ff
 
 ```feng
-mod main;
-use libc.interop;
-use mylib; // 导入 feng 自有二进制包
+module main;
+import libc.interop;
+import mylib; // 导入 feng 自有二进制包
 
 // 函数契约形状
 spec IntToInt(x: int): int;
 
 // feng 内部普通函数
-fn make_adder(base: int): IntToInt {
+func make_adder(base: int): IntToInt {
   return (x: int) -> base + x;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
   // 操作 C 兼容结构体
   let p1 = Point {x: 10, y: 20};
   let p2 = Point {x: 5, y: 5};

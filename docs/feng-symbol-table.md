@@ -17,7 +17,7 @@ Feng 在跨模块边界上采用“**编译产出符号表,消费侧走查询**�
 核心判断如下:
 
 - 跨模块边界后,编译器与语言服务真正需要的是“已完成语义收敛的公开事实”,不是再次解析实现源码。
-- 对依赖包,`use` 的核心路径应当是“模块名 -> `.ft` 路径 -> 符号表查询”,也就是“**把类型解析变成类型查询**”。
+- 对依赖包,`import` 的核心路径应当是“模块名 -> `.ft` 路径 -> 符号表查询”,也就是“**把类型解析变成类型查询**”。
 - 对当前工程本身,编译成功后的符号信息也应缓存在 `build/` 目录,供 IDE/LSP 直接复用,减少重复解析与重复语义分析成本。
 - `pack` 不应再单独重做一次接口提取; 应直接复用 `build/` 下已生成的公开符号表并写入 `.fb`。
 - 是否携带源码位置、依赖指纹等本地缓存信息,不应再体现在扩展名上; 这些差异应由目录位置与文件头 `profile` 区分。
@@ -133,12 +133,12 @@ build/
 对 `--pkg <xxx.fb>`:
 
 1. 先只扫描 `mod/` entry 路径,建立“模块名 -> entry path”的索引。
-2. 遇到 `use mylib.api;` 时,直接定位 `mod/mylib/api.ft`。
-3. 由 `src/symbol/` 中的 `.ft` 读取模块把该文件解析为统一的“已导入模块查询视图”,其中包含公开 `type`、公开 `enum`、`spec`、`fit`、顶层 `fn`、模块级 `let` / `var`、公开成员等声明级事实。
+2. 遇到 `import mylib.api;` 时,直接定位 `mod/mylib/api.ft`。
+3. 由 `src/symbol/` 中的 `.ft` 读取模块把该文件解析为统一的“已导入模块查询视图”,其中包含公开 `type`、公开 `enum`、`spec`、`fit`、顶层 `func`、模块级 `let` / `var`、公开成员等声明级事实。
 4. 编译驱动把这些查询视图通过抽象查询接口注入核心分析器。
 5. 后续类型检查、名称查找、契约关系判断、`@bounded` 重复绑定检查都基于该抽象查询接口进行,不重解析文本接口,也不让核心分析器直接依赖 `.ft` 模块。
 
-Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.ft` entry; 该策略只属于 Provider 内部实现。未来切换为按 `use` 懒加载时,上层接口与核心分析器语义不得改变。
+Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.ft` entry; 该策略只属于 Provider 内部实现。未来切换为按 `import` 懒加载时,上层接口与核心分析器语义不得改变。
 
 ### 4.3 IDE/LSP 消费流程
 
@@ -158,7 +158,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开 `enum`。
 - 公开 `spec`。
 - 公开 `fit` 及其建立的契约关系。
-- 公开顶层 `fn`。
+- 公开顶层 `func`。
 - 公开模块级 `let` / `var`。
 - 公开成员字段与成员方法。
 - 公开 `type` 的全部字段布局声明; 非公开字段只作为对象布局与跨包泛型实例化的 ABI 元信息导出,不得在 consumer 中变成可访问成员。
@@ -166,7 +166,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开泛型声明的类型参数列表、参数顺序、参数约束目标与未实例化签名骨架。
 - 公开泛型父 `spec` 使用、泛型 `fit` 契约使用以及其有序类型实参事实。
 - 支撑跨包重载决议与泛型推导所需的泛型参数数量、参数类型与约束事实。
-- 公开 `extern fn` 与 `@abi` 声明所需的 ABI 元信息。
+- 公开 `extern func` 与 `@abi` 声明所需的 ABI 元信息。
 - 公开 `let` 成员的 `@bounded` 声明事实,以及构造函数 `@bounded(...)` 绑定关系。
 - 公开声明的文档注释。
 
@@ -180,7 +180,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 针对泛型,公开包表还必须满足以下约束:
 
 - `.ft` / `.fb` 导出的是**声明级泛型事实**,而不是某次调用点推导结果或某个单态化实例的专用实现。
-- 公开泛型 `type`、`spec`、顶层 `fn` 与成员方法,都必须以“声明符号 + 有序类型参数 + 约束 + 未替换签名骨架”的形式导出,使 consumer 仅依赖 `.ft` 就能完成名称解析、约束检查、重载决议与泛型推导。
+- 公开泛型 `type`、`spec`、顶层 `func` 与成员方法,都必须以“声明符号 + 有序类型参数 + 约束 + 未替换签名骨架”的形式导出,使 consumer 仅依赖 `.ft` 就能完成名称解析、约束检查、重载决议与泛型推导。
 - 跨包消费泛型时,consumer 不得以“重新读取 provider 源码”或“包内一定存在某个已单态化实例”作为成立前提。
 - 当前阶段公开包表无需导出 variance 元信息; 泛型实例兼容性统一按语言规范中的不变规则处理。
 
@@ -569,7 +569,7 @@ attr key 常量建议如下:
 | kind | `type_ref` 指向 |
 | --- | --- |
 | `binding` / `field` | 值类型的 `TYPS.id` |
-| `fn` / `method` / `ctor` / `dtor` | TYPS callable 节点（含所有参数 + 返回类型） |
+| `func` / `method` / `ctor` / `dtor` | TYPS callable 节点（含所有参数 + 返回类型） |
 | `spec` | TYPS spec 节点（TYPS.kind 区分 form: object / callable / union） |
 | `type` | 类型自身对应的 `TYPS.id` |
 | `fit` | `0`（fit 无自己的"类型"；目标类型走 `extra_ref`） |
@@ -882,7 +882,7 @@ RELS
 
 - 只有单个紧邻声明的 `/** */` 块才是文档注释。
 - 文档注释与声明之间不得出现空行。
-- 文档注释与声明之间允许出现声明级前缀,即注解、`pu` / `pr` 与 `extern`。
+- 文档注释与声明之间允许出现声明级前缀,即注解、`open` / `seal` 与 `extern`。
 - `//` 与普通 `/* */` 不参与文档注释绑定; 若它们出现在 `/** */` 与声明之间,则绑定失效。
 - 一个声明最多绑定一个 `/** */` 文档块。
 
@@ -907,23 +907,23 @@ RELS
 示例源码:
 
 ```feng
-pu mod mylib.api;
+open module mylib.api;
 
 # 用户模型
-pu type User: Named {
-    pu var name: string;
+open type User: Named {
+    open var name: string;
 
     @bounded
-    pu let id: int;
+    open let id: int;
 
-    pu fn get_info(): string;
+    open func get_info(): string;
 }
 
-pu fit User: Auditable {
-    pu fn audit(): string;
+open fit User: Auditable {
+    open func audit(): string;
 }
 
-pu fn add_user(u: User): bool;
+open func add_user(u: User): bool;
 ```
 
 对应的符号表最少应出现:
@@ -946,16 +946,16 @@ pu fn add_user(u: User): bool;
 若把示例扩展为:
 
 ```feng
-pu spec Reader<T> {
-  fn get(): T;
+open spec Reader<T> {
+  func get(): T;
 }
 
-pu type Box<T> {
-  pu let value: T;
+open type Box<T> {
+  open let value: T;
 }
 
-pu fit Box<T>: Reader<T> {
-  pu fn get(): T;
+open fit Box<T>: Reader<T> {
+  open func get(): T;
 }
 ```
 
@@ -1043,6 +1043,6 @@ pu fit Box<T>: Reader<T> {
 - [feng-language.md](./feng-language.md): 语言总体规范与文件扩展名总览。
 - [feng-package.md](./feng-package.md): `.fb` 包结构、`feng.fm` 字段语义以及编译器可从 `.fb` 读取哪些元信息。
 - [feng-build.md](./feng-build.md): 编译器与构建工具的职责划分、`.fb` 消费路径与构建协议。
-- [feng-module.md](./feng-module.md): 模块名、`use`、公开导出与模块级初始化规则。
+- [feng-module.md](./feng-module.md): 模块名、`import`、公开导出与模块级初始化规则。
 - [feng-fit.md](./feng-fit.md): `fit` 的语义边界与公开导出规则。
-- [feng-function.md](./feng-function.md): 顶层 `fn`、成员方法、构造函数与终结器的语义规则。
+- [feng-function.md](./feng-function.md): 顶层 `func`、成员方法、构造函数与终结器的语义规则。

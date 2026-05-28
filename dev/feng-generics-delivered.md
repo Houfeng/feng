@@ -33,20 +33,20 @@
 本轮按以下顺序收口当前语言形态内的缺口，并分别补充 smoke：
 
 1. 函数级自引用约束：`fn sameAs<U: Eq<U>>(...)` 与类型级 `type MiniMap<K: Eq<K>, V>` 使用同一套 open generic spec instance 注册与 descriptor 解析机制。
-2. open generic 返回值 witness adapter：`spec Cloneable<T> { fn cloneValue(): T; }` 这类约束方法返回 open generic parameter 时，witness thunk 通过 `_out`/slot ABI 把 concrete 返回值写回 erased slot。
+2. open generic 返回值 witness adapter：`spec Cloneable<T> { func cloneValue(): T; }` 这类约束方法返回 open generic parameter 时，witness thunk 通过 `_out`/slot ABI 把 concrete 返回值写回 erased slot。
 3. generic spec parent codegen：`spec IntSequence: Sequence<int>` 这类语义层已接受的 generic spec parent，会在 codegen 注册与 witness 结构中按子优先、同名跳过的规则展开父 spec 成员。
 
 ### 2026-05-09 复查新增缺口与本轮修复
 
 本次复查不只看文档，按现有 smoke、代码生成护栏与最小 probe 反查，确认以下缺口属于当前既有语言形态内的问题；本轮已按顺序修复并补充 smoke：
 
-1. 约束面向上转发：`fn useLabelled<U: Labelled>(value: U) { useNamed:<U>(value); }` 在 `Labelled: Named` 已成立时，可通过 parent-prefix 兼容的 descriptor adapter 转发到 `Named` 约束面。
+1. 约束面向上转发：`func useLabelled<U: Labelled>(value: U) { useNamed:<U>(value); }` 在 `Labelled: Named` 已成立时，可通过 parent-prefix 兼容的 descriptor adapter 转发到 `Named` 约束面。
 2. open generic spec parent 替换：`spec Collection<T>: Sequence<T>` 与 `type IntBag: Collection<int>` 组合下，语义层与 codegen 均以 `Sequence<int>` 检查和注册 parent spec instance。
 3. 泛型 fit：`fit Box<T>: Reader<T>` 中左侧 `<T>` 进入目标泛型 type 参数作用域，满足性检查、符号导出与 codegen 均按 concrete target instance 替换 `T`。
 
 ### 2026-05-09 跨包泛型消费缺口
 
-本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `use` 消费”。该路径必须满足 [feng-package.md](../docs/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `fn` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
+本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `import` 消费”。该路径必须满足 [feng-package.md](../docs/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `func` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
 
 本轮按以下四项收口：
 
@@ -59,7 +59,7 @@
 
 1. 外部包公开泛型顶层函数后，consumer 调用时不能在 codegen 中丢失函数级类型参数引用。
 2. 外部包公开泛型类型后，consumer 构造具体实例并调用成员方法时，必须正确生成实例类型、默认零值构造符声明/实现引用以及对应成员方法符号。
-3. 外部包公开泛型 `spec` 后，consumer 必须能通过 `use` 引入该 spec，实现 `type Key: Eq<Key>`，并把 imported generic spec 作为本地泛型约束使用。
+3. 外部包公开泛型 `spec` 后，consumer 必须能通过 `import` 引入该 spec，实现 `type Key: Eq<Key>`，并把 imported generic spec 作为本地泛型约束使用。
 
 ### 2026-05-11 全量修复拆分（先全局 codegen，再泛型特有路径）
 
@@ -99,7 +99,7 @@
 
 #### Phase D. 全局 codegen：callable OTHER coercion
 
-- [x] D1. 抽取 callable-form `spec` 的统一 closure/adaptor builder，保留 top-level fn / method / lambda 快路径。
+- [x] D1. 抽取 callable-form `spec` 的统一 closure/adaptor builder，保留 top-level func / method / lambda 快路径。
 - [x] D2. 为 `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 增加“已是 callable value 但 target surface 不同”时的重包装 lowering。
 - [x] D3. 复核 coercion site 元数据后确认当前字段已足够区分 source 形态，本轮无需新增 semantic sidecar。
 - [x] D4. 新增 focused codegen regression 与 smoke，覆盖 local binding / parameter 来源的 OTHER coercion。
@@ -108,7 +108,7 @@
 
 1. `FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER` 分支不再直接报 not yet supported；当 source 已是 callable value 且与 target callable spec 仅 surface 不同，会生成统一的 rewrap closure。
 2. rewrap closure 复用 callable-form 统一对象布局（`_hdr`/`_self`/`invoke`），通过 adaptor `invoke` 桥接到 source callable 的 `invoke`，并通过 `feng_assign` 管理 `_self` 生命周期。
-3. top-level fn / method / lambda 既有快路径保持不变；OTHER 仅补齐缺口路径，不回退已有行为。
+3. top-level func / method / lambda 既有快路径保持不变；OTHER 仅补齐缺口路径，不回退已有行为。
 4. 已新增 focused codegen regression 与 smoke，覆盖 parameter -> local binding -> target callable spec 的连续 coercion 路径。
 
 #### Phase E. 泛型特有路径：aggregate generic arg
@@ -180,7 +180,7 @@
 
 #### P3. 泛型类型上的泛型方法基础路径已完成
 
-- 当前 `type Box<T> { fn map<U>(...) { ... } }` 这类“泛型类型 + 方法级泛型参数”的基础组合已经打通。
+- 当前 `type Box<T> { func map<U>(...) { ... } }` 这类“泛型类型 + 方法级泛型参数”的基础组合已经打通。
 - 语义层已经能在成员方法调用返回类型上同时替换外层类型参数与方法级类型参数，支持方法级类型实参显式指定与直接参数位置推导。
 - 代码生成层已经移除 `generic methods on generic types are not yet supported` 失败分支；G6-6 的 ABI 落地为：泛型类型共享方法体按“外层类型参数描述符 -> 方法类型参数描述符”接收统一 descriptor 序列；具体类型实例 wrapper 负责补齐外层 descriptor，调用点负责为方法级类型实参构造 descriptor，并继续通过 `_out` 处理方法级泛型返回值。
 - 当前基础证据来自 `test/codegen/test_codegen.c` 的生成 C 编译用例，以及 `test/smoke/phase1a/generic_type_generic_method.ff` 端到端 smoke。
@@ -214,7 +214,7 @@
 | 托管指针类型（`UserType` / `string` / `T[]`） | **已支持基础路径** | 走 `FENG_VALUE_MANAGED_POINTER` |
 | object-form spec value | **已支持基础路径** | 无约束 generic arg、约束 witness 调用、aggregate return 已闭环 |
 | 受约束 object-form spec value generic arg | **已支持基础路径** | slot witness adapter 已闭环 |
-| callable-form spec value | **已支持基础路径** | callable value 表示、top-level fn coercion、method coercion、lambda coercion、generic callable spec instance coercion、direct call、generic callable constraint 已闭环 |
+| callable-form spec value | **已支持基础路径** | callable value 表示、top-level func coercion、method coercion、lambda coercion、generic callable spec instance coercion、direct call、generic callable constraint 已闭环 |
 | union-form spec value | **暂缓** | union-form 仍处于语法草案阶段，不纳入本轮验收 |
 | 未来 tuple / value-struct / 其他按值聚合类型 | **暂缓** | 尚未成为当前可用语言形态；未来接入时必须提供 aggregate descriptor / flatten rule |
 | 受约束类型参数上的 object-form 行为调用 | **已支持基础路径** | `_T->witness` lowering 已闭环 |
@@ -312,7 +312,7 @@
  *
  * object-form spec Named {
  *   let name: string;
- *   fn rename(next: string): void;
+ *   func rename(next: string): void;
  * }
  */
 typedef struct FengNamedWitness {
@@ -537,7 +537,7 @@ if (_V_IntOrString->test__int(v_ptr)) {
 - 这一顺序属于共享主体 ABI 的一部分；后续优化可以内联 wrapper、裁剪未使用局部，但不能改变主体签名展开顺序。
 
 ```c
-/* type PairMap<K: Hashable, V> { fn merge<U>(key: K, value: V, extra: U): void } */
+/* type PairMap<K: Hashable, V> { func merge<U>(key: K, value: V, extra: U): void } */
 void FengPairMap__merge__shared(
     void *_self,
     const size_t *_field_offsets,
@@ -549,7 +549,7 @@ void FengPairMap__merge__shared(
     const void *_p_extra,
     void *_out);
 
-/* fn clone<T>(value: T): T */
+/* func clone<T>(value: T): T */
 void FengClone__shared(
     const FengGenericParamDescriptor *_T,
     const void *_p_value,
@@ -658,7 +658,7 @@ typedef struct { FengManagedHeader _hdr; int64_t value_0; double value_1; } Feng
 **共享主体只编译一份**（泛型专有发码，依赖宿主布局输入 + 按顺序展开的 `FengGenericParamDescriptor *` + 显式参数 + out 参数）：
 
 ```c
-// fn get(): T
+// func get(): T
 void FengBox__get__shared(void *self, const size_t *field_offsets,
                          const FengGenericParamDescriptor *T, void *out) {
     void *fp = (char *)self + field_offsets[0];
@@ -713,7 +713,7 @@ int64_t y = _tmp + 1;
 **顶层泛型函数也生成单态 wrapper**（与成员方法同一路线，只是不含 `self` / 布局输入）：
 
 ```c
-/* fn clone<T>(value: T): T */
+/* func clone<T>(value: T): T */
 void FengClone__shared(const FengGenericParamDescriptor *T,
                       const void *p_value,
                       void *out) {
@@ -834,7 +834,7 @@ static void cg_emit_generic_method(CG *cg, ...) {
 
 ```feng
 spec Reader<T> {
-  fn get(): T;
+  func get(): T;
 }
 
 type Box<T: Reader<int>> {   // 合法：泛型约束是泛型 spec 的具体实例
@@ -890,7 +890,7 @@ let b: Box<int>;   // 合法：value 取 int 零值（0），b 是 Box<int> 的�
 **决策**：从实参列表从左到右推导，第一个能确定类型参数的实参位置为准；后续实参若产生不匹配，在**该不匹配实参的位置**报编译错误（信息：参数类型不匹配，期望 `T = <已推导类型>`，实际 `<当前类型>`）。
 
 ```feng
-fn pair<T>(left: T, right: T): T { ... }
+func pair<T>(left: T, right: T): T { ... }
 
 pair(1, "x");
 //       ^^^ 编译错误：right 期望类型 int（由 left 推导 T = int），实际类型 string

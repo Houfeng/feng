@@ -1,26 +1,26 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn throw_i32(): i32 {
+func throw_i32(): i32 {
     let v: i32 = 42;
     throw v;
     return 0;
 }
 
-fn throw_string(): string {
+func throw_string(): string {
     throw "oops";
     return "";
 }
 
-fn anon_catch_expr(): string {
+func anon_catch_expr(): string {
     return try throw_string() catch {
         "anon-expr-caught";
     };
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     // anonymous catch as statement: catches any exception
     try throw_i32() catch {
         puts(&"anon-stmt-any");

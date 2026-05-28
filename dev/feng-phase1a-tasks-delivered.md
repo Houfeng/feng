@@ -8,12 +8,12 @@
 
 - 后端与运行时骨架：建立 C 发码主链路 + 最小运行时骨架。
 - 确定性 ARC 核心：`string` / 数组 / 普通 `type` / 闭包环境的 retain/release、作用域退出清理、异常路径清理、单路径终结器执行。
-- 本地源码 → C 发码最小闭环：模块级 `let`/`var`、顶层 `fn`、普通 `type`、构造函数、方法调用、对象字面量、数组、控制流、异常展开、`main` 入口。
+- 本地源码 → C 发码最小闭环：模块级 `let`/`var`、顶层 `func`、普通 `type`、构造函数、方法调用、对象字面量、数组、控制流、异常展开、`main` 入口。
 
 ### 1.2 验证里程碑（硬门槛）
 
 - 新增 `examples/phase1a/*.ff` 及 `test/smoke/phase1a/*` smoke 集合：
-  - hello 子集：模块级绑定、顶层 `fn`、`type` + 字段初始化、`@cdecl("c")` 调用 `printf` 等，编译为 C 后链接生成可执行文件且运行结果与期望一致。
+  - hello 子集：模块级绑定、顶层 `func`、`type` + 字段初始化、`@cdecl("c")` 调用 `printf` 等，编译为 C 后链接生成可执行文件且运行结果与期望一致。
   - control flow 子集：`if`/`while`/`for` 三段式与 `for/in`、`break`/`continue`、数组下标读写。
   - exception 子集：`throw` / `try`/`catch` / `finally`，覆盖正常路径与 `throw` 跨多层 `finally` 的展开。
 - 现有 `make test`（`test_lexer`/`test_parser`/`test_semantic`）保持全绿。
@@ -23,7 +23,7 @@
 
 - 循环检测器、终结器复活、复杂多阶段回收 → Phase 1B。
 - 项目级 CLI：`init`/`build`/`run`/`check`/`clean`/`pack`/`deps` → Phase 3。
-- 外部包（`.fb`/`.fi` 解析、`use` 跨包消解）→ Phase 4。
+- 外部包（`.fb`/`.fi` 解析、`import` 跨包消解）→ Phase 4。
 - C ABI 完整桥接（除 `@cdecl` 调用 libc 之外的扩展）→ Phase 5。
 - 标准库 → Phase 6。
 
@@ -57,8 +57,8 @@
 - 输入：T1 入口 + T2 元数据 + T3 运行时 ABI。
 - 产物：`src/codegen/`（`emit_module.c`、`emit_decl.c`、`emit_stmt.c`、`emit_expr.c`、`emit_type.c`、`mangle.c`、`naming.c`）。
 - 子任务（按 1A 子集）：
-  - C1 顶层声明：模块级 `let`/`var`、顶层 `fn`、普通 `type`（字段 + 构造函数 + 方法 + 单路径终结器），方法重载与 `spec`/`fit` 不在 1A。
-  - C2 表达式：标识符、字面量（含字符串 → `feng_string_literal_n`）、对象字面量、数组字面量、二元 / 一元 / 比较 / 逻辑、字段访问、方法调用、`extern fn` 调用（仅 `@cdecl`）、cast（限内建数值与 `string` ↔ `string` 的恒等、显式数值转换）。
+  - C1 顶层声明：模块级 `let`/`var`、顶层 `func`、普通 `type`（字段 + 构造函数 + 方法 + 单路径终结器），方法重载与 `spec`/`fit` 不在 1A。
+  - C2 表达式：标识符、字面量（含字符串 → `feng_string_literal_n`）、对象字面量、数组字面量、二元 / 一元 / 比较 / 逻辑、字段访问、方法调用、`extern func` 调用（仅 `@cdecl`）、cast（限内建数值与 `string` ↔ `string` 的恒等、显式数值转换）。
   - C3 语句：`let`/`var`、赋值、`if`、`while`、`for`（三段式 + `for/in` 的数组迭代）、`break`/`continue`、`return`、`throw`、`try`/`catch`/`finally`、表达式语句。
   - C4 ARC 自动插入：作用域出口 release、临时值 release、异常展开 release、构造返回值 ownership 转移。
 - 验收：T4 完成后，T6 的 smoke 全集可编译、链接、运行通过。

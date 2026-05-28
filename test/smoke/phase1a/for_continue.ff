@@ -1,12 +1,12 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 // Verifies that `continue` inside a three-clause `for` still runs the
 // update step (i++) before re-evaluating the condition. If the update were
 // skipped, the loop would either spin forever or terminate after one tick.
-fn main(args: string[]) {
+func main(args: string[]) {
     for var i: i32 = 0; i < 5; i = i + 1 {
         if i == 2 {
             continue;

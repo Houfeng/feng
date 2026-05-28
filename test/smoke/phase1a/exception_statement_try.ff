@@ -1,19 +1,19 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn make_label(): string {
+func make_label(): string {
     return "bound-try";
 }
 
-fn fail_i32(): i32 {
+func fail_i32(): i32 {
     let payload: i32 = 7;
     throw payload;
     return 0;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let label = try make_label() catch { "unknown"; };
     puts(&label);
 

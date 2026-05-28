@@ -1,14 +1,14 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 /* Simple non-generic aggregate type. */
 type Counter {
     var value: i32;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     /* Non-generic array-new: Counter[:n] allocates n zero-initialized Counters. */
     let counters: Counter[!] = Counter[:3];
 

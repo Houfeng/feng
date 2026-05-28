@@ -1374,8 +1374,8 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
 
     mkdir_p(src_dir);
     write_text_file(good_path,
-                    "mod test.cli.good;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.good;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         char *argv[] = {
@@ -1392,8 +1392,8 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     }
 
     write_text_file(good_path,
-                    "mod test.cli.good;\n"
-                    "fn main(args: string[]) {\n");
+                    "module test.cli.good;\n"
+                    "func main(args: string[]) {\n");
 
     {
         char *argv[] = {
@@ -1410,8 +1410,8 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     }
 
     write_text_file(bad_path,
-                    "mod test.cli.keep;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.keep;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         char *argv[] = {
@@ -1429,8 +1429,8 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
     }
 
     write_text_file(bad_path,
-                    "mod test.cli.keep;\n"
-                    "fn main(args: string[]) {\n");
+                    "module test.cli.keep;\n"
+                    "func main(args: string[]) {\n");
 
     {
         char *argv[] = {
@@ -1477,11 +1477,11 @@ static void test_direct_build_emits_symbol_tables(void) {
 
     mkdir_p(src_dir);
     write_text_file(source_path,
-                    "pu mod test.cli.symbols;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.symbols;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n"
-                    "fn main(args: string[]) {}\n");
+                    "func main(args: string[]) {}\n");
 
     {
         char *argv[] = {
@@ -1540,14 +1540,14 @@ static void test_direct_build_accepts_package_bundle(void) {
     mkdir_p(dep_src_dir);
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
-                    "pu mod test.cli.pkgdep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.pkgdep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(main_source_path,
-                    "mod test.cli.pkgmain;\n"
-                    "use test.cli.pkgdep;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.pkgmain;\n"
+                    "import test.cli.pkgdep;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         char *out_opt = make_out_option(dep_out_dir);
@@ -1629,16 +1629,16 @@ static void test_direct_build_links_library_from_package_bundle(void) {
     mkdir_p(dep_src_dir);
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
-                    "pu mod test.cli.pkgdep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.pkgdep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(main_source_path,
-                    "mod test.cli.pkgmain;\n"
-                    "use test.cli.pkgdep;\n"
+                    "module test.cli.pkgmain;\n"
+                    "import test.cli.pkgdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string*): int;\n"
-                    "fn main(args: string[]) {\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "func main(args: string[]) {\n"
                     "  if dep_value() == 7 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
@@ -1742,22 +1742,22 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
     mkdir_p(a_src_dir);
     mkdir_p(main_src_dir);
     write_text_file(b_source_path,
-                    "pu mod test.cli.pkgb;\n"
-                    "pu fn b_value(): int {\n"
+                    "open module test.cli.pkgb;\n"
+                    "open func b_value(): int {\n"
                     "  return 11;\n"
                     "}\n");
     write_text_file(a_source_path,
-                    "pu mod test.cli.pkga;\n"
-                    "use test.cli.pkgb as b;\n"
-                    "pu fn a_value(): int {\n"
+                    "open module test.cli.pkga;\n"
+                    "import test.cli.pkgb as b;\n"
+                    "open func a_value(): int {\n"
                     "  return b.b_value();\n"
                     "}\n");
     write_text_file(main_source_path,
-                    "mod test.cli.pkgconsumer;\n"
-                    "use test.cli.pkga as a;\n"
+                    "module test.cli.pkgconsumer;\n"
+                    "import test.cli.pkga as a;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string*): int;\n"
-                    "fn main(args: string[]) {\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "func main(args: string[]) {\n"
                     "  if a.a_value() == 11 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
@@ -1881,16 +1881,16 @@ static void test_project_pack_bundle_can_be_consumed(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(lib_source_path,
-                    "pu mod test.cli.packdep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.packdep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 9;\n"
                     "}\n");
     write_text_file(consumer_source_path,
-                    "mod test.cli.packconsumer;\n"
-                    "use test.cli.packdep;\n"
+                    "module test.cli.packconsumer;\n"
+                    "import test.cli.packdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string*): int;\n"
-                    "fn main(args: string[]) {\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "func main(args: string[]) {\n"
                     "  if dep_value() == 9 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
 
@@ -2178,9 +2178,9 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
 
     mkdir_p(dep_src_dir);
     write_text_file(dep_source_path,
-                    "pu mod test.cli.pkgextlib;\n"
+                    "open module test.cli.pkgextlib;\n"
                     "@fastcall(\"helper\")\n"
-                    "pu extern fn helper_value(): int;\n");
+                    "open extern func helper_value(): int;\n");
     {
         char *out_opt = make_out_option(dep_out_dir);
         char *name_opt = dup_printf("--name=%s", "pkgextlib");
@@ -2219,11 +2219,11 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     mkdir_p(consumer_src_dir);
     mkdir_p(consumer_bin_dir);
     write_text_file(consumer_source_path,
-                    "mod test.cli.pkgextlibmain;\n"
-                    "use test.cli.pkgextlib;\n"
+                    "module test.cli.pkgextlibmain;\n"
+                    "import test.cli.pkgextlib;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string*): int;\n"
-                    "fn main(args: string[]) {\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "func main(args: string[]) {\n"
                     "  if helper_value() == 7 {\n"
                     "    puts(&\"ok\");\n"
                     "  }\n"
@@ -2348,9 +2348,9 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
 
     mkdir_p(dep_src_dir);
     write_text_file(dep_source_path,
-                    "pu mod test.cli.pkgextlibstatic;\n"
+                    "open module test.cli.pkgextlibstatic;\n"
                     "@stdcall(\"helper\")\n"
-                    "pu extern fn helper_value(): int;\n");
+                    "open extern func helper_value(): int;\n");
     {
         char *out_opt = make_out_option(dep_out_dir);
         char *name_opt = dup_printf("--name=%s", "pkgextlibstatic");
@@ -2391,11 +2391,11 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
 
     mkdir_p(consumer_src_dir);
     write_text_file(consumer_source_path,
-                    "mod test.cli.pkgextlibstaticconsumer;\n"
-                    "use test.cli.pkgextlibstatic;\n"
+                    "module test.cli.pkgextlibstaticconsumer;\n"
+                    "import test.cli.pkgextlibstatic;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern fn puts(msg: string*): int;\n"
-                    "fn main(args: string[]) {\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "func main(args: string[]) {\n"
                     "  if helper_value() == 41 {\n"
                     "    puts(&\"ok\");\n"
                     "  } else {\n"
@@ -2489,8 +2489,8 @@ static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
 
     mkdir_p(src_dir);
     write_text_file(source_path,
-                    "mod test.cli.directclilibname;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.directclilibname;\n"
+                    "func main(args: string[]) {}\n");
 
     if (getenv("CC") != NULL) {
         saved_cc = dup_cstr(getenv("CC"));
@@ -2572,8 +2572,8 @@ static void test_direct_build_passes_cli_library_path_verbatim(void) {
                     "}\n");
     build_native_static_library_or_die(native_source_path, native_library_path);
     write_text_file(source_path,
-                    "mod test.cli.directclilibpath;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.directclilibpath;\n"
+                    "func main(args: string[]) {}\n");
 
     if (getenv("CC") != NULL) {
         saved_cc = dup_cstr(getenv("CC"));
@@ -2631,19 +2631,19 @@ static void test_direct_build_consumes_package_generic_function(void) {
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkggenericfn",
-        "pu mod test.cli.pkggenericfn;\n"
-        "pu fn identity<T>(value: T): T {\n"
+        "open module test.cli.pkggenericfn;\n"
+        "open func identity<T>(value: T): T {\n"
         "  return value;\n"
         "}\n");
 
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkggenericfnmain;\n"
-        "use test.cli.pkggenericfn;\n"
+        "module test.cli.pkggenericfnmain;\n"
+        "import test.cli.pkggenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
-        "fn main(args: string[]) {\n"
+        "extern func puts(msg: string*): int;\n"
+        "func main(args: string[]) {\n"
         "  if identity(7) == 7 { puts(&\"generic fn ok\"); }\n"
         "}\n",
         "generic_fn_main",
@@ -2666,13 +2666,13 @@ static void test_direct_build_consumes_package_generic_type(void) {
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkggenerictype",
-        "pu mod test.cli.pkggenerictype;\n"
-        "pu type Box<T> {\n"
+        "open module test.cli.pkggenerictype;\n"
+        "open type Box<T> {\n"
         "  var value: T;\n"
-        "  pu fn setValue(next: T) {\n"
+        "  open func setValue(next: T) {\n"
         "    self.value = next;\n"
         "  }\n"
-        "  pu fn readValue(): T {\n"
+        "  open func readValue(): T {\n"
         "    return self.value;\n"
         "  }\n"
         "}\n");
@@ -2680,11 +2680,11 @@ static void test_direct_build_consumes_package_generic_type(void) {
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkggenerictypemain;\n"
-        "use test.cli.pkggenerictype;\n"
+        "module test.cli.pkggenerictypemain;\n"
+        "import test.cli.pkggenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
-        "fn main(args: string[]) {\n"
+        "extern func puts(msg: string*): int;\n"
+        "func main(args: string[]) {\n"
         "  let box: Box<int> = Box<int>();\n"
         "  box.setValue(11);\n"
         "  if box.readValue() == 11 { puts(&\"generic type ok\"); }\n"
@@ -2709,8 +2709,8 @@ static void test_direct_build_consumes_package_enum(void) {
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkgenum",
-        "pu mod test.cli.pkgenum;\n"
-        "pu enum HttpStatus {\n"
+        "open module test.cli.pkgenum;\n"
+        "open enum HttpStatus {\n"
         "  Ok = 200,\n"
         "  NotFound = 404\n"
         "}\n");
@@ -2718,11 +2718,11 @@ static void test_direct_build_consumes_package_enum(void) {
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkgenummain;\n"
-        "use test.cli.pkgenum;\n"
+        "module test.cli.pkgenummain;\n"
+        "import test.cli.pkgenum;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
-        "fn main(args: string[]) {\n"
+        "extern func puts(msg: string*): int;\n"
+        "func main(args: string[]) {\n"
         "  let status: HttpStatus;\n"
         "  if status == HttpStatus.Ok { puts(&\"enum package ok\"); }\n"
         "}\n",
@@ -2746,28 +2746,28 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkggenericspec",
-        "pu mod test.cli.pkggenericspec;\n"
-        "pu spec Eq<T> {\n"
-        "  fn same(other: T): bool;\n"
+        "open module test.cli.pkggenericspec;\n"
+        "open spec Eq<T> {\n"
+        "  func same(other: T): bool;\n"
         "}\n");
 
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkggenericspecmain;\n"
-        "use test.cli.pkggenericspec;\n"
+        "module test.cli.pkggenericspecmain;\n"
+        "import test.cli.pkggenericspec;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
-        "  fn same(other: Key): bool {\n"
+        "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
         "}\n"
-        "fn sameLocal<T: Eq<T>>(left: T, right: T): bool {\n"
+        "func sameLocal<T: Eq<T>>(left: T, right: T): bool {\n"
         "  return left.same(right);\n"
         "}\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "  let a = Key{id: 3};\n"
         "  let b = Key{id: 3};\n"
         "  if sameLocal(a, b) { puts(&\"generic spec ok\"); }\n"
@@ -2792,28 +2792,28 @@ static void test_direct_build_consumes_package_constrained_generic_function(void
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkgconstrainedgenericfn",
-        "pu mod test.cli.pkgconstrainedgenericfn;\n"
-        "pu spec Eq<T> {\n"
-        "  fn same(other: T): bool;\n"
+        "open module test.cli.pkgconstrainedgenericfn;\n"
+        "open spec Eq<T> {\n"
+        "  func same(other: T): bool;\n"
         "}\n"
-        "pu fn sameAs<T: Eq<T>>(left: T, right: T): bool {\n"
+        "open func sameAs<T: Eq<T>>(left: T, right: T): bool {\n"
         "  return left.same(right);\n"
         "}\n");
 
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkgconstrainedgenericfnmain;\n"
-        "use test.cli.pkgconstrainedgenericfn;\n"
+        "module test.cli.pkgconstrainedgenericfnmain;\n"
+        "import test.cli.pkgconstrainedgenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
-        "  fn same(other: Key): bool {\n"
+        "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
         "}\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "  let a = Key{id: 5};\n"
         "  let b = Key{id: 5};\n"
         "  if sameAs(a, b) { puts(&\"constrained generic fn ok\"); }\n"
@@ -2838,18 +2838,18 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
     bundle_path = build_single_source_package_bundle(
         workspace_dir,
         "pkgconstrainedgenerictype",
-        "pu mod test.cli.pkgconstrainedgenerictype;\n"
-        "pu spec Eq<T> {\n"
-        "  fn same(other: T): bool;\n"
+        "open module test.cli.pkgconstrainedgenerictype;\n"
+        "open spec Eq<T> {\n"
+        "  func same(other: T): bool;\n"
         "}\n"
-        "pu type MiniMap<K: Eq<K>, V> {\n"
+        "open type MiniMap<K: Eq<K>, V> {\n"
         "  var key: K;\n"
         "  var value: V;\n"
-        "  pu fn put(key: K, value: V) {\n"
+        "  open func put(key: K, value: V) {\n"
         "    self.key = key;\n"
         "    self.value = value;\n"
         "  }\n"
-        "  pu fn hasKey(key: K): bool {\n"
+        "  open func hasKey(key: K): bool {\n"
         "    return key.same(self.key);\n"
         "  }\n"
         "}\n");
@@ -2857,17 +2857,17 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
     compile_consumer_with_package_and_expect_stdout(
         workspace_dir,
         bundle_path,
-        "mod test.cli.pkgconstrainedgenerictypemain;\n"
-        "use test.cli.pkgconstrainedgenerictype;\n"
+        "module test.cli.pkgconstrainedgenerictypemain;\n"
+        "import test.cli.pkgconstrainedgenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
         "  var id: int;\n"
-        "  fn same(other: Key): bool {\n"
+        "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
         "}\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "  let a = Key{id: 8};\n"
         "  let b = Key{id: 8};\n"
         "  let map: MiniMap<Key, string> = MiniMap<Key, string>();\n"
@@ -2924,8 +2924,8 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod local.dep;\n"
-                    "pu fn value(): int {\n"
+                    "open module local.dep;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -2939,8 +2939,8 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
                     "[dependencies]\n"
                     "local_dep: \"../dep\"\n");
     write_text_file(root_source_path,
-                    "pu mod root.lib;\n"
-                    "pu fn root_value(): int {\n"
+                    "open module root.lib;\n"
+                    "open func root_value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -3010,8 +3010,8 @@ static void test_project_check_accepts_source_file_path_and_local_dependencies(v
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod test.cli.localdep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.localdep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -3025,11 +3025,11 @@ static void test_project_check_accepts_source_file_path_and_local_dependencies(v
                     "[dependencies]\n"
                     "local_dep: \"../dep\"\n");
     write_text_file(root_source_path,
-                    "mod test.cli.localdepapp;\n"
+                    "module test.cli.localdepapp;\n"
                     "\n"
-                    "use test.cli.localdep;\n"
+                    "import test.cli.localdep;\n"
                     "\n"
-                    "fn main(args: string[]) {\n"
+                    "func main(args: string[]) {\n"
                     "  if dep_value() == 7 {\n"
                     "  }\n"
                     "}\n");
@@ -3079,12 +3079,12 @@ static void test_project_check_reports_enum_semantic_error_without_unknown_type(
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(source_path,
-                    "mod test.cli.enumdiag;\n"
+                    "module test.cli.enumdiag;\n"
                     "enum Status {\n"
                     "  Ok,\n"
                     "  NotFound\n"
                     "}\n"
-                    "fn main(args: string[]) {\n"
+                    "func main(args: string[]) {\n"
                     "  let value: Status = (Status)1;\n"
                     "}\n");
 
@@ -3141,15 +3141,15 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
     mkdir_p(dep_src_dir);
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
-                    "pu mod test.cli.pkgdep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.pkgdep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n"
-                    "fn main(args: string[]) {}\n");
+                    "func main(args: string[]) {}\n");
     write_text_file(main_source_path,
-                    "mod test.cli.pkgmain;\n"
-                    "use test.cli.pkgdep;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.pkgmain;\n"
+                    "import test.cli.pkgdep;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         char *out_opt = make_out_option(dep_out_dir);
@@ -3229,8 +3229,8 @@ static void test_frontend_source_overlay_replaces_disk_source(void) {
     size_t source_count = 0U;
 
     static const char *kOverlaySource =
-        "mod overlay.demo;\n"
-        "fn main(args: string[]) {}\n";
+        "module overlay.demo;\n"
+        "func main(args: string[]) {}\n";
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
@@ -3239,8 +3239,8 @@ static void test_frontend_source_overlay_replaces_disk_source(void) {
 
     mkdir_p(src_dir);
     write_text_file(main_source_path,
-                    "mod overlay.demo;\n"
-                    "fn main( {}\n");
+                    "module overlay.demo;\n"
+                    "func main( {}\n");
 
     {
         char *paths[] = { main_source_path };
@@ -3298,13 +3298,13 @@ static void test_frontend_source_overlay_rejects_duplicate_paths(void) {
 
     mkdir_p(src_dir);
     write_text_file(main_source_path,
-                    "mod overlay.demo;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module overlay.demo;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         static const char *kOverlaySource =
-            "mod overlay.demo;\n"
-            "fn main(args: string[]) {}\n";
+            "module overlay.demo;\n"
+            "func main(args: string[]) {}\n";
         char *paths[] = { main_source_path };
         FengCliFrontendInput input = {
             .path_count = 1,
@@ -3361,8 +3361,8 @@ static void test_direct_build_rejects_bad_package_bundle(void) {
 
     mkdir_p(src_dir);
     write_text_file(source_path,
-                    "mod test.cli.badpkg;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.badpkg;\n"
+                    "func main(args: string[]) {}\n");
     write_bundle_with_bytes_or_die(bundle_path,
                                    "mod/test/cli/bad.ft",
                                    kBadBytes,
@@ -3434,9 +3434,9 @@ static void test_init_creates_bin_project(void) {
                   "src: \"src/\"\n"
                   "out: \"build/\"\n") == 0);
     ASSERT(strcmp(main_text,
-                  "mod demo_app;\n"
+                  "module demo_app;\n"
                   "\n"
-                  "fn main(args: string[]) {\n"
+                  "func main(args: string[]) {\n"
                   "}\n") == 0);
 
     free(main_text);
@@ -3471,7 +3471,7 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     src_dir = path_join(project_dir, "src");
     lib_path = path_join(src_dir, "lib.ff");
     expected_manifest = dup_printf("[package]\nname: \"_9_demo_lib\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
-    expected_lib_text = dup_printf("mod _9_demo_lib;\n\nfn helper(): int {\n  return 0;\n}\n");
+    expected_lib_text = dup_printf("module _9_demo_lib;\n\nfunc helper(): int {\n  return 0;\n}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
 
@@ -3573,9 +3573,9 @@ static void test_init_prefixes_keyword_package_name(void) {
                   "src: \"src/\"\n"
                   "out: \"build/\"\n") == 0);
     ASSERT(strcmp(main_text,
-                  "mod _if;\n"
+                  "module _if;\n"
                   "\n"
-                  "fn main(args: string[]) {\n"
+                  "func main(args: string[]) {\n"
                   "}\n") == 0);
 
     free(main_text);
@@ -4149,8 +4149,8 @@ static void test_dap_reports_missing_backend_after_launch_validation(void) {
 static void test_dap_rewrites_set_breakpoints_source_path_to_package_uri(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x41U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_breakpoints_uri_XXXXXX";
     char *workspace_dir;
@@ -4274,8 +4274,8 @@ static void test_dap_rewrites_set_breakpoints_source_path_to_package_uri(void) {
 static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x42U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_breakpoints_reject_XXXXXX";
     char *workspace_dir;
@@ -4404,8 +4404,8 @@ static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
 static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x43U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_stacktrace_path_XXXXXX";
     char *workspace_dir;
@@ -4539,9 +4539,9 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
 static void test_dap_rewrites_stack_trace_compiler_normalized_source_path(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
+        "module demo.pkg;\n"
         "let TEST_NAME: string = \"hello_world\";\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_stacktrace_uri_variant_XXXXXX";
     char *workspace_dir;
@@ -4682,8 +4682,8 @@ static void test_dap_rewrites_stack_trace_compiler_normalized_source_path(void) 
 static void test_dap_hides_hidden_stack_trace_frames(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x44U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_stacktrace_hidden_XXXXXX";
     char *workspace_dir;
@@ -4822,8 +4822,8 @@ static void test_dap_hides_hidden_stack_trace_frames(void) {
 static void test_dap_rewrites_variables_to_feng_names(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x45U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_variables_names_XXXXXX";
@@ -5065,8 +5065,8 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
 static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x48U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    for var i = 1; i <= 1000; i += 1 {\n"
         "        println(\"Hello, world!\");\n"
         "    }\n"
@@ -5412,11 +5412,11 @@ static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(source_path,
-                    "mod demo;\n"
+                    "module demo;\n"
                     "\n"
                     "let TEST_NAME: string = \"hello_world\";\n"
                     "\n"
-                    "fn main(args: string[]) {\n"
+                    "func main(args: string[]) {\n"
                     "    let prefix: string = TEST_NAME;\n"
                     "}\n");
 
@@ -5646,8 +5646,8 @@ static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
 static void test_dap_uses_array_element_type_name_in_value_summary(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x49U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    println(\"Hello, world!\");\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_array_summary_type_XXXXXX";
@@ -6010,8 +6010,8 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
 static void test_dap_clears_synthetic_refs_after_continue(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    println(\"warmup\");\n"
         "    println(\"warmup\");\n"
         "    println(\"warmup\");\n"
@@ -6338,12 +6338,12 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
 static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x4aU};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
+        "module demo.pkg;\n"
         "type Point {\n"
         "    let x: i32;\n"
         "    let label: string;\n"
         "}\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let point: Point = Point{x: 7, label: \"seven\"};\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_type_fields_XXXXXX";
@@ -6650,9 +6650,9 @@ static void test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf(voi
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(source_path,
-                    "mod demo;\n"
+                    "module demo;\n"
                     "\n"
-                    "fn main(args: string[]) {\n"
+                    "func main(args: string[]) {\n"
                     "    for var i = 1; i <= 3; i += 1 {\n"
                     "        let j = i;\n"
                     "    }\n"
@@ -6737,13 +6737,13 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     mkdir_p(src_dir);
     write_text_file(manifest_path, manifest_text);
     write_text_file(source_path,
-                    "mod demo;\n"
+                    "module demo;\n"
                     "\n"
-                    "use std;\n"
+                    "import std;\n"
                     "\n"
                     "let TEST_NAME: string = \"hello_world\";\n"
                     "\n"
-                    "fn main(args: string[]) {\n"
+                    "func main(args: string[]) {\n"
                     "    println(\"Running test: \" + TEST_NAME);\n"
                     "    for var i = 1; i <= 3; i += 1 {\n"
                     "        println(\"Hello, world!\");\n"
@@ -6785,8 +6785,8 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
 static void test_dap_rewrites_identifier_evaluate_expression(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_evaluate_ident_XXXXXX";
@@ -6992,8 +6992,8 @@ static void run_dap_evaluate_session(FengCodegenMapingInfo *info,
                                      int *out_rc) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
     static const char *kSourceText =
-        "mod demo.pkg;\n"
-        "fn main(args: string[]) {\n"
+        "module demo.pkg;\n"
+        "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_dap_evaluate_phase5_XXXXXX";
@@ -7368,13 +7368,13 @@ static void test_dap_rejects_assignment_evaluate_expression(void) {
 
 static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     static const char *kBadSource =
-        "mod test.lsp;\n"
-        "fn main(args: string[]) {\n"
+        "module test.lsp;\n"
+        "func main(args: string[]) {\n"
         "    let value: string = ;\n"
         "}\n";
     static const char *kGoodSource =
-        "mod test.lsp;\n"
-        "fn main(args: string[]) {\n"
+        "module test.lsp;\n"
+        "func main(args: string[]) {\n"
         "    let value: string = \"ok\";\n"
         "}\n";
     char template_path[] = "/tmp/feng_cli_lsp_diag_XXXXXX";
@@ -7443,7 +7443,7 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
 
 static void test_lsp_hover_definition_and_completion(void) {
     static const char *kSource =
-        "mod test.lsp;\n"
+        "module test.lsp;\n"
         "\n"
         "/** User record. */\n"
         "type User {\n"
@@ -7452,11 +7452,11 @@ static void test_lsp_hover_definition_and_completion(void) {
         "}\n"
         "\n"
         "/** Formats a user label. */\n"
-        "fn format(user: User): string {\n"
+        "func format(user: User): string {\n"
         "    return user.name;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let label: string = format(user);\n"
         "    let mirror: string = user.name;\n"
@@ -7547,7 +7547,7 @@ static void test_lsp_hover_definition_and_completion(void) {
     ASSERT(strstr(output, "\"Z\"") != NULL);
     ASSERT(strstr(output, "\"kind\":\"plaintext\"") != NULL);
     ASSERT(strstr(output, "Formats a user label.") != NULL);
-    ASSERT(strstr(output, "fn format(user: User): string") != NULL);
+    ASSERT(strstr(output, "func format(user: User): string") != NULL);
     ASSERT(strstr(output, "Display name.") != NULL);
     ASSERT(strstr(output, "let name: string") != NULL);
     ASSERT(strstr(output, expected_definition) != NULL);
@@ -7737,18 +7737,18 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
 
 static void test_lsp_hover_uses_markdown_when_supported(void) {
     static const char *kSource =
-        "mod test.lsp.markdown;\n"
+        "module test.lsp.markdown;\n"
         "\n"
         "/**\n"
         " * Summarizes the CLI arguments.\n"
         " *\n"
         " * @param args The command-line arguments.\n"
         " */\n"
-        "fn describe(args: string[]): string {\n"
+        "func describe(args: string[]): string {\n"
         "    return \"ok\";\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let label: string = describe(args);\n"
         "}\n";
     static const char *kInitialize =
@@ -7759,7 +7759,7 @@ static void test_lsp_hover_uses_markdown_when_supported(void) {
                                               20U);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":{\"contents\":{\"kind\":\"markdown\"") != NULL);
-    ASSERT(strstr(output, "```feng\\nfn describe(args: string[]): string\\n```") != NULL);
+    ASSERT(strstr(output, "```feng\\nfunc describe(args: string[]): string\\n```") != NULL);
     ASSERT(strstr(output, "Summarizes the CLI arguments.") != NULL);
     ASSERT(strstr(output, "- **@param** `args` The command-line arguments.") != NULL);
 
@@ -7768,18 +7768,18 @@ static void test_lsp_hover_uses_markdown_when_supported(void) {
 
 static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(void) {
     static const char *kSource =
-        "mod test.lsp.plaintext;\n"
+        "module test.lsp.plaintext;\n"
         "\n"
         "/**\n"
         " * Summarizes the CLI arguments.\n"
         " *\n"
         " * @param args The command-line arguments.\n"
         " */\n"
-        "fn describe(args: string[]): string {\n"
+        "func describe(args: string[]): string {\n"
         "    return \"ok\";\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let label: string = describe(args);\n"
         "}\n";
     static const char *kInitialize =
@@ -7790,7 +7790,7 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
                                               20U);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":{\"contents\":{\"kind\":\"plaintext\"") != NULL);
-    ASSERT(strstr(output, "fn describe(args: string[]): string") != NULL);
+    ASSERT(strstr(output, "func describe(args: string[]): string") != NULL);
     ASSERT(strstr(output, "@param args The command-line arguments.") != NULL);
     ASSERT(strstr(output, "**@param**") == NULL);
     ASSERT(strstr(output, "```feng") == NULL);
@@ -7800,23 +7800,23 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
 
 static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
     static const char *kHoverSource =
-        "mod test.lsp.variadic_signature_hover;\n"
+        "module test.lsp.variadic_signature_hover;\n"
         "\n"
-        "fn log(fmt: string, args: string...): string {\n"
+        "func log(fmt: string, args: string...): string {\n"
         "    return fmt;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let value: string = log(\"x\", \"a\");\n"
         "}\n";
     static const char *kCompletionSource =
-        "mod test.lsp.variadic_signature_completion;\n"
+        "module test.lsp.variadic_signature_completion;\n"
         "\n"
-        "fn log(fmt: string, args: string...): string {\n"
+        "func log(fmt: string, args: string...): string {\n"
         "    return fmt;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    lo\n"
         "}\n";
     static const char *kInitialize =
@@ -7829,11 +7829,11 @@ static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
                                                               "    lo\n",
                                                               strlen("    lo"));
 
-    ASSERT(strstr(hover_output, "fn log(fmt: string, args: string...): string") != NULL);
-    ASSERT(strstr(hover_output, "fn log(fmt: string, args: string[]): string") == NULL);
+    ASSERT(strstr(hover_output, "func log(fmt: string, args: string...): string") != NULL);
+    ASSERT(strstr(hover_output, "func log(fmt: string, args: string[]): string") == NULL);
     ASSERT(strstr(completion_output, "\"label\":\"log\"") != NULL);
-    ASSERT(strstr(completion_output, "\"detail\":\"fn log(fmt: string, args: string...): string\"") != NULL);
-    ASSERT(strstr(completion_output, "\"detail\":\"fn log(fmt: string, args: string[]): string\"") == NULL);
+    ASSERT(strstr(completion_output, "\"detail\":\"func log(fmt: string, args: string...): string\"") != NULL);
+    ASSERT(strstr(completion_output, "\"detail\":\"func log(fmt: string, args: string[]): string\"") == NULL);
 
     free(completion_output);
     free(hover_output);
@@ -7868,35 +7868,35 @@ static void assert_lsp_completion_contains_name(const char *source,
 
 static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     static const char *kDotSource =
-        "mod test.lsp.completiondot;\n"
+        "module test.lsp.completiondot;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let label: string = user.;\n"
         "}\n";
     static const char *kPrefixSource =
-        "mod test.lsp.completionprefix;\n"
+        "module test.lsp.completionprefix;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let label: string = user.n;\n"
         "}\n";
     static const char *kInferredSource =
-        "mod test.lsp.completioninferred;\n"
+        "module test.lsp.completioninferred;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user = User { name: \"copilot\" };\n"
         "    let label: string = user.;\n"
         "}\n";
@@ -7907,25 +7907,25 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
 }
 static void test_lsp_enum_member_completion_survives_incomplete_member_access(void) {
     static const char *kDotSource =
-        "mod test.lsp.enumcompletiondot;\n"
+        "module test.lsp.enumcompletiondot;\n"
         "\n"
         "enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let status: HttpStatus = HttpStatus.;\n"
         "}\n";
     static const char *kPrefixSource =
-        "mod test.lsp.enumcompletionprefix;\n"
+        "module test.lsp.enumcompletionprefix;\n"
         "\n"
         "enum HttpStatus {\n"
         "    Ok = 200,\n"
         "    NotFound = 404\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let status: HttpStatus = HttpStatus.N;\n"
         "}\n";
     const char *labels[] = {"Ok", "NotFound"};
@@ -7937,20 +7937,20 @@ static void test_lsp_enum_member_completion_survives_incomplete_member_access(vo
 
 static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kMemberBeforeNextStmt =
-        "mod test.lsp.completioneditmember;\n"
+        "module test.lsp.completioneditmember;\n"
         "\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "    let age: i32;\n"
         "\n"
-        "    fn say(msg: string): void {\n"
+        "    func say(msg: string): void {\n"
         "        puts(&msg);\n"
         "    }\n"
         "}\n"
         "\n"
-        "fn hello_world_example(args: string[]): void {\n"
+        "func hello_world_example(args: string[]): void {\n"
         "    let user = User {\n"
         "        name: \"Houfeng\",\n"
         "        age: 18\n"
@@ -7959,20 +7959,20 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
         "    user.say(\"Hello World: \" + user.name);\n"
         "}\n";
     static const char *kScopeBeforeClose =
-        "mod test.lsp.completioneditscope;\n"
+        "module test.lsp.completioneditscope;\n"
         "\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "    let age: i32;\n"
         "\n"
-        "    fn say(msg: string): void {\n"
+        "    func say(msg: string): void {\n"
         "        puts(&msg);\n"
         "    }\n"
         "}\n"
         "\n"
-        "fn hello_world_example(args: string[]): void {\n"
+        "func hello_world_example(args: string[]): void {\n"
         "    let user = User {\n"
         "        name: \"Houfeng\",\n"
         "        age: 18\n"
@@ -7981,26 +7981,26 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
         "    \n"
         "}\n";
     static const char *kScopePrefixBeforeNextStmt =
-        "mod test.lsp.completioneditprefix;\n"
+        "module test.lsp.completioneditprefix;\n"
         "\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn hello_world_example(args: string[]): void {\n"
+        "func hello_world_example(args: string[]): void {\n"
         "    let user = User { name: \"Houfeng\" };\n"
         "    us\n"
         "    user.say(\"Hello World\");\n"
         "}\n";
     static const char *kMainPrefixBeforeClose =
-        "mod test.lsp.completionmainprefix;\n"
+        "module test.lsp.completionmainprefix;\n"
         "\n"
         "@cdecl(\"libc\")\n"
-        "extern fn puts(msg: string*): int;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    puts(&\"hello, examples\");\n"
         "    p\n"
         "}\n";
@@ -8033,23 +8033,23 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
 
 static void test_lsp_member_completion_infers_constructor_call_overloads(void) {
     static const char *kSource =
-        "mod test.lsp.completionoverload;\n"
+        "module test.lsp.completionoverload;\n"
         "\n"
         "spec CommitOptions {\n"
         "    var message: i32;\n"
         "}\n"
         "\n"
         "type User {\n"
-        "    fn commit(options: CommitOptions): void {\n"
+        "    func commit(options: CommitOptions): void {\n"
         "        options.message = 1;\n"
         "    }\n"
         "\n"
-        "    fn commit(message: i32): int {\n"
+        "    func commit(message: i32): int {\n"
         "        return message;\n"
         "    }\n"
         "}\n"
         "\n"
-        "fn debug_example(args: string[]): void {\n"
+        "func debug_example(args: string[]): void {\n"
         "    let user = User();\n"
         "    user.co\n"
         "}\n";
@@ -8057,21 +8057,21 @@ static void test_lsp_member_completion_infers_constructor_call_overloads(void) {
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
     ASSERT(count_occurrences(output, "\"label\":\"commit\"") == 2);
-    ASSERT(strstr(output, "fn commit(options: CommitOptions): void") != NULL);
-    ASSERT(strstr(output, "fn commit(message: i32): int") != NULL);
+    ASSERT(strstr(output, "func commit(options: CommitOptions): void") != NULL);
+    ASSERT(strstr(output, "func commit(message: i32): int") != NULL);
 
     free(output);
 }
 
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
     static const char *kSource =
-        "mod test.lsp.rename;\n"
+        "module test.lsp.rename;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
@@ -8209,13 +8209,13 @@ static void test_lsp_member_references_and_rename_from_object_literal_field(void
 
 static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     static const char *kSource =
-        "mod test.lsp.declsite;\n"
+        "module test.lsp.declsite;\n"
         "\n"
-        "fn helper(x: int): int {\n"
+        "func helper(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    helper(1);\n"
         "    helper(2);\n"
         "}\n";
@@ -8254,8 +8254,8 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
 
     /* Cursor is in the middle of the `helper` name token at its declaration. */
     find_line_character(kSource,
-                        "fn helper(x: int): int {",
-                        3U,
+                        "func helper(x: int): int {",
+                        5U,
                         &decl_line,
                         &decl_character);
     find_line_character(kSource,
@@ -8358,13 +8358,13 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
 
 static void test_lsp_rename_accepts_identifier_end_position(void) {
     static const char *kSource =
-        "mod test.lsp.renameend;\n"
+        "module test.lsp.renameend;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
@@ -8500,13 +8500,13 @@ static void test_lsp_rename_accepts_identifier_end_position(void) {
    declaration token) must still succeed. */
 static void test_lsp_definition_references_rename_with_broken_code(void) {
     static const char *kSource =
-        "mod test.lsp.broken;\n"
+        "module test.lsp.broken;\n"
         "\n"
-        "fn helper(x: int): int {\n"
+        "func helper(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    helper(1);\n"
         "    helper(2);\n"
         "}\n";
@@ -8543,8 +8543,8 @@ static void test_lsp_definition_references_rename_with_broken_code(void) {
     write_text_file(source_path, kSource);
 
     find_line_character(kSource,
-                        "fn helper(x: int): int {",
-                        3U,
+                        "func helper(x: int): int {",
+                        5U,
                         &decl_line,
                         &decl_character);
     find_line_character(kSource,
@@ -8652,14 +8652,14 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
        inside feng_cli_find_loaded_source.  The server must survive and return
        valid JSON responses for all requests. */
     static const char *kSource =
-        "mod test.lsp.libonly;\n"
+        "module test.lsp.libonly;\n"
         "\n"
         "/** A counter type with no main function. */\n"
-        "pu type Counter {\n"
+        "open type Counter {\n"
         "    /** The count field. */\n"
-        "    pu let count: int;\n"
+        "    open let count: int;\n"
         "    /** Returns double the count. */\n"
-        "    pu fn double(): int {\n"
+        "    open func double(): int {\n"
         "        return self.count * 2;\n"
         "    }\n"
         "}\n";
@@ -8684,7 +8684,7 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
     source_path = path_join(workspace_dir, "counter.ff");
     write_text_file(source_path, kSource);
 
-    find_line_character(kSource, "    pu let count: int;", 11U,
+    find_line_character(kSource, "    open let count: int;", 11U,
                         &field_line, &field_character);
 
     uri = file_uri_from_path(source_path);
@@ -8753,9 +8753,9 @@ static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
        the LSP server actually receives over the wire:
          backslash-u6d4b backslash-u8bd5 is the Unicode encoding of: 测试 */
     static const char *kSourceEscaped =
-        "mod test.lsp.unicode;\\n"
+        "module test.lsp.unicode;\\n"
         "/** \\u6d4b\\u8bd5 */\\n"
-        "pu type Tag { pu let name: string; }\\n";
+        "open type Tag { open let name: string; }\\n";
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
@@ -8764,9 +8764,9 @@ static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
     /* Write the actual source to disk so the LSP can find it; the on-disk
        version uses real UTF-8, the in-message version uses \\uXXXX. */
     write_text_file(source_path,
-                    "mod test.lsp.unicode;\n"
+                    "module test.lsp.unicode;\n"
                     "/** \xe6\xb5\x8b\xe8\xaf\x95 */\n"
-                    "pu type Tag { pu let name: string; }\n");
+                    "open type Tag { open let name: string; }\n");
 
     uri = file_uri_from_path(source_path);
 
@@ -8812,26 +8812,26 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kSharedSource =
-        "pu mod test.cli.cachedep;\n"
+        "open module test.cli.cachedep;\n"
         "\n"
         "/** User from cache. */\n"
-        "pu type User {\n"
+        "open type User {\n"
         "    /** Display name. */\n"
         "    let name: string;\n"
         "}\n";
     static const char *kBrokenSharedSource =
-        "pu mod test.cli.cachedep;\n"
+        "open module test.cli.cachedep;\n"
         "\n"
-        "pu type User {\n"
+        "open type User {\n"
         "    let name: string;\n"
         "}\n"
         "\n"
-        "pu fn broken(user: User): string {\n";
+        "open func broken(user: User): string {\n";
     static const char *kMainSource =
-        "mod test.cli.cachemain;\n"
-        "use test.cli.cachedep;\n"
+        "module test.cli.cachemain;\n"
+        "import test.cli.cachedep;\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
@@ -9192,8 +9192,8 @@ static void test_project_open_collects_sources(void) {
                     "\n"
                     "[dependencies]\n"
                     "base: \"1.0.0\"\n");
-    write_text_file(main_path, "mod demo.main;\nfn main(args: string[]) {}\n");
-    write_text_file(helper_path, "mod demo.main;\nfn helper(): int { return 1; }\n");
+    write_text_file(main_path, "module demo.main;\nfunc main(args: string[]) {}\n");
+    write_text_file(helper_path, "module demo.main;\nfunc helper(): int { return 1; }\n");
 
     ASSERT(feng_cli_project_open(project_dir, &context, &error));
     ASSERT(strcmp(context.manifest.name, "demo") == 0);
@@ -9435,8 +9435,8 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "mod local.dep;\n"
-                    "pu fn value(): int { return 1; }\n");
+                    "module local.dep;\n"
+                    "open func value(): int { return 1; }\n");
     write_text_file(project_manifest_path,
                     "[package]\n"
                     "name: \"app\"\n"
@@ -9767,13 +9767,13 @@ static void test_deps_resolve_reports_local_dependency_cycle(void) {
                     "[dependencies]\n"
                     "dep_a: \"../dep_a\"\n");
     write_text_file(dep_a_source_path,
-                    "pu mod test.cli.cyclea;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.cyclea;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(dep_b_source_path,
-                    "pu mod test.cli.cycleb;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.cycleb;\n"
+                    "open func value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -9909,8 +9909,8 @@ static void test_deps_add_local_validates_then_writes_manifest(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod test.cli.addlocal;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.addlocal;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -9973,8 +9973,8 @@ static void test_deps_add_local_rejects_name_mismatch_before_write(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod test.cli.addlocalname;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.addlocalname;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -10035,8 +10035,8 @@ static void test_deps_add_local_rejects_non_lib_target_before_write(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "mod test.cli.addlocaltarget;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.addlocaltarget;\n"
+                    "func main(args: string[]) {}\n");
 
     {
         char *argv[] = { "add", "local_dep", "../dep", project_dir };
@@ -10633,8 +10633,8 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(source_path,
-                    "mod test.cli.debugflags;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.debugflags;\n"
+                    "func main(args: string[]) {}\n");
 
     if (getenv("CC") != NULL) {
         saved_cc = dup_cstr(getenv("CC"));
@@ -10715,8 +10715,8 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod test.cli.releasedep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.releasedep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -10730,9 +10730,9 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
                     "[dependencies]\n"
                     "release_dep: \"../dep\"\n");
     write_text_file(root_source_path,
-                    "mod test.cli.releaseapp;\n"
-                    "use test.cli.releasedep;\n"
-                    "fn main(args: string[]) {\n"
+                    "module test.cli.releaseapp;\n"
+                    "import test.cli.releasedep;\n"
+                    "func main(args: string[]) {\n"
                     "  if dep_value() == 7 {\n"
                     "  }\n"
                     "}\n");
@@ -10824,8 +10824,8 @@ static void test_project_build_bin_copies_assets_and_refreshes_existing_output(v
                     "[assets]\n"
                     "runtime: \"runtime_assets/\"\n");
     write_text_file(source_path,
-                    "mod test.cli.assets.bin;\n"
-                    "fn main(args: string[]) {}\n");
+                    "module test.cli.assets.bin;\n"
+                    "func main(args: string[]) {}\n");
     write_text_file(asset_source_path, "alpha\n");
     write_text_file(asset_nested_path, "nested-alpha\n");
 
@@ -10924,8 +10924,8 @@ static void test_project_build_lib_stages_assets_under_output_root(void) {
                     "[assets]\n"
                     "runtime: \"bundle_assets/\"\n");
     write_text_file(source_path,
-                    "pu mod test.cli.assets.lib;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.assets.lib;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(asset_source_path, "alpha\n");
@@ -11031,8 +11031,8 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
                     "[assets]\n"
                     "extlib: \"vendor_extlib/\"\n");
     write_text_file(source_path,
-                    "pu mod test.cli.assets.extlibstage;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.assets.extlibstage;\n"
+                    "open func value(): int {\n"
                     "  return 5;\n"
                     "}\n");
     write_text_file(asset_source_path, "alpha\n");
@@ -11121,8 +11121,8 @@ static void test_project_run_release_reuses_build_pipeline(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod test.cli.rundep;\n"
-                    "pu fn dep_value(): int {\n"
+                    "open module test.cli.rundep;\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -11136,9 +11136,9 @@ static void test_project_run_release_reuses_build_pipeline(void) {
                     "[dependencies]\n"
                     "run_dep: \"../dep\"\n");
     write_text_file(root_source_path,
-                    "mod test.cli.runapp;\n"
-                    "use test.cli.rundep;\n"
-                    "fn main(args: string[]) {\n"
+                    "module test.cli.runapp;\n"
+                    "import test.cli.rundep;\n"
+                    "func main(args: string[]) {\n"
                     "  if dep_value() == 7 {\n"
                     "  }\n"
                     "}\n");
@@ -11232,8 +11232,8 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
-                    "pu mod local.dep;\n"
-                    "pu fn value(): int {\n"
+                    "open module local.dep;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -11247,8 +11247,8 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
                     "[dependencies]\n"
                     "local_dep: \"../dep\"\n");
     write_text_file(root_source_path,
-                    "pu mod test.cli.packroot;\n"
-                    "pu fn root_value(): int {\n"
+                    "open module test.cli.packroot;\n"
+                    "open func root_value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -11350,8 +11350,8 @@ static void test_project_pack_includes_staged_assets_in_bundle(void) {
                     "[assets]\n"
                     "runtime: \"bundle_assets/\"\n");
     write_text_file(source_path,
-                    "pu mod test.cli.assetpack;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.assetpack;\n"
+                    "open func value(): int {\n"
                     "  return 3;\n"
                     "}\n");
     write_text_file(asset_config_path, "config\n");
@@ -11447,8 +11447,8 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
                     "[assets]\n"
                     "extlib: \"vendor_extlib/\"\n");
     write_text_file(source_path,
-                    "pu mod test.cli.assetextlibpack;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.assetextlibpack;\n"
+                    "open func value(): int {\n"
                     "  return 9;\n"
                     "}\n");
     write_text_file(asset_source_path, "dynamic\n");
@@ -11516,8 +11516,8 @@ static void test_project_pack_rejects_release_flag(void) {
                     "src: \"src/\"\n"
                     "out: \"build/\"\n");
     write_text_file(source_path,
-                    "pu mod test.cli.packnorelease;\n"
-                    "pu fn value(): int {\n"
+                    "open module test.cli.packnorelease;\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -11540,14 +11540,14 @@ static void test_project_pack_rejects_release_flag(void) {
  * cursor positions. */
 static void test_lsp_hover_and_definition_local_var_rhs(void) {
     static const char *kSource =
-        "mod test.lsp.localrhs;\n"
+        "module test.lsp.localrhs;\n"
         "\n"
-        "fn check(n: int): int {\n"
+        "func check(n: int): int {\n"
         "    let doubled = if n > 0 { n + n; } else { 0; };\n"
         "    return doubled;\n"
         "}\n"
         "\n"
-        "fn loop_sum(n: int): int {\n"
+        "func loop_sum(n: int): int {\n"
         "    var acc: int = 0;\n"
         "    for var i = 0; i < n; i += 1 {\n"
         "        acc = acc + i;\n"
@@ -11661,15 +11661,15 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
 
 static void test_lsp_hover_uses_inferred_top_level_binding_type(void) {
     static const char *kSource =
-        "mod test.lsp.inferred_binding;\n"
+        "module test.lsp.inferred_binding;\n"
         "\n"
         "let TEST_NAME = \"hello_world\";\n"
         "\n"
-        "fn message(): string {\n"
+        "func message(): string {\n"
         "    return \"Running test: \" + TEST_NAME;\n"
         "}\n"
         "\n"
-        "fn main(args: string[]) {\n"
+        "func main(args: string[]) {\n"
         "    let label: string = message();\n"
         "}\n";
     static const char *kInitialize =
@@ -11699,16 +11699,16 @@ static void test_lsp_use_path_completion(void) {
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kLibSource =
-        "pu mod test.lsp.usepath.lib;\n"
+        "open module test.lsp.usepath.lib;\n"
         "\n"
-        "pu fn value(): int {\n"
+        "open func value(): int {\n"
         "    return 1;\n"
         "}\n";
-    /* Main source ends with an incomplete `use` path — the cursor is placed
+    /* Main source ends with an incomplete `import` path — the cursor is placed
      * right after the trailing dot to trigger path-segment completion. */
     static const char *kMainSource =
-        "mod test.lsp.usepath.main;\n"
-        "use test.lsp.usepath.\n";
+        "module test.lsp.usepath.main;\n"
+        "import test.lsp.usepath.\n";
     char template_path[] = "/tmp/feng_lsp_usepath_XXXXXX";
     char *workspace_dir;
     char *project_dir;
@@ -11742,9 +11742,9 @@ static void test_lsp_use_path_completion(void) {
     write_text_file(lib_path, kLibSource);
     write_text_file(main_path, kMainSource);
 
-    /* Position the cursor right after the trailing dot in `use test.lsp.usepath.`
-     * (line 1, character 21). */
-    find_line_character(kMainSource, "use test.lsp.usepath.", 21U, &comp_line, &comp_char);
+    /* Position the cursor right after the trailing dot in `import test.lsp.usepath.`
+     * (line 1, character 24). */
+    find_line_character(kMainSource, "import test.lsp.usepath.", 24U, &comp_line, &comp_char);
 
     main_uri = file_uri_from_path(main_path);
     escaped_main = json_escape_text(kMainSource);
@@ -11809,12 +11809,12 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kCSource =
-        "pu mod a.b.c;\n";
+        "open module a.b.c;\n";
     static const char *kDSource =
-        "pu mod a.b.d;\n";
+        "open module a.b.d;\n";
     static const char *kMainSource =
-        "mod app.main;\n"
-        "use a.\n";
+        "module app.main;\n"
+        "import a.\n";
     char template_path[] = "/tmp/feng_lsp_usepath_dedup_XXXXXX";
     char *workspace_dir;
     char *project_dir;
@@ -11851,7 +11851,7 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
     write_text_file(d_path, kDSource);
     write_text_file(main_path, kMainSource);
 
-    find_line_character(kMainSource, "use a.", 6U, &comp_line, &comp_char);
+    find_line_character(kMainSource, "import a.", 9U, &comp_line, &comp_char);
 
     main_uri = file_uri_from_path(main_path);
     escaped_main = json_escape_text(kMainSource);
@@ -11903,9 +11903,9 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
     free(remove_error);
 }
 
-/* Tests the edit-time project-scan fallback used for incomplete `use` paths.
+/* Tests the edit-time project-scan fallback used for incomplete `import` paths.
  * Before the fix, deduplication stored slices into freed file buffers, so
- * `use foo.` could return duplicate `bar` entries when several modules shared
+ * `import foo.` could return duplicate `bar` entries when several modules shared
  * the `foo.bar.*` prefix. */
 static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(void) {
     static const char *kManifest =
@@ -11916,26 +11916,26 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kASource =
-        "pu mod foo.bar.a;\n"
+        "open module foo.bar.a;\n"
         "\n"
-        "pu fn alpha(): int {\n"
+        "open func alpha(): int {\n"
         "    return 1;\n"
         "}\n";
     static const char *kBSource =
-        "pu mod foo.bar.b;\n"
+        "open module foo.bar.b;\n"
         "\n"
-        "pu fn beta(): int {\n"
+        "open func beta(): int {\n"
         "    return 2;\n"
         "}\n";
     static const char *kCSource =
-        "pu mod foo.bar.c;\n"
+        "open module foo.bar.c;\n"
         "\n"
-        "pu fn gamma(): int {\n"
+        "open func gamma(): int {\n"
         "    return 3;\n"
         "}\n";
     static const char *kMainSource =
-        "mod foo.bar.current;\n"
-        "use foo.\n";
+        "module foo.bar.current;\n"
+        "import foo.\n";
     char template_path[] = "/tmp/feng_lsp_usepath_scan_dedup_XXXXXX";
     char *workspace_dir;
     char *project_dir;
@@ -11975,7 +11975,7 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
     write_text_file(c_path, kCSource);
     write_text_file(main_path, kMainSource);
 
-    find_line_character(kMainSource, "use foo.", 8U, &comp_line, &comp_char);
+    find_line_character(kMainSource, "import foo.", 11U, &comp_line, &comp_char);
 
     main_uri = file_uri_from_path(main_path);
     escaped_main = json_escape_text(kMainSource);
@@ -12042,20 +12042,20 @@ static void test_lsp_imported_type_completion_after_use(void) {
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kTypesSource =
-        "pu mod test.lsp.imptypes;\n"
+        "open module test.lsp.imptypes;\n"
         "\n"
-        "pu type Widget {\n"
+        "open type Widget {\n"
         "    let id: int;\n"
         "}\n"
         "\n"
-        "pu fn make_widget(): Widget {\n"
+        "open func make_widget(): Widget {\n"
         "    return Widget { id: 0 };\n"
         "}\n";
     static const char *kMainSource =
-        "mod test.lsp.impcomp.main;\n"
-        "use test.lsp.imptypes;\n"
+        "module test.lsp.impcomp.main;\n"
+        "import test.lsp.imptypes;\n"
         "\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    return 0;\n"
         "}\n";
     char template_path[] = "/tmp/feng_lsp_impcomp_XXXXXX";
@@ -12132,7 +12132,7 @@ static void test_lsp_imported_type_completion_after_use(void) {
     ASSERT(strstr(output,
                   "\"label\":\"Widget\",\"kind\":6,\"detail\":\"type Widget\"") != NULL);
     ASSERT(strstr(output,
-                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"fn make_widget(): Widget\"") != NULL);
+                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"func make_widget(): Widget\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -12164,20 +12164,20 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kTypesSource =
-        "pu mod other.lib;\n"
+        "open module other.lib;\n"
         "\n"
-        "pu type Widget {\n"
+        "open type Widget {\n"
         "    let id: int;\n"
         "}\n"
         "\n"
-        "pu fn make_widget(): Widget {\n"
+        "open func make_widget(): Widget {\n"
         "    return Widget { id: 0 };\n"
         "}\n";
     static const char *kMainSource =
-        "mod app.main;\n"
-        "use other.lib;\n"
+        "module app.main;\n"
+        "import other.lib;\n"
         "\n"
-        "fn helper(): int {\n"
+        "func helper(): int {\n"
         "    return 0;\n"
         "}\n";
     char template_path[] = "/tmp/feng_lsp_impcomp_degraded_XXXXXX";
@@ -12251,7 +12251,7 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
     ASSERT(strstr(output,
                   "\"label\":\"Widget\",\"kind\":6,\"detail\":\"type Widget\"") != NULL);
     ASSERT(strstr(output,
-                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"fn make_widget(): Widget\"") != NULL);
+                  "\"label\":\"make_widget\",\"kind\":3,\"detail\":\"func make_widget(): Widget\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -12282,16 +12282,16 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
         "src: \"src/\"\n"
         "out: \"build/\"\n";
     static const char *kLoopSource =
-        "pu mod test.lsp.alias.loop;\n"
+        "open module test.lsp.alias.loop;\n"
         "\n"
-        "pu fn loop_example(): int {\n"
+        "open func loop_example(): int {\n"
         "    return 1;\n"
         "}\n";
     static const char *kMainSource =
-        "mod test.lsp.alias.main;\n"
-        "use test.lsp.alias.loop as lp;\n"
+        "module test.lsp.alias.main;\n"
+        "import test.lsp.alias.loop as lp;\n"
         "\n"
-        "fn run(): int {\n"
+        "func run(): int {\n"
         "    lp.\n"
         "    return 0;\n"
         "}\n";
@@ -12362,7 +12362,7 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"loop_example\"") != NULL);
     ASSERT(strstr(output,
-                  "\"label\":\"loop_example\",\"kind\":3,\"detail\":\"fn loop_example(): int\"") != NULL);
+                  "\"label\":\"loop_example\",\"kind\":3,\"detail\":\"func loop_example(): int\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -12382,73 +12382,73 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
 
 static void test_lsp_external_package_hover_docs_and_completion(void) {
     static const char *kPackageSource =
-        "pu mod test.lsp.pkg.collections;\n"
+        "open module test.lsp.pkg.collections;\n"
         "\n"
         "/**\n"
         " * Package map docs.\n"
         " */\n"
-        "pu type Map<K, V> {\n"
+        "open type Map<K, V> {\n"
         "    /**\n"
         "     * Number of stored entries.\n"
         "     */\n"
-        "    pu let count: int;\n"
+        "    open let count: int;\n"
         "}\n"
         "\n"
         "/**\n"
         " * Package join docs.\n"
         " */\n"
-        "pu fn join(prefix: string, parts: string...): string {\n"
+        "open func join(prefix: string, parts: string...): string {\n"
         "    return prefix;\n"
         "}\n";
     static const char *kHoverSource =
-        "mod test.lsp.pkgconsumer.main;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.main;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn consume(map: Map<string, int>): int {\n"
+        "func consume(map: Map<string, int>): int {\n"
         "    return map.count;\n"
         "}\n"
         "\n"
-        "fn consume_join(): string {\n"
+        "func consume_join(): string {\n"
         "    return join(\"x\", \"a\");\n"
         "}\n";
     static const char *kUsePathSource =
-        "mod test.lsp.pkgconsumer.useedit;\n"
-        "use test.lsp.pkg.\n"
+        "module test.lsp.pkgconsumer.useedit;\n"
+        "import test.lsp.pkg.\n"
         "\n"
-        "fn run(): void {}\n";
+        "func run(): void {}\n";
     static const char *kTypeCompletionSource =
-        "mod test.lsp.pkgconsumer.typeedit;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.typeedit;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let value: Ma\n"
         "}\n";
     static const char *kCtorCompletionSource =
-        "mod test.lsp.pkgconsumer.ctoredit;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.ctoredit;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    let value = M\n"
         "}\n";
     static const char *kBareCompletionSource =
-        "mod test.lsp.pkgconsumer.bareedit;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.bareedit;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    M\n"
         "}\n";
     static const char *kMemberCompletionSource =
-        "mod test.lsp.pkgconsumer.memberedit;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.memberedit;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn consume(map: Map<string, int>): int {\n"
+        "func consume(map: Map<string, int>): int {\n"
         "    return map.;\n"
         "}\n";
     static const char *kFunctionCompletionSource =
-        "mod test.lsp.pkgconsumer.functionedit;\n"
-        "use test.lsp.pkg.collections;\n"
+        "module test.lsp.pkgconsumer.functionedit;\n"
+        "import test.lsp.pkg.collections;\n"
         "\n"
-        "fn run(): void {\n"
+        "func run(): void {\n"
         "    j\n"
         "}\n";
     static const char *kInitialize =
@@ -12522,8 +12522,8 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                               kHoverSource,
                                                               kInitialize,
                                                               "textDocument/hover",
-                                                              "fn consume(map: Map<string, int>): int {",
-                                                              strlen("fn consume(map: "));
+                                                              "func consume(map: Map<string, int>): int {",
+                                                              strlen("func consume(map: "));
     hover_member_output = capture_lsp_position_response_at_path(main_path,
                                                                 kHoverSource,
                                                                 kInitialize,
@@ -12540,8 +12540,8 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                   kUsePathSource,
                                                                   kInitialize,
                                                                   "textDocument/completion",
-                                                                  "use test.lsp.pkg.",
-                                                                  strlen("use test.lsp.pkg."));
+                                                                  "import test.lsp.pkg.",
+                                                                  strlen("import test.lsp.pkg."));
     type_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                    kTypeCompletionSource,
                                                                    kInitialize,
@@ -12602,8 +12602,8 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(hover_member_output, "let count: i32") != NULL);
     ASSERT(strstr(hover_member_output, "Number of stored entries.") != NULL);
     ASSERT(strstr(hover_function_output, "\"id\":2,\"result\":null") == NULL);
-    ASSERT(strstr(hover_function_output, "fn join(prefix: string, parts: string...): string") != NULL);
-    ASSERT(strstr(hover_function_output, "fn join(prefix: string, parts: string[]): string") == NULL);
+    ASSERT(strstr(hover_function_output, "func join(prefix: string, parts: string...): string") != NULL);
+    ASSERT(strstr(hover_function_output, "func join(prefix: string, parts: string[]): string") == NULL);
     ASSERT(strstr(hover_function_output, "Package join docs.") != NULL);
     ASSERT(strstr(use_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(use_completion_output, "\"label\":\"collections\"") != NULL);
@@ -12619,9 +12619,9 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(function_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(function_completion_output, "\"label\":\"join\"") != NULL);
     ASSERT(strstr(function_completion_output,
-                  "\"label\":\"join\",\"kind\":3,\"detail\":\"fn join(prefix: string, parts: string...): string\"") != NULL);
+                  "\"label\":\"join\",\"kind\":3,\"detail\":\"func join(prefix: string, parts: string...): string\"") != NULL);
     ASSERT(strstr(function_completion_output,
-                  "\"label\":\"join\",\"kind\":3,\"detail\":\"fn join(prefix: string, parts: string[]): string\"") == NULL);
+                  "\"label\":\"join\",\"kind\":3,\"detail\":\"func join(prefix: string, parts: string[]): string\"") == NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\"") != NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);

@@ -84,7 +84,7 @@ typedef struct AliasEntry {
 /* Per-program record of every module referenced by a `use` declaration in
  * the current file (whether short-name or aliased). Cross-module visibility
  * checks against external modules require an entry here in addition to the
- * target being declared `pu mod`. */
+ * target being declared `open mod`. */
 typedef struct ImportedModuleEntry {
     const FengSemanticModule *target_module;
 } ImportedModuleEntry;
@@ -229,7 +229,7 @@ typedef struct ResolveContext {
     size_t alias_count;
     /* Modules the current file imported via `use` (short-name or aliased).
      * Used to enforce that cross-module symbol/contract visibility requires
-     * an explicit `use`, not just the target being `pu mod`. */
+     * an explicit `use`, not just the target being `open mod`. */
     const ImportedModuleEntry *imported_modules;
     size_t imported_module_count;
     ScopeFrame *scopes;
@@ -2180,7 +2180,7 @@ static bool builtin_type_name_is_integer(FengSlice name) {
 
 /* Stronger check than the legacy "target is public" predicate: a target
  * module is *use-visible* from the current resolve context only if either
- * (a) it is the same module, or (b) the target is `pu mod` AND the current
+ * (a) it is the same module, or (b) the target is `open mod` AND the current
  * file imported it via a `use` declaration. Required by docs/feng-module.md
  * to prevent ambient access to any public module without an explicit import. */
 static bool module_is_use_visible_from(const ResolveContext *ctx,
@@ -2476,7 +2476,7 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
         return resolver_append_error(
             context,
             runtime_annotation->token,
-            format_message("@runtime only applies to top-level extern fn declarations")) &&
+            format_message("@runtime only applies to top-level extern func declarations")) &&
                false;
     }
 
@@ -2533,7 +2533,7 @@ static bool validate_runtime_annotation_on_member(ResolveContext *context,
     return resolver_append_error(
         context,
         runtime_annotation->token,
-        format_message("@runtime only applies to top-level extern fn declarations")) &&
+        format_message("@runtime only applies to top-level extern func declarations")) &&
            false;
 }
 
@@ -6269,7 +6269,7 @@ static bool type_member_is_public(const FengTypeMember *member) {
 }
 
 /* When the resolver is inside a fit-block function body, accessing the target
- * type's private members (`pr` fields or `pr` methods) is forbidden, regardless
+ * type's private members (`seal` fields or `seal` methods) is forbidden, regardless
  * of whether the target lives in the same package as the fit declaration.
  * Members contributed by the fit block itself live on the fit decl, not on the
  * target type, so this helper only consults the target type's own member set.
@@ -8110,7 +8110,7 @@ static bool fit_decl_is_visible_from(const ResolveContext *ctx,
         return true;
     }
     /* Cross-module fits become effective in the consumer only when (a) the
-     * fit itself is `pu fit`, and (b) the consumer file imported the fit's
+     * fit itself is `open fit`, and (b) the consumer file imported the fit's
      * owning module via `use`. Mirrors docs/feng-fit.md §4: "其他 mod 通过
      * use 引入当前模块后，该契约关系在其作用域内生效". */
     return fit_decl->visibility == FENG_VISIBILITY_PUBLIC &&
@@ -17177,8 +17177,8 @@ static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
     }
 
     /* Specs from every visible fit declaration (current module + cross-module
-     * `pu fit`s the consumer has imported via `use`). Mirrors docs/feng-fit.md
-     * §4 — a `pu fit` activates in the importing module after `use`. */
+     * `open fit`s the consumer has imported via `use`). Mirrors docs/feng-fit.md
+     * §4 — a `open fit` activates in the importing module after `use`. */
     if (ctx->analysis != NULL) {
         size_t m_idx;
 
@@ -18756,7 +18756,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                           error_capacity,
                                           program->path,
                                           use_decl->token,
-                                          format_message("duplicate use alias '%.*s' in the same file",
+                                          format_message("duplicate import alias '%.*s' in the same file",
                                                          (int)use_decl->alias.length,
                                                          use_decl->alias.data));
                         break;
@@ -18778,7 +18778,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                     error_capacity,
                     program->path,
                     use_decl->token,
-                    format_message("use target module '%s' was not found in current compilation input",
+                    format_message("import target module '%s' was not found in current compilation input",
                                    module_name != NULL ? module_name : "<unknown>"));
                 free(module_name);
                 if (!ok) {

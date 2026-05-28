@@ -1,5 +1,5 @@
-pu mod test.cli.localdep;
+open module test.cli.localdep;
 
-pu fn dep_value(): int {
+open func dep_value(): int {
   return 7;
 }

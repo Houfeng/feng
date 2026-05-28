@@ -1,26 +1,26 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
-    fn first(): T;
+    func first(): T;
 }
 
 spec Collection<T>: Sequence<T> {
 }
 
 type IntBag: Collection<int> {
-    fn first(): int {
+    func first(): int {
         return 7;
     }
 }
 
-fn head(seq: Sequence<int>): int {
+func head(seq: Sequence<int>): int {
     return seq.first();
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let bag: IntBag = IntBag{};
     if head(bag) == 7 {
         puts(&"generic spec open parent ok");

@@ -1,16 +1,16 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
 spec Eq<T> {
-    fn same(other: T): bool;
+    func same(other: T): bool;
 }
 
 type Key: Eq<Key> {
     var id: int;
 
-    fn same(other: Key): bool {
+    func same(other: Key): bool {
         return self.id == other.id;
     }
 }
@@ -19,16 +19,16 @@ type MiniMap<K: Eq<K>, V> {
     var key: K;
     var value: V;
 
-    fn put(key: K, value: V) {
+    func put(key: K, value: V) {
         self.key = key;
         self.value = value;
     }
 
-    fn hasKey(key: K): bool {
+    func hasKey(key: K): bool {
         return key.same(self.key);
     }
 
-    fn getValue(key: K): V {
+    func getValue(key: K): V {
         if self.hasKey(key) {
             return self.value;
         }
@@ -36,7 +36,7 @@ type MiniMap<K: Eq<K>, V> {
     }
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let key: Key = Key{id: 7};
     let map: MiniMap<Key, string> = MiniMap<Key, string>();
     map.put(key, "self constraint ok");

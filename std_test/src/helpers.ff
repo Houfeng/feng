@@ -1,35 +1,35 @@
-mod std_test;
+module std_test;
 
-use std;
-
-@cdecl("libc")
-extern fn write(fd: int, buf: string*, count: long): long;
+import std;
 
 @cdecl("libc")
-extern fn pipe(fds: int*): int;
+extern func write(fd: int, buf: string*, count: long): long;
 
 @cdecl("libc")
-extern fn dup2(from: int, to: int): int;
+extern func pipe(fds: int*): int;
 
 @cdecl("libc")
-extern fn close(fd: int): int;
+extern func dup2(from: int, to: int): int;
 
 @cdecl("libc")
-extern fn exit(code: int): void;
+extern func close(fd: int): int;
 
-fn logLine(text: string) {
+@cdecl("libc")
+extern func exit(code: int): void;
+
+func logLine(text: string) {
   let newline = "\n";
 
   write(2, &text, text.length());
   write(2, &newline, newline.length());
 }
 
-fn failNow(name: string) {
+func failNow(name: string) {
   logLine("FAIL: " + name);
   exit(1);
 }
 
-pu fn check(cond: bool, name: string) {
+open func check(cond: bool, name: string) {
   if cond {
     logLine("ok: " + name);
   } else {
@@ -37,7 +37,7 @@ pu fn check(cond: bool, name: string) {
   }
 }
 
-pu fn replaceStdin(text: string) {
+open func replaceStdin(text: string) {
   let fds: int[!] = int[: (long)2];
 
   if pipe(&fds) != 0 {

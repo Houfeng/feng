@@ -1,28 +1,28 @@
-mod feng.smoke;
+module feng.smoke;
 
 @cdecl("libc")
-extern fn puts(msg: string*): int;
+extern func puts(msg: string*): int;
 
-fn fail(): string {
+func fail(): string {
     throw "boom";
     return "unreachable";
 }
 
-fn catch_returns(): string {
+func catch_returns(): string {
     let value = try fail() catch ex: string {
         return "catch-return";
     };
     return value;
 }
 
-fn normal_value(): string {
+func normal_value(): string {
     let value = try "normal" catch ex: string {
         "caught";
     };
     return value;
 }
 
-fn main(args: string[]) {
+func main(args: string[]) {
     let first = catch_returns();
     puts(&first);
 

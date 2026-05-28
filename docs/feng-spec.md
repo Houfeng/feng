@@ -24,21 +24,21 @@
 ```feng
 spec Named {
   let name: string;
-  fn display(): string;
+  func display(): string;
 }
 
 spec Identified {
-  fn id(): int;
+  func id(): int;
 }
 
 type User: Named, Identified {
   let name: string;
 
-  fn display(): string {
+  func display(): string {
     return self.name;
   }
 
-  fn id(): int {
+  func id(): int {
     return 1;
   }
 }
@@ -55,7 +55,7 @@ spec Mapper(x: int): int;
 
 ```feng
 spec Bad {
-  pu fn run(): void;
+  open func run(): void;
 }
 ```
 
@@ -64,7 +64,7 @@ spec Bad {
 ```feng
 // 对象形状中的行为签名
 spec Bad {
-  fn process(var x: int): void;
+  func process(var x: int): void;
 }
 
 // 可调用形状
@@ -100,8 +100,8 @@ type Box: Choice {}
 - 由于对象形状 `spec` 不约束物理布局,运行时可采用分发表、witness 表或其他等价机制来满足契约,因此对象形状 `spec` 不构成 ABI 稳定类型,不能进入 C ABI 边界。
 - 目前成员顺序的调整,不是兼容变更。未来增加基于编译期计算出稳定的成员 KEY 进行编译期成员重排的方式优化此问题。
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
-- `spec` 中的成员与行为签名默认公开,且不允许显式添加 `pu` 或 `pr`。
-- 对象形状中的行为签名使用 `fn` 关键字,在 `spec` 中可不写函数体。
+- `spec` 中的成员与行为签名默认公开,且不允许显式添加 `open` 或 `seal`。
+- 对象形状中的行为签名使用 `func` 关键字,在 `spec` 中可不写函数体。
 - object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; 不允许声明构造器或终结器。
 - `spec` 中任何位置的参数均不可使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数; 参数可变性属于实现侧内部约束,不属于 `spec` 契约形状的一部分。
 - `spec` 中的成员类型规则与 `type` 的成员类型引用规则一致: 成员类型必须引用已声明的具名类型,不能在成员类型位置内联匿名类型定义。

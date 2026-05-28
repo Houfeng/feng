@@ -213,6 +213,6 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
 - `match` 表达式 / `match` 语句的发码。
 - `@fixed` 类型与 ABI 桥接。
 - 循环检测器、终结器复活、跨对象 finalize 顺序保证。
-- `extern fn` 中除 `@cdecl("c")` 调用 `printf`/`puts`/`exit` 外的其他形态。
+- `extern func` 中除 `@cdecl("c")` 调用 `printf`/`puts`/`exit` 外的其他形态。
 
 任何 1A 不实现项在 codegen 入口遇到时必须返回明确的 `out_error`，禁止悄悄跳过。
