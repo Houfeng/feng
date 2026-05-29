@@ -44,7 +44,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengAnnotationKind annotation_kind;
 
     ASSERT(feng_keyword_count() == 28U);
-    ASSERT(feng_reserved_word_count() == 10U);
+    ASSERT(feng_reserved_word_count() == 8U);
     ASSERT(feng_builtin_annotation_count() == 8U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
@@ -75,8 +75,8 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(keyword_kind == FENG_TOKEN_KW_OPEN);
     ASSERT(feng_lookup_keyword("seal", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_SEAL);
-    ASSERT(feng_is_reserved_word("pu", 2U));
-    ASSERT(feng_is_reserved_word("pr", 2U));
+    ASSERT(!feng_is_reserved_word("pu", 2U));
+    ASSERT(!feng_is_reserved_word("pr", 2U));
     ASSERT(feng_lookup_keyword("func", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_FUNC);
     ASSERT(feng_is_reserved_word("prop", 4U));
@@ -99,8 +99,6 @@ static void test_reserved_words_rejected(void) {
         "export",
         "fn",
         "mod",
-        "pu",
-        "pr",
         "use",
         "prop"
     };
@@ -163,6 +161,19 @@ static void test_new_keywords_and_builtin_type_names(void) {
     assert_lexeme(&token, "u8");
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "f64");
+    token = next_token(&lexer, FENG_TOKEN_EOF);
+}
+
+static void test_removed_reserved_words_are_identifiers(void) {
+    const char *source = "pu pr";
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "removed_reserved_words.ff");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "pu");
+    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+    assert_lexeme(&token, "pr");
     token = next_token(&lexer, FENG_TOKEN_EOF);
 }
 
@@ -628,6 +639,7 @@ static void test_generic_token_sequences(void) {
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
+    test_removed_reserved_words_are_identifiers();
     test_new_keywords_and_builtin_type_names();
     test_basic_module_tokens();
     test_runtime_annotation_token();

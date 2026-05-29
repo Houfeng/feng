@@ -46,8 +46,6 @@ extern "C" {
     X(EXPORT, "export") \
     X(FN, "fn") \
     X(MOD, "mod") \
-    X(PU, "pu") \
-    X(PR, "pr") \
     X(USE, "use") \
     X(PROP, "prop")
 
