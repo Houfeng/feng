@@ -249,6 +249,13 @@ static bool cgtype_is_aggregate(const CGType *t) {
     return cgtype_value_kind(t) == CG_VK_AGGREGATE;
 }
 
+static bool cgtype_is_by_value_struct(const CGType *t) {
+    CGAggregateFacts facts;
+    return t != NULL &&
+           cg_aggregate_facts(t, &facts) &&
+           facts.value_struct_name != NULL;
+}
+
 static bool cgtype_is_integer(CGTypeKind k) {
     return k == CG_TYPE_I8 || k == CG_TYPE_I16 || k == CG_TYPE_I32 || k == CG_TYPE_I64 ||
            k == CG_TYPE_U8 || k == CG_TYPE_U16 || k == CG_TYPE_U32 || k == CG_TYPE_U64;
@@ -518,6 +525,9 @@ struct UserType {
      * cyclic types the slot stays NULL and any binding/field that would need
      * a default zero of this type is rejected at semantic time. */
     char   *c_default_zero_name;
+    char   *c_aggregate_slots_name;
+    char   *c_aggregate_default_name;
+    char   *c_aggregate_desc_name;
     bool    is_abi_type;
     char   *c_abi_layout_name;
     char   *c_abi_ptr_name;
@@ -551,6 +561,17 @@ struct UserType {
 
 static bool cg_user_type_is_abi(const struct UserType *t) {
     return t != NULL && t->is_abi_type;
+}
+
+static bool cg_user_type_is_tuple(const struct UserType *t) {
+    return t != NULL &&
+           t->decl != NULL &&
+           t->decl->kind == FENG_DECL_TYPE &&
+           t->decl->as.type_decl.is_tuple;
+}
+
+static bool cg_type_is_tuple_user(const CGType *t) {
+    return t != NULL && t->kind == CG_TYPE_OBJECT && cg_user_type_is_tuple(t->user);
 }
 
 /* Spec registry. Object-form specs lower to by-value fat structs; callable-
@@ -710,13 +731,13 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         buf_append_cstr(b, " *");
         return;
     }
-    if (t && t->kind == CG_TYPE_OBJECT && t->user) {
-        buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
-        return;
-    }
     CGAggregateFacts aggregate_facts;
     if (t && cg_aggregate_facts(t, &aggregate_facts) && aggregate_facts.value_struct_name) {
         buf_append_fmt(b, "struct %s", aggregate_facts.value_struct_name);
+        return;
+    }
+    if (t && t->kind == CG_TYPE_OBJECT && t->user) {
+        buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
         return;
     }
     if (t && t->kind == CG_TYPE_CALLABLE && t->user_spec) {
@@ -1111,6 +1132,10 @@ static void er_free(ExprResult *r);
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_tuple_literal_typed(CG *cg,
+                                        const FengExpr *e,
+                                        const CGType *expected_type,
+                                        ExprResult *out);
 static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
@@ -2313,6 +2338,17 @@ static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
         case FENG_EXPR_ARRAY_LITERAL:
             for (size_t i = 0; i < expr->as.array_literal.count; ++i) {
                 if (!cg_collect_capture_requirements_in_expr(expr->as.array_literal.items[i],
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (size_t i = 0; i < expr->as.tuple_literal.count; ++i) {
+                if (!cg_collect_capture_requirements_in_expr(expr->as.tuple_literal.items[i],
                                                              out_names,
                                                              out_count,
                                                              out_capacity,
@@ -5054,6 +5090,17 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     Buf zero_name; buf_init(&zero_name);
     buf_append_fmt(&zero_name, "%s__default_zero", t->c_struct_name);
     t->c_default_zero_name = zero_name.data;
+    if (cg_user_type_is_tuple(t)) {
+        Buf slots_name; buf_init(&slots_name);
+        Buf aggregate_default_name; buf_init(&aggregate_default_name);
+        Buf aggregate_desc_name; buf_init(&aggregate_desc_name);
+        buf_append_fmt(&slots_name, "%s__aggregate_slots", t->c_struct_name);
+        buf_append_fmt(&aggregate_default_name, "%s__aggregate_default", t->c_struct_name);
+        buf_append_fmt(&aggregate_desc_name, "%s__aggregate_desc", t->c_struct_name);
+        t->c_aggregate_slots_name = slots_name.data;
+        t->c_aggregate_default_name = aggregate_default_name.data;
+        t->c_aggregate_desc_name = aggregate_desc_name.data;
+    }
     t->is_abi_type = cg_annotations_contain_kind(decl->annotations,
                                                  decl->annotation_count,
                                                  FENG_ANNOTATION_ABI);
@@ -5067,7 +5114,9 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     free(owner_mangle);
     free(base_san);
     buf_free(&symbol);
-    if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name) {
+    if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name ||
+        (cg_user_type_is_tuple(t) &&
+         (!t->c_aggregate_slots_name || !t->c_aggregate_default_name || !t->c_aggregate_desc_name))) {
         return false;
     }
 
@@ -6767,6 +6816,22 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     buf_append_fmt(&d, "FengTypeDesc__%s__%s", cg->module_mangle, san);
     t->c_desc_name = d.data;
 
+    if (cg_user_type_is_tuple(t)) {
+        Buf slots_name; buf_init(&slots_name);
+        Buf aggregate_default_name; buf_init(&aggregate_default_name);
+        Buf aggregate_desc_name; buf_init(&aggregate_desc_name);
+        buf_append_fmt(&slots_name, "%s__aggregate_slots", t->c_struct_name);
+        buf_append_fmt(&aggregate_default_name, "%s__aggregate_default", t->c_struct_name);
+        buf_append_fmt(&aggregate_desc_name, "%s__aggregate_desc", t->c_struct_name);
+        t->c_aggregate_slots_name = slots_name.data;
+        t->c_aggregate_default_name = aggregate_default_name.data;
+        t->c_aggregate_desc_name = aggregate_desc_name.data;
+        if (!t->c_aggregate_slots_name || !t->c_aggregate_default_name || !t->c_aggregate_desc_name) {
+            free(san);
+            return false;
+        }
+    }
+
     /* release_children symbol is materialised lazily in
      * cg_emit_user_type_definition: types without managed fields don't get a
      * function emitted and leave the descriptor slot NULL. */
@@ -8428,6 +8493,252 @@ static void er_init(ExprResult *r) {
     r->owns_ref = false;
 }
 
+static bool cg_tuple_user_has_field_count(const UserType *ut, size_t count) {
+    return cg_user_type_is_tuple(ut) && ut->field_count == count;
+}
+
+static bool cg_emit_tuple_field_value_store(CG *cg,
+                                            const char *tuple_expr,
+                                            const UserField *field,
+                                            ExprResult *value,
+                                            FengToken blame) {
+    if (cg == NULL || tuple_expr == NULL || field == NULL || value == NULL) {
+        return false;
+    }
+
+    if (cgtype_is_managed(field->type)) {
+        if (value->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                           "    %s.%s = %s;\n",
+                           tuple_expr,
+                           field->c_name,
+                           value->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s.%s = %s; feng_retain(%s.%s);\n",
+                           tuple_expr,
+                           field->c_name,
+                           value->c_expr,
+                           tuple_expr,
+                           field->c_name);
+        }
+        return true;
+    }
+
+    if (cgtype_is_aggregate(field->type)) {
+        const char *agg_desc = cg_aggregate_desc_name(field->type);
+        Buf lvalue;
+        bool ok;
+
+        if (agg_desc == NULL) {
+            return cg_fail(cg,
+                           blame,
+                           "codegen: missing aggregate descriptor for tuple field '%s'",
+                           field->feng_name);
+        }
+        buf_init(&lvalue);
+        buf_append_fmt(&lvalue, "%s.%s", tuple_expr, field->c_name);
+        if (lvalue.data == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        buf_append_cstr(cg->cur_body, "    ");
+        ok = cg_append_aggregate_default_init_call(cg->cur_body, field->type, lvalue.data);
+        buf_append_cstr(cg->cur_body, ";\n");
+        if (!ok) {
+            buf_free(&lvalue);
+            return cg_fail(cg,
+                           blame,
+                           "codegen: missing aggregate default-init rule for tuple field '%s'",
+                           field->feng_name);
+        }
+        if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
+            buf_free(&lvalue);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        if (value->owns_ref) {
+            buf_free(&lvalue);
+            return cg_fail(cg, blame, "codegen: internal tuple aggregate ownership state was not materialized");
+        }
+        if (cgtype_is_aggregate(value->type)) {
+            buf_append_fmt(cg->cur_body,
+                           "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+                           lvalue.data,
+                           value->c_expr,
+                           agg_desc);
+        } else {
+            buf_free(&lvalue);
+            return cg_fail(cg, blame, "codegen: tuple aggregate field initializer type mismatch");
+        }
+        buf_free(&lvalue);
+        return true;
+    }
+
+    {
+        char *cty = cg_ctype_dup(field->type);
+
+        if (cty == NULL) {
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+        if (cgtype_is_by_value_struct(field->type)) {
+            buf_append_fmt(cg->cur_body,
+                           "    %s.%s = %s;\n",
+                           tuple_expr,
+                           field->c_name,
+                           value->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s.%s = (%s)(%s);\n",
+                           tuple_expr,
+                           field->c_name,
+                           cty,
+                           value->c_expr);
+        }
+        free(cty);
+    }
+    return true;
+}
+
+static bool cg_emit_tuple_literal_typed(CG *cg,
+                                        const FengExpr *e,
+                                        const CGType *expected_type,
+                                        ExprResult *out) {
+    er_init(out);
+    if (e == NULL || e->kind != FENG_EXPR_TUPLE_LITERAL ||
+        !cg_type_is_tuple_user(expected_type)) {
+        return cg_fail(cg,
+                       e != NULL ? e->token : (FengToken){0},
+                       "codegen: tuple literal requires a named tuple target type");
+    }
+
+    const UserType *ut = expected_type->user;
+    size_t item_count = e->as.tuple_literal.count;
+    if (!cg_tuple_user_has_field_count(ut, item_count)) {
+        return cg_fail(cg,
+                       e->token,
+                       "codegen: tuple literal arity does not match target tuple type '%s'",
+                       ut->feng_name);
+    }
+
+    char *tmp = cg_fresh_temp(cg, "_tuple");
+    char *cty = cg_ctype_dup(expected_type);
+    if (tmp == NULL || cty == NULL) {
+        free(tmp);
+        free(cty);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
+    free(cty);
+
+    for (size_t i = 0; i < item_count; ++i) {
+        ExprResult value;
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            e->as.tuple_literal.items[i],
+                                            ut->fields[i].type,
+                                            &value)) {
+            free(tmp);
+            return false;
+        }
+        if (!cg_emit_tuple_field_value_store(cg, tmp, &ut->fields[i], &value, e->token)) {
+            er_free(&value);
+            free(tmp);
+            return false;
+        }
+        er_free(&value);
+    }
+
+    out->c_expr = strdup(tmp);
+    out->type = cgtype_clone(expected_type);
+    out->owns_ref = cgtype_is_aggregate(expected_type);
+    free(tmp);
+    return out->c_expr != NULL && out->type != NULL;
+}
+
+static bool cg_emit_tuple_cast_to_type(CG *cg,
+                                       const FengExpr *e,
+                                       const CGType *target,
+                                       ExprResult *out) {
+    ExprResult source;
+
+    er_init(out);
+    if (e->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return cg_emit_tuple_literal_typed(cg, e, target, out);
+    }
+    if (!cg_emit_expr(cg, e, &source)) {
+        return false;
+    }
+    if (!cg_type_is_tuple_user(source.type)) {
+        er_free(&source);
+        return cg_fail(cg, e->token, "codegen: tuple cast source must be a tuple value");
+    }
+    if (source.type->user == target->user) {
+        cgtype_free(source.type);
+        source.type = cgtype_clone(target);
+        *out = source;
+        return out->type != NULL;
+    }
+    if (!cg_tuple_user_has_field_count(source.type->user, target->user->field_count)) {
+        er_free(&source);
+        return cg_fail(cg, e->token, "codegen: tuple cast arity mismatch");
+    }
+
+    if (cg_materialize_to_local(cg, &source, "_tuple_src") == NULL) {
+        er_free(&source);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+
+    char *tmp = cg_fresh_temp(cg, "_tuple_cast");
+    char *cty = cg_ctype_dup(target);
+    if (tmp == NULL || cty == NULL) {
+        free(tmp);
+        free(cty);
+        er_free(&source);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
+    free(cty);
+
+    for (size_t i = 0; i < target->user->field_count; ++i) {
+        ExprResult field_value;
+        Buf field_expr;
+
+        er_init(&field_value);
+        buf_init(&field_expr);
+        buf_append_fmt(&field_expr,
+                       "%s.%s",
+                       source.c_expr,
+                       source.type->user->fields[i].c_name);
+        field_value.c_expr = field_expr.data;
+        field_value.type = cgtype_clone(target->user->fields[i].type);
+        field_value.owns_ref = false;
+        if (field_value.c_expr == NULL || field_value.type == NULL) {
+            er_free(&field_value);
+            free(tmp);
+            er_free(&source);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+        if (!cg_emit_tuple_field_value_store(cg,
+                                             tmp,
+                                             &target->user->fields[i],
+                                             &field_value,
+                                             e->token)) {
+            er_free(&field_value);
+            free(tmp);
+            er_free(&source);
+            return false;
+        }
+        er_free(&field_value);
+    }
+
+    out->c_expr = strdup(tmp);
+    out->type = cgtype_clone(target);
+    out->owns_ref = cgtype_is_aggregate(target);
+    free(tmp);
+    er_free(&source);
+    return out->c_expr != NULL && out->type != NULL;
+}
+
 static bool cg_emit_imported_binding_expr(CG *cg,
                                           const FengDecl *decl,
                                           ExprResult *out) {
@@ -8704,8 +9015,13 @@ static bool cg_emit_return_expr_result(CG *cg,
             er_free(r);
             return cg_fail(cg, blame, "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
-                       cty, tmp, cty, r->c_expr);
+        if (cgtype_is_by_value_struct(r->type)) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                           cty, tmp, r->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                           cty, tmp, cty, r->c_expr);
+        }
         free(cty);
         cg_release_through(cg, NULL);
         cg_emit_return_control_cleanup(cg);
@@ -10330,6 +10646,9 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
                            e->token,
                            "codegen: explicit generic target must be consumed before emission");
         case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
+        case FENG_EXPR_TUPLE_LITERAL:
+            return cg_fail(cg, e->token,
+                "codegen: tuple literal requires an explicit named tuple target type");
         case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
         case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
@@ -10459,9 +10778,15 @@ static bool cg_pack_variadic_args(CG *cg,
                 "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
                 slots_tmp, i, items[i].c_expr, slots_tmp, i);
         } else {
-            buf_append_fmt(cg->cur_body,
-                "    %s[%zu] = (%s)(%s);\n",
-                slots_tmp, i, elem_cty, items[i].c_expr);
+            if (cgtype_is_by_value_struct(elem)) {
+                buf_append_fmt(cg->cur_body,
+                    "    %s[%zu] = %s;\n",
+                    slots_tmp, i, items[i].c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    %s[%zu] = (%s)(%s);\n",
+                    slots_tmp, i, elem_cty, items[i].c_expr);
+            }
         }
     }
 
@@ -13091,6 +13416,31 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&recv);
         return out->c_expr && out->type;
     }
+    if (cg_type_is_tuple_user(recv.type)) {
+        const UserType *ut = recv.type->user;
+        const UserField *uf = cg_user_type_field(ut,
+            e->as.member.member.data, e->as.member.member.length);
+        if (!uf) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                "codegen: tuple type '%s' has no field '%.*s'",
+                ut->feng_name,
+                (int)e->as.member.member.length,
+                e->as.member.member.data);
+        }
+        if (cgtype_is_aggregate(recv.type) && recv.owns_ref &&
+            cg_materialize_to_local(cg, &recv, "_tuple") == NULL) {
+            er_free(&recv);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(%s).%s", recv.c_expr, uf->c_name);
+        out->c_expr = b.data;
+        out->type = cgtype_clone(uf->type);
+        out->owns_ref = false;
+        er_free(&recv);
+        return out->c_expr && out->type;
+    }
     if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
         er_free(&recv);
         return cg_fail(cg, e->token,
@@ -13489,7 +13839,9 @@ static char *cg_array_element_descriptor(const CGType *elem) {
         case CG_TYPE_STRING: buf_append_cstr(&b, "&feng_string_descriptor"); break;
         case CG_TYPE_ARRAY:  buf_append_cstr(&b, "&feng_array_descriptor"); break;
         case CG_TYPE_OBJECT:
-            if (elem->user) {
+            if (cg_type_is_tuple_user(elem)) {
+                buf_append_cstr(&b, "NULL");
+            } else if (elem->user) {
                 buf_append_fmt(&b, "&%s", elem->user->c_desc_name);
             } else {
                 buf_append_cstr(&b, "NULL");
@@ -13691,9 +14043,15 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
                 "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
                 slots_tmp, i, items[i].c_expr, slots_tmp, i);
         } else {
-            buf_append_fmt(cg->cur_body,
-                "    %s[%zu] = (%s)(%s);\n",
-                slots_tmp, i, elem_cty, items[i].c_expr);
+            if (cgtype_is_by_value_struct(elem)) {
+                buf_append_fmt(cg->cur_body,
+                    "    %s[%zu] = %s;\n",
+                    slots_tmp, i, items[i].c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    %s[%zu] = (%s)(%s);\n",
+                    slots_tmp, i, elem_cty, items[i].c_expr);
+            }
         }
     }
     free(slots_tmp); free(elem_cty); free(desc_expr);
@@ -13883,6 +14241,11 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     CGType *target = NULL;
     if (!cg_resolve_type(cg, e->as.cast.type, &e->token, &target)) return false;
+    if (cg_type_is_tuple_user(target)) {
+        bool ok = cg_emit_tuple_cast_to_type(cg, e->as.cast.value, target, out);
+        cgtype_free(target);
+        return ok;
+    }
     if (target->kind == CG_TYPE_CALLABLE) {
         ExprResult inner;
         const UserSpec *target_spec = target->user_spec;
@@ -15430,6 +15793,10 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
                     "codegen: cannot default-zero an unresolved object type");
             }
+            if (cg_user_type_is_tuple(type->user)) {
+                buf_append_fmt(&b, "(struct %s){0}", type->user->c_struct_name);
+                break;
+            }
             if (!cg_user_type_is_default_zero_safe(cg, type->user)) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
@@ -15457,6 +15824,10 @@ static bool cg_emit_expr_for_expected_type(CG *cg,
         expr->kind == FENG_EXPR_ARRAY_LITERAL) {
         return cg_emit_array_literal_typed(cg, expr, expected_type->element, out);
     }
+    if (expected_type != NULL && cg_type_is_tuple_user(expected_type) &&
+        expr != NULL && expr->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return cg_emit_tuple_literal_typed(cg, expr, expected_type, out);
+    }
     return cg_emit_expr(cg, expr, out);
 }
 
@@ -15465,6 +15836,208 @@ static bool cg_emit_initializer_for_declared_type(CG *cg,
                                                   const CGType *decl_type,
                                                   ExprResult *out) {
     return cg_emit_expr_for_expected_type(cg, initializer, decl_type, out);
+}
+
+static bool cg_emit_initialized_local_binding(CG *cg,
+                                              FengSlice name,
+                                              const CGType *decl_type,
+                                              ExprResult *init,
+                                              FengToken token) {
+    if (name.data == NULL || name.length == 0U || decl_type == NULL || init == NULL) {
+        return false;
+    }
+    if (cg_current_callable_captures_name(cg, name.data, name.length)) {
+        return cg_scope_bind_capture_cell(cg,
+                                          cg->cur_scope,
+                                          name,
+                                          decl_type,
+                                          token,
+                                          init->c_expr,
+                                          true,
+                                          init->owns_ref,
+                                          true,
+                                          FENG_CODEGEN_MAPING_VARIABLE_BINDING);
+    }
+
+    char *cname = cg_local_cname(cg, name.data, name.length);
+    char *cty = cg_ctype_dup(decl_type);
+    if (cname == NULL || cty == NULL) {
+        free(cname);
+        free(cty);
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+
+    if (!cg_emit_line_directive_force(cg, token)) {
+        free(cname);
+        free(cty);
+        return false;
+    }
+    if (cgtype_is_managed(decl_type)) {
+        if (init->owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s %s = %s; feng_retain(%s);\n",
+                           cty,
+                           cname,
+                           init->c_expr,
+                           cname);
+        }
+    } else if (cgtype_is_aggregate(decl_type)) {
+        if (init->owns_ref) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init->c_expr);
+        } else {
+            const char *desc = cg_aggregate_desc_name(decl_type);
+            if (desc == NULL) {
+                free(cname);
+                free(cty);
+                return cg_fail(cg, token, "codegen: missing aggregate descriptor for local binding");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                           cty,
+                           cname,
+                           init->c_expr,
+                           cname,
+                           desc);
+        }
+    } else {
+        if (cgtype_is_by_value_struct(decl_type)) {
+            buf_append_fmt(cg->cur_body,
+                           "    %s %s = %s;\n",
+                           cty,
+                           cname,
+                           init->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s %s = (%s)(%s);\n",
+                           cty,
+                           cname,
+                           cty,
+                           init->c_expr);
+        }
+    }
+    free(cty);
+
+    CGType *local_type = cgtype_clone(decl_type);
+    if (local_type == NULL ||
+        !scope_add(cg->cur_scope, "_unused_internal_name__", cname, local_type, false)) {
+        cgtype_free(local_type);
+        free(cname);
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
+    free(added->name);
+    added->name = strndup(name.data, name.length);
+    if (added->name == NULL) {
+        free(cname);
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    if (!cg_debug_add_variable_record_slice_cgtype(cg,
+                                                   cname,
+                                                   name,
+                                                   NULL,
+                                                   decl_type,
+                                                   FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+                                                   token)) {
+        free(cname);
+        return false;
+    }
+    if (cgtype_is_managed(decl_type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, cname);
+    } else if (cgtype_is_aggregate(decl_type)) {
+        cg_emit_cleanup_push_for_aggregate_local(cg, cname, decl_type);
+    }
+    free(cname);
+    return true;
+}
+
+static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
+    const FengBinding *binding = &stmt->as.binding;
+
+    if (binding->initializer == NULL) {
+        return cg_fail(cg, binding->token,
+                       "codegen: destructuring binding requires an initializer");
+    }
+    if (binding->initializer->kind == FENG_EXPR_TUPLE_LITERAL) {
+        const FengExpr *tuple = binding->initializer;
+        if (tuple->as.tuple_literal.count != binding->destructure_count) {
+            return cg_fail(cg, binding->token,
+                           "codegen: destructuring arity mismatch");
+        }
+        for (size_t i = 0; i < binding->destructure_count; ++i) {
+            FengSlice name = binding->destructure_names[i];
+            if (name.length == 0U) {
+                continue;
+            }
+            ExprResult item;
+            if (!cg_emit_expr(cg, tuple->as.tuple_literal.items[i], &item)) {
+                return false;
+            }
+            if (!cg_emit_initialized_local_binding(cg,
+                                                   name,
+                                                   item.type,
+                                                   &item,
+                                                   binding->token)) {
+                er_free(&item);
+                return false;
+            }
+            er_free(&item);
+        }
+        return true;
+    }
+
+    ExprResult source;
+    if (!cg_emit_expr(cg, binding->initializer, &source)) {
+        return false;
+    }
+    if (!cg_type_is_tuple_user(source.type)) {
+        er_free(&source);
+        return cg_fail(cg, binding->token,
+                       "codegen: destructuring source must be a tuple value");
+    }
+    if (source.type->user->field_count != binding->destructure_count) {
+        er_free(&source);
+        return cg_fail(cg, binding->token,
+                       "codegen: destructuring arity mismatch");
+    }
+    if (cg_materialize_to_local(cg, &source, "_tuple") == NULL) {
+        er_free(&source);
+        return cg_fail(cg, binding->token, "codegen: out of memory");
+    }
+    for (size_t i = 0; i < binding->destructure_count; ++i) {
+        FengSlice name = binding->destructure_names[i];
+        if (name.length == 0U) {
+            continue;
+        }
+        const UserField *field = &source.type->user->fields[i];
+        ExprResult field_value;
+        Buf field_expr;
+
+        er_init(&field_value);
+        buf_init(&field_expr);
+        buf_append_fmt(&field_expr, "%s.%s", source.c_expr, field->c_name);
+        field_value.c_expr = field_expr.data;
+        field_value.type = cgtype_clone(field->type);
+        field_value.owns_ref = false;
+        if (field_value.c_expr == NULL || field_value.type == NULL) {
+            er_free(&field_value);
+            er_free(&source);
+            return cg_fail(cg, binding->token, "codegen: out of memory");
+        }
+        if (!cg_emit_initialized_local_binding(cg,
+                                               name,
+                                               field->type,
+                                               &field_value,
+                                               binding->token)) {
+            er_free(&field_value);
+            er_free(&source);
+            return false;
+        }
+        er_free(&field_value);
+    }
+    er_free(&source);
+    return true;
 }
 
 /* Emit a write into an object field, either as first construction-time
@@ -15526,9 +16099,15 @@ static bool cg_emit_user_field_value_store(CG *cg,
         if (cty == NULL) {
             return cg_fail(cg, blame, "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body,
-            "    %s->%s = (%s)(%s);\n",
-            object_expr, uf->c_name, cty, value->c_expr);
+        if (cgtype_is_by_value_struct(uf->type)) {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = %s;\n",
+                object_expr, uf->c_name, value->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = (%s)(%s);\n",
+                object_expr, uf->c_name, cty, value->c_expr);
+        }
         free(cty);
     }
     return true;
@@ -15581,9 +16160,15 @@ static bool cg_emit_user_field_default_value(CG *cg,
             free(def_expr);
             return cg_fail(cg, blame, "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body,
-            "    %s->%s = (%s)(%s);\n",
-            object_expr, uf->c_name, cty, def_expr);
+        if (cgtype_is_by_value_struct(uf->type)) {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = %s;\n",
+                object_expr, uf->c_name, def_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    %s->%s = (%s)(%s);\n",
+                object_expr, uf->c_name, cty, def_expr);
+        }
         free(cty);
         free(def_expr);
     }
@@ -15722,6 +16307,9 @@ cleanup:
 
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     const FengBinding *b = &stmt->as.binding;
+    if (b->is_destructure) {
+        return cg_emit_destructure_binding(cg, stmt);
+    }
     /* Determine type: explicit annotation else inferred from initializer. */
     CGType *decl_type = NULL;
     if (b->type) {
@@ -15816,8 +16404,13 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                cty, cname, init.c_expr, cname, desc);
             }
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
-                           cty, cname, cty, init.c_expr);
+            if (cgtype_is_by_value_struct(decl_type)) {
+                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                               cty, cname, init.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                               cty, cname, cty, init.c_expr);
+            }
         }
         er_free(&init);
     } else {
@@ -15986,7 +16579,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return true;
         }
         ExprResult v;
-        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            stmt->as.assign.value,
+                                            recv.type->element,
+                                            &v)) {
             free(idx_tmp); er_free(&ix); er_free(&recv); return false;
         }
         char *elem_cty = cg_ctype_dup(recv.type->element);
@@ -16187,7 +16783,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 {
                     ExprResult v;
 
-                    if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+                    if (!cg_emit_expr_for_expected_type(cg,
+                                                        stmt->as.assign.value,
+                                                        binding->type,
+                                                        &v)) {
                         return false;
                     }
                     if (cgtype_is_managed(binding->type)) {
@@ -16384,7 +16983,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return true;
             }
             ExprResult v;
-            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                stmt->as.assign.value,
+                                                field_type,
+                                                &v)) {
                 free(field_addr); free(field_cty);
                 cgtype_free(field_type); er_free(&recv);
                 return false;
@@ -16517,7 +17119,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return true;
             }
             ExprResult v;
-            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                stmt->as.assign.value,
+                                                sm->type,
+                                                &v)) {
                 free(subject_expr);
                 er_free(&recv);
                 return false;
@@ -16620,7 +17225,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return true;
             }
             ExprResult v;
-            if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                stmt->as.assign.value,
+                                                sm->type,
+                                                &v)) {
                 er_free(&recv); return false;
             }
             /* Setter takes ownership semantics inside the thunk (managed →
@@ -16721,7 +17329,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return true;
         }
         ExprResult v;
-        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            stmt->as.assign.value,
+                                            uf->type,
+                                            &v)) {
             er_free(&recv); return false;
         }
         if (cgtype_is_managed(uf->type)) {
@@ -16734,10 +17345,31 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "    feng_assign((void**)&(%s)->%s, %s);\n",
                     recv.c_expr, uf->c_name, v.c_expr);
             }
+        } else if (cgtype_is_aggregate(uf->type)) {
+            const char *desc = cg_aggregate_desc_name(uf->type);
+            if (desc == NULL) {
+                er_free(&v);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                               "codegen: missing aggregate descriptor for member assignment");
+            }
+            if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+                er_free(&v);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token, "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&(%s)->%s, &%s, &%s);\n",
+                recv.c_expr, uf->c_name, v.c_expr, desc);
         } else {
             char *cty = cg_ctype_dup(uf->type);
-            buf_append_fmt(cg->cur_body, "    (%s)->%s = (%s)(%s);\n",
-                           recv.c_expr, uf->c_name, cty, v.c_expr);
+            if (cgtype_is_by_value_struct(uf->type)) {
+                buf_append_fmt(cg->cur_body, "    (%s)->%s = %s;\n",
+                               recv.c_expr, uf->c_name, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body, "    (%s)->%s = (%s)(%s);\n",
+                               recv.c_expr, uf->c_name, cty, v.c_expr);
+            }
             free(cty);
         }
         er_free(&v);
@@ -16822,7 +17454,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return true;
         }
         ExprResult v;
-        if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
+        if (!cg_emit_expr_for_expected_type(cg,
+                            stmt->as.assign.value,
+                            mb->type,
+                            &v)) return false;
         if (cgtype_is_managed(mb->type)) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
@@ -16832,10 +17467,29 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 buf_append_fmt(cg->cur_body,
                     "    feng_assign((void**)&%s, %s);\n", mb->c_name, v.c_expr);
             }
+        } else if (cgtype_is_aggregate(mb->type)) {
+            const char *desc = cg_aggregate_desc_name(mb->type);
+            if (desc == NULL) {
+                er_free(&v);
+                return cg_fail(cg, stmt->token,
+                               "codegen: missing aggregate descriptor for module assignment");
+            }
+            if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+                er_free(&v);
+                return cg_fail(cg, stmt->token, "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+                mb->c_name, v.c_expr, desc);
         } else {
             char *cty = cg_ctype_dup(mb->type);
-            buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
-                           mb->c_name, cty, v.c_expr);
+            if (cgtype_is_by_value_struct(mb->type)) {
+                buf_append_fmt(cg->cur_body, "    %s = %s;\n",
+                               mb->c_name, v.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                               mb->c_name, cty, v.c_expr);
+            }
             free(cty);
         }
         er_free(&v);
@@ -16890,7 +17544,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         return true;
     }
     ExprResult v;
-    if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) return false;
+    if (!cg_emit_expr_for_expected_type(cg,
+                                        stmt->as.assign.value,
+                                        l->type,
+                                        &v)) return false;
     if (cgtype_is_managed(l->type)) {
         if (v.owns_ref) {
             /* Release old, take +1. */
@@ -16901,10 +17558,29 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    feng_assign((void**)&%s, %s);\n", l->c_name, v.c_expr);
         }
+    } else if (cgtype_is_aggregate(l->type)) {
+        const char *desc = cg_aggregate_desc_name(l->type);
+        if (desc == NULL) {
+            er_free(&v);
+            return cg_fail(cg, stmt->token,
+                           "codegen: missing aggregate descriptor for local assignment");
+        }
+        if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+            er_free(&v);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+            l->c_name, v.c_expr, desc);
     } else {
         char *cty = cg_ctype_dup(l->type);
-        buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
-                       l->c_name, cty, v.c_expr);
+        if (cgtype_is_by_value_struct(l->type)) {
+            buf_append_fmt(cg->cur_body, "    %s = %s;\n",
+                           l->c_name, v.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
+                           l->c_name, cty, v.c_expr);
+        }
         free(cty);
     }
     er_free(&v);
@@ -16936,7 +17612,10 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
             "codegen: non-void function must return a value");
     }
     ExprResult r;
-    if (!cg_emit_expr(cg, stmt->as.return_value, &r)) return false;
+    if (!cg_emit_expr_for_expected_type(cg,
+                                        stmt->as.return_value,
+                                        cg->cur_return_type,
+                                        &r)) return false;
     /* Non-managed: emit cleanup then return. Managed: must transfer +1 out:
      * - if r.owns_ref, store in temp, release scopes, return temp.
      * - else (borrowed), retain, release scopes, return retained. */
@@ -16999,8 +17678,13 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
     } else {
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
-        buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
-                       cty, tmp, cty, r.c_expr);
+        if (cgtype_is_by_value_struct(r.type)) {
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                           cty, tmp, r.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                           cty, tmp, cty, r.c_expr);
+        }
         free(cty);
         cg_release_through(cg, NULL);
         cg_emit_return_control_cleanup(cg);
@@ -17695,6 +18379,8 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     /* Materialise managed +1 results into a temp so they're released. */
     if (cgtype_is_managed(r.type) && r.owns_ref) {
         cg_materialize_to_local(cg, &r, "_t");
+    } else if (cgtype_is_aggregate(r.type) && r.owns_ref) {
+        cg_materialize_to_local(cg, &r, "_t");
     } else {
         buf_append_fmt(cg->cur_body, "    (void)(%s);\n", r.c_expr);
     }
@@ -18003,7 +18689,11 @@ static void cg_emit_user_method_proto(Buf *out,
     cg_emit_c_type(out, m->return_type);
     buf_append_fmt(out, " %s(", m->c_name);
     if (!is_static_method) {
-        buf_append_fmt(out, "struct %s *self", t->c_struct_name);
+        if (cg_user_type_is_tuple(t)) {
+            buf_append_fmt(out, "struct %s self", t->c_struct_name);
+        } else {
+            buf_append_fmt(out, "struct %s *self", t->c_struct_name);
+        }
         has_param = true;
     }
     for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
@@ -18470,7 +19160,10 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             "codegen: non-void function must return a value");
     }
     ExprResult r;
-    if (!cg_emit_expr(cg, stmt->as.return_value, &r)) return false;
+    if (!cg_emit_expr_for_expected_type(cg,
+                                        stmt->as.return_value,
+                                        cg->cur_return_type,
+                                        &r)) return false;
 
     if (cg->cur_return_type->kind == CG_TYPE_GENERIC_PARAM) {
         /* Erased return type T: dispatch via the descriptor for T. */
@@ -21649,6 +22342,15 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 }
             }
             return true;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (size_t i = 0; i < expr->as.tuple_literal.count; ++i) {
+                if (!cg_collect_generic_instances_from_expr(cg,
+                                                           expr->as.tuple_literal.items[i],
+                                                           scope)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_EXPR_OBJECT_LITERAL:
             if (!cg_collect_generic_instances_from_expr(cg, expr->as.object_literal.target, scope)) {
                 return false;
@@ -22093,6 +22795,12 @@ static bool cg_pass_register_module_bindings(CG *cg,
         if (cgtype_is_managed(mb->type)) {
             buf_append_fmt(&cg->statics,
                            "%s%s %s = NULL;\n",
+                           mb->exports_public_surface ? "" : "static ",
+                           cty,
+                           mb->c_name);
+        } else if (cgtype_is_aggregate(mb->type)) {
+            buf_append_fmt(&cg->statics,
+                           "%s%s %s = {0};\n",
                            mb->exports_public_surface ? "" : "static ",
                            cty,
                            mb->c_name);
@@ -22633,6 +23341,16 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
         /* No initializer: assign the type's default zero. For managed
          * types the slot now owns a +1 reference (the static was zero-initialised
          * to NULL/0 in pass 2b). */
+        if (cgtype_is_aggregate(mb->type)) {
+            buf_append_cstr(cg->cur_body, "    ");
+            if (!cg_append_aggregate_default_init_call(cg->cur_body, mb->type, mb->c_name)) {
+                return cg_fail(cg,
+                               mb->binding->token,
+                               "codegen: missing aggregate default-init rule for module binding");
+            }
+            buf_append_cstr(cg->cur_body, ";\n");
+            return true;
+        }
         char *def_expr = NULL;
         if (!cg_default_value_expr(cg, mb->type, &mb->binding->token, &def_expr)) {
             return false;
@@ -22675,6 +23393,26 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
                 "        %s = %s; feng_retain(%s);\n",
                 mb->c_name, r.c_expr, mb->c_name);
         }
+    } else if (cgtype_is_aggregate(mb->type)) {
+        const char *desc = cg_aggregate_desc_name(mb->type);
+
+        if (desc == NULL) {
+            er_free(&r);
+            cg->cur_scope = NULL; scope_pop_free(fn_scope);
+            cg->cur_body = NULL;
+            return cg_fail(cg,
+                           mb->binding->token,
+                           "codegen: missing aggregate descriptor for module binding");
+        }
+        if (r.owns_ref && cg_materialize_to_local(cg, &r, "_t") == NULL) {
+            er_free(&r);
+            cg->cur_scope = NULL; scope_pop_free(fn_scope);
+            cg->cur_body = NULL;
+            return cg_fail(cg, mb->binding->token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "        feng_aggregate_assign(&%s, &%s, &%s);\n",
+            mb->c_name, r.c_expr, desc);
     } else {
         char *cty = cg_ctype_dup(mb->type);
         buf_append_fmt(cg->cur_body, "        %s = (%s)(%s);\n",
@@ -22923,6 +23661,12 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
         if (cgtype_is_managed(mb->type)) {
             buf_append_fmt(b, "    feng_release(%s); %s = NULL;\n",
                            mb->c_name, mb->c_name);
+        } else if (cgtype_is_aggregate(mb->type)) {
+            const char *desc = cg_aggregate_desc_name(mb->type);
+            if (desc != NULL) {
+                buf_append_fmt(b, "    feng_aggregate_release(&%s, &%s);\n",
+                               mb->c_name, desc);
+            }
         }
     }
     buf_append_cstr(b, "    feng_release(_args);\n");
@@ -22987,6 +23731,42 @@ static void cg_spec_aggregate_emit_cleanup_zero(Buf *out,
     buf_append_fmt(out, "%s.subject = NULL;", cname);
 }
 
+static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
+                                                      const char *field_base_offsetof_expr,
+                                                      const CGType *type);
+static void cg_tuple_aggregate_emit_cleanup_push(Buf *out,
+                                                 const char *cname,
+                                                 const CGType *type);
+static void cg_tuple_aggregate_emit_cleanup_zero(Buf *out,
+                                                 const char *cname,
+                                                 const CGType *type);
+
+static size_t cg_tuple_aggregate_flattened_pointer_slot_count(const UserType *tuple_type) {
+    size_t count = 0U;
+
+    if (!cg_user_type_is_tuple(tuple_type)) {
+        return 0U;
+    }
+    for (size_t i = 0; i < tuple_type->field_count; ++i) {
+        const CGType *field_type = tuple_type->fields[i].type;
+        switch (cgtype_value_kind(field_type)) {
+            case CG_VK_TRIVIAL:
+                break;
+            case CG_VK_MANAGED_POINTER:
+                count++;
+                break;
+            case CG_VK_AGGREGATE: {
+                CGAggregateFacts nested = {0};
+                if (cg_aggregate_facts(field_type, &nested)) {
+                    count += nested.pointer_slot_count;
+                }
+                break;
+            }
+        }
+    }
+    return count;
+}
+
 static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
     CGAggregateFacts facts = {0};
     if (!t) {
@@ -23008,6 +23788,30 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
             }
             facts.emit_cleanup_push = cg_spec_aggregate_emit_cleanup_push;
             facts.emit_cleanup_zero = cg_spec_aggregate_emit_cleanup_zero;
+            break;
+        case CG_TYPE_OBJECT:
+            if (!cg_type_is_tuple_user(t)) {
+                return false;
+            }
+            {
+                size_t tuple_slot_count = cg_tuple_aggregate_flattened_pointer_slot_count(t->user);
+
+                facts.value_kind = tuple_slot_count > 0U
+                                       ? CG_VK_AGGREGATE
+                                       : CG_VK_TRIVIAL;
+                facts.descriptor_name = t->user->c_aggregate_desc_name;
+                facts.value_struct_name = t->user->c_struct_name;
+                facts.runtime_type_kind_name = "FENG_RUNTIME_TYPE_OBJECT";
+                facts.pointer_slot_count = tuple_slot_count;
+                facts.default_init_kind = tuple_slot_count > 0U
+                                              ? CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
+                                              : CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES;
+                if (facts.value_struct_name != NULL) {
+                    facts.emit_pointer_slot_rows = cg_tuple_aggregate_emit_pointer_slot_rows;
+                }
+                facts.emit_cleanup_push = cg_tuple_aggregate_emit_cleanup_push;
+                facts.emit_cleanup_zero = cg_tuple_aggregate_emit_cleanup_zero;
+            }
             break;
         default:
             return false;
@@ -23073,6 +23877,173 @@ static void cg_emit_aggregate_pointer_slot_rows(Buf *td,
     if (cg_aggregate_facts(t, &facts) && facts.emit_pointer_slot_rows != NULL) {
         facts.emit_pointer_slot_rows(td, field_base_offsetof_expr, t);
     }
+}
+
+static const char *cg_managed_pointer_static_desc_expr(const CGType *type) {
+    if (type == NULL) {
+        return "NULL";
+    }
+    switch (type->kind) {
+        case CG_TYPE_STRING:
+            return "&feng_string_descriptor";
+        case CG_TYPE_ARRAY:
+            return "&feng_array_descriptor";
+        case CG_TYPE_OBJECT:
+            if (cg_type_is_tuple_user(type)) {
+                return "NULL";
+            }
+            if (type->user != NULL && type->user->c_desc_name != NULL) {
+                return type->user->c_desc_name;
+            }
+            return "NULL";
+        default:
+            return "NULL";
+    }
+}
+
+static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
+                                                      const char *field_base_offsetof_expr,
+                                                      const CGType *type) {
+    if (!cg_type_is_tuple_user(type)) {
+        return;
+    }
+    const UserType *tuple_type = type->user;
+    for (size_t i = 0; i < tuple_type->field_count; ++i) {
+        const UserField *field = &tuple_type->fields[i];
+        switch (cgtype_value_kind(field->type)) {
+            case CG_VK_TRIVIAL:
+                break;
+            case CG_VK_MANAGED_POINTER: {
+                const char *static_desc = cg_managed_pointer_static_desc_expr(field->type);
+                if (static_desc != NULL && static_desc[0] == '&') {
+                    buf_append_fmt(out,
+                        "    { %s + offsetof(struct %s, %s), %s },\n",
+                        field_base_offsetof_expr,
+                        tuple_type->c_struct_name,
+                        field->c_name,
+                        static_desc);
+                } else if (static_desc != NULL && strcmp(static_desc, "NULL") != 0) {
+                    buf_append_fmt(out,
+                        "    { %s + offsetof(struct %s, %s), &%s },\n",
+                        field_base_offsetof_expr,
+                        tuple_type->c_struct_name,
+                        field->c_name,
+                        static_desc);
+                } else {
+                    buf_append_fmt(out,
+                        "    { %s + offsetof(struct %s, %s), NULL },\n",
+                        field_base_offsetof_expr,
+                        tuple_type->c_struct_name,
+                        field->c_name);
+                }
+                break;
+            }
+            case CG_VK_AGGREGATE: {
+                Buf nested_base;
+                buf_init(&nested_base);
+                buf_append_fmt(&nested_base,
+                               "%s + offsetof(struct %s, %s)",
+                               field_base_offsetof_expr,
+                               tuple_type->c_struct_name,
+                               field->c_name);
+                if (nested_base.data != NULL) {
+                    cg_emit_aggregate_pointer_slot_rows(out, nested_base.data, field->type);
+                }
+                buf_free(&nested_base);
+                break;
+            }
+        }
+    }
+}
+
+static void cg_tuple_emit_cleanup_push_slots(Buf *out,
+                                             const char *node_prefix,
+                                             const char *lvalue_expr,
+                                             const CGType *type) {
+    switch (cgtype_value_kind(type)) {
+        case CG_VK_TRIVIAL:
+            return;
+        case CG_VK_MANAGED_POINTER:
+            buf_append_fmt(out,
+                           "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
+                           node_prefix,
+                           node_prefix,
+                           lvalue_expr);
+            return;
+        case CG_VK_AGGREGATE:
+            if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL) {
+                buf_append_fmt(out,
+                               "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s.subject);\n",
+                               node_prefix,
+                               node_prefix,
+                               lvalue_expr);
+                return;
+            }
+            if (cg_type_is_tuple_user(type)) {
+                const UserType *tuple_type = type->user;
+                for (size_t i = 0; i < tuple_type->field_count; ++i) {
+                    Buf child_prefix;
+                    Buf child_lvalue;
+                    buf_init(&child_prefix);
+                    buf_init(&child_lvalue);
+                    buf_append_fmt(&child_prefix, "%s_%zu", node_prefix, i);
+                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, tuple_type->fields[i].c_name);
+                    if (child_prefix.data != NULL && child_lvalue.data != NULL) {
+                        cg_tuple_emit_cleanup_push_slots(out,
+                                                         child_prefix.data,
+                                                         child_lvalue.data,
+                                                         tuple_type->fields[i].type);
+                    }
+                    buf_free(&child_prefix);
+                    buf_free(&child_lvalue);
+                }
+            }
+            return;
+    }
+}
+
+static void cg_tuple_emit_cleanup_zero_slots(Buf *out,
+                                             const char *lvalue_expr,
+                                             const CGType *type) {
+    switch (cgtype_value_kind(type)) {
+        case CG_VK_TRIVIAL:
+            return;
+        case CG_VK_MANAGED_POINTER:
+            buf_append_fmt(out, "%s = NULL; ", lvalue_expr);
+            return;
+        case CG_VK_AGGREGATE:
+            if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL) {
+                buf_append_fmt(out, "%s.subject = NULL; ", lvalue_expr);
+                return;
+            }
+            if (cg_type_is_tuple_user(type)) {
+                const UserType *tuple_type = type->user;
+                for (size_t i = 0; i < tuple_type->field_count; ++i) {
+                    Buf child_lvalue;
+                    buf_init(&child_lvalue);
+                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, tuple_type->fields[i].c_name);
+                    if (child_lvalue.data != NULL) {
+                        cg_tuple_emit_cleanup_zero_slots(out,
+                                                         child_lvalue.data,
+                                                         tuple_type->fields[i].type);
+                    }
+                    buf_free(&child_lvalue);
+                }
+            }
+            return;
+    }
+}
+
+static void cg_tuple_aggregate_emit_cleanup_push(Buf *out,
+                                                 const char *cname,
+                                                 const CGType *type) {
+    cg_tuple_emit_cleanup_push_slots(out, cname, cname, type);
+}
+
+static void cg_tuple_aggregate_emit_cleanup_zero(Buf *out,
+                                                 const char *cname,
+                                                 const CGType *type) {
+    cg_tuple_emit_cleanup_zero_slots(out, cname, type);
 }
 
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
@@ -23247,8 +24218,182 @@ static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
     return true;
 }
 
+static size_t cg_tuple_aggregate_top_level_slot_count(const UserType *t) {
+    size_t count = 0U;
+
+    if (!cg_user_type_is_tuple(t)) {
+        return 0U;
+    }
+    for (size_t i = 0; i < t->field_count; ++i) {
+        if (cgtype_value_kind(t->fields[i].type) != CG_VK_TRIVIAL) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
+    Buf *td = &cg->type_defs;
+    size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
+
+    buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
+    for (size_t i = 0; i < t->field_count; i++) {
+        buf_append_cstr(td, "    ");
+        cg_emit_c_type(td, t->fields[i].type);
+        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    if (slot_count > 0U) {
+        buf_append_fmt(td,
+            "static const FengManagedSlotDescriptor %s[] = {\n",
+            t->c_aggregate_slots_name);
+        for (size_t i = 0; i < t->field_count; ++i) {
+            const UserField *field = &t->fields[i];
+            switch (cgtype_value_kind(field->type)) {
+                case CG_VK_TRIVIAL:
+                    break;
+                case CG_VK_MANAGED_POINTER:
+                    buf_append_fmt(td,
+                        "    { offsetof(struct %s, %s), FENG_SLOT_POINTER, NULL },\n",
+                        t->c_struct_name,
+                        field->c_name);
+                    break;
+                case CG_VK_AGGREGATE: {
+                    const char *nested_desc = cg_aggregate_desc_name(field->type);
+                    if (nested_desc == NULL) {
+                        (void)cg_fail(cg,
+                                      t->decl->token,
+                                      "codegen: tuple field '%s' has no aggregate descriptor",
+                                      field->feng_name);
+                        return;
+                    }
+                    buf_append_fmt(td,
+                        "    { offsetof(struct %s, %s), FENG_SLOT_NESTED_AGGREGATE, &%s },\n",
+                        t->c_struct_name,
+                        field->c_name,
+                        nested_desc);
+                    break;
+                }
+            }
+        }
+        buf_append_cstr(td, "};\n\n");
+    }
+
+    Buf init_fn_name;
+    buf_init(&init_fn_name);
+    if (slot_count > 0U) {
+        buf_append_fmt(&init_fn_name,
+                       "%s__init",
+                       t->c_aggregate_default_name);
+        if (init_fn_name.data == NULL) {
+            (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+            return;
+        }
+        buf_append_fmt(td,
+                       "static void %s(void *value_out) {\n"
+                       "    struct %s *_out = (struct %s *)value_out;\n"
+                       "    memset(_out, 0, sizeof *_out);\n",
+                       init_fn_name.data,
+                       t->c_struct_name,
+                       t->c_struct_name);
+        for (size_t i = 0; i < t->field_count; ++i) {
+            const UserField *field = &t->fields[i];
+            const FengToken *blame = field->member != NULL
+                                         ? &field->member->token
+                                         : &t->decl->token;
+
+            switch (cgtype_value_kind(field->type)) {
+                case CG_VK_TRIVIAL:
+                    break;
+                case CG_VK_MANAGED_POINTER: {
+                    char *default_expr = NULL;
+
+                    if (!cg_default_value_expr(cg,
+                                               field->type,
+                                               blame,
+                                               &default_expr)) {
+                        buf_free(&init_fn_name);
+                        return;
+                    }
+                    buf_append_fmt(td,
+                                   "    _out->%s = %s;\n",
+                                   field->c_name,
+                                   default_expr);
+                    free(default_expr);
+                    break;
+                }
+                case CG_VK_AGGREGATE: {
+                    Buf lvalue;
+                    Buf init_call;
+
+                    buf_init(&lvalue);
+                    buf_init(&init_call);
+                    buf_append_fmt(&lvalue, "_out->%s", field->c_name);
+                    if (lvalue.data == NULL ||
+                        !cg_append_aggregate_default_init_call(&init_call,
+                                                               field->type,
+                                                               lvalue.data)) {
+                        buf_free(&lvalue);
+                        buf_free(&init_call);
+                        buf_free(&init_fn_name);
+                        (void)cg_fail(cg,
+                                      *blame,
+                                      "codegen: missing tuple field aggregate default initializer");
+                        return;
+                    }
+                    buf_append_fmt(td, "    %s;\n", init_call.data);
+                    buf_free(&lvalue);
+                    buf_free(&init_call);
+                    break;
+                }
+            }
+        }
+        buf_append_cstr(td, "}\n\n");
+        buf_append_fmt(td,
+            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "    .kind = FENG_DEFAULT_INIT_FN,\n"
+            "    .init_fn = &%s,\n"
+            "};\n",
+            t->c_aggregate_default_name,
+            init_fn_name.data);
+    } else {
+        buf_append_fmt(td,
+            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "    .kind = FENG_DEFAULT_ZERO_BYTES,\n"
+            "    .init_fn = NULL,\n"
+            "};\n",
+            t->c_aggregate_default_name);
+    }
+    buf_free(&init_fn_name);
+    buf_append_fmt(td,
+        "static const FengAggregateValueDescriptor %s __attribute__((unused)) = {\n"
+        "    .name = \"%s.%s\",\n"
+        "    .size = sizeof(struct %s),\n"
+        "    .default_init = &%s,\n"
+        "    .managed_slot_count = %zu,\n",
+        t->c_aggregate_desc_name,
+        cg->module_dot_name,
+        t->feng_name,
+        t->c_struct_name,
+        t->c_aggregate_default_name,
+        slot_count);
+    if (slot_count > 0U) {
+        buf_append_fmt(td, "    .managed_slots = %s,\n", t->c_aggregate_slots_name);
+    } else {
+        buf_append_cstr(td, "    .managed_slots = NULL,\n");
+    }
+    buf_append_cstr(td, "};\n\n");
+}
+
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
     buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
+    if (cg_user_type_is_tuple(t)) {
+        buf_append_fmt(&cg->headers,
+                       "static const FengAggregateValueDescriptor %s;\n",
+                       t->c_aggregate_desc_name);
+        return;
+    }
     if (t->is_abi_type && t->c_abi_layout_name != NULL) {
         buf_append_fmt(&cg->headers, "struct %s;\n", t->c_abi_layout_name);
     }
@@ -23259,6 +24404,10 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
 /* Emit struct body, finalizer, and descriptor into `type_defs`. */
 static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
+    if (cg_user_type_is_tuple(t)) {
+        cg_emit_tuple_type_definition(cg, t);
+        return;
+    }
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
     for (size_t i = 0; i < t->field_count; i++) {
@@ -23441,10 +24590,27 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                 }
                 case CG_TYPE_OBJECT:
                     if (ft->user) {
-                        buf_append_fmt(td,
-                            "    _o->%s = %s();\n",
-                            t->fields[i].c_name,
-                            ft->user->c_default_zero_name);
+                        if (cg_user_type_is_tuple(ft->user)) {
+                            char lvalue[512];
+                            Buf init;
+
+                            buf_init(&init);
+                            if (snprintf(lvalue, sizeof(lvalue), "_o->%s", t->fields[i].c_name) > 0 &&
+                                cg_append_aggregate_default_init_call(&init, ft, lvalue)) {
+                                buf_append_fmt(td, "    %s;\n", init.data ? init.data : "");
+                            } else {
+                                buf_append_fmt(td,
+                                    "    _o->%s = (struct %s){0};\n",
+                                    t->fields[i].c_name,
+                                    ft->user->c_struct_name);
+                            }
+                            buf_free(&init);
+                        } else {
+                            buf_append_fmt(td,
+                                "    _o->%s = %s();\n",
+                                t->fields[i].c_name,
+                                ft->user->c_default_zero_name);
+                        }
                     }
                     break;
                 default:
@@ -24265,7 +25431,8 @@ cleanup:
 }
 
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
- * parameter typed as `struct T *`. */
+ * parameter. Managed object methods receive `struct T *`; tuple value methods
+ * receive `struct T` by value. */
 static bool cg_emit_user_method(CG *cg,
                                 const UserType *t,
                                 const UserMethod *m,
@@ -24319,7 +25486,11 @@ static bool cg_emit_user_method(CG *cg,
     cg_emit_c_type(body, m->return_type);
     buf_append_fmt(body, " %s(", m->c_name);
     if (!is_static_method) {
-        buf_append_fmt(body, "struct %s *self", t->c_struct_name);
+        if (cg_user_type_is_tuple(t)) {
+            buf_append_fmt(body, "struct %s self", t->c_struct_name);
+        } else {
+            buf_append_fmt(body, "struct %s *self", t->c_struct_name);
+        }
         has_param = true;
     }
     for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
@@ -24970,6 +26141,9 @@ static void cg_dispose(CG *cg) {
         free(ut->c_release_children_name);
         free(ut->c_finalizer_name);
         free(ut->c_default_zero_name);
+        free(ut->c_aggregate_slots_name);
+        free(ut->c_aggregate_default_name);
+        free(ut->c_aggregate_desc_name);
         free(ut->c_abi_layout_name);
         free(ut->c_abi_ptr_name);
         free(ut->c_abi_base_offset_name);

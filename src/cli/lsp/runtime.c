@@ -6914,6 +6914,18 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
                 }
             }
             return false;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (resolve_object_field_target_expr(session,
+                                                     program,
+                                                     expr->as.tuple_literal.items[index],
+                                                     offset,
+                                                     locals,
+                                                     target)) {
+                    return true;
+                }
+            }
+            return false;
         case FENG_EXPR_GENERIC_TARGET:
             return resolve_object_field_target_expr(session,
                                                     program,
@@ -7505,6 +7517,20 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                                 owner_decl,
                                                 owner_member,
                                                 expr->as.array_literal.items[index],
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (!collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                expr->as.tuple_literal.items[index],
                                                 target,
                                                 references)) {
                     return false;

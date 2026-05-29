@@ -1920,6 +1920,220 @@ static void test_parse_error_extern_fn_variadic(void) {
     ASSERT(strstr(error.message, "extern function declarations cannot use variadic parameters") != NULL);
 }
 
+static void test_tuple_type_declaration_parses(void) {
+    const char *source =
+        "module demo.tuple;\n"
+        "type Point(float, float);\n"
+        "type Pair<T, U>(T, U);\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *point;
+    const FengDecl *pair;
+
+    ASSERT(feng_parse_source(source, strlen(source), "tuple_type.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    point = program->declarations[0];
+    ASSERT(point->kind == FENG_DECL_TYPE);
+    ASSERT(point->as.type_decl.is_tuple);
+    ASSERT(point->as.type_decl.member_count == 2U);
+    ASSERT(point->as.type_decl.members[0]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(point->as.type_decl.members[0]->as.field.mutability == FENG_MUTABILITY_LET);
+    assert_slice_text(point->as.type_decl.members[0]->as.field.name, "item1");
+    assert_slice_text(point->as.type_decl.members[1]->as.field.name, "item2");
+    assert_slice_text(point->as.type_decl.members[0]->as.field.type->as.named.segments[0], "float");
+
+    pair = program->declarations[1];
+    ASSERT(pair->kind == FENG_DECL_TYPE);
+    ASSERT(pair->as.type_decl.is_tuple);
+    ASSERT(pair->as.type_decl.type_param_count == 2U);
+    ASSERT(pair->as.type_decl.member_count == 2U);
+    assert_slice_text(pair->as.type_decl.members[0]->as.field.type->as.named.segments[0], "T");
+    assert_slice_text(pair->as.type_decl.members[1]->as.field.type->as.named.segments[0], "U");
+
+    feng_program_free(program);
+}
+
+static void test_tuple_type_arity_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.tuple;\n"
+            "type Unit();\n",
+            "tuple type declarations require 2 to 8 elements"
+        },
+        {
+            "module demo.tuple;\n"
+            "type Single(int);\n",
+            "tuple type declarations require 2 to 8 elements"
+        },
+        {
+            "module demo.tuple;\n"
+            "type TooMany(int, int, int, int, int, int, int, int, int);\n",
+            "tuple type declarations support at most 8 elements"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "tuple_type_arity_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[i].message) != NULL);
+    }
+}
+
+static void test_tuple_literal_and_grouped_expression_parse(void) {
+    const char *source =
+        "module demo.tuple;\n"
+        "type Point(int, int);\n"
+        "func run() {\n"
+        "    let grouped = (1);\n"
+        "    let tupled: Point = (1, 2);\n"
+        "    let casted = (Point)(1, 2);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengExpr *grouped;
+    const FengExpr *tupled;
+    const FengExpr *casted;
+
+    ASSERT(feng_parse_source(source, strlen(source), "tuple_literal_parse.f", &program, &error));
+    ASSERT(program != NULL);
+    body = program->declarations[1]->as.function_decl.body;
+    ASSERT(body->statement_count == 3U);
+
+    grouped = body->statements[0]->as.binding.initializer;
+    ASSERT(grouped->kind == FENG_EXPR_INTEGER);
+
+    tupled = body->statements[1]->as.binding.initializer;
+    ASSERT(tupled->kind == FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(tupled->as.tuple_literal.count == 2U);
+
+    casted = body->statements[2]->as.binding.initializer;
+    ASSERT(casted->kind == FENG_EXPR_CAST);
+    ASSERT(casted->as.cast.value->kind == FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(casted->as.cast.value->as.tuple_literal.count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_tuple_literal_arity_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.tuple;\n"
+            "func run() { let one = (1,); }\n",
+            "tuple literals require an expression after ','"
+        },
+        {
+            "module demo.tuple;\n"
+            "func run() { let many = (1, 2, 3, 4, 5, 6, 7, 8, 9); }\n",
+            "tuple literals support at most 8 elements"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "tuple_literal_arity_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[i].message) != NULL);
+    }
+}
+
+static void test_destructuring_binding_parse(void) {
+    const char *source =
+        "module demo.tuple;\n"
+        "func run(point: Point, tuple: Triple) {\n"
+        "    let (x, , z) = point;\n"
+        "    var (, middle, ) = tuple;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengBinding *first;
+    const FengBinding *second;
+
+    ASSERT(feng_parse_source(source, strlen(source), "destructure_parse.f", &program, &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 2U);
+
+    first = &body->statements[0]->as.binding;
+    ASSERT(first->is_destructure);
+    ASSERT(first->destructure_count == 3U);
+    assert_slice_text(first->destructure_names[0], "x");
+    assert_slice_text(first->destructure_names[1], NULL);
+    assert_slice_text(first->destructure_names[2], "z");
+    ASSERT(first->initializer->kind == FENG_EXPR_IDENTIFIER);
+
+    second = &body->statements[1]->as.binding;
+    ASSERT(second->is_destructure);
+    ASSERT(second->mutability == FENG_MUTABILITY_VAR);
+    ASSERT(second->destructure_count == 3U);
+    assert_slice_text(second->destructure_names[0], NULL);
+    assert_slice_text(second->destructure_names[1], "middle");
+    assert_slice_text(second->destructure_names[2], NULL);
+
+    feng_program_free(program);
+}
+
+static void test_destructuring_binding_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.tuple;\n"
+            "func run(value: Tuple) { let (x) = value; }\n",
+            "destructuring bindings require at least two positions"
+        },
+        {
+            "module demo.tuple;\n"
+            "func run(value: Tuple) { let (x, (y, z)) = value; }\n",
+            "nested destructuring bindings are not supported"
+        },
+        {
+            "module demo.tuple;\n"
+            "func run(value: Tuple) { let (x, y): Tuple = value; }\n",
+            "destructuring bindings cannot use a single type annotation"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "destructure_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[i].message) != NULL);
+    }
+}
+
 int main(void) {
     test_top_level_declarations();
     test_extern_rejects_non_function_top_level_declarations();
@@ -1999,6 +2213,12 @@ int main(void) {
     test_variadic_parameter_parses();
     test_parse_error_variadic_not_last();
     test_parse_error_extern_fn_variadic();
+    test_tuple_type_declaration_parses();
+    test_tuple_type_arity_errors();
+    test_tuple_literal_and_grouped_expression_parse();
+    test_tuple_literal_arity_errors();
+    test_destructuring_binding_parse();
+    test_destructuring_binding_errors();
     puts("parser tests passed");
     return 0;
 }

@@ -155,6 +155,16 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             }
             fputc(']', stream);
             break;
+        case FENG_EXPR_TUPLE_LITERAL:
+            fputc('(', stream);
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (index != 0U) {
+                    fputs(", ", stream);
+                }
+                dump_expr(stream, expr->as.tuple_literal.items[index], 0);
+            }
+            fputc(')', stream);
+            break;
         case FENG_EXPR_OBJECT_LITERAL:
             dump_expr(stream, expr->as.object_literal.target, 0);
             fputs(" {", stream);
@@ -345,7 +355,18 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
         case FENG_STMT_BINDING:
             fputs(mutability_name(stmt->as.binding.mutability), stream);
             fputc(' ', stream);
-            dump_slice(stream, stmt->as.binding.name);
+            if (stmt->as.binding.is_destructure) {
+                fputc('(', stream);
+                for (index = 0U; index < stmt->as.binding.destructure_count; ++index) {
+                    if (index != 0U) {
+                        fputs(", ", stream);
+                    }
+                    dump_slice(stream, stmt->as.binding.destructure_names[index]);
+                }
+                fputc(')', stream);
+            } else {
+                dump_slice(stream, stmt->as.binding.name);
+            }
             if (stmt->as.binding.type != NULL) {
                 fputs(": ", stream);
                 dump_type_ref(stream, stmt->as.binding.type);

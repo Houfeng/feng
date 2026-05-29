@@ -26,6 +26,11 @@ static inline bool decl_is_named_fit_target(const FengDecl *decl) {
            (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM);
 }
 
+/* Named tuples reuse normal type declarations with positional field members. */
+static inline bool decl_is_tuple_type(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_TYPE && decl->as.type_decl.is_tuple;
+}
+
 /* Forward declaration — defined later in this file alongside the witness
  * materialisation helpers. */
 static bool init_spec_witness_subject_key(const FengDecl *type_decl,
@@ -1469,6 +1474,17 @@ static bool inject_external_modules_from_expr(
                                                        imported_query,
                                                        program,
                                                        expr->as.array_literal.items[item_index])) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (size_t item_index = 0U; item_index < expr->as.tuple_literal.count; ++item_index) {
+                if (!inject_external_modules_from_expr(analysis,
+                                                       imported_query,
+                                                       program,
+                                                       expr->as.tuple_literal.items[item_index])) {
                     return false;
                 }
             }
@@ -3498,6 +3514,19 @@ static bool evaluate_constant_expr(ResolveContext *context,
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
+static bool expr_matches_expected_type_ref(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *expected_type_ref);
+static bool validate_untyped_tuple_literal_expr(ResolveContext *context, const FengExpr *expr);
+static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
+                                                   const FengBinding *binding,
+                                                   const FengDecl *tuple_decl,
+                                                   const FengTypeRef *tuple_type_ref,
+                                                   bool add_to_scope);
+static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
+                                                      const FengBinding *binding,
+                                                      const FengExpr *literal,
+                                                      bool add_to_scope);
 static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
@@ -4216,6 +4245,210 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
     }
 
     return false;
+}
+
+/* Resolve a type reference only when it denotes a named tuple declaration. */
+static const FengDecl *resolve_tuple_type_ref_decl(const ResolveContext *context,
+                                                  const FengTypeRef *type_ref) {
+    const FengDecl *decl = resolve_type_ref_decl(context, type_ref);
+
+    return decl_is_tuple_type(decl) ? decl : NULL;
+}
+
+/* Fetch the positional tuple field at index, preserving parser member order. */
+static const FengTypeMember *tuple_field_member_at(const FengDecl *tuple_decl,
+                                                   size_t field_index) {
+    size_t member_index;
+    size_t seen_fields = 0U;
+
+    if (!decl_is_tuple_type(tuple_decl)) {
+        return NULL;
+    }
+
+    for (member_index = 0U;
+         member_index < tuple_decl->as.type_decl.member_count;
+         ++member_index) {
+        const FengTypeMember *member = tuple_decl->as.type_decl.members[member_index];
+
+        if (member == NULL || member->is_static ||
+            member->kind != FENG_TYPE_MEMBER_FIELD) {
+            continue;
+        }
+        if (seen_fields == field_index) {
+            return member;
+        }
+        ++seen_fields;
+    }
+
+    return NULL;
+}
+
+/* Return a tuple field type after applying the instance's generic arguments. */
+static const FengTypeRef *tuple_field_type_for_instance(ResolveContext *context,
+                                                        const FengDecl *tuple_decl,
+                                                        const FengTypeRef *tuple_type_ref,
+                                                        size_t field_index) {
+    const FengTypeMember *field = tuple_field_member_at(tuple_decl, field_index);
+
+    if (field == NULL) {
+        return NULL;
+    }
+    return substitute_type_ref_for_owner_instance(context,
+                                                  tuple_decl,
+                                                  inferred_expr_type_from_type_ref(tuple_type_ref),
+                                                  field->as.field.type);
+}
+
+/* Compare two named tuple instances structurally for explicit casts. */
+static bool tuple_type_refs_have_equal_shape(ResolveContext *context,
+                                             const FengTypeRef *source_type_ref,
+                                             const FengTypeRef *target_type_ref) {
+    const FengDecl *source_decl = resolve_tuple_type_ref_decl(context, source_type_ref);
+    const FengDecl *target_decl = resolve_tuple_type_ref_decl(context, target_type_ref);
+    size_t field_index;
+
+    if (source_decl == NULL || target_decl == NULL) {
+        return false;
+    }
+    if (source_decl->as.type_decl.member_count != target_decl->as.type_decl.member_count) {
+        return false;
+    }
+
+    for (field_index = 0U;
+         field_index < source_decl->as.type_decl.member_count;
+         ++field_index) {
+        const FengTypeRef *source_field_type =
+            tuple_field_type_for_instance(context, source_decl, source_type_ref, field_index);
+        const FengTypeRef *target_field_type =
+            tuple_field_type_for_instance(context, target_decl, target_type_ref, field_index);
+
+        if (source_field_type == NULL || target_field_type == NULL ||
+            !type_refs_semantically_equal(context, source_field_type, target_field_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Compare an inferred tuple value against a target tuple for explicit casts. */
+static bool inferred_tuple_type_has_equal_shape(ResolveContext *context,
+                                                InferredExprType source_type,
+                                                const FengTypeRef *target_type_ref) {
+    const FengDecl *target_decl = resolve_tuple_type_ref_decl(context, target_type_ref);
+
+    if (target_decl == NULL) {
+        return false;
+    }
+    if (source_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        return tuple_type_refs_have_equal_shape(context, source_type.type_ref, target_type_ref);
+    }
+    if (source_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+        decl_is_tuple_type(source_type.type_decl)) {
+        size_t field_index;
+
+        if (source_type.type_decl->as.type_decl.member_count !=
+            target_decl->as.type_decl.member_count) {
+            return false;
+        }
+        for (field_index = 0U;
+             field_index < source_type.type_decl->as.type_decl.member_count;
+             ++field_index) {
+            const FengTypeMember *source_field =
+                tuple_field_member_at(source_type.type_decl, field_index);
+            const FengTypeRef *target_field_type =
+                tuple_field_type_for_instance(context, target_decl, target_type_ref, field_index);
+
+            if (source_field == NULL || target_field_type == NULL ||
+                !type_refs_semantically_equal(context,
+                                              source_field->as.field.type,
+                                              target_field_type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/* Pure tuple literal matcher used by overload resolution and expected-type checks. */
+static bool tuple_literal_matches_tuple_type_ref(ResolveContext *context,
+                                                 const FengExpr *expr,
+                                                 const FengTypeRef *expected_type_ref) {
+    const FengDecl *tuple_decl = resolve_tuple_type_ref_decl(context, expected_type_ref);
+    size_t item_index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_TUPLE_LITERAL || tuple_decl == NULL) {
+        return false;
+    }
+    if (expr->as.tuple_literal.count != tuple_decl->as.type_decl.member_count) {
+        return false;
+    }
+
+    for (item_index = 0U; item_index < expr->as.tuple_literal.count; ++item_index) {
+        const FengTypeRef *field_type =
+            tuple_field_type_for_instance(context, tuple_decl, expected_type_ref, item_index);
+
+        if (field_type == NULL ||
+            !expr_matches_expected_type_ref(context,
+                                            expr->as.tuple_literal.items[item_index],
+                                            field_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Validate a tuple literal against the named tuple that supplies its type. */
+static bool validate_tuple_literal_expr_against_type(ResolveContext *context,
+                                                     const FengExpr *expr,
+                                                     const FengTypeRef *expected_type_ref) {
+    const FengDecl *tuple_decl = resolve_tuple_type_ref_decl(context, expected_type_ref);
+    size_t item_index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_TUPLE_LITERAL) {
+        return true;
+    }
+    if (tuple_decl == NULL) {
+        char *type_name = format_type_ref_name(expected_type_ref);
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message("tuple literal requires a named tuple target type, got '%s'",
+                           type_name != NULL ? type_name : "<type>"));
+
+        free(type_name);
+        return ok;
+    }
+    if (expr->as.tuple_literal.count != tuple_decl->as.type_decl.member_count) {
+        char *type_name = format_type_ref_name(expected_type_ref);
+        bool ok = resolver_append_error(
+            context,
+            expr->token,
+            format_message("tuple literal has %zu element(s) but tuple type '%s' expects %zu",
+                           expr->as.tuple_literal.count,
+                           type_name != NULL ? type_name : "<type>",
+                           tuple_decl->as.type_decl.member_count));
+
+        free(type_name);
+        return ok;
+    }
+
+    for (item_index = 0U; item_index < expr->as.tuple_literal.count; ++item_index) {
+        const FengTypeRef *field_type =
+            tuple_field_type_for_instance(context, tuple_decl, expected_type_ref, item_index);
+
+        if (field_type != NULL &&
+            !validate_expr_against_expected_type(context,
+                                                 expr->as.tuple_literal.items[item_index],
+                                                 field_type)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static const FengDecl *resolve_function_type_decl(const ResolveContext *context,
@@ -5760,7 +5993,7 @@ static bool array_cast_writability_subset(const FengTypeRef *source,
     return array_cast_writability_subset(source->as.inner, target->as.inner);
 }
 
-static bool cast_expr_types_are_valid(const ResolveContext *context,
+static bool cast_expr_types_are_valid(ResolveContext *context,
                                       InferredExprType value_type,
                                       const FengTypeRef *target_type) {
     const char *target_builtin = type_ref_builtin_canonical_name(target_type);
@@ -5777,6 +6010,9 @@ static bool cast_expr_types_are_valid(const ResolveContext *context,
             function_type_refs_have_equal_signature(context, value_type.type_ref, target_type)) {
             return true;
         }
+    }
+    if (inferred_tuple_type_has_equal_shape(context, value_type, target_type)) {
+        return true;
     }
     if (inferred_expr_type_is_enum(context, value_type) && target_builtin != NULL &&
         strcmp(target_builtin, "i32") == 0) {
@@ -5804,6 +6040,12 @@ static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
     char *message;
 
     value_type = infer_expr_type(context, expr->as.cast.value);
+    if (expr->as.cast.value != NULL &&
+        expr->as.cast.value->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return validate_tuple_literal_expr_against_type(context,
+                                                        expr->as.cast.value,
+                                                        expr->as.cast.type);
+    }
     if (cast_expr_types_are_valid(context, value_type, expr->as.cast.type)) {
         return true;
     }
@@ -5946,6 +6188,10 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
         return report_lambda_requires_callable_spec_target(context,
                                                            stmt->as.return_value,
                                                            "a return statement");
+    }
+    if (stmt->as.return_value != NULL &&
+        !validate_untyped_tuple_literal_expr(context, stmt->as.return_value)) {
+        return false;
     }
     if (!inferred_expr_type_is_known(return_type)) {
         return true;
@@ -6940,6 +7186,41 @@ static bool callable_collect_type_args_from_arg_expr(ResolveContext *context,
                                                                          arg_expr,
                                                                          &owned_actual_type_ref);
     bool ok;
+
+    if (arg_expr != NULL && arg_expr->kind == FENG_EXPR_TUPLE_LITERAL) {
+        const FengDecl *tuple_decl = resolve_tuple_type_ref_decl(context, param_type);
+        size_t item_index;
+
+        if (tuple_decl == NULL ||
+            arg_expr->as.tuple_literal.count != tuple_decl->as.type_decl.member_count) {
+            return false;
+        }
+        for (item_index = 0U; item_index < arg_expr->as.tuple_literal.count; ++item_index) {
+            const FengTypeRef *field_type =
+                tuple_field_type_for_instance(context, tuple_decl, param_type, item_index);
+            InferredExprType item_type =
+                infer_expr_type(context, arg_expr->as.tuple_literal.items[item_index]);
+            FengTypeRef *owned_item_type_ref = create_type_ref_from_inferred_type(
+                &item_type,
+                arg_expr->as.tuple_literal.items[item_index]->token);
+
+            if (field_type == NULL || owned_item_type_ref == NULL) {
+                free_synthetic_type_ref(owned_item_type_ref);
+                return false;
+            }
+            ok = callable_collect_type_args_from_type_refs(context,
+                                                           callable,
+                                                           field_type,
+                                                           owned_item_type_ref,
+                                                           type_args,
+                                                           owned_type_args);
+            free_synthetic_type_ref(owned_item_type_ref);
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     if (actual_type_ref == NULL) {
         return false;
@@ -9090,6 +9371,37 @@ static InferredExprType infer_block_return_type(ResolveContext *context, const F
         /* Bring local bindings into scope so subsequent `return` expressions
          * can resolve identifiers introduced by `let`/`var` statements. */
         if (stmt->kind == FENG_STMT_BINDING) {
+            if (stmt->as.binding.is_destructure) {
+                InferredExprType initializer_type;
+                const FengDecl *tuple_decl = NULL;
+                const FengTypeRef *tuple_type_ref = NULL;
+
+                if (stmt->as.binding.initializer != NULL &&
+                    stmt->as.binding.initializer->kind == FENG_EXPR_TUPLE_LITERAL) {
+                    (void)add_destructure_locals_from_tuple_literal(context,
+                                                                    &stmt->as.binding,
+                                                                    stmt->as.binding.initializer,
+                                                                    true);
+                    continue;
+                }
+
+                initializer_type = infer_expr_type(context, stmt->as.binding.initializer);
+                if (initializer_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+                    tuple_type_ref = initializer_type.type_ref;
+                    tuple_decl = resolve_tuple_type_ref_decl(context, tuple_type_ref);
+                } else if (initializer_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+                           decl_is_tuple_type(initializer_type.type_decl)) {
+                    tuple_decl = initializer_type.type_decl;
+                }
+                if (tuple_decl != NULL) {
+                    (void)add_destructure_locals_from_tuple_type(context,
+                                                                 &stmt->as.binding,
+                                                                 tuple_decl,
+                                                                 tuple_type_ref,
+                                                                 true);
+                }
+                continue;
+            }
             InferredExprType binding_type = stmt->as.binding.type != NULL
                                                 ? inferred_expr_type_from_type_ref(stmt->as.binding.type)
                                                 : infer_expr_type(context, stmt->as.binding.initializer);
@@ -9528,6 +9840,14 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
         case FENG_EXPR_ARRAY_LITERAL:
             for (index = 0U; index < expr->as.array_literal.count; ++index) {
                 if (expr_type_inference_is_pending(context, expr->as.array_literal.items[index])) {
+                    return true;
+                }
+            }
+            return false;
+
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (expr_type_inference_is_pending(context, expr->as.tuple_literal.items[index])) {
                     return true;
                 }
             }
@@ -10408,6 +10728,9 @@ static char *format_expr_target_name(const FengExpr *expr) {
         case FENG_EXPR_GENERIC_TARGET:
             return format_expr_target_name(expr->as.generic_target.target);
 
+        case FENG_EXPR_TUPLE_LITERAL:
+            return duplicate_cstr("<tuple literal>");
+
         default:
             return duplicate_cstr("<expression>");
     }
@@ -10770,6 +11093,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         case FENG_EXPR_ARRAY_LITERAL:
             return infer_array_literal_expr_type(context, expr);
 
+        case FENG_EXPR_TUPLE_LITERAL:
+            return inferred_expr_type_unknown();
+
         case FENG_EXPR_ARRAY_NEW: {
             const FengTypeRef *elem_ref = expr->as.array_new.element_type;
             if (elem_ref == NULL) {
@@ -10939,6 +11265,13 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         }
 
         case FENG_EXPR_CAST:
+            if (expr->as.cast.value != NULL &&
+                expr->as.cast.value->kind == FENG_EXPR_TUPLE_LITERAL &&
+                tuple_literal_matches_tuple_type_ref(context,
+                                                     expr->as.cast.value,
+                                                     expr->as.cast.type)) {
+                return inferred_expr_type_from_type_ref(expr->as.cast.type);
+            }
             return cast_expr_types_are_valid(context,
                                              infer_expr_type(context, expr->as.cast.value),
                                              expr->as.cast.type)
@@ -11822,6 +12155,10 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
     if (function_type_decl != NULL) {
         return resolve_expr_callable_value(context, expr, expected_type_ref).kind ==
                FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+    }
+
+    if (expr != NULL && expr->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return tuple_literal_matches_tuple_type_ref(context, expr, expected_type_ref);
     }
 
     /* Step 4b-γ — arrays with an expected array target drive matching
@@ -13039,6 +13376,9 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
     if (expr == NULL || expected_type_ref == NULL) {
         return true;
     }
+    if (expr->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return validate_tuple_literal_expr_against_type(context, expr, expected_type_ref);
+    }
     if (expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_AMP &&
         resolve_abi_function_pointer_type_decl(context, expected_type_ref) != NULL) {
         return validate_expr_against_expected_abi_function_pointer_type(context,
@@ -14154,6 +14494,18 @@ static bool validate_untyped_array_literal_expr(ResolveContext *context, const F
     return resolver_append_error(context,
                                  expr->token,
                                  format_message("empty array literal requires an explicit target array type"));
+}
+
+/* Tuple literals have no anonymous type and therefore need a named target. */
+static bool validate_untyped_tuple_literal_expr(ResolveContext *context, const FengExpr *expr) {
+    if (expr == NULL || expr->kind != FENG_EXPR_TUPLE_LITERAL) {
+        return true;
+    }
+
+    return resolver_append_error(
+        context,
+        expr->token,
+        format_message("tuple literal requires an explicit named tuple target type"));
 }
 
 static bool validate_constructor_invocation(ResolveContext *context,
@@ -15775,6 +16127,14 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             }
             return validate_array_literal_expr(context, expr);
 
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (!resolve_expr(context, expr->as.tuple_literal.items[index], allow_self)) {
+                    return false;
+                }
+            }
+            return true;
+
         case FENG_EXPR_ARRAY_NEW: {
             if (!resolve_type_ref(context, expr->as.array_new.element_type, false)) {
                 return false;
@@ -16004,12 +16364,160 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
     return true;
 }
 
+/* Add local names produced by destructuring a tuple value. */
+static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
+                                                   const FengBinding *binding,
+                                                   const FengDecl *tuple_decl,
+                                                   const FengTypeRef *tuple_type_ref,
+                                                   bool add_to_scope) {
+    size_t index;
+
+    if (!decl_is_tuple_type(tuple_decl)) {
+        return resolver_append_error(
+            context,
+            binding->token,
+            format_message("destructuring binding initializer must be a tuple"));
+    }
+    if (binding->destructure_count != tuple_decl->as.type_decl.member_count) {
+        return resolver_append_error(
+            context,
+            binding->token,
+            format_message("destructuring binding has %zu position(s) but tuple initializer has %zu",
+                           binding->destructure_count,
+                           tuple_decl->as.type_decl.member_count));
+    }
+
+    for (index = 0U; index < binding->destructure_count; ++index) {
+        FengSlice name = binding->destructure_names[index];
+        const FengTypeRef *field_type;
+
+        if (name.length == 0U) {
+            continue;
+        }
+
+        field_type = tuple_field_type_for_instance(context, tuple_decl, tuple_type_ref, index);
+        if (field_type == NULL) {
+            return false;
+        }
+        if (add_to_scope &&
+            !resolver_add_local_typed_name_with_source(context,
+                                                       name,
+                                                       inferred_expr_type_from_type_ref(field_type),
+                                                       binding->mutability,
+                                                       NULL)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Add local names produced by destructuring a tuple literal expression. */
+static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
+                                                      const FengBinding *binding,
+                                                      const FengExpr *literal,
+                                                      bool add_to_scope) {
+    size_t index;
+
+    if (literal == NULL || literal->kind != FENG_EXPR_TUPLE_LITERAL) {
+        return false;
+    }
+    if (binding->destructure_count != literal->as.tuple_literal.count) {
+        return resolver_append_error(
+            context,
+            binding->token,
+            format_message("destructuring binding has %zu position(s) but tuple literal has %zu",
+                           binding->destructure_count,
+                           literal->as.tuple_literal.count));
+    }
+
+    for (index = 0U; index < binding->destructure_count; ++index) {
+        FengSlice name = binding->destructure_names[index];
+        const FengExpr *item = literal->as.tuple_literal.items[index];
+        InferredExprType item_type;
+
+        if (!validate_untyped_callable_value_expr(context, item) ||
+            !validate_untyped_address_of_expr(context, item) ||
+            !validate_untyped_array_literal_expr(context, item) ||
+            !validate_untyped_tuple_literal_expr(context, item)) {
+            return false;
+        }
+        if (name.length == 0U) {
+            continue;
+        }
+
+        item_type = infer_expr_type(context, item);
+        if (add_to_scope &&
+            !resolver_add_local_typed_name_with_source(context,
+                                                       name,
+                                                       item_type,
+                                                       binding->mutability,
+                                                       item)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Resolve and type-check a destructuring let/var binding. */
+static bool resolve_destructure_binding(ResolveContext *context,
+                                        const FengBinding *binding,
+                                        bool allow_self,
+                                        bool add_to_scope) {
+    InferredExprType initializer_type;
+    const FengDecl *tuple_decl = NULL;
+    const FengTypeRef *tuple_type_ref = NULL;
+
+    if (binding->type != NULL) {
+        return resolver_append_error(
+            context,
+            binding->token,
+            format_message("destructuring bindings cannot use a single type annotation"));
+    }
+    if (!resolve_expr(context, binding->initializer, allow_self)) {
+        return false;
+    }
+    if (binding->initializer != NULL &&
+        binding->initializer->kind == FENG_EXPR_TUPLE_LITERAL) {
+        return add_destructure_locals_from_tuple_literal(context,
+                                                         binding,
+                                                         binding->initializer,
+                                                         add_to_scope);
+    }
+
+    initializer_type = infer_expr_type(context, binding->initializer);
+    if (initializer_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        tuple_type_ref = initializer_type.type_ref;
+        tuple_decl = resolve_tuple_type_ref_decl(context, tuple_type_ref);
+    } else if (initializer_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+               decl_is_tuple_type(initializer_type.type_decl)) {
+        tuple_decl = initializer_type.type_decl;
+    }
+
+    if (tuple_decl == NULL) {
+        return resolver_append_error(
+            context,
+            binding->token,
+            format_message("destructuring binding initializer must be a tuple"));
+    }
+
+    return add_destructure_locals_from_tuple_type(context,
+                                                  binding,
+                                                  tuple_decl,
+                                                  tuple_type_ref,
+                                                  add_to_scope);
+}
+
 static bool resolve_binding(ResolveContext *context,
                             const FengBinding *binding,
                             bool allow_self,
                             bool add_to_scope) {
     InferredExprType binding_type;
 
+    if (binding->is_destructure) {
+        return resolve_destructure_binding(context, binding, allow_self, add_to_scope);
+    }
     if (!resolve_type_ref(context, binding->type, false)) {
         return false;
     }
@@ -16037,6 +16545,9 @@ static bool resolve_binding(ResolveContext *context,
             return false;
         }
         if (!validate_untyped_array_literal_expr(context, binding->initializer)) {
+            return false;
+        }
+        if (!validate_untyped_tuple_literal_expr(context, binding->initializer)) {
             return false;
         }
     }
@@ -16287,12 +16798,14 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
         case FENG_STMT_TRY:
             return resolve_try_expr(context, stmt->as.expr, allow_self, false) &&
                    validate_untyped_callable_value_expr(context, stmt->as.expr) &&
-                   validate_untyped_address_of_expr(context, stmt->as.expr);
+                   validate_untyped_address_of_expr(context, stmt->as.expr) &&
+                   validate_untyped_tuple_literal_expr(context, stmt->as.expr);
 
         case FENG_STMT_EXPR:
             return resolve_expr(context, stmt->as.expr, allow_self) &&
                    validate_untyped_callable_value_expr(context, stmt->as.expr) &&
-                   validate_untyped_address_of_expr(context, stmt->as.expr);
+                   validate_untyped_address_of_expr(context, stmt->as.expr) &&
+                   validate_untyped_tuple_literal_expr(context, stmt->as.expr);
 
         case FENG_STMT_IF:
             for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
@@ -18592,6 +19105,14 @@ static bool validate_type_param_constraints(ResolveContext *context,
             const FengDecl *constraint_decl =
                 resolve_type_ref_decl(context, type_params[i].constraint);
 
+            if (decl_is_tuple_type(constraint_decl)) {
+                return resolver_append_error(
+                    context,
+                    type_params[i].token,
+                    format_message("type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint",
+                                   (int)type_params[i].name.length,
+                                   type_params[i].name.data));
+            }
             if (constraint_decl != NULL && constraint_decl->kind != FENG_DECL_SPEC) {
                 return resolver_append_error(
                     context,

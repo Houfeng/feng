@@ -159,6 +159,7 @@ typedef enum FengExprKind {
     FENG_EXPR_FLOAT,
     FENG_EXPR_STRING,
     FENG_EXPR_ARRAY_LITERAL,
+    FENG_EXPR_TUPLE_LITERAL,
     FENG_EXPR_OBJECT_LITERAL,
     FENG_EXPR_GENERIC_TARGET,
     FENG_EXPR_CALL,
@@ -187,6 +188,10 @@ struct FengExpr {
             FengExpr **items;
             size_t count;
         } array_literal;
+        struct {
+            FengExpr **items;
+            size_t count;
+        } tuple_literal;
         struct {
             FengExpr *target;
             FengObjectFieldInit *fields;
@@ -266,6 +271,9 @@ typedef struct FengBinding {
     FengSlice name;
     FengTypeRef *type;
     FengExpr *initializer;
+    bool is_destructure;
+    FengSlice *destructure_names;
+    size_t destructure_count;
 } FengBinding;
 
 typedef struct FengIfClause {
@@ -424,6 +432,7 @@ struct FengDecl {
             size_t member_count;
             FengTypeRef **declared_specs;
             size_t declared_spec_count;
+            bool is_tuple;
         } type_decl;
         struct {
             FengSlice name;

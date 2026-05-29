@@ -13735,6 +13735,215 @@ static void test_variadic_spec_satisfaction_mismatch_rejected(void) {
     feng_program_free(program);
 }
 
+static void assert_single_source_semantic_ok(const char *path, const char *source) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void assert_single_source_semantic_error_contains(const char *path,
+                                                         const char *source,
+                                                         const char *expected) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found = false;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strstr(errors[index].message, expected) != NULL) {
+            found = true;
+            break;
+        }
+    }
+    ASSERT(found);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_tuple_literal_expected_contexts_pass(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "type Pair<T, U>(T, U);\n"
+        "type Holder {\n"
+        "    let point: Point;\n"
+        "}\n"
+        "func take(p: Point): int { return p.item1; }\n"
+        "func make(): Point { return (1, 2); }\n"
+        "func takePair(p: Pair<int, string>): int { return p.item1; }\n"
+        "func run(): int {\n"
+        "    let p: Point = (1, 2);\n"
+        "    let q = (Point)(3, 4);\n"
+        "    let h: Holder = Holder{point: (5, 6)};\n"
+        "    let pair: Pair<int, string> = (7, \"s\");\n"
+        "    return take((8, 9)) + make().item1 + p.item2 + q.item1 + h.point.item2 + pair.item1 + takePair((10, \"t\"));\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("tuple_contexts.f", source);
+}
+
+static void test_tuple_literal_without_target_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): int {\n"
+        "    let value = (1, 2);\n"
+        "    return 0;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains("tuple_no_target.f",
+                                                 source,
+                                                 "tuple literal requires");
+}
+
+static void test_tuple_literal_shape_mismatch_is_rejected(void) {
+    const char *arity_source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): void {\n"
+        "    let p: Point = (1, 2, 3);\n"
+        "}\n";
+    const char *type_source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): void {\n"
+        "    let p: Point = (1, \"two\");\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains("tuple_bad_arity.f",
+                                                 arity_source,
+                                                 "tuple literal has 3 element");
+    assert_single_source_semantic_error_contains("tuple_bad_item.f",
+                                                 type_source,
+                                                 "does not match expected type");
+}
+
+static void test_tuple_named_conversion_rules(void) {
+    const char *explicit_ok =
+        "module demo.main;\n"
+        "type A(int, string);\n"
+        "type B(int, string);\n"
+        "func run(): int {\n"
+        "    let b: B = (1, \"ok\");\n"
+        "    let a: A = (A)b;\n"
+        "    return a.item1;\n"
+        "}\n";
+    const char *implicit_bad =
+        "module demo.main;\n"
+        "type A(int, int);\n"
+        "type B(int, int);\n"
+        "func run(): void {\n"
+        "    let b: B = (1, 2);\n"
+        "    let a: A = b;\n"
+        "}\n";
+    const char *explicit_bad =
+        "module demo.main;\n"
+        "type A(int, int);\n"
+        "type C(int, string);\n"
+        "func run(): void {\n"
+        "    let c: C = (1, \"bad\");\n"
+        "    let a: A = (A)c;\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("tuple_explicit_cast_ok.f", explicit_ok);
+    assert_single_source_semantic_error_contains("tuple_implicit_cast_bad.f",
+                                                 implicit_bad,
+                                                 "does not match expected type");
+    assert_single_source_semantic_error_contains("tuple_explicit_cast_bad.f",
+                                                 explicit_bad,
+                                                 "cast from");
+}
+
+static void test_tuple_destructuring_semantics(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): int {\n"
+        "    let p: Point = (1, 2);\n"
+        "    let (x, y) = p;\n"
+        "    let (a, , c) = (3, 4, 5);\n"
+        "    var (, middle, ) = (6, 7, 8);\n"
+        "    return x + y + a + c + middle;\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("tuple_destructure_ok.f", source);
+}
+
+static void test_tuple_destructuring_non_tuple_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): void {\n"
+        "    let (x, y) = 1;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains("tuple_destructure_non_tuple.f",
+                                                 source,
+                                                 "destructuring binding initializer must be a tuple");
+}
+
+static void test_tuple_item_assignment_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): void {\n"
+        "    var p: Point = (1, 2);\n"
+        "    p.item1 = 3;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains("tuple_item_assignment.f",
+                                                 source,
+                                                 "not writable");
+}
+
+static void test_tuple_whole_assignment_semantics(void) {
+    const char *var_source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): int {\n"
+        "    var p: Point = (1, 2);\n"
+        "    p = (3, 4);\n"
+        "    return p.item1 + p.item2;\n"
+        "}\n";
+    const char *let_source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): void {\n"
+        "    let p: Point = (1, 2);\n"
+        "    p = (3, 4);\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("tuple_var_whole_assign.f", var_source);
+    assert_single_source_semantic_error_contains("tuple_let_whole_assign.f",
+                                                 let_source,
+                                                 "not writable");
+}
+
+static void test_tuple_type_constraint_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Pair(int, int);\n"
+        "func bad<T: Pair>(value: T): T { return value; }\n";
+
+    assert_single_source_semantic_error_contains("tuple_constraint.f",
+                                                 source,
+                                                 "tuple type cannot be used as a constraint");
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -14218,6 +14427,15 @@ int main(void) {
     test_generic_spec_generic_parent_forwarding_ok();
     test_generic_duplicate_fn_by_type_param_name_only_rejected();
     test_generic_same_name_same_arity_different_constraint_rejected();
+    test_tuple_literal_expected_contexts_pass();
+    test_tuple_literal_without_target_is_rejected();
+    test_tuple_literal_shape_mismatch_is_rejected();
+    test_tuple_named_conversion_rules();
+    test_tuple_destructuring_semantics();
+    test_tuple_destructuring_non_tuple_is_rejected();
+    test_tuple_item_assignment_is_rejected();
+    test_tuple_whole_assignment_semantics();
+    test_tuple_type_constraint_is_rejected();
     test_variadic_accepts_zero_one_many_arguments();
     test_fixed_and_variadic_parameters_accept_calls();
     test_variadic_rejects_mismatched_element_type();

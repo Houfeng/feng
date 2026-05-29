@@ -23,6 +23,12 @@ typedef struct Parser {
 #define APPEND_VALUE(parser, items, count, capacity, value) \
     append_raw((parser), (void **)&(items), &(count), &(capacity), sizeof(*(items)), &(value))
 
+#define FENG_TUPLE_MAX_ITEMS 8U
+
+static const char *const k_tuple_item_names[FENG_TUPLE_MAX_ITEMS] = {
+    "item1", "item2", "item3", "item4", "item5", "item6", "item7", "item8"
+};
+
 static FengProgram *parse_program(Parser *parser);
 static FengDecl *parse_declaration(Parser *parser);
 static FengBlock *parse_block(Parser *parser);
@@ -31,6 +37,10 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
 static FengExpr *parse_expression(Parser *parser);
 static FengExpr *parse_unary(Parser *parser);
 static FengTypeRef *parse_type_ref(Parser *parser);
+static FengBinding parse_binding_core(Parser *parser,
+                                      FengMutability mutability,
+                                      bool require_type,
+                                      bool allow_destructure);
 static bool parser_match(Parser *parser, FengTokenKind kind);
 static void free_type_params(FengTypeParam *params, size_t count);
 static void free_type_ref(FengTypeRef *type_ref);
@@ -704,7 +714,83 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
     return true;
 }
 
-static FengBinding parse_binding_core(Parser *parser, FengMutability mutability, bool require_type) {
+static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding) {
+    size_t capacity = 0U;
+
+    if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '(' to start destructuring binding")) {
+        return false;
+    }
+
+    if (parser_check(parser, FENG_TOKEN_RPAREN)) {
+        return parser_error_current(parser, "destructuring bindings require at least two positions");
+    }
+
+    for (;;) {
+        FengSlice name = {0};
+
+        if (parser_check(parser, FENG_TOKEN_LPAREN)) {
+            return parser_error_current(parser, "nested destructuring bindings are not supported");
+        }
+        if (parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
+            name = slice_from_token(parser_current(parser));
+            (void)parser_advance(parser);
+        } else if (!parser_check(parser, FENG_TOKEN_COMMA) &&
+                   !parser_check(parser, FENG_TOKEN_RPAREN)) {
+            return parser_error_current(parser,
+                                        "destructuring positions must be identifiers or empty slots");
+        }
+
+        if (binding->destructure_count >= FENG_TUPLE_MAX_ITEMS) {
+            return parser_error_current(parser,
+                                        "destructuring bindings support at most 8 positions");
+        }
+        if (!APPEND_VALUE(parser,
+                          binding->destructure_names,
+                          binding->destructure_count,
+                          capacity,
+                          name)) {
+            return false;
+        }
+
+        if (parser_check(parser, FENG_TOKEN_RPAREN)) {
+            break;
+        }
+        if (!parser_expect(parser, FENG_TOKEN_COMMA, "expected ',' between destructuring positions")) {
+            return false;
+        }
+        if (parser_check(parser, FENG_TOKEN_RPAREN)) {
+            FengSlice empty = {0};
+
+            if (binding->destructure_count >= FENG_TUPLE_MAX_ITEMS) {
+                return parser_error_current(parser,
+                                            "destructuring bindings support at most 8 positions");
+            }
+            if (!APPEND_VALUE(parser,
+                              binding->destructure_names,
+                              binding->destructure_count,
+                              capacity,
+                              empty)) {
+                return false;
+            }
+            break;
+        }
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close destructuring binding")) {
+        return false;
+    }
+    if (binding->destructure_count < 2U) {
+        return parser_error_at(parser,
+                               &binding->token,
+                               "destructuring bindings require at least two positions");
+    }
+    return true;
+}
+
+static FengBinding parse_binding_core(Parser *parser,
+                                      FengMutability mutability,
+                                      bool require_type,
+                                      bool allow_destructure) {
     FengBinding binding;
 
     binding.token = parser_current_token(parser);
@@ -713,6 +799,32 @@ static FengBinding parse_binding_core(Parser *parser, FengMutability mutability,
     binding.name.length = 0U;
     binding.type = NULL;
     binding.initializer = NULL;
+    binding.is_destructure = false;
+    binding.destructure_names = NULL;
+    binding.destructure_count = 0U;
+
+    if (parser_check(parser, FENG_TOKEN_LPAREN)) {
+        if (!allow_destructure) {
+            (void)parser_error_current(parser, "destructuring is not valid in this binding context");
+            return binding;
+        }
+        binding.is_destructure = true;
+        if (!parse_destructure_binding_names(parser, &binding)) {
+            return binding;
+        }
+        if (parser_match(parser, FENG_TOKEN_COLON)) {
+            (void)parser_error_current(parser,
+                                       "destructuring bindings cannot use a single type annotation");
+            return binding;
+        }
+        if (!parser_expect(parser,
+                           FENG_TOKEN_ASSIGN,
+                           "destructuring bindings require an initializer")) {
+            return binding;
+        }
+        binding.initializer = parse_expression(parser);
+        return binding;
+    }
 
     if (!parser_expect_identifier_like(parser, &binding.name, false, "expected a binding name")) {
         return binding;
@@ -1035,6 +1147,99 @@ static FengDecl *parse_enum_declaration(Parser *parser,
     return decl;
 }
 
+static FengTypeMember *new_tuple_field_member(Parser *parser,
+                                              FengToken token,
+                                              size_t index,
+                                              FengTypeRef *type_ref) {
+    FengTypeMember *member;
+    const char *item_name;
+
+    if (index >= FENG_TUPLE_MAX_ITEMS) {
+        (void)parser_error_at(parser, &token, "tuple type declarations support at most 8 elements");
+        return NULL;
+    }
+
+    member = new_type_member(parser, FENG_TYPE_MEMBER_FIELD, token, (FengSlice){0});
+    if (member == NULL) {
+        return NULL;
+    }
+
+    item_name = k_tuple_item_names[index];
+    member->visibility = FENG_VISIBILITY_DEFAULT;
+    member->is_static = false;
+    member->as.field.mutability = FENG_MUTABILITY_LET;
+    member->as.field.name.data = item_name;
+    member->as.field.name.length = strlen(item_name);
+    member->as.field.type = type_ref;
+    member->as.field.initializer = NULL;
+    return member;
+}
+
+static bool parse_tuple_type_declaration_tail(Parser *parser, FengDecl *decl) {
+    size_t member_capacity = 0U;
+
+    decl->as.type_decl.is_tuple = true;
+    if (!parser_expect(parser, FENG_TOKEN_LPAREN, "expected '(' to start tuple type declaration")) {
+        return false;
+    }
+
+    if (!parser_check(parser, FENG_TOKEN_RPAREN)) {
+        do {
+            FengToken element_token = parser_current_token(parser);
+            FengTypeRef *element_type;
+            FengTypeMember *member;
+
+            if (decl->as.type_decl.member_count >= FENG_TUPLE_MAX_ITEMS) {
+                return parser_error_current(parser,
+                                            "tuple type declarations support at most 8 elements");
+            }
+
+            element_type = parse_type_ref(parser);
+            if (element_type == NULL) {
+                return false;
+            }
+
+            member = new_tuple_field_member(parser,
+                                            element_token,
+                                            decl->as.type_decl.member_count,
+                                            element_type);
+            if (member == NULL) {
+                free_type_ref(element_type);
+                return false;
+            }
+            if (!APPEND_VALUE(parser,
+                              decl->as.type_decl.members,
+                              decl->as.type_decl.member_count,
+                              member_capacity,
+                              member)) {
+                free_type_member(member);
+                return false;
+            }
+        } while (parser_match(parser, FENG_TOKEN_COMMA));
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close tuple type declaration")) {
+        return false;
+    }
+    if (decl->as.type_decl.member_count < 2U) {
+        return parser_error_at(parser,
+                               &decl->token,
+                               "tuple type declarations require 2 to 8 elements");
+    }
+
+    if (parser_match(parser, FENG_TOKEN_COLON)) {
+        if (!parse_spec_satisfaction_list(parser,
+                                          &decl->as.type_decl.declared_specs,
+                                          &decl->as.type_decl.declared_spec_count)) {
+            return false;
+        }
+    }
+
+    return parser_expect(parser,
+                         FENG_TOKEN_SEMICOLON,
+                         "tuple type declarations must end with ';'");
+}
+
 static FengDecl *parse_type_declaration(Parser *parser,
                                         FengSlice doc_comment,
                                         FengVisibility visibility,
@@ -1072,11 +1277,11 @@ static FengDecl *parse_type_declaration(Parser *parser,
     }
 
     if (parser_check(parser, FENG_TOKEN_LPAREN)) {
-        (void)parser_error_current(
-            parser,
-            "callable contracts must use 'spec Name(args): ReturnType;'; 'type' no longer defines callable shapes");
-        free_decl(decl);
-        return NULL;
+        if (!parse_tuple_type_declaration_tail(parser, decl)) {
+            free_decl(decl);
+            return NULL;
+        }
+        return decl;
     }
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
@@ -1128,7 +1333,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
                                             ? FENG_MUTABILITY_LET
                                             : FENG_MUTABILITY_VAR;
-            FengBinding binding = parse_binding_core(parser, mutability, false);
+            FengBinding binding = parse_binding_core(parser, mutability, false, false);
 
             if (parser->error.message != NULL) {
                 free_annotations(member_annotations, member_annotation_count);
@@ -1364,7 +1569,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
                                         ? FENG_MUTABILITY_LET
                                         : FENG_MUTABILITY_VAR;
-        FengBinding binding = parse_binding_core(parser, mutability, true);
+        FengBinding binding = parse_binding_core(parser, mutability, true, false);
 
         if (parser->error.message != NULL) {
             return NULL;
@@ -1816,7 +2021,7 @@ static FengDecl *parse_global_binding(Parser *parser,
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
     decl->visibility = visibility;
-    decl->as.binding = parse_binding_core(parser, mutability, false);
+    decl->as.binding = parse_binding_core(parser, mutability, false, false);
     if (parser->error.message != NULL) {
         free_decl(decl);
         return NULL;
@@ -2279,6 +2484,57 @@ static FengExpr *parse_lambda(Parser *parser) {
     return expr;
 }
 
+static FengExpr *parse_tuple_literal_tail(Parser *parser, FengToken token, FengExpr *first) {
+    FengExpr *expr = new_expr(parser, FENG_EXPR_TUPLE_LITERAL, token);
+    size_t capacity = 0U;
+
+    if (expr == NULL) {
+        free_expr(first);
+        return NULL;
+    }
+    if (!APPEND_VALUE(parser, expr->as.tuple_literal.items, expr->as.tuple_literal.count, capacity, first)) {
+        free_expr(first);
+        free_expr(expr);
+        return NULL;
+    }
+
+    for (;;) {
+        FengExpr *item;
+
+        if (parser_check(parser, FENG_TOKEN_RPAREN)) {
+            (void)parser_error_current(parser,
+                                       "tuple literals require an expression after ','");
+            free_expr(expr);
+            return NULL;
+        }
+        if (expr->as.tuple_literal.count >= FENG_TUPLE_MAX_ITEMS) {
+            (void)parser_error_current(parser, "tuple literals support at most 8 elements");
+            free_expr(expr);
+            return NULL;
+        }
+
+        item = parse_expression(parser);
+        if (item == NULL) {
+            free_expr(expr);
+            return NULL;
+        }
+        if (!APPEND_VALUE(parser, expr->as.tuple_literal.items, expr->as.tuple_literal.count, capacity, item)) {
+            free_expr(item);
+            free_expr(expr);
+            return NULL;
+        }
+        if (!parser_match(parser, FENG_TOKEN_COMMA)) {
+            break;
+        }
+    }
+
+    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close tuple literal")) {
+        free_expr(expr);
+        return NULL;
+    }
+    return expr;
+}
+
 /* ---------------- if / match shared helpers ---------------- */
 
 static bool is_match_label_atom_token(FengTokenKind kind) {
@@ -2666,6 +2922,8 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
 }
 
 static FengExpr *parse_group_or_cast(Parser *parser) {
+    FengToken group_token = parser_current_token(parser);
+
     if (looks_like_lambda(parser)) {
         return parse_lambda(parser);
     }
@@ -2709,6 +2967,9 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
 
         if (expr == NULL) {
             return NULL;
+        }
+        if (parser_match(parser, FENG_TOKEN_COMMA)) {
+            return parse_tuple_literal_tail(parser, group_token, expr);
         }
         if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close grouped expression")) {
             free_expr(expr);
@@ -3418,7 +3679,7 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
         if (stmt == NULL) {
             return NULL;
         }
-        stmt->as.binding = parse_binding_core(parser, mutability, false);
+        stmt->as.binding = parse_binding_core(parser, mutability, false, true);
         if (parser->error.message != NULL) {
             free_stmt(stmt);
             return NULL;
@@ -3782,6 +4043,12 @@ static void free_expr(FengExpr *expr) {
             }
             free(expr->as.array_literal.items);
             break;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                free_expr(expr->as.tuple_literal.items[index]);
+            }
+            free(expr->as.tuple_literal.items);
+            break;
         case FENG_EXPR_OBJECT_LITERAL:
             free_expr(expr->as.object_literal.target);
             for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
@@ -3896,6 +4163,7 @@ static void free_stmt(FengStmt *stmt) {
         case FENG_STMT_BINDING:
             free_type_ref(stmt->as.binding.type);
             free_expr(stmt->as.binding.initializer);
+            free(stmt->as.binding.destructure_names);
             break;
         case FENG_STMT_ASSIGN:
             free_expr(stmt->as.assign.target);
@@ -3988,6 +4256,7 @@ static void free_decl(FengDecl *decl) {
         case FENG_DECL_GLOBAL_BINDING:
             free_type_ref(decl->as.binding.type);
             free_expr(decl->as.binding.initializer);
+            free(decl->as.binding.destructure_names);
             break;
         case FENG_DECL_TYPE:
             free_type_params(decl->as.type_decl.type_params,

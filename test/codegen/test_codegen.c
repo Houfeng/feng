@@ -5051,6 +5051,222 @@ static void test_variadic_callable_spec_lambda_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_tuple_value_codegen_core(void) {
+    static const char *kSource =
+        "module feng.codegen.tuplecore;\n"
+        "type Point(int, int);\n"
+        "type Coord(int, int);\n"
+        "type Pair<T, U>(T, U);\n"
+        "type Holder {\n"
+        "    let point: Point;\n"
+        "}\n"
+        "func make_point(x: int, y: int): Point {\n"
+        "    return (x, y);\n"
+        "}\n"
+        "func sum(point: Point): int {\n"
+        "    return point.item1 + point.item2;\n"
+        "}\n"
+        "func cast_sum(point: Point): int {\n"
+        "    let coord: Coord = (Coord)point;\n"
+        "    return coord.item1 + coord.item2;\n"
+        "}\n"
+        "func destruct_literal(): int {\n"
+        "    let (x, , z) = (1, 2, 3);\n"
+        "    return x + z;\n"
+        "}\n"
+        "func destruct_call(): int {\n"
+        "    let (x, y) = make_point(3, 4);\n"
+        "    return x + y;\n"
+        "}\n"
+        "func holder_sum(): int {\n"
+        "    let holder = Holder { point: (5, 6) };\n"
+        "    return holder.point.item1 + holder.point.item2;\n"
+        "}\n"
+        "func generic_pair(): int {\n"
+        "    let pair: Pair<int, int> = (7, 8);\n"
+        "    return pair.item1 + pair.item2;\n"
+        "}\n"
+        "func replace_whole(): int {\n"
+        "    var point: Point = (1, 2);\n"
+        "    point = (3, 4);\n"
+        "    return point.item1 + point.item2;\n"
+        "}\n"
+        "func run(): int {\n"
+        "    return sum((1, 2)) + sum(make_point(3, 4)) + cast_sum((9, 10)) + destruct_literal() + destruct_call() + holder_sum() + generic_pair() + replace_whole();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/tuple_core_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (tuple core): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "struct Feng__feng__codegen__tuplecore__Point {") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Point__aggregate_desc") != NULL);
+    ASSERT(strstr(out.c_source, ".item1") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Pair__G__int__int") != NULL);
+    ASSERT(strstr(out.c_source, "feng_object_new(&FengTypeDesc__feng__codegen__tuplecore__Point") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_tuple_managed_slots_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.tuplemanaged;\n"
+        "type Label(string, int);\n"
+        "type Holder {\n"
+        "    let label: Label;\n"
+        "}\n"
+        "func make_label(name: string): Label {\n"
+        "    return (name, 7);\n"
+        "}\n"
+        "func number(label: Label): int {\n"
+        "    return label.item2;\n"
+        "}\n"
+        "func from_holder(name: string): int {\n"
+        "    let holder = Holder { label: (name, 9) };\n"
+        "    let (text, value) = holder.label;\n"
+        "    return value;\n"
+        "}\n"
+        "func default_label(): int {\n"
+        "    let label: Label;\n"
+        "    return label.item2;\n"
+        "}\n"
+        "func run(name: string): int {\n"
+        "    let label = make_label(name);\n"
+        "    return number(label) + from_holder(name) + default_label();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/tuple_managed_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (tuple managed slots): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FENG_SLOT_POINTER") != NULL);
+    ASSERT(strstr(out.c_source, "FENG_DEFAULT_INIT_FN") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_retain") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_release") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplemanaged__Label__aggregate_desc") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_tuple_fit_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.tuplefit;\n"
+        "spec Summable {\n"
+        "    func sum(): int;\n"
+        "}\n"
+        "type Point(int, int);\n"
+        "fit Point: Summable {\n"
+        "    func sum(): int {\n"
+        "        return self.item1 + self.item2;\n"
+        "    }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let point: Point = (5, 6);\n"
+        "    return point.sum();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/tuple_fit_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (tuple fit): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "__sum(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
@@ -5139,6 +5355,9 @@ int main(void) {
     test_variadic_multi_args_codegen();
     test_variadic_fixed_prefix_codegen();
     test_variadic_callable_spec_lambda_codegen();
+    test_tuple_value_codegen_core();
+    test_tuple_managed_slots_codegen();
+    test_tuple_fit_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }
