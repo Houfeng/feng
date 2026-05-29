@@ -6,6 +6,7 @@ func main(args: string[]) {
   run_set_tests();
   run_list_tests();
   run_length_tests();
+  run_math_tests();
   run_string_tests();
   run_slice_tests();
   run_io_tests();

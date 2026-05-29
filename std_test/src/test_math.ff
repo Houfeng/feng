@@ -1,0 +1,75 @@
+module std_test;
+
+import std.math;
+
+func absValue(value: f64): f64 {
+  if value < 0.0 {
+    return 0.0 - value;
+  }
+
+  return value;
+}
+
+func checkAlmostEq(actual: f64, expected: f64, tolerance: f64, name: string) {
+  let delta = actual - expected;
+  check(absValue(delta) <= tolerance, name);
+}
+
+func math_basic_tests() {
+  let tolerance: f64 = 0.0000000001;
+
+  checkAlmostEq(Math.abs(-3.25), 3.25, tolerance, "math/abs");
+  checkAlmostEq(Math.min(2.0, -1.0), -1.0, tolerance, "math/min");
+  checkAlmostEq(Math.max(2.0, -1.0), 2.0, tolerance, "math/max");
+  checkAlmostEq(Math.copySign(2.0, -1.0), -2.0, tolerance, "math/copySign");
+}
+
+func math_trigonometry_tests() {
+  let tolerance: f64 = 0.0000000001;
+
+  checkAlmostEq(Math.sin(0.5), 0.479425538604203, tolerance, "math/sin");
+  checkAlmostEq(Math.cos(0.5), 0.877582561890373, tolerance, "math/cos");
+  checkAlmostEq(Math.tan(0.25), 0.255341921221036, tolerance, "math/tan");
+  checkAlmostEq(Math.asin(0.5), 0.523598775598299, tolerance, "math/asin");
+  checkAlmostEq(Math.acos(0.5), 1.047197551196598, tolerance, "math/acos");
+  checkAlmostEq(Math.atan(1.0), 0.785398163397448, tolerance, "math/atan");
+  checkAlmostEq(Math.atan2(1.0, 1.0), 0.785398163397448, tolerance, "math/atan2");
+  checkAlmostEq(Math.sinh(1.0), 1.175201193643801, tolerance, "math/sinh");
+  checkAlmostEq(Math.cosh(1.0), 1.543080634815244, tolerance, "math/cosh");
+  checkAlmostEq(Math.tanh(1.0), 0.761594155955765, tolerance, "math/tanh");
+}
+
+func math_exponential_tests() {
+  let tolerance: f64 = 0.0000000001;
+
+  checkAlmostEq(Math.exp(1.0), 2.718281828459045, tolerance, "math/exp");
+  checkAlmostEq(Math.exp2(5.0), 32.0, tolerance, "math/exp2");
+  checkAlmostEq(Math.expm1(1.0), 1.718281828459045, tolerance, "math/expm1");
+  checkAlmostEq(Math.log(Math.exp(1.0)), 1.0, tolerance, "math/log");
+  checkAlmostEq(Math.log2(8.0), 3.0, tolerance, "math/log2");
+  checkAlmostEq(Math.log10(1000.0), 3.0, tolerance, "math/log10");
+  checkAlmostEq(Math.log1p(1.0), 0.693147180559945, tolerance, "math/log1p");
+  checkAlmostEq(Math.pow(2.0, 10.0), 1024.0, tolerance, "math/pow");
+  checkAlmostEq(Math.sqrt(81.0), 9.0, tolerance, "math/sqrt");
+  checkAlmostEq(Math.cbrt(27.0), 3.0, tolerance, "math/cbrt");
+  checkAlmostEq(Math.hypot(3.0, 4.0), 5.0, tolerance, "math/hypot");
+}
+
+func math_rounding_tests() {
+  let tolerance: f64 = 0.0000000001;
+
+  checkAlmostEq(Math.ceil(2.25), 3.0, tolerance, "math/ceil");
+  checkAlmostEq(Math.floor(2.75), 2.0, tolerance, "math/floor");
+  checkAlmostEq(Math.round(2.5), 3.0, tolerance, "math/round-pos-half");
+  checkAlmostEq(Math.round(-2.5), -3.0, tolerance, "math/round-neg-half");
+  checkAlmostEq(Math.trunc(-2.75), -2.0, tolerance, "math/trunc");
+  checkAlmostEq(Math.fmod(7.5, 2.0), 1.5, tolerance, "math/fmod");
+  checkAlmostEq(Math.remainder(7.5, 2.0), -0.5, tolerance, "math/remainder");
+}
+
+open func run_math_tests() {
+  math_basic_tests();
+  math_trigonometry_tests();
+  math_exponential_tests();
+  math_rounding_tests();
+}

@@ -1,12 +1,398 @@
 open module std.math;
 
+/**
+ * Private basic libm bindings backing `Math`.
+ */
+@cdecl("libm")
+extern func fabs(x: f64): f64;
+
+@cdecl("libm")
+extern func fmin(x: f64, y: f64): f64;
+
+@cdecl("libm")
+extern func fmax(x: f64, y: f64): f64;
+
+@cdecl("libm")
+extern func copysign(x: f64, sign: f64): f64;
+
+/**
+ * Private trigonometric libm bindings backing `Math`.
+ */
 @cdecl("libm")
 extern func sin(x: f64): f64;
 
+@cdecl("libm")
+extern func cos(x: f64): f64;
+
+@cdecl("libm")
+extern func tan(x: f64): f64;
+
+@cdecl("libm")
+extern func asin(x: f64): f64;
+
+@cdecl("libm")
+extern func acos(x: f64): f64;
+
+@cdecl("libm")
+extern func atan(x: f64): f64;
+
+@cdecl("libm")
+extern func atan2(y: f64, x: f64): f64;
+
+@cdecl("libm")
+extern func sinh(x: f64): f64;
+
+@cdecl("libm")
+extern func cosh(x: f64): f64;
+
+@cdecl("libm")
+extern func tanh(x: f64): f64;
+
+/**
+ * Private exponential and logarithmic libm bindings backing `Math`.
+ */
+@cdecl("libm")
+extern func exp(x: f64): f64;
+
+@cdecl("libm")
+extern func exp2(x: f64): f64;
+
+@cdecl("libm")
+extern func expm1(x: f64): f64;
+
+@cdecl("libm")
+extern func log(x: f64): f64;
+
+@cdecl("libm")
+extern func log2(x: f64): f64;
+
+@cdecl("libm")
+extern func log10(x: f64): f64;
+
+@cdecl("libm")
+extern func log1p(x: f64): f64;
+
+@cdecl("libm")
+extern func pow(x: f64, y: f64): f64;
+
+@cdecl("libm")
+extern func sqrt(x: f64): f64;
+
+@cdecl("libm")
+extern func cbrt(x: f64): f64;
+
+@cdecl("libm")
+extern func hypot(x: f64, y: f64): f64;
+
+/**
+ * Private rounding and remainder libm bindings backing `Math`.
+ */
+@cdecl("libm")
+extern func ceil(x: f64): f64;
+
+@cdecl("libm")
+extern func floor(x: f64): f64;
+
+@cdecl("libm")
+extern func round(x: f64): f64;
+
+@cdecl("libm")
+extern func trunc(x: f64): f64;
+
+@cdecl("libm")
+extern func fmod(x: f64, y: f64): f64;
+
+@cdecl("libm")
+extern func remainder(x: f64, y: f64): f64;
+
+/**
+ * Provides double-precision scalar math functions backed by `libm`.
+ */
 open type Math {
-  open func sin(x: f64): f64 {
+  /**
+   * Returns the absolute value of `x`.
+   * @param x - source value
+   * @return magnitude of `x`
+   */
+  open static func abs(x: f64): f64 {
+    return fabs(x);
+  }
+
+  /**
+   * Returns the smaller value of `x` and `y` using `libm` `fmin` semantics.
+   * @param x - first candidate value
+   * @param y - second candidate value
+   * @return smaller value chosen by `fmin`
+   */
+  open static func min(x: f64, y: f64): f64 {
+    return fmin(x, y);
+  }
+
+  /**
+   * Returns the larger value of `x` and `y` using `libm` `fmax` semantics.
+   * @param x - first candidate value
+   * @param y - second candidate value
+   * @return larger value chosen by `fmax`
+   */
+  open static func max(x: f64, y: f64): f64 {
+    return fmax(x, y);
+  }
+
+  /**
+   * Returns `x` with its sign replaced by the sign of `sign`.
+   * @param x - value contributing the magnitude
+   * @param sign - value contributing the sign bit
+   * @return magnitude of `x` carrying the sign of `sign`
+   */
+  open static func copySign(x: f64, sign: f64): f64 {
+    return copysign(x, sign);
+  }
+
+  /**
+   * Returns the sine of `x`, where `x` is interpreted in radians.
+   * @param x - source angle in radians
+   * @return sine of `x`
+   */
+  open static func sin(x: f64): f64 {
     return sin(x);
   }
-}
 
-open let math = Math();
+  /**
+   * Returns the cosine of `x`, where `x` is interpreted in radians.
+   * @param x - source angle in radians
+   * @return cosine of `x`
+   */
+  open static func cos(x: f64): f64 {
+    return cos(x);
+  }
+
+  /**
+   * Returns the tangent of `x`, where `x` is interpreted in radians.
+   * @param x - source angle in radians
+   * @return tangent of `x`
+   */
+  open static func tan(x: f64): f64 {
+    return tan(x);
+  }
+
+  /**
+   * Returns the principal arc-sine of `x` in radians.
+   * @param x - source sine value
+   * @return principal arc-sine of `x`
+   */
+  open static func asin(x: f64): f64 {
+    return asin(x);
+  }
+
+  /**
+   * Returns the principal arc-cosine of `x` in radians.
+   * @param x - source cosine value
+   * @return principal arc-cosine of `x`
+   */
+  open static func acos(x: f64): f64 {
+    return acos(x);
+  }
+
+  /**
+   * Returns the principal arc-tangent of `x` in radians.
+   * @param x - source tangent value
+   * @return principal arc-tangent of `x`
+   */
+  open static func atan(x: f64): f64 {
+    return atan(x);
+  }
+
+  /**
+   * Returns the principal arc-tangent of the point `(x, y)` in radians.
+   * @param y - y-coordinate of the point
+   * @param x - x-coordinate of the point
+   * @return principal arc-tangent of `(x, y)`
+   */
+  open static func atan2(y: f64, x: f64): f64 {
+    return atan2(y, x);
+  }
+
+  /**
+   * Returns the hyperbolic sine of `x`.
+   * @param x - source value
+   * @return hyperbolic sine of `x`
+   */
+  open static func sinh(x: f64): f64 {
+    return sinh(x);
+  }
+
+  /**
+   * Returns the hyperbolic cosine of `x`.
+   * @param x - source value
+   * @return hyperbolic cosine of `x`
+   */
+  open static func cosh(x: f64): f64 {
+    return cosh(x);
+  }
+
+  /**
+   * Returns the hyperbolic tangent of `x`.
+   * @param x - source value
+   * @return hyperbolic tangent of `x`
+   */
+  open static func tanh(x: f64): f64 {
+    return tanh(x);
+  }
+
+  /**
+   * Returns `e` raised to the power `x`.
+   * @param x - exponent
+   * @return exponential value `e^x`
+   */
+  open static func exp(x: f64): f64 {
+    return exp(x);
+  }
+
+  /**
+   * Returns `2` raised to the power `x`.
+   * @param x - exponent
+   * @return exponential value `2^x`
+   */
+  open static func exp2(x: f64): f64 {
+    return exp2(x);
+  }
+
+  /**
+   * Returns `e^x - 1` with the accuracy characteristics of `libm expm1`.
+   * @param x - exponent
+   * @return `e^x - 1`
+   */
+  open static func expm1(x: f64): f64 {
+    return expm1(x);
+  }
+
+  /**
+   * Returns the natural logarithm of `x`.
+   * @param x - source value
+   * @return natural logarithm of `x`
+   */
+  open static func log(x: f64): f64 {
+    return log(x);
+  }
+
+  /**
+   * Returns the base-2 logarithm of `x`.
+   * @param x - source value
+   * @return base-2 logarithm of `x`
+   */
+  open static func log2(x: f64): f64 {
+    return log2(x);
+  }
+
+  /**
+   * Returns the base-10 logarithm of `x`.
+   * @param x - source value
+   * @return base-10 logarithm of `x`
+   */
+  open static func log10(x: f64): f64 {
+    return log10(x);
+  }
+
+  /**
+   * Returns `log(1 + x)` with the accuracy characteristics of `libm log1p`.
+   * @param x - value added to `1`
+   * @return natural logarithm of `1 + x`
+   */
+  open static func log1p(x: f64): f64 {
+    return log1p(x);
+  }
+
+  /**
+   * Returns `x` raised to the power `y`.
+   * @param x - base value
+   * @param y - exponent value
+   * @return result of raising `x` to `y`
+   */
+  open static func pow(x: f64, y: f64): f64 {
+    return pow(x, y);
+  }
+
+  /**
+   * Returns the square root of `x`.
+   * @param x - source value
+   * @return square root of `x`
+   */
+  open static func sqrt(x: f64): f64 {
+    return sqrt(x);
+  }
+
+  /**
+   * Returns the cube root of `x`.
+   * @param x - source value
+   * @return cube root of `x`
+   */
+  open static func cbrt(x: f64): f64 {
+    return cbrt(x);
+  }
+
+  /**
+   * Returns the Euclidean length of the vector `(x, y)`.
+   * @param x - x-coordinate
+   * @param y - y-coordinate
+   * @return Euclidean length of `(x, y)`
+   */
+  open static func hypot(x: f64, y: f64): f64 {
+    return hypot(x, y);
+  }
+
+  /**
+   * Returns the smallest integer value not less than `x`.
+   * @param x - source value
+   * @return ceil of `x`
+   */
+  open static func ceil(x: f64): f64 {
+    return ceil(x);
+  }
+
+  /**
+   * Returns the largest integer value not greater than `x`.
+   * @param x - source value
+   * @return floor of `x`
+   */
+  open static func floor(x: f64): f64 {
+    return floor(x);
+  }
+
+  /**
+   * Returns `x` rounded to the nearest integral value, halfway cases away from zero.
+   * @param x - source value
+   * @return rounded value
+   */
+  open static func round(x: f64): f64 {
+    return round(x);
+  }
+
+  /**
+   * Returns `x` truncated toward zero.
+   * @param x - source value
+   * @return truncated value
+   */
+  open static func trunc(x: f64): f64 {
+    return trunc(x);
+  }
+
+  /**
+   * Returns the floating-point remainder of dividing `x` by `y` using `fmod` semantics.
+   * @param x - dividend value
+   * @param y - divisor value
+   * @return floating-point remainder computed by `fmod`
+   */
+  open static func fmod(x: f64, y: f64): f64 {
+    return fmod(x, y);
+  }
+
+  /**
+   * Returns the IEEE remainder of dividing `x` by `y` using `remainder` semantics.
+   * @param x - dividend value
+   * @param y - divisor value
+   * @return floating-point remainder computed by `remainder`
+   */
+  open static func remainder(x: f64, y: f64): f64 {
+    return remainder(x, y);
+  }
+}
