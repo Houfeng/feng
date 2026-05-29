@@ -88,7 +88,7 @@ let s = string.join(["a", "b"], ",")  // 同上
 
 ```feng
 fit string {
-    open static func fromUtf8bytes(bytes: [byte]): string { ... }
+    open static func fromUtf8Bytes(bytes: byte[]): string { ... }
 }
 
 fit int {
@@ -121,13 +121,13 @@ Counter._internal = 0              // 语义报错（seal）
 ```feng
 // 模块 mymod 中
 fit string {
-    open static func fromUtf8bytes(bytes: [byte]): string { ... }
+    open static func fromUtf8Bytes(bytes: byte[]): string { ... }
 }
 
 // 另一个模块中
 use mymod
 
-let s = string.fromUtf8bytes(buf)  // 合法，mymod 已引入
+let s = string.fromUtf8Bytes(buf)  // 合法，mymod 已引入
 ```
 
 ### 访问语法
@@ -136,7 +136,7 @@ let s = string.fromUtf8bytes(buf)  // 合法，mymod 已引入
 // 合法：通过类型名访问
 let c = Counter.create()
 Counter.count = Counter.count + 1
-let s = string.fromUtf8bytes(buf)
+let s = string.fromUtf8Bytes(buf)
 
 // 非法：通过实例访问静态成员（语义报错）
 let c = Counter { value: 0 }

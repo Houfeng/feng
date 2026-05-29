@@ -101,7 +101,7 @@ fit User {
 }
 
 fit string {
-  open static func from_utf8bytes(bytes: [byte]): string { ... }
+  open static func fromUtf8Bytes(bytes: byte[]): string { ... }
 }
 
 fit Box<T> {
@@ -111,7 +111,7 @@ fit Box<T> {
 }
 ```
 
-`fit` 静态方法与 `type` 静态方法使用同一成员关键字顺序: `[open | seal] static func ...`。引入定义该 `fit` 的模块后,公开静态方法在调用侧可见面可用,如 `User.from_name("feng")` 或 `string.from_utf8bytes(bytes)`。
+`fit` 静态方法与 `type` 静态方法使用同一成员关键字顺序: `[open | seal] static func ...`。引入定义该 `fit` 的模块后,公开静态方法在调用侧可见面可用,如 `User.from_name("feng")` 或 `string.fromUtf8Bytes(bytes)`。
 
 正确语法七,泛型参数的子到父传递与直接声明一致:
 

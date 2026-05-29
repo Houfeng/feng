@@ -68,6 +68,7 @@
 - `string` 的 `==` / `!=` 按内容（值语义）比较，不依赖底层引用身份。
 - `string` 支持 `+` 运算符进行拼接，结果为新的 `string` 值。
 - `string` 的长度访问通过标准库在内建类型上的 `fit` 方法 `length()` 提供，返回类型为 `long`（`i64`），表示 UTF-8 字节长度。
+- `string.fromUtf8Bytes(bytes: byte[]): string` 通过标准库在内建类型上的静态 `fit` 方法提供，返回由 `bytes` 全量内容构造得到的 `string` 值；非空输入会复制字节内容，空数组返回标准空字符串值；当前运行时按字节复制，不额外执行 UTF-8 合法性校验。
 - 当前版本不支持 `.length` / `.len` 属性语法；必须使用方法调用形式 `value.length()`。
 - `string` 在 C ABI 边界上的兼容资格、桥接与限制统一见 [Feng 语言 C 互操作规范](./feng-interop.md)。`string` 本身没有 `char*` 之类的类型别名。
 

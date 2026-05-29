@@ -34,7 +34,7 @@
   - `length` 必须满足 `0 <= length <= value.length()`。
   - 返回值是新的 Feng `string` 值；当 `length == 0` 时，返回共享空字符串单例。
   - 当前实现只做按字节复制，不在这里额外执行 UTF-8 合法性校验。
-- 主要使用点：标准库 `std/src/io/input.ff` 用它把输入字节数组转换为 `string`。
+- 主要使用点：标准库 `std/src/builtin/string.ff` 用它实现 `string.fromUtf8Bytes(bytes)`；I/O 模块通过该公开静态方法把输入或格式化后的字节数组转换为 `string`。
 - 边界说明：若 `length` 为负或超过数组长度，runtime 直接失败。
 
 ### 2.3 `feng_array_length_i64`

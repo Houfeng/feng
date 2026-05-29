@@ -3,10 +3,22 @@ open module std;
 @runtime
 extern func feng_string_utf8_length(value: string): long;
 
+@runtime
+extern func feng_string_from_utf8_bytes(value: byte[], length: long): string;
+
 /**
- * Extends `string` with standard length-related operations.
+ * Extends `string` with standard UTF-8 operations.
  */
 open fit string {
+  /**
+   * Returns a new string by copying all bytes from `bytes`.
+   * @param bytes - UTF-8 byte sequence to copy
+   * @return string containing the copied bytes
+   */
+  open static func fromUtf8Bytes(bytes: byte[]): string {
+    return feng_string_from_utf8_bytes(bytes, bytes.length());
+  }
+
   /**
    * Returns the UTF-8 byte length of this string.
    * @return number of bytes in this string

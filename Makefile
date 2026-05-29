@@ -135,6 +135,9 @@ std-tests: cli runtime
 	grep -q '^__STDIO_WRITE__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_WRITE_TEXT__$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_LINE__$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_FROM_UTF8_ASCII__=hello$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_FROM_UTF8_UTF8__=你好$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_FROM_UTF8_EMPTY__=$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_PRINTLN__ left/right$$' ./std_test/build/std_test.stdout

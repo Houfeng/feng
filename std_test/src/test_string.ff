@@ -1,0 +1,33 @@
+module std_test;
+
+import std;
+
+func string_from_utf8_bytes_ascii() {
+  let bytes: byte[] = [(byte)104, (byte)101, (byte)108, (byte)108, (byte)111];
+  let text = string.fromUtf8Bytes(bytes);
+
+  check(text.length() == (long)5, "string/fromUtf8Bytes-ascii-length");
+  writeLine("__STRING_FROM_UTF8_ASCII__=" + text);
+}
+
+func string_from_utf8_bytes_utf8() {
+  let bytes: byte[] = [(byte)228, (byte)189, (byte)160, (byte)229, (byte)165, (byte)189];
+  let text = string.fromUtf8Bytes(bytes);
+
+  check(text.length() == (long)6, "string/fromUtf8Bytes-utf8-length");
+  writeLine("__STRING_FROM_UTF8_UTF8__=" + text);
+}
+
+func string_from_utf8_bytes_empty() {
+  let bytes: byte[!] = byte[: (long)0];
+  let text = string.fromUtf8Bytes((byte[])bytes);
+
+  check(text.length() == (long)0, "string/fromUtf8Bytes-empty-length");
+  writeLine("__STRING_FROM_UTF8_EMPTY__=" + text);
+}
+
+open func run_string_tests() {
+  string_from_utf8_bytes_ascii();
+  string_from_utf8_bytes_utf8();
+  string_from_utf8_bytes_empty();
+}

@@ -9,9 +9,6 @@ extern func read(fd: int, buf: byte*, count: long): long;
 extern func write(fd: int, buf: byte*, count: long): long;
 
 @runtime
-extern func feng_string_from_utf8_bytes(value: byte[], length: long): string;
-
-@runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 /**
@@ -41,7 +38,7 @@ seal func appendBytes(target: List<byte>, values: byte[]) {
  */
 seal func lineBytesToString(line: List<byte>): string {
 	let entries = line.entries();
-	return feng_string_from_utf8_bytes(entries, entries.length());
+	return string.fromUtf8Bytes(entries);
 }
 
 /**
@@ -112,7 +109,7 @@ seal func renderFormattedBytes(format: string, args: string[]): byte[] {
  */
 seal func renderFormattedString(fmt: string, args: string[]): string {
 	let rendered = renderFormattedBytes(fmt, args);
-	return feng_string_from_utf8_bytes(rendered, rendered.length());
+	return string.fromUtf8Bytes(rendered);
 }
 
 /**
