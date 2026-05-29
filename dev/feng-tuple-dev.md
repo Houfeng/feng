@@ -24,9 +24,9 @@
 - [ ] S7. 解构语义展开：平铺为各元素的独立绑定，继承 `let`/`var` 语义；空位跳过，不产生绑定
 - [ ] S8. 解构右侧为字面量元组时的语义处理：按位置推断各位置类型，编译期展开
 - [ ] S9. 嵌套解构报编译错误（解构模式只允许标识符或空位，不允许 `(...)`）
-- [ ] S10. 泛型元组：具名元组泛型参数的实例化、类型推断（与现有泛型机制复用）
-- [ ] S11. 具名元组不能作为泛型上界约束，使用时报明确编译错误
-- [ ] S12. `fit` 支持：具名元组走普通 `type` 的 `fit` 路径，无需额外处理（验证现有 fit 机制可覆盖）
+- [ ] S10. 泛型元组：**验证**现有泛型机制对元组无遗漏，无需新增逻辑。`type_params[]` 已有，实例化时现有替换逻辑遍历 `members[].as.field.type` 做参数替换，元组 member 与普通 struct field 使用同一个 `FengTypeMember.as.field` 结构，路径完全命中。S2 的逐位置字面量检查在实例化后读到的已是具体类型，无需感知泛型。
+- [ ] S11. 具名元组不能作为泛型上界约束：约束检查处加一个 `is_tuple` 判断报错，改动极小
+- [ ] S12. `fit` 支持：**验证**现有 fit 机制可覆盖，无需新增逻辑。`members[]` 已有，fit 路径直接命中
 
 ## Codegen
 
@@ -141,6 +141,21 @@ typedef struct FengBinding {
 现有的 `FENG_SEMANTIC_TYPE_FACT_DECL` kind 已可标记具名元组，无需新增 kind。语义分析器在处理 `FengDecl.type_decl.is_tuple == true` 时走独立路径，向类型事实表注册该 decl；后续 coercion 检查读取 `members[]` 做位置匹配（第 i 个 member 即 item(i+1) 的类型）。
 
 **S5（元素不可变）自动覆盖**：parser 合成的 member 均为 `FENG_MUTABILITY_LET`，现有的字段不可变赋值检查路径直接报错，无需新增逻辑。
+
+**各任务改动量一览**
+
+| 分类 | 任务 | 改动 |
+|------|------|------|
+| 必须新增逻辑 | S2/S3 字面量推断 | `FENG_EXPR_TUPLE_LITERAL` 是新 expr kind，需在 `validate_expr_against_expected_type()` 新增处理分支，逐位置检查元素类型 |
+| 必须新增逻辑 | S6 显式转换检查 | 现有转换检查不认识元组，需比较两个 `is_tuple` 类型的 `member_count` + 各位置类型 |
+| 必须新增逻辑 | S7/S8 解构展开 | `is_destructure` 是新字段，需新增展开逻辑将其平铺为独立 binding 序列 |
+| 改动极小 | S1 类型注册 | 现有 `FENG_DECL_TYPE` 注册路径复用，只需把 `is_tuple` 透传到类型事实供 S2/S6 查询 |
+| 改动极小 | S9 嵌套解构报错 | 解构 pattern 解析时加 `is_tuple` 判断即可 |
+| 改动极小 | S11 上界约束报错 | 约束检查处加一个 `is_tuple` 判断 |
+| 自动继承，仅验证 | S4 成员访问 | `members[]` 已有对应 field，现有成员查找路径直接命中 |
+| 自动继承，仅验证 | S5 元素不可变 | `FENG_MUTABILITY_LET` 检查已有 |
+| 自动继承，仅验证 | S10 泛型 | `type_params[]` 已有，实例化替换遍历 `members[].as.field.type`，路径完全命中 |
+| 自动继承，仅验证 | S12 fit | `members[]` 已有，fit 路径直接工作 |
 
 **新增 Coercion 路径**
 
