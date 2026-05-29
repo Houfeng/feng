@@ -286,6 +286,60 @@ struct FengBuiltin__string r = _feng_stm__mymod__string__repeat__string_int(s, 3
 
 ---
 
+## 任务清单
+
+### Phase 1 — 文档
+
+- [ ] 更新 `docs/feng-type.md`：static 成员语法、访问规则、可见性、泛型静态方法、跨包规则、禁止项
+- [ ] 更新 `docs/feng-fit.md`：fit static 语法、内建类型示例、重载规则、use 可见性规则
+
+### Phase 2 — 词法器
+
+- [ ] `src/lexer/token.h`：将 `X(STATIC, "static")` 从 `FENG_RESERVED_WORD_LIST` 移入 `FENG_KEYWORD_LIST`
+- [ ] `test/lexer/test_lexer.c`：计数更新（keyword +1，reserved -1），删除旧保留词测试，新增关键词正向测试
+
+### Phase 3 — 解析器 / AST
+
+- [ ] `src/parser/parser.h`：`FengTypeMember` 新增 `bool is_static`
+- [ ] `src/parser/parser.h`：`FengResolvedCallableKind` 新增 `TYPE_STATIC_METHOD`、`FIT_STATIC_METHOD`
+- [ ] `src/parser/parser.c`：`parse_type_declaration` 成员循环插入 `static` 匹配逻辑
+- [ ] `src/parser/parser.c`：`parse_fit_method_member` 插入 `static` 匹配逻辑
+- [ ] `src/parser/parser.c`：`parse_spec_member` 插入 `static` 拒绝检查
+
+### Phase 4 — 语义分析
+
+- [ ] `ResolvedTypeTarget` 扩展：新增 `is_builtin_type_name` + `builtin_name`
+- [ ] `resolve_type_target_expr`：内建类型名识别分支
+- [ ] 新增辅助函数 `find_type_static_member`
+- [ ] 新增辅助函数 `find_fit_static_method_for_type`
+- [ ] 新增辅助函数 `find_builtin_fit_static_method`
+- [ ] `validate_instance_member_expr`：静态成员访问路径（含实例访问静态成员的报错）
+- [ ] `infer_member_expr_type`：静态字段类型推断
+- [ ] `validate_function_call_expr`：静态方法调用路径（用户类型 + 内建类型）
+- [ ] `validate_type_member_overloads` / `validate_type_member_overload_overlap`：静态/实例独立重载集
+
+### Phase 5 — 代码生成
+
+- [ ] `UserType` 结构体扩展：`static_methods`、`static_bindings` 字段
+- [ ] `BuiltinFit` 结构体扩展：`static_methods` 字段
+- [ ] `cg_pass_register_*`：按 `is_static` 分发到静态槽
+- [ ] `cg_emit_type_static_binding`：存储槽 + inited flag + ensure_init 函数生成
+- [ ] `cg_emit_type_static_method`：无 self 参数的直接 C 函数生成
+- [ ] `FENG_EXPR_CALL` 处理：`TYPE_STATIC_METHOD` / `FIT_STATIC_METHOD` 直接调用生成
+- [ ] `FENG_EXPR_MEMBER` 处理：静态绑定读取 / 写入（ensure_init + 槽访问）
+
+### Phase 6 — 测试
+
+- [ ] 词法器测试：`static` 关键词正向 + 保留词删除
+- [ ] 解析器测试：成功场景（static let/var/func，fit static，泛型 static）
+- [ ] 解析器测试：失败场景（静态构造器、静态析构器、顺序错误、spec 中 static）
+- [ ] 语义测试：成功场景（类型名调用、fit 内建类型、跨包 open static）
+- [ ] 语义测试：失败场景（实例访问静态成员、重载冲突）
+- [ ] 代码生成测试：存储槽/ensure_init 生成、无 self 直接调用、var 赋值、builtin fit 调用
+- [ ] 全量回归：所有现有测试通过
+
+---
+
 ## 各层变更明细
 
 ### Phase 1 — 文档（先于所有代码变更）
