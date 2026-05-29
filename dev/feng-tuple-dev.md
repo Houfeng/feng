@@ -11,7 +11,7 @@
 - [ ] P3. 解析元组字面量 `(expr, expr, ...)` 作为值表达式
 - [ ] P4. 解析解构绑定 `let (x, y) = ...` / `var (x, y) = ...`，支持空位（相邻逗号间无标识符）
 - [ ] P5. 解析显式类型转换 `(TupleType)expr`（与现有转换语法复用）
-- [ ] P6. 元素数量检查：超过 8 个元素报编译错误（可在 parser 或 semantic 阶段做，统一决策）
+- [ ] P6. 元素数量检查：超过 8 个元素，Parser 立即报错
 
 ## Semantic
 
@@ -21,7 +21,7 @@
 - [ ] S4. 成员访问 `.item1` / `.item2` / ... 解析：根据具名元组元素列表生成对应字段访问
 - [ ] S5. 元素不可变：无论 `let`/`var`，禁止对单个元素原地赋值（`a.item1 = x` 报错）— parser 合成 member 时固定 `FENG_MUTABILITY_LET`，由现有字段不可变检查路径自动覆盖，需验证无遗漏
 - [ ] S6. 具名元组间显式转换：结构（元素数量 + 各位置类型）完全相同时允许，否则报错；禁止隐式转换
-- [ ] S7. 解构语义展开：平铺为各元素的独立绑定，继承 `let`/`var` 语义；空位跳过，不产生绑定
+- [ ] S7. 解构语义展开：平铺为各元素的独立绑定，继承 `let`/`var` 语义；空位跳过，不产生绑定；若右侧不是简单变量（如函数调用），codegen 先生成临时变量持有结果，再按位置展开，避免右侧被求值多次
 - [ ] S8. 解构右侧为字面量元组时的语义处理：按位置推断各位置类型，编译期展开
 - [ ] S9. 嵌套解构报编译错误（解构模式只允许标识符或空位，不允许 `(...)`）
 - [ ] S10. 泛型元组：**验证**现有泛型机制对元组无遗漏，无需新增逻辑。`type_params[]` 已有，实例化时现有替换逻辑遍历 `members[].as.field.type` 做参数替换，元组 member 与普通 struct field 使用同一个 `FengTypeMember.as.field` 结构，路径完全命中。S2 的逐位置字面量检查在实例化后读到的已是具体类型，无需感知泛型。
@@ -247,13 +247,21 @@ static const FengAggregateValueDescriptor Point_agg = {
 解构不产生任何运行时成本，semantic 阶段将 `is_destructure` 的 `FengBinding` 展开为 N 个普通 `FengBinding`，codegen 处理的 AST 中已无解构节点：
 
 ```c
-/* Feng 源码 */
+/* Feng 源码：右侧是简单变量，直接展开 */
 let (x, , z) = t;
 
-/* semantic 展开后等价于（codegen 实际看到的形式）*/
-let x: T1 = t.item1;
-/* item2 空位：不生成任何绑定 */
-let z: T3 = t.item3;
+/* codegen 生成 */
+T1 x = t.item1;
+/* item2 空位：不生成任何赋值 */
+T3 z = t.item3;
+
+/* Feng 源码：右侧是函数调用，先生成临时变量，避免 foo() 被求值多次 */
+let (x, , z) = foo();
+
+/* codegen 生成 */
+FooTuple_t _tmp = foo();
+T1 x = _tmp.item1;
+T3 z = _tmp.item3;
 ```
 
 ### 显式类型转换的 Codegen
