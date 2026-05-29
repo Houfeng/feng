@@ -110,6 +110,7 @@ FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl);
 FengMutability feng_symbol_decl_mutability(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl);
+bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_return_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_fit_target(const FengSymbolDeclView *decl);

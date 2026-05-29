@@ -71,14 +71,22 @@ spec Bad {
 spec BadMapper(let x: int): int;
 ```
 
-错语法三,循环声明满足:
+错语法三,`spec` 中声明静态成员:
+
+```feng
+spec Bad {
+  static func make(): Bad;
+}
+```
+
+错语法四,循环声明满足:
 
 ```feng
 spec A: B {}
 spec B: A {}
 ```
 
-错语法四,`type` 声明头满足 callable-form `spec`:
+错语法五,`type` 声明头满足 callable-form `spec`:
 
 ```feng
 spec Click(): void;
@@ -86,7 +94,7 @@ spec Click(): void;
 type Button: Click {}
 ```
 
-错语法五,`type` 声明头满足 union-form `spec`:
+错语法六,`type` 声明头满足 union-form `spec`:
 
 ```feng
 spec Choice: int | string;
@@ -101,6 +109,7 @@ type Box: Choice {}
 - 目前成员顺序的调整,不是兼容变更。未来增加基于编译期计算出稳定的成员 KEY 进行编译期成员重排的方式优化此问题。
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 - `spec` 中的成员与行为签名默认公开,且不允许显式添加 `open` 或 `seal`。
+- `spec` 中暂不支持声明静态成员; object-form `spec` 体内出现 `static` 时,编译器在 Parser 阶段拒绝。
 - 对象形状中的行为签名使用 `func` 关键字,在 `spec` 中可不写函数体。
 - object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; 不允许声明构造器或终结器。
 - `spec` 中任何位置的参数均不可使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数; 参数可变性属于实现侧内部约束,不属于 `spec` 契约形状的一部分。
@@ -132,6 +141,7 @@ type Box: Choice {}
 - [禁止] 同一声明头中的 `spec` 列表重复列出同一个 `spec`。
 - [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
+- [禁止] `spec` 中声明 `static` 成员; 该限制由 Parser 阶段诊断。
 - [禁止] object-form `spec` 声明构造器或终结器; 该限制属于语义规则,由语义分析阶段诊断。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi`、`@union` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的顶层函数、方法值与 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
@@ -151,6 +161,7 @@ type Box: Choice {}
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
+- 编译器必须在 Parser 阶段拒绝 object-form `spec` 体内的 `static` 成员声明。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
 - 编译器必须在 object-form `spec` 的父子闭包成员收集中对“同名且签名完全一致”的方法按“子 `spec` 优先”去重,避免把继承覆盖关系误判为多重重载歧义。

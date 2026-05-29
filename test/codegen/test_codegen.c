@@ -165,6 +165,20 @@ static size_t count_substr(const char *haystack, const char *needle) {
     return count;
 }
 
+static bool span_contains(const char *start, const char *end, const char *needle) {
+    size_t needle_len = strlen(needle);
+    size_t span_len = (start != NULL && end != NULL && end >= start) ? (size_t)(end - start) : 0U;
+
+    if (needle_len == 0U) return true;
+    if (needle_len > span_len) return false;
+    for (size_t index = 0U; index + needle_len <= span_len; ++index) {
+        if (memcmp(start + index, needle, needle_len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void assert_builtin_subject_thunks_direct_fit_call(const char *c_source) {
     const char *cursor = c_source;
     size_t checked = 0U;
@@ -516,6 +530,196 @@ static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
                         "_feng_g__feng__codegen__topbindobj__current__inited = true;") == 1U);
     ASSERT(strstr(out.c_source,
                   "feng_assign((void**)&_feng_g__feng__codegen__topbindobj__current, next);") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_type_static_members_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.staticm;\n"
+        "func base(): int {\n"
+        "    return 41;\n"
+        "}\n"
+        "type Counter {\n"
+        "    static let seed: int = base();\n"
+        "    static var current: int = 0;\n"
+        "    static func make(value: int): int {\n"
+        "        return value + Counter.seed;\n"
+        "    }\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    Counter.current = Counter.make(1);\n"
+        "    Counter.current += 1;\n"
+        "    return Counter.current;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "staticm.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (type static members): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticm__Counter__static__seed") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticm__Counter__static__seed__inited = false;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticm__Counter__static__seed__ensure_init(void)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticm__Counter__static__current__ensure_init();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticm__Counter__static__make") != NULL);
+    {
+        const char *method_name = strstr(out.c_source,
+                                         "Feng__feng__codegen__staticm__Counter__static__make");
+        const char *signature_end;
+
+        ASSERT(method_name != NULL);
+        signature_end = strchr(method_name, ')');
+        ASSERT(signature_end != NULL);
+        ASSERT(!span_contains(method_name, signature_end, "self"));
+        ASSERT(!span_contains(method_name, signature_end, "struct Feng__feng__codegen__staticm__Counter"));
+    }
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_builtin_fit_static_method_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.fitstatic;\n"
+        "fit string {\n"
+        "    static func marker(): int {\n"
+        "        return 5;\n"
+        "    }\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    return string.marker();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "fitstatic.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (builtin fit static method): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengFitBuiltin__feng__codegen__fitstatic__string__i0__marker") != NULL);
+    {
+        const char *method_name = strstr(out.c_source,
+                                         "FengFitBuiltin__feng__codegen__fitstatic__string__i0__marker");
+        const char *signature_end;
+
+        ASSERT(method_name != NULL);
+        signature_end = strchr(method_name, ')');
+        ASSERT(signature_end != NULL);
+        ASSERT(!span_contains(method_name, signature_end, "self"));
+        ASSERT(!span_contains(method_name, signature_end, "struct FengBuiltin__string"));
+    }
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_generic_static_methods_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.staticgen;\n"
+        "type Util {\n"
+        "    static func id<T>(value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "}\n"
+        "type Box<T> {\n"
+        "    let value: T;\n"
+        "    static func make(value: T): Box<T> {\n"
+        "        return Box<T> { value: value };\n"
+        "    }\n"
+        "}\n"
+        "fit Box<T> {\n"
+        "    static func of(value: T): Box<T> {\n"
+        "        return Box<T> { value: value };\n"
+        "    }\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let direct: int = Util.id<int>(41);\n"
+        "    let boxed: Box<int> = Box<int>.make(1);\n"
+        "    let via_fit: Box<int> = Box<int>.of(2);\n"
+        "    return direct + boxed.value + via_fit.value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "staticgen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (generic static methods): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic static methods): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengGenericMethod__feng__codegen__staticgen__Util__i0__id") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticgen__Util__static__id") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengGenericMethod__feng__codegen__staticgen__Box__i0__make") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__staticgen__Box__G__int__static__make") != NULL);
+    ASSERT(strstr(out.c_source, "__of__from__i32") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1629,6 +1833,75 @@ static void test_imported_public_let_binding_codegen_compiles(void) {
                         "feng__vendor__values__count__ensure_init__from__void();") == 1U);
     ASSERT(strstr(out.c_source,
                   "feng__vendor__values__count") != NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_imported_public_static_members_codegen_compiles(void) {
+    static const char *kImportedSource =
+        "open module vendor.static_values;\n"
+        "open type Counter {\n"
+        "    open static let seed: int = 7;\n"
+        "    open static var current: int = 1;\n"
+        "    open static func make(): int {\n"
+        "        return 2;\n"
+        "    }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.main;\n"
+        "import vendor.static_values as values;\n"
+        "func project(next: int): int {\n"
+        "    values.Counter.current = next;\n"
+        "    return values.Counter.seed + values.Counter.make() + values.Counter.current;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(&fixture,
+                                 "tests/imported_static_members_vendor.ff",
+                                 kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_or_die(kConsumerSource, "tests/imported_static_members_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern int32_t Feng__vendor__static_values__Counter__static__seed;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void Feng__vendor__static_values__Counter__static__seed__ensure_init(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern int32_t Feng__vendor__static_values__Counter__static__current;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__vendor__static_values__Counter__static__make") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__vendor__static_values__Counter__static__current__ensure_init();") != NULL);
 
     compile_generated_c_or_die(out.c_source);
 
@@ -4785,6 +5058,9 @@ int main(void) {
     test_address_of_module_binding_uses_storage_slot_codegen();
     test_module_scalar_var_assignment_marks_initialized_codegen();
     test_module_managed_var_assignment_marks_initialized_codegen();
+    test_type_static_members_codegen();
+    test_builtin_fit_static_method_codegen();
+    test_generic_static_methods_codegen();
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_address_of_scalar_and_array_codegen();
@@ -4808,6 +5084,7 @@ int main(void) {
     test_imported_alias_qualified_type_annotations_codegen_compile();
     test_imported_full_path_type_annotations_codegen_compile_without_use();
     test_imported_public_let_binding_codegen_compiles();
+    test_imported_public_static_members_codegen_compiles();
     test_imported_public_var_binding_read_write_codegen_compiles();
     test_imported_public_binding_address_of_codegen_compiles();
     test_public_binding_lib_exports_slot_and_ensure_init_codegen();

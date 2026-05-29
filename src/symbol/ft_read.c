@@ -993,6 +993,10 @@ static bool parse_attrs(ReadContext *ctx,
             decl->has_enum_item_value = true;
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_STATIC_MEMBER) {
+            decl->is_static = true;
+            continue;
+        }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {
             continue;
         }

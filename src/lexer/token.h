@@ -18,6 +18,7 @@ extern "C" {
     X(FUNC, "func") \
     X(LET, "let") \
     X(VAR, "var") \
+    X(STATIC, "static") \
     X(OPEN, "open") \
     X(SEAL, "seal") \
     X(SELF, "self") \
@@ -41,7 +42,6 @@ extern "C" {
 #define FENG_RESERVED_WORD_LIST(X) \
     X(CLASS, "class") \
     X(STRUCT, "struct") \
-    X(STATIC, "static") \
     X(CONST, "const") \
     X(EXPORT, "export") \
     X(FN, "fn") \

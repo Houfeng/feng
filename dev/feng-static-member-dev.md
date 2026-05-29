@@ -2,14 +2,14 @@
 
 ## 功能概述
 
-为 Feng 语言 `type` 和 `fit` 体内新增 `static` 关键字支持，允许声明静态绑定（`static let`/`static var`）和静态方法（`static func`）。
+为 Feng 语言新增 `static` 关键字支持：`type` 体内允许声明静态绑定（`static let`/`static var`）和静态方法（`static func`）；`fit` 体内仅允许声明静态方法（`static func`），不允许扩展静态绑定或实例字段。
 
 **核心规则：**
 
 - 静态成员只能通过类型名访问（`T.xxx`），不能通过实例访问
-- `fit` 可为用户自定义类型和内建类型（`string`、`int` 等）扩展静态成员
+- `fit` 可为用户自定义类型和内建类型（`string`、`int` 等）扩展静态方法，但不得扩展 `let`/`var` 绑定
 - 静态方法支持泛型，规则与实例方法相同
-- `fit` 的静态成员在 `use` 引入对应模块后，在调用侧可见面可用，规则与 fit 实例方法一致
+- `fit` 的静态方法在 `use` 引入对应模块后，在调用侧可见面可用，规则与 fit 实例方法一致
 - 静态成员（`open` 修饰）可跨 fb 包使用，符号表中记录完整信息
 - `spec` 中暂不支持声明静态成员
 - 静态方法运行时开销 = 普通顶层函数（编译为直接 C 函数调用，无任何间接层）
@@ -53,7 +53,7 @@ type Counter {
 }
 ```
 
-### fit 为用户自定义类型扩展静态成员
+### fit 为用户自定义类型扩展静态方法
 
 ```feng
 fit Counter {
@@ -84,7 +84,7 @@ let p = Pair.of(1, "hello")           // 类型从参数推断
 let s = string.join(["a", "b"], ",")  // 同上
 ```
 
-### fit 为内建类型扩展静态成员
+### fit 为内建类型扩展静态方法
 
 ```feng
 fit string {
@@ -114,9 +114,9 @@ Counter.count = Counter.count + 1  // 合法（open）
 Counter._internal = 0              // 语义报错（seal）
 ```
 
-### fit 静态成员的可见性
+### fit 静态方法的可见性
 
-`fit` 的静态成员与 fit 实例方法遵循相同的可见性规则：引入（`use`）定义 fit 的模块后，其 `open` 静态成员在调用侧可见：
+`fit` 的静态方法与 fit 实例方法遵循相同的可见性规则：引入（`use`）定义 fit 的模块后，其 `open` 静态方法在调用侧可见：
 
 ```feng
 // 模块 mymod 中
@@ -145,10 +145,11 @@ c.create()    // 错误：静态方法不能通过实例访问
 
 ### 关键字顺序
 
-如果有可见性修饰符（`open`/`seal`），`static` 必须紧跟在其**之后**；`static` 始终在 `let`/`var`/`func` **之前**：
+如果有可见性修饰符（`open`/`seal`），`static` 必须紧跟在其**之后**。在 `type` 中，`static` 始终在 `let`/`var`/`func` **之前**；在 `fit` 中，`static` 只能出现在 `func` **之前**：
 
 ```
 [open | seal] static (let | var | func) ...
+[open | seal] static func ...  // fit 体内
 ```
 
 `static` 不可出现在 `open`/`seal` 之前，以下写法均为 parse error：
@@ -208,17 +209,17 @@ codegen 凭借这两个值直接生成无 `self` 参数的直接函数调用，�
 
 | 角色 | C 名称 |
 |------|--------|
-| 存储槽 | `_feng_st__<mod>__<TypeName>__<field>` |
-| inited flag | `_feng_st__<mod>__<TypeName>__<field>__inited` |
-| ensure_init 函数 | `_feng_ensure_st__<mod>__<TypeName>__<field>` |
+| 存储槽 | `Feng__<mod>__<TypeName>__static__<field>` |
+| inited flag | `Feng__<mod>__<TypeName>__static__<field>__inited` |
+| ensure_init 函数 | `Feng__<mod>__<TypeName>__static__<field>__ensure_init` |
 
 ### 5. 静态方法的 C 名称方案
 
 | 角色 | C 名称 |
 |------|--------|
-| type 体内静态方法 | `_feng_stm__<mod>__<TypeName>__<method>__<sig>` |
-| fit 体内静态方法（用户类型） | `_feng_stm__<mod>__<TypeName>__<method>__<sig>`（同上，fit 来源由语义层已确定） |
-| fit 体内静态方法（内建类型） | `_feng_stm__<mod>__<builtin_name>__<method>__<sig>` |
+| type 体内静态方法 | `Feng__<mod>__<TypeName>__static__<method>__<sig>` |
+| fit 体内静态方法（用户类型） | `FengFit_<index>__Feng__<mod>__<TypeName>__<method>__<sig>` |
+| fit 体内静态方法（内建类型） | `FengFitBuiltin__<mod>__<builtin_name>__<visibility><index>__<method>__<sig>` |
 
 无 `self` 参数，等价于模块级普通函数。
 
@@ -247,22 +248,22 @@ fit string {
 
 ```c
 // 静态绑定存储
-static int64_t _feng_st__mymod__Counter__count = 0;
-static bool    _feng_st__mymod__Counter__count__inited = false;
+static int64_t Feng__mymod__Counter__static__count = 0;
+static bool    Feng__mymod__Counter__static__count__inited = false;
 
-static void _feng_ensure_st__mymod__Counter__count(void) {
-    if (_feng_st__mymod__Counter__count__inited) return;
-    _feng_st__mymod__Counter__count = (int64_t)0;
-    _feng_st__mymod__Counter__count__inited = true;
+static void Feng__mymod__Counter__static__count__ensure_init(void) {
+    if (Feng__mymod__Counter__static__count__inited) return;
+    Feng__mymod__Counter__static__count = (int64_t)0;
+    Feng__mymod__Counter__static__count__inited = true;
 }
 
 // 静态方法（无 self 参数，与顶层函数等价）
-static struct Feng__mymod__Counter *_feng_stm__mymod__Counter__create__(void) {
+static struct Feng__mymod__Counter *Feng__mymod__Counter__static__create__(void) {
     // ...
 }
 
 // fit string 静态方法
-static struct FengBuiltin__string _feng_stm__mymod__string__repeat__string_int(
+static struct FengBuiltin__string FengFitBuiltin__mymod__string__i0__repeat__string_int(
     struct FengBuiltin__string s,
     int64_t n
 ) {
@@ -270,18 +271,18 @@ static struct FengBuiltin__string _feng_stm__mymod__string__repeat__string_int(
 }
 
 // 访问 Counter.count（读）
-_feng_ensure_st__mymod__Counter__count();
-int64_t val = _feng_st__mymod__Counter__count;
+Feng__mymod__Counter__static__count__ensure_init();
+int64_t val = Feng__mymod__Counter__static__count;
 
 // 访问 Counter.count（写，var 静态绑定）
-_feng_ensure_st__mymod__Counter__count();
-_feng_st__mymod__Counter__count = new_val;
+Feng__mymod__Counter__static__count__ensure_init();
+Feng__mymod__Counter__static__count = new_val;
 
 // 调用 Counter.create()
-struct Feng__mymod__Counter *c = _feng_stm__mymod__Counter__create__();
+struct Feng__mymod__Counter *c = Feng__mymod__Counter__static__create__();
 
 // 调用 string.repeat(s, 3)
-struct FengBuiltin__string r = _feng_stm__mymod__string__repeat__string_int(s, 3);
+struct FengBuiltin__string r = FengFitBuiltin__mymod__string__i0__repeat__string_int(s, 3);
 ```
 
 ---
@@ -290,53 +291,59 @@ struct FengBuiltin__string r = _feng_stm__mymod__string__repeat__string_int(s, 3
 
 ### Phase 1 — 文档
 
-- [ ] 更新 `docs/feng-type.md`：static 成员语法、访问规则、可见性、泛型静态方法、跨包规则、禁止项
-- [ ] 更新 `docs/feng-fit.md`：fit static 语法、内建类型示例、重载规则、use 可见性规则
+- [x] 更新 `docs/feng-type.md`：static 成员语法、访问规则、可见性、泛型静态方法、跨包规则、禁止项
+- [x] 更新 `docs/feng-fit.md`：fit static func 语法、内建类型示例、重载规则、use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
 
 ### Phase 2 — 词法器
 
-- [ ] `src/lexer/token.h`：将 `X(STATIC, "static")` 从 `FENG_RESERVED_WORD_LIST` 移入 `FENG_KEYWORD_LIST`
-- [ ] `test/lexer/test_lexer.c`：计数更新（keyword +1，reserved -1），删除旧保留词测试，新增关键词正向测试
+- [x] `src/lexer/token.h`：将 `X(STATIC, "static")` 从 `FENG_RESERVED_WORD_LIST` 移入 `FENG_KEYWORD_LIST`
+- [x] `test/lexer/test_lexer.c`：计数更新（keyword +1，reserved -1），删除旧保留词测试，新增关键词正向测试
 
 ### Phase 3 — 解析器 / AST
 
-- [ ] `src/parser/parser.h`：`FengTypeMember` 新增 `bool is_static`
-- [ ] `src/parser/parser.h`：`FengResolvedCallableKind` 新增 `TYPE_STATIC_METHOD`、`FIT_STATIC_METHOD`
-- [ ] `src/parser/parser.c`：`parse_type_declaration` 成员循环插入 `static` 匹配逻辑
-- [ ] `src/parser/parser.c`：`parse_fit_method_member` 插入 `static` 匹配逻辑
-- [ ] `src/parser/parser.c`：`parse_spec_member` 插入 `static` 拒绝检查
+- [x] `src/parser/parser.h`：`FengTypeMember` 新增 `bool is_static`
+- [x] `src/parser/parser.h`：`FengResolvedCallableKind` 新增 `TYPE_STATIC_METHOD`、`FIT_STATIC_METHOD`
+- [x] `src/parser/parser.c`：`parse_type_declaration` 成员循环插入 `static` 匹配逻辑
+- [x] `src/parser/parser.c`：`parse_fit_method_member` 插入 `static` 匹配逻辑，并拒绝 fit 中的 `static let`/`static var`
+- [x] `src/parser/parser.c`：`parse_spec_member` 插入 `static` 拒绝检查
+- [x] `src/parser/parser.c`：支持 `Box<int>.make(...)` 形式的显式泛型类型目标静态成员访问
 
 ### Phase 4 — 语义分析
 
-- [ ] `ResolvedTypeTarget` 扩展：新增 `is_builtin_type_name` + `builtin_name`
-- [ ] `resolve_type_target_expr`：内建类型名识别分支
-- [ ] 新增辅助函数 `find_type_static_member`
-- [ ] 新增辅助函数 `find_fit_static_method_for_type`
-- [ ] 新增辅助函数 `find_builtin_fit_static_method`
-- [ ] `validate_instance_member_expr`：静态成员访问路径（含实例访问静态成员的报错）
-- [ ] `infer_member_expr_type`：静态字段类型推断
-- [ ] `validate_function_call_expr`：静态方法调用路径（用户类型 + 内建类型）
-- [ ] `validate_type_member_overloads` / `validate_type_member_overload_overlap`：静态/实例独立重载集
+- [x] `ResolvedTypeTarget` 扩展：新增 `is_builtin_type_name` + `builtin_name`
+- [x] `resolve_type_target_expr`：内建类型名识别分支
+- [x] 新增辅助函数 `find_type_static_member`
+- [x] 新增辅助函数 `find_fit_static_method_for_type`
+- [x] 新增辅助函数 `find_builtin_fit_static_method`
+- [x] `validate_instance_member_expr`：静态成员访问路径（含实例访问静态成员的报错）
+- [x] `infer_member_expr_type`：type 静态字段类型推断
+- [x] `validate_function_call_expr`：静态方法调用路径（用户类型 + 内建类型）
+- [x] `validate_type_member_overloads` / `validate_type_member_overload_overlap`：静态/实例独立重载集
+- [x] 泛型静态方法解析：支持非泛型 owner、泛型 owner type、泛型 owner fit 的静态方法调用解析
 
 ### Phase 5 — 代码生成
 
-- [ ] `UserType` 结构体扩展：`static_methods`、`static_bindings` 字段
-- [ ] `BuiltinFit` 结构体扩展：`static_methods` 字段
-- [ ] `cg_pass_register_*`：按 `is_static` 分发到静态槽
-- [ ] `cg_emit_type_static_binding`：存储槽 + inited flag + ensure_init 函数生成
-- [ ] `cg_emit_type_static_method`：无 self 参数的直接 C 函数生成
-- [ ] `FENG_EXPR_CALL` 处理：`TYPE_STATIC_METHOD` / `FIT_STATIC_METHOD` 直接调用生成
-- [ ] `FENG_EXPR_MEMBER` 处理：静态绑定读取 / 写入（ensure_init + 槽访问）
+- [x] `UserType` 结构体扩展：`static_methods`、`static_bindings` 字段
+- [x] fit 方法注册保留 `is_static` 标志，仅支持静态方法，不产生 fit 静态绑定
+- [x] `cg_pass_register_*`：type 成员按 `is_static` 分发到静态槽；fit 成员仅允许分发静态方法
+- [x] `cg_emit_type_static_binding`：存储槽 + inited flag + ensure_init 函数生成
+- [x] `cg_emit_type_static_method`：无 self 参数的直接 C 函数生成
+- [x] `FENG_EXPR_CALL` 处理：`TYPE_STATIC_METHOD` / `FIT_STATIC_METHOD` 直接调用生成
+- [x] `FENG_EXPR_MEMBER` 处理：静态绑定读取 / 写入（ensure_init + 槽访问）
+- [x] 泛型静态方法生成：支持非泛型 owner、泛型 owner type、泛型 owner fit，并在 fit 方法体中应用目标泛型实参替换
 
 ### Phase 6 — 测试
 
-- [ ] 词法器测试：`static` 关键词正向 + 保留词删除
-- [ ] 解析器测试：成功场景（static let/var/func，fit static，泛型 static）
-- [ ] 解析器测试：失败场景（静态构造器、静态析构器、顺序错误、spec 中 static）
-- [ ] 语义测试：成功场景（类型名调用、fit 内建类型、跨包 open static）
-- [ ] 语义测试：失败场景（实例访问静态成员、重载冲突）
-- [ ] 代码生成测试：存储槽/ensure_init 生成、无 self 直接调用、var 赋值、builtin fit 调用
-- [ ] 全量回归：所有现有测试通过
+- [x] 词法器测试：`static` 关键词正向 + 保留词删除
+- [x] 解析器测试：成功场景（static let/var/func，fit static）
+- [x] 解析器测试：泛型类型目标静态成员访问（`Box<int>.make(...)`）
+- [x] 解析器测试：失败场景（静态构造器、静态析构器、顺序错误、spec 中 static）
+- [x] 语义测试：成功场景（类型名调用、fit 内建类型、跨包 open static）
+- [x] 语义测试：泛型静态方法解析（非泛型 owner、泛型 owner type、泛型 owner fit）
+- [x] 语义测试：失败场景（实例访问静态成员、重载冲突）
+- [x] 代码生成测试：存储槽/ensure_init 生成、无 self 直接调用、var 赋值、builtin fit 调用
+- [x] 代码生成测试：泛型静态方法（非泛型 owner、泛型 owner type、泛型 owner fit）
+- [x] 全量回归：所有现有测试通过
 
 ---
 
@@ -345,7 +352,7 @@ struct FengBuiltin__string r = _feng_stm__mymod__string__repeat__string_int(s, 3
 ### Phase 1 — 文档（先于所有代码变更）
 
 - 更新 `docs/feng-type.md`：补充 `static let`/`static var` 和 `static func` 语法，访问规则，可见性规则，泛型静态方法规则，跨包访问规则，禁止项（构造器/析构器不能加 static；spec 中不支持 static）
-- 更新 `docs/feng-fit.md`：补充 fit 体内 `static` 语法，内建类型静态扩展示例，重载冲突规则（fit 静态只与同类型静态比较），fit 静态成员的 use 可见性规则
+- 更新 `docs/feng-fit.md`：补充 fit 体内 `static func` 语法，内建类型静态方法扩展示例，重载冲突规则（fit 静态方法只与同类型静态方法比较），fit 静态方法的 use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
 
 ### Phase 2 — 词法器
 
@@ -401,7 +408,7 @@ bool is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
 bool is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
 ```
 
-- `let`/`var` 静态绑定在 fit 中允许（内建类型静态字段扩展）
+- `let`/`var` 在 fit 中始终禁止，即使前面带 `static` 也要在 Parser 阶段报错
 - `func` 正常解析，`member->is_static = true`
 
 **`src/parser/parser.c` — `parse_spec_member`**（新增拒绝逻辑）
@@ -471,7 +478,7 @@ if type_target.type_decl != NULL（用户类型）:
     若 object 是实例（非类型名）且找到的是静态成员 → 报错：通过实例访问静态成员
 
 if type_target.is_builtin_type_name（内建类型）:
-    查找 builtin fit 静态成员 → 同上处理
+    查找 builtin fit 静态方法 → 同上处理
 ```
 
 #### 4.4 infer_member_expr_type（line ~10156）
@@ -482,8 +489,7 @@ enum item 推断之后，新增分支：
 if type_target.type_decl != NULL:
     查找静态字段 → 返回字段声明类型
 
-if type_target.is_builtin_type_name:
-    查找 builtin fit 静态字段 → 返回其声明类型
+fit 不扩展静态字段，因此内建类型目标不新增 builtin fit 静态字段推断路径。
 ```
 
 #### 4.5 validate_function_call_expr（line ~13820）
@@ -543,7 +549,7 @@ typedef struct {
 
 #### 5.3 注册阶段（cg_pass_register_*）
 
-注册 type 成员时，依据 `is_static` 分发到 `static_methods` 或 `static_bindings`；注册 fit 成员时同理。
+注册 type 成员时，依据 `is_static` 分发到 `static_methods` 或 `static_bindings`；注册 fit 成员时，`is_static` 只能分发到 `static_methods`，不得产生 fit 静态绑定。
 
 #### 5.4 静态绑定 emit（模仿 cg_emit_module_binding_ensure_init）
 
@@ -635,6 +641,8 @@ type T { static func ~T() { ... } }   // 禁止：静态析构器
 type T { static open let x: int = 0 } // 禁止：static 在 open/seal 之前
 type T { static seal var n: int = 0 } // 禁止：static 在 seal 之前
 
+fit T { static let x: int = 0 }       // 禁止：fit 中不得声明 static let/static var
+
 // 禁止：spec 中声明 static 成员
 spec Foo {
     static func bar(): int
@@ -678,13 +686,13 @@ spec Foo {
 | 文件 | 变更内容 |
 |------|---------|
 | `docs/feng-type.md` | 补充 static 成员规范（先于代码） |
-| `docs/feng-fit.md` | 补充 fit 中 static 规范（先于代码） |
+| `docs/feng-fit.md` | 补充 fit 中 static func 规范（先于代码），明确禁止 static let/static var |
 | `src/lexer/token.h` | static 从 reserved 移入 keyword list |
 | `test/lexer/test_lexer.c` | 计数更新，删除 static 保留词测试，新增关键词测试 |
 | `src/parser/parser.h` | FengTypeMember::is_static，FengResolvedCallableKind 新增两个值 |
 | `src/parser/parser.c` | parse_type_declaration、parse_fit_method_member |
 | `src/semantic/analyzer.c` | ResolvedTypeTarget 扩展，三个新辅助函数，validate_instance_member_expr、infer_member_expr_type、validate_function_call_expr 扩展，重载检查扩展 |
-| `src/codegen/codegen.c` | UserType/BuiltinFit 扩展，静态绑定/方法注册、emit、调用生成 |
+| `src/codegen/codegen.c` | UserType/BuiltinFit 扩展，type 静态绑定/方法注册、emit、调用生成，fit 静态方法注册与调用生成 |
 
 ---
 

@@ -2056,6 +2056,8 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
             break;
     }
 
+            decl->is_static = member->is_static;
+
     if (!register_source_decl(ctx, member, decl, path, member->token, out_error)) {
         feng_symbol_internal_decl_free_members(decl);
         free(decl);

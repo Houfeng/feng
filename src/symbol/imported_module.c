@@ -701,6 +701,7 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
     }
     member->token = member_decl->token;
     member->visibility = member_decl->visibility;
+    member->is_static = member_decl->is_static;
     if (!clone_slice_as_slice(feng_symbol_decl_doc(member_decl), &member->doc_comment)) {
         free_synthetic_type_member(member);
         return NULL;

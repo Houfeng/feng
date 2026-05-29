@@ -43,8 +43,8 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 27U);
-    ASSERT(feng_reserved_word_count() == 11U);
+    ASSERT(feng_keyword_count() == 28U);
+    ASSERT(feng_reserved_word_count() == 10U);
     ASSERT(feng_builtin_annotation_count() == 8U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
@@ -61,7 +61,9 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(!feng_lookup_keyword("int", 3U, &keyword_kind));
     ASSERT(!feng_lookup_keyword("float", 5U, &keyword_kind));
     ASSERT(feng_is_reserved_word("class", 5U));
-    ASSERT(feng_is_reserved_word("static", 6U));
+    ASSERT(!feng_is_reserved_word("static", 6U));
+    ASSERT(feng_lookup_keyword("static", 6U, &keyword_kind));
+    ASSERT(keyword_kind == FENG_TOKEN_KW_STATIC);
     ASSERT(!feng_is_reserved_word("enum", 4U));
     ASSERT(feng_is_reserved_word("const", 5U));
     ASSERT(feng_is_reserved_word("export", 6U));
@@ -93,7 +95,6 @@ static void test_reserved_words_rejected(void) {
     static const char *const reserved_words[] = {
         "class",
         "struct",
-        "static",
         "const",
         "export",
         "fn",

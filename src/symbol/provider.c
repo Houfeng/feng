@@ -952,6 +952,10 @@ bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->bounded_decl;
 }
 
+bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->is_static;
+}
+
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->value_type : NULL;
 }

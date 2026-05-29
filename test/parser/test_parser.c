@@ -269,6 +269,122 @@ static void test_member_annotations_and_constructors(void) {
     feng_program_free(program);
 }
 
+static void test_static_members_parse(void) {
+    const char *source =
+        "module demo.static_members;\n"
+        "type Counter {\n"
+        "    static let seed: int = 1;\n"
+        "    open static var count: int = 0;\n"
+        "    open static func create(): Counter {\n"
+        "        return Counter();\n"
+        "    }\n"
+        "    func value(): int {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n"
+        "fit Counter {\n"
+        "    open static func fromSeed(): Counter {\n"
+        "        return Counter();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *counter;
+    const FengDecl *fit;
+
+    ASSERT(feng_parse_source(source, strlen(source), "static_members.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    counter = program->declarations[0];
+    ASSERT(counter->kind == FENG_DECL_TYPE);
+    ASSERT(counter->as.type_decl.member_count == 4U);
+    ASSERT(counter->as.type_decl.members[0]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(counter->as.type_decl.members[0]->is_static);
+    ASSERT(counter->as.type_decl.members[1]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(counter->as.type_decl.members[1]->is_static);
+    ASSERT(counter->as.type_decl.members[2]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(counter->as.type_decl.members[2]->is_static);
+    ASSERT(counter->as.type_decl.members[2]->visibility == FENG_VISIBILITY_PUBLIC);
+    ASSERT(counter->as.type_decl.members[3]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(!counter->as.type_decl.members[3]->is_static);
+
+    fit = program->declarations[1];
+    ASSERT(fit->kind == FENG_DECL_FIT);
+    ASSERT(fit->as.fit_decl.member_count == 1U);
+    ASSERT(fit->as.fit_decl.members[0]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(fit->as.fit_decl.members[0]->is_static);
+    ASSERT(fit->as.fit_decl.members[0]->visibility == FENG_VISIBILITY_PUBLIC);
+
+    feng_program_free(program);
+}
+
+static void test_static_member_parse_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.bad;\n"
+            "spec Factory {\n"
+            "    static func make(): int;\n"
+            "}\n",
+            "spec members cannot be declared 'static'"
+        },
+        {
+            "module demo.bad;\n"
+            "type Counter {\n"
+            "    static func Counter() {}\n"
+            "}\n",
+            "constructors cannot be declared 'static'"
+        },
+        {
+            "module demo.bad;\n"
+            "type Counter {\n"
+            "    static func ~Counter() {}\n"
+            "}\n",
+            "finalizers cannot be declared 'static'"
+        },
+        {
+            "module demo.bad;\n"
+            "type Counter {\n"
+            "    static open let value: int = 0;\n"
+            "}\n",
+            "expected type member declaration"
+        },
+        {
+            "module demo.bad;\n"
+            "type Counter {}\n"
+            "fit Counter {\n"
+            "    static let value: int = 0;\n"
+            "}\n",
+            "fit blocks cannot declare 'static let' or 'static var'"
+        },
+        {
+            "module demo.bad;\n"
+            "type Counter {}\n"
+            "fit Counter {\n"
+            "    static var value: int = 0;\n"
+            "}\n",
+            "fit blocks cannot declare 'static let' or 'static var'"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "static_member_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[i].message) != NULL);
+    }
+}
+
 static void test_enum_declarations_parse(void) {
     const char *source =
         "module demo.enums;\n"
@@ -1712,6 +1828,34 @@ static void test_generic_target_expression_argument_parses(void) {
     feng_program_free(program);
 }
 
+static void test_generic_type_target_member_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): void {\n"
+        "    Box<int>.make(1);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *fn_decl;
+    const FengStmt *stmt;
+    const FengExpr *call;
+    const FengExpr *member;
+
+    ASSERT(feng_parse_source(source, strlen(source), "generic_type_target_member.f", &program, &error));
+    ASSERT(program != NULL);
+    fn_decl = program->declarations[0];
+    stmt = fn_decl->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_EXPR);
+    call = stmt->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    member = call->as.call.callee;
+    ASSERT(member->kind == FENG_EXPR_MEMBER);
+    ASSERT(member->as.member.object->kind == FENG_EXPR_GENERIC_TARGET);
+    ASSERT(member->as.member.object->as.generic_target.type_arg_count == 1U);
+
+    feng_program_free(program);
+}
+
 /* T1: func sum(values: int...): int — variadic parameter parses and is
  * normalised to is_variadic=true with type int[]. */
 static void test_variadic_parameter_parses(void) {
@@ -1795,6 +1939,8 @@ int main(void) {
     test_non_generic_type_brackets_without_colon_parses_as_index();
     test_generic_type_brackets_without_colon_parses_as_index();
     test_member_annotations_and_constructors();
+    test_static_members_parse();
+    test_static_member_parse_errors();
     test_ast_source_tokens();
     test_type_field_inferred_initializers();
     test_doc_comments_bind_to_declarations_and_members();
@@ -1849,6 +1995,7 @@ int main(void) {
     test_generic_parse_error_missing_closing_gt();
     test_generic_parse_error_missing_type_param_name();
     test_generic_target_expression_argument_parses();
+    test_generic_type_target_member_parses();
     test_variadic_parameter_parses();
     test_parse_error_variadic_not_last();
     test_parse_error_extern_fn_variadic();

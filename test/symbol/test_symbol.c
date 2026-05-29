@@ -340,6 +340,8 @@ static void test_roundtrip_public_module_docs(void) {
         "open type User {\n"
         "    /** Stable identifier */\n"
         "    open let id: int;\n"
+        "    /** Static version */\n"
+        "    open static let version: int = 1;\n"
         "}\n";
 
     FengProgram *program = parse_or_die("docs_roundtrip.ff", kSource);
@@ -354,6 +356,7 @@ static void test_roundtrip_public_module_docs(void) {
     const FengSymbolDeclView *add_decl = NULL;
     const FengSymbolDeclView *user_decl = NULL;
     const FengSymbolDeclView *id_decl = NULL;
+    const FengSymbolDeclView *version_decl = NULL;
 
     ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
     options.public_root = public_root;
@@ -385,6 +388,12 @@ static void test_roundtrip_public_module_docs(void) {
     id_decl = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("id"));
     ASSERT(id_decl != NULL);
     ASSERT(slice_equals_cstr(feng_symbol_decl_doc(id_decl), "Stable identifier"));
+    ASSERT(!feng_symbol_decl_is_static(id_decl));
+
+    version_decl = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("version"));
+    ASSERT(version_decl != NULL);
+    ASSERT(feng_symbol_decl_is_static(version_decl));
+    ASSERT(slice_equals_cstr(feng_symbol_decl_doc(version_decl), "Static version"));
 
     feng_symbol_provider_free(provider);
     feng_symbol_error_free(&error);

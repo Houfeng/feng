@@ -6655,6 +6655,50 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_external_imported_static_members_are_visible(void) {
+    const char *external_source =
+        "open module vendor.static_model;\n"
+        "open type Counter {\n"
+        "    open static let seed: int = 1;\n"
+        "    open static func make(): int {\n"
+        "        return 2;\n"
+        "    }\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import vendor.static_model as model;\n"
+        "func run(): int {\n"
+        "    return model.Counter.seed + model.Counter.make();\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_static_members.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_static_members_main.f", main_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_external_full_path_type_refs_do_not_require_use(void) {
     const char *external_source =
         "open module vendor.api;\n"
@@ -9631,6 +9675,227 @@ static void test_resolved_callable_attached_to_call_exprs(void) {
 
     free(calls.items);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_static_members_semantic_resolution(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Counter {\n"
+        "    static let seed: int = 1;\n"
+        "    static var current: int = 0;\n"
+        "    static func make(value: int): int {\n"
+        "        return value + Counter.seed;\n"
+        "    }\n"
+        "    func make(): int {\n"
+        "        return 7;\n"
+        "    }\n"
+        "}\n"
+        "fit string {\n"
+        "    static func marker(): int {\n"
+        "        return 3;\n"
+        "    }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let c: Counter = Counter();\n"
+        "    let a: int = Counter.seed;\n"
+        "    Counter.current = a;\n"
+        "    let b: int = Counter.make(a);\n"
+        "    let d: int = c.make();\n"
+        "    return b + d + string.marker();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("static_semantic.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *run_decl;
+    const FengDecl *counter_type = NULL;
+    CallList calls = {NULL, 0U, 0U};
+    const FengExpr *call_static_make;
+    const FengExpr *call_fit_static_marker;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    for (size_t i = 0U; i < program->declaration_count; ++i) {
+        const FengDecl *decl = program->declarations[i];
+        if (decl->kind == FENG_DECL_TYPE &&
+            decl->as.type_decl.name.length == 7U &&
+            memcmp(decl->as.type_decl.name.data, "Counter", 7U) == 0) {
+            counter_type = decl;
+            break;
+        }
+    }
+    ASSERT(counter_type != NULL);
+
+    run_decl = find_function_decl_by_name(program, "run");
+    ASSERT(run_decl != NULL);
+    collect_calls_in_block(run_decl->as.function_decl.body, &calls);
+
+    call_static_make = find_call_with_member_name(&calls, "make");
+    ASSERT(call_static_make != NULL);
+    ASSERT(call_static_make->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD);
+    ASSERT(call_static_make->as.call.resolved_callable.owner_type_decl == counter_type);
+    ASSERT(call_static_make->as.call.resolved_callable.member != NULL);
+    ASSERT(call_static_make->as.call.resolved_callable.member->is_static);
+
+    call_fit_static_marker = find_call_with_member_name(&calls, "marker");
+    ASSERT(call_fit_static_marker != NULL);
+    ASSERT(call_fit_static_marker->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD);
+    ASSERT(call_fit_static_marker->as.call.resolved_callable.fit_decl != NULL);
+    ASSERT(call_fit_static_marker->as.call.resolved_callable.member != NULL);
+    ASSERT(call_fit_static_marker->as.call.resolved_callable.member->is_static);
+
+    free(calls.items);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_static_members_semantic_resolution(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Util {\n"
+        "    static func id<T>(value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "}\n"
+        "type Box<T> {\n"
+        "    let value: T;\n"
+        "    static func make(value: T): Box<T> {\n"
+        "        return Box<T> { value: value };\n"
+        "    }\n"
+        "}\n"
+        "fit Box<T> {\n"
+        "    static func of(value: T): Box<T> {\n"
+        "        return Box<T> { value: value };\n"
+        "    }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let a: int = Util.id<int>(1);\n"
+        "    let b: Box<int> = Box<int>.make(a);\n"
+        "    let c: Box<int> = Box<int>.of(a);\n"
+        "    return b.value + c.value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_static_semantic.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *run_decl;
+    CallList calls = {NULL, 0U, 0U};
+    const FengExpr *call_id;
+    const FengExpr *call_make;
+    const FengExpr *call_of;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (generic static members): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    run_decl = find_function_decl_by_name(program, "run");
+    ASSERT(run_decl != NULL);
+    collect_calls_in_block(run_decl->as.function_decl.body, &calls);
+
+    call_id = find_call_with_member_name(&calls, "id");
+    ASSERT(call_id != NULL);
+    ASSERT(call_id->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD);
+    ASSERT(call_id->as.call.resolved_callable.member != NULL);
+    ASSERT(call_id->as.call.resolved_callable.member->is_static);
+
+    call_make = find_call_with_member_name(&calls, "make");
+    ASSERT(call_make != NULL);
+    ASSERT(call_make->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD);
+    ASSERT(call_make->as.call.resolved_callable.member != NULL);
+    ASSERT(call_make->as.call.resolved_callable.member->is_static);
+
+        call_of = find_call_with_member_name(&calls, "of");
+        ASSERT(call_of != NULL);
+        ASSERT(call_of->as.call.resolved_callable.kind ==
+            FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD);
+        ASSERT(call_of->as.call.resolved_callable.member != NULL);
+        ASSERT(call_of->as.call.resolved_callable.member->is_static);
+
+    free(calls.items);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_static_member_instance_access_is_rejected(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.main;\n"
+            "type Counter {\n"
+            "    static let seed: int = 1;\n"
+            "}\n"
+            "func run(): int {\n"
+            "    let c: Counter = Counter();\n"
+            "    return c.seed;\n"
+            "}\n",
+            "must be accessed through its type"
+        },
+        {
+            "module demo.main;\n"
+            "type Counter {\n"
+            "    static func make(): int { return 1; }\n"
+            "}\n"
+            "func run(): int {\n"
+            "    let c: Counter = Counter();\n"
+            "    return c.make();\n"
+            "}\n",
+            "must be accessed through its type"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = parse_program_or_die("static_instance_access.f", cases[i].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strstr(errors[0].message, cases[i].message) != NULL);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+static void test_duplicate_static_method_signature_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Counter {\n"
+        "    static func make(): int { return 1; }\n"
+        "    static func make(): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("static_duplicate_method.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "overloads") != NULL ||
+           strstr(errors[0].message, "duplicate") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -13773,6 +14038,7 @@ int main(void) {
     test_external_imported_function_argument_type_mismatch();
     test_external_imported_function_argument_type_match();
     test_external_imported_field_type_participates_in_typecheck();
+    test_external_imported_static_members_are_visible();
     test_external_full_path_type_refs_do_not_require_use();
     test_external_alias_type_ref_still_requires_use_alias();
     test_external_imported_declared_specs_enable_spec_coercion();
@@ -13883,6 +14149,10 @@ int main(void) {
     test_spec_at_type_position_rejects_unrelated_type();
     test_spec_at_type_position_accepts_via_fit();
     test_resolved_callable_attached_to_call_exprs();
+    test_static_members_semantic_resolution();
+    test_generic_static_members_semantic_resolution();
+    test_static_member_instance_access_is_rejected();
+    test_duplicate_static_method_signature_is_rejected();
     test_finalizer_basic_ok();
     test_finalizer_rejects_multiple_per_type();
     test_finalizer_rejected_on_fixed_type();

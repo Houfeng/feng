@@ -6200,10 +6200,13 @@ static bool resolve_callable_target(const FengResolvedCallable *callable,
             target->decl = callable->function_decl;
             return callable->function_decl != NULL;
         case FENG_RESOLVED_CALLABLE_TYPE_METHOD:
+        case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR:
         case FENG_RESOLVED_CALLABLE_FIT_METHOD:
+        case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:
             target->kind = FENG_LSP_RESOLVED_MEMBER;
-            target->decl = callable->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD
+            target->decl = (callable->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+                            callable->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD)
                                ? callable->fit_decl
                                : callable->owner_type_decl;
             target->member = callable->member;

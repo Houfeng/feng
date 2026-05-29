@@ -1102,6 +1102,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
         FengAnnotation *member_annotations;
         size_t member_annotation_count = 0U;
         FengVisibility member_visibility;
+        bool is_static;
         FengSlice member_doc_comment = doc_comment_from_token(parser_current(parser));
         FengTypeMember *member = NULL;
 
@@ -1112,6 +1113,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
         }
 
         member_visibility = parse_visibility(parser);
+        is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
 
         if (member_annotation_count > 0U && parser_check(parser, FENG_TOKEN_SEMICOLON)) {
             free_annotations(member_annotations, member_annotation_count);
@@ -1155,6 +1157,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
             member->visibility = member_visibility;
+            member->is_static = is_static;
             member->annotations = member_annotations;
             member->annotation_count = member_annotation_count;
             member->as.field.mutability = binding.mutability;
@@ -1216,6 +1219,30 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
 
+            if (is_static && is_finalizer) {
+                free_parameters(callable.params, callable.param_count);
+                free_type_ref(callable.return_type);
+                free_block(callable.body);
+                free_annotations(member_annotations, member_annotation_count);
+                (void)parser_error_at(parser,
+                                      &callable.token,
+                                      "finalizers cannot be declared 'static'");
+                free_decl(decl);
+                return NULL;
+            }
+
+            if (is_static && slice_equals(name, type_name)) {
+                free_parameters(callable.params, callable.param_count);
+                free_type_ref(callable.return_type);
+                free_block(callable.body);
+                free_annotations(member_annotations, member_annotation_count);
+                (void)parser_error_at(parser,
+                                      &callable.token,
+                                      "constructors cannot be declared 'static'");
+                free_decl(decl);
+                return NULL;
+            }
+
             if (is_finalizer) {
                 if (callable.param_count != 0U) {
                     free_parameters(callable.params, callable.param_count);
@@ -1270,6 +1297,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 return NULL;
             }
             member->visibility = member_visibility;
+            member->is_static = is_static;
             member->annotations = member_annotations;
             member->annotation_count = member_annotation_count;
             member->as.callable = callable;
@@ -1287,7 +1315,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                     "type members cannot use 'extern func'; use 'func' for methods or 'let'/'var' for fields");
             } else {
                 (void)parser_error_current(parser,
-                                           "expected type member declaration: 'let', 'var', or 'func'");
+                                           "expected type member declaration: 'let', 'var', 'func', or 'static'");
             }
             free_decl(decl);
             return NULL;
@@ -1322,6 +1350,13 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         (void)parser_error_current(
             parser,
             "spec members cannot declare visibility; remove 'open' or 'seal'");
+        return NULL;
+    }
+
+    if (parser_check(parser, FENG_TOKEN_KW_STATIC)) {
+        (void)parser_error_current(
+            parser,
+            "spec members cannot be declared 'static'");
         return NULL;
     }
 
@@ -1567,6 +1602,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     FengToken doc_token = parser_current_token(parser);
     FengSlice doc_comment = doc_comment_from_token(&doc_token);
     FengVisibility visibility = parse_visibility(parser);
+    bool is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
     FengToken member_start = parser_current_token(parser);
     FengCallableSignature callable;
     FengSlice name;
@@ -1575,12 +1611,18 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) {
         (void)parser_error_current(
             parser,
-            "fit blocks cannot declare 'let' or 'var' fields; declare them on the original type");
+            is_static
+                ? "fit blocks cannot declare 'static let' or 'static var'; fit only supports methods"
+                : "fit blocks cannot declare 'let' or 'var' fields; declare them on the original type");
         return NULL;
     }
 
     if (!parser_match(parser, FENG_TOKEN_KW_FUNC)) {
-        (void)parser_error_current(parser, "fit block members must start with 'func'");
+        (void)parser_error_current(
+            parser,
+            is_static
+                ? "fit static members must be declared with 'func'"
+                : "fit block members must start with 'func'");
         return NULL;
     }
 
@@ -1607,6 +1649,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
         return NULL;
     }
     member->visibility = visibility;
+    member->is_static = is_static;
     member->as.callable = callable;
     return member;
 }
@@ -1939,6 +1982,7 @@ static bool token_starts_expression(FengTokenKind kind) {
         case FENG_TOKEN_FLOAT:
         case FENG_TOKEN_STRING:
         case FENG_TOKEN_LPAREN:
+        case FENG_TOKEN_DOT:
         case FENG_TOKEN_LBRACKET:
         case FENG_TOKEN_MINUS:
         case FENG_TOKEN_NOT:
@@ -2030,6 +2074,7 @@ static bool expr_can_take_explicit_type_args(const FengExpr *expr) {
 static bool token_can_follow_explicit_generic_target(FengTokenKind kind) {
     switch (kind) {
         case FENG_TOKEN_LPAREN:
+        case FENG_TOKEN_DOT:
         case FENG_TOKEN_LBRACKET:
         case FENG_TOKEN_LBRACE:
         case FENG_TOKEN_SEMICOLON:

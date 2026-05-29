@@ -51,6 +51,8 @@ typedef enum FengResolvedCallableKind {
     FENG_RESOLVED_CALLABLE_FUNCTION,         /* free / module-level fn */
     FENG_RESOLVED_CALLABLE_TYPE_METHOD,      /* method declared in a type body */
     FENG_RESOLVED_CALLABLE_FIT_METHOD,       /* method declared in a fit body */
+    FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD, /* static method declared in a type body */
+    FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD,  /* static method declared in a fit body */
     FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR  /* constructor of a concrete type */
 } FengResolvedCallableKind;
 
@@ -367,6 +369,7 @@ struct FengTypeMember {
     FengToken token;
     FengTypeMemberKind kind;
     FengVisibility visibility;
+    bool is_static;
     FengSlice doc_comment;
     FengAnnotation *annotations;
     size_t annotation_count;

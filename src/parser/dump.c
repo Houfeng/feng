@@ -574,6 +574,9 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     dump_annotations(stream, member->annotations, member->annotation_count, 2);
                     dump_indent(stream, 2);
                     fprintf(stream, "%s ", visibility_name(member->visibility));
+                    if (member->is_static) {
+                        fputs("static ", stream);
+                    }
                     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                         fprintf(stream, "field %s ", mutability_name(member->as.field.mutability));
                         dump_slice(stream, member->as.field.name);
@@ -696,7 +699,10 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     const FengTypeMember *member = decl->as.fit_decl.members[member_index];
 
                     dump_indent(stream, 2);
-                    fprintf(stream, "%s method\n", visibility_name(member->visibility));
+                        fprintf(stream,
+                            "%s %smethod\n",
+                            visibility_name(member->visibility),
+                            member->is_static ? "static " : "");
                     dump_callable(stream, &member->as.callable, 3);
                 }
                 break;
