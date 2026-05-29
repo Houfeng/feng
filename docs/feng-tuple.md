@@ -53,20 +53,59 @@ first(p);  // ✅ T 推断为 int，U 推断为 string
 
 ## 5 字面量元组绑定规则
 
-字面量元组在绑定时，由目标具名元组的元素类型决定各位置类型；元素数量与各位置类型必须完全一致，否则为编译错误。
+字面量元组在绑定时，由目标具名元组类型决定各位置的类型；元素数量与各位置类型必须完全一致，否则为编译错误。
+
+字面量元组可在以下四个上下文中按结构贴合目标类型：
+
+**① let / var 绑定**
 
 ```feng
-type MyTuple(int, char*);
-type OrderPair(int, char*);
-
-// ✅ 字面量元组未绑定时无类型，可贴合结构匹配的具名元组
-let a: MyTuple = (1, "str");
-let b: OrderPair = (1, "str");
-
-// ❌ 结构不匹配，禁止绑定
-type TripleInt(int, int, int);
-let c: TripleInt = (1, "str");  // 错误：元素类型不匹配
+type Point(float, float);
+let p: Point = (1.0, 2.0);   // ✅
+var q: Point = (3.0, 4.0);   // ✅
 ```
+
+**② 函数入参**
+
+```feng
+type Point(float, float);
+func length(p: Point): float { ... }
+
+length((1.0, 2.0));  // ✅ 字面量贴合参数类型 Point
+```
+
+**③ 函数返回值**
+
+```feng
+type Point(float, float);
+func origin(): Point {
+    return (0.0, 0.0);  // ✅ 字面量贴合返回类型 Point
+}
+```
+
+**④ 类型成员绑定**
+
+```feng
+type Segment(Point, Point);
+type Point(float, float);
+
+type Rect {
+    var origin: Point;
+    var size: Point;
+}
+
+var r: Rect = { origin: (0.0, 0.0), size: (100.0, 200.0) };  // ✅ 字段初始化时字面量贴合字段类型
+```
+
+**⑤ 显式类型转换**
+
+```feng
+type Point(float, float);
+
+let a = (Point)(1.0, 2.0);  // ✅ 显式转换提供目标类型，字面量合法
+```
+
+在所有上下文中，目标类型均由声明位置给出；字面量本身无类型，仅在贴合时完成类型推断与检查。脱离上述上下文（如 `let a = (1, 2)`，无类型注解且无显式转换）是编译错误。
 
 ## 6 具名元组间的转换规则
 
