@@ -73,17 +73,23 @@
 
 ```c
 typedef enum FengManagedSlotKind {
+    /* 无托管槽位。主要用于运行时转发描述符的 no-op 状态。 */
+    FENG_SLOT_NONE = 0,
     /* 槽位本身就是一根托管指针，使用现有单指针原语。 */
     FENG_SLOT_POINTER = 1,
     /* 槽位内嵌套另一个按值聚合值，需要递归走 walker。 */
     FENG_SLOT_NESTED_AGGREGATE = 2,
+    /* 槽位本身存放一个运行时 FengManagedSlotDescriptor，walker 读取后
+     * 按该描述符继续处理。 */
+    FENG_SLOT_FORWARD = 3,
 } FengManagedSlotKind;
 
 typedef struct FengManagedSlotDescriptor {
     /* 槽位相对于聚合值起始地址的字节偏移。 */
     size_t offset;
     FengManagedSlotKind kind;
-    /* 仅当 kind == FENG_SLOT_NESTED_AGGREGATE 时使用，指向嵌套聚合值的描述符。 */
+    /* 仅当 kind == FENG_SLOT_NESTED_AGGREGATE 时使用，指向嵌套聚合值的描述符。
+     * 其他 kind 必须为 NULL。 */
     const struct FengAggregateValueDescriptor *nested;
 } FengManagedSlotDescriptor;
 
@@ -102,11 +108,11 @@ typedef struct FengAggregateValueDescriptor {
 
 ### 3.2 设计要点
 
-- 描述符**只列托管槽位**，不枚举平凡字段。trivial 字段不进入任何 walker 路径。
-- `kind` 仅有两种取值；不引入回调指针。
+- 描述符**只列托管槽位**，不枚举平凡字段。trivial 字段不进入任何 walker 路径；`FENG_SLOT_NONE` 仅用于运行时转发描述符表达当前无托管槽位。
+- `kind` 不引入回调指针；`FENG_SLOT_FORWARD` 表示该位置存放一个运行时 `FengManagedSlotDescriptor`，walker 读取后按同一个 aggregate value base 解释其 `offset` 并继续处理。
 - `nested` 字段为递归留出空间，但第一阶段（fat spec）不会用到（fat spec 只有一个 `FENG_SLOT_POINTER` 槽位 = subject）。
 - `name` 仅用于调试与诊断，不参与任何决策。
-- 描述符是 `static const`，由 codegen 生成。
+- 静态描述符是 `static const`，由 codegen 生成；`FENG_SLOT_FORWARD` 指向的运行时描述符位于值本身内部，由 codegen 在值构造或 active 状态切换时写入。
 
 ### 3.3 trivial 值不生成任何描述符
 
@@ -229,11 +235,13 @@ void feng_aggregate_default_init(void *value_out,
 
 **这是本草案的核心实现约定。** 五个 API 的实现一律通过通用 walker 遍历描述符，对每个槽位调用现有单指针原语：
 
-- `retain`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_retain`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归。
-- `release`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_release`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归。
+- `retain`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_retain`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归；每个 `FENG_SLOT_FORWARD` → 读取运行时描述符后按其 `kind` 处理。
+- `release`：每个 `FENG_SLOT_POINTER` 槽位 → `feng_release`；每个 `FENG_SLOT_NESTED_AGGREGATE` → 递归；每个 `FENG_SLOT_FORWARD` → 读取运行时描述符后按其 `kind` 处理。
 - `assign`：先按声明顺序对每个 `FENG_SLOT_POINTER` 槽位 `feng_assign(dst_slot, src_slot)`（`feng_assign` 内部已做 retain-before-release，自赋值安全）；非托管字节由 `memcpy` 完成。
 - `take`：对每个 `FENG_SLOT_POINTER` 槽位 `feng_release(*dst_slot); *dst_slot = *src_slot; *src_slot = NULL;`；非托管字节同样 `memcpy`。
 - `default_init`：见 §4。
+
+`FENG_SLOT_FORWARD` 不改变上述五类操作的时序：`assign` 仍然先遍历源值并 retain，再遍历目标值并 release，最后整体 `memcpy`；`take` 仍然先 release 目标，整体 `memcpy`，再按源值当前的运行时描述符清空源值中的托管指针槽。
 
 walker 函数本身是 runtime 内部实现，不暴露公共回调签名。
 
@@ -303,9 +311,11 @@ runtime 负责：
 
 `feng_retain` / `feng_release` / `feng_assign` / 作用域清理表 / 异常清理表 / `release_children` 调用约定 / `FengManagedHeader` 布局 / `FengTypeTag` 集合：**全部不变**。
 
-### 7.2 Cycle collector：通过描述符展平接入
+### 7.2 Cycle collector：通过描述符展平与运行时转发接入
 
 **接入方式：在 codegen 生成 `FengTypeDescriptor.managed_fields` 时，将含 aggregate 字段的对象按 aggregate 描述符展平成多条原始 `FengManagedFieldDescriptor`。**
+
+上述静态展平适用于 `FENG_SLOT_POINTER` 与 `FENG_SLOT_NESTED_AGGREGATE` 组成的描述符。若某个 aggregate slot 使用 `FENG_SLOT_FORWARD`，active 托管槽位由值内的运行时 `FengManagedSlotDescriptor` 决定，不能预先翻译成固定的 `FengManagedFieldDescriptor`；此类载体必须在拥有值字节与 aggregate 描述符的运行时路径中直接走 aggregate slot 遍历。
 
 具体规则：
 
@@ -344,7 +354,7 @@ static const FengManagedFieldDescriptor Feng__demo__Holder__managed_fields[] = {
 
 #### 7.2.2 收益
 
-- cycle collector 代码完全不动。
+- cycle collector 不为任何具体 aggregate 类型写专用代码。
 - `FengManagedFieldDescriptor` 结构不动（仅完成 §9.1 的命名重构，字段语义保持）。
 - 完全符合 OCP：新增 aggregate 类型 → codegen 在生成对象描述符时多调一次展平逻辑，CC 不感知。
 

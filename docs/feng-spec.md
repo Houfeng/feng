@@ -131,6 +131,7 @@ type Box: Choice {}
 分为「必须、禁止、建议」。
 
 - [必须] 在 `spec Foo: Bar, Baz {}` 中,冒号右侧必须是一个或多个 `spec`,并使用逗号分隔。
+- [禁止] object-form `spec` 的父 `spec` 列表中出现 callable-form `spec` 或 union-form `spec`；object-form `spec` 的父级只能是 object-form `spec`。
 - [必须] 在 `type Foo: Bar, Baz {}` 或契约适配 `fit Foo: Bar, Baz` 中,冒号右侧每一项都必须是 object-form `spec`。
 - [必须] 判断 `type` 是否满足 `spec` 时,字段匹配采用“名称 + 绑定方式（`let` 或 `var`，即字段是否可变） + 类型完全一致”规则。
 - [必须] 判断 `type` 是否满足 `spec` 时,方法匹配采用“名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”规则。
@@ -159,6 +160,7 @@ type Box: Choice {}
 ## 6 编译期
 
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
+- 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form `spec` 与 union-form `spec` 出现在父 `spec` 列表中。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
 - 编译器必须在 Parser 阶段拒绝 object-form `spec` 体内的 `static` 成员声明。

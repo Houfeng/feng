@@ -1249,6 +1249,27 @@ static const FengAggregateDescriptor outer_desc = {
     .managed_slots = outer_slots,
 };
 
+typedef struct ForwardAgg {
+    FengManagedSlotDescriptor active;
+    union {
+        int   trivial;
+        void *ptr;
+        FatPair nested;
+    } payload;
+} ForwardAgg;
+
+static const FengManagedSlotDescriptor forward_slots[] = {
+    { offsetof(ForwardAgg, active), FENG_SLOT_FORWARD, NULL },
+};
+
+static const FengAggregateDescriptor forward_desc = {
+    .name = "test.ForwardAgg",
+    .size = sizeof(ForwardAgg),
+    .default_init = &outer_default_zero,
+    .managed_slot_count = sizeof(forward_slots) / sizeof(forward_slots[0]),
+    .managed_slots = forward_slots,
+};
+
 static void test_array_slice_aggregate_assigns_elements(void) {
     FengArray *source;
     FengArray *slice;
@@ -1527,6 +1548,95 @@ static void test_aggregate_nested_assign(void) {
     ASSERT(g_finalize_count == 6);
 }
 
+static void test_aggregate_forward_none_is_noop(void) {
+    ForwardAgg value = {0};
+    value.active = (FengManagedSlotDescriptor){ 0U, FENG_SLOT_NONE, NULL };
+    value.payload.trivial = 123;
+
+    feng_aggregate_retain(&value, &forward_desc);
+    feng_aggregate_release(&value, &forward_desc);
+
+    ASSERT(value.payload.trivial == 123);
+}
+
+static void test_aggregate_forward_pointer_retain_release(void) {
+    g_finalize_count = 0;
+    TestObject *subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    ForwardAgg value = {0};
+    value.active = (FengManagedSlotDescriptor){
+        offsetof(ForwardAgg, payload), FENG_SLOT_POINTER, NULL
+    };
+    value.payload.ptr = subject;
+
+    feng_aggregate_retain(&value, &forward_desc);
+    ASSERT(subject->header.refcount == 2U);
+
+    feng_aggregate_release(&value, &forward_desc);
+    ASSERT(subject->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+
+    feng_aggregate_release(&value, &forward_desc);
+    ASSERT(g_finalize_count == 1);
+}
+
+static void test_aggregate_forward_nested_assign(void) {
+    g_finalize_count = 0;
+    TestObject *src_subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *dst_subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    FengManagedSlotDescriptor nested_slot = {
+        offsetof(ForwardAgg, payload), FENG_SLOT_NESTED_AGGREGATE, &fat_pair_desc
+    };
+    ForwardAgg src = {0};
+    ForwardAgg dst = {0};
+    src.active = nested_slot;
+    src.payload.nested.subject = src_subject;
+    src.payload.nested.tag = 17;
+    dst.active = nested_slot;
+    dst.payload.nested.subject = dst_subject;
+    dst.payload.nested.tag = 23;
+
+    feng_aggregate_assign(&dst, &src, &forward_desc);
+
+    ASSERT(dst.active.kind == FENG_SLOT_NESTED_AGGREGATE);
+    ASSERT(dst.payload.nested.subject == src_subject);
+    ASSERT(dst.payload.nested.tag == 17);
+    ASSERT(src_subject->header.refcount == 2U);
+    ASSERT(g_finalize_count == 1);
+
+    feng_aggregate_release(&dst, &forward_desc);
+    feng_aggregate_release(&src, &forward_desc);
+    ASSERT(g_finalize_count == 2);
+}
+
+static void test_aggregate_forward_take_nulls_source_pointer(void) {
+    g_finalize_count = 0;
+    TestObject *dst_subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    TestObject *src_subject = (TestObject *)feng_object_new(&test_object_descriptor);
+    FengManagedSlotDescriptor pointer_slot = {
+        offsetof(ForwardAgg, payload), FENG_SLOT_POINTER, NULL
+    };
+    ForwardAgg dst = {0};
+    ForwardAgg src = {0};
+    dst.active = pointer_slot;
+    dst.payload.ptr = dst_subject;
+    src.active = pointer_slot;
+    src.payload.ptr = src_subject;
+
+    feng_aggregate_take(&dst, &src, &forward_desc);
+
+    ASSERT(dst.payload.ptr == src_subject);
+    ASSERT(src.payload.ptr == NULL);
+    ASSERT(src.active.kind == FENG_SLOT_POINTER);
+    ASSERT(src_subject->header.refcount == 1U);
+    ASSERT(g_finalize_count == 1);
+
+    feng_aggregate_release(&src, &forward_desc);
+    ASSERT(g_finalize_count == 1);
+
+    feng_aggregate_release(&dst, &forward_desc);
+    ASSERT(g_finalize_count == 2);
+}
+
 /* ---- §7.3 Array element three-classification ----------------------- */
 
 static void test_array_kinded_trivial_matches_legacy(void) {
@@ -1719,6 +1829,10 @@ int main(void) {
     test_aggregate_default_init_fn();
     test_aggregate_nested_walker();
     test_aggregate_nested_assign();
+    test_aggregate_forward_none_is_noop();
+    test_aggregate_forward_pointer_retain_release();
+    test_aggregate_forward_nested_assign();
+    test_aggregate_forward_take_nulls_source_pointer();
 
     test_array_kinded_trivial_matches_legacy();
     test_array_kinded_managed_pointer_matches_legacy();

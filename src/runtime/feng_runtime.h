@@ -266,19 +266,25 @@ typedef struct FengGenericParamDescriptor {
 /* Single managed slot inside a by-value aggregate. `offset` is measured from
  * the aggregate value's base address (NOT from a FengManagedHeader). */
 typedef enum FengManagedSlotKind {
+    /* No managed slot. Used by runtime-forwarded descriptors to represent
+     * the active value carrying no managed references. */
+    FENG_SLOT_NONE = 0,
     /* Slot itself is one managed pointer. The aggregate APIs use
      * feng_retain/feng_release/feng_assign on `*(void**)(value + offset)`. */
     FENG_SLOT_POINTER = 1,
     /* Slot embeds another by-value aggregate; walker recurses through
      * `nested`. */
-    FENG_SLOT_NESTED_AGGREGATE = 2
+    FENG_SLOT_NESTED_AGGREGATE = 2,
+    /* Slot stores a runtime FengManagedSlotDescriptor. The forwarded
+     * descriptor's offset is interpreted relative to the same aggregate
+     * value base. */
+    FENG_SLOT_FORWARD = 3
 } FengManagedSlotKind;
 
 typedef struct FengManagedSlotDescriptor {
     size_t offset;
     FengManagedSlotKind kind;
-    /* Required iff kind == FENG_SLOT_NESTED_AGGREGATE; otherwise must be
-     * NULL. */
+    /* Required iff kind == FENG_SLOT_NESTED_AGGREGATE; otherwise must be NULL. */
     const struct FengAggregateDescriptor *nested;
 } FengManagedSlotDescriptor;
 

@@ -123,6 +123,7 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 因此，union-form 与 object-form 应当是并列 form，而不是“object-form 的另一种 parent 列表写法”。
 
 进一步说，union-form 也不是“具体 `type` 可以在声明头或 `fit` 中声明满足的契约目标”；`type A: UnionSpec` 与 `fit A: UnionSpec` 都应非法。具体值进入 union-form 只发生在赋值、初始化、传参、返回等值流站点，并按 union member 选择规则处理。
+此外，**object-form `spec` 的父 spec 只能是 object-form `spec`**；union-form `spec` 不能出现在 object-form `spec` 的父 spec 列表中。union-form 没有可继承的字段契约，以它作为父 spec 在语义上无意义，应在语义层报错。
 
 ### 3.5 union-form 的成员访问必须先收窄
 
@@ -177,6 +178,7 @@ if v {
 - `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
 - 当分支内收窄结果仍包含多个 member 时，值依然处于 union 视角，只是 member 集合变小；此时仍不允许直接做成员访问、方法调用或 `==` / `!=` 比较。
 - 当目标 member 本身是 object-form `spec` 且该分支只命中该单一 member 时，分支内值直接取得该 `spec` 视角，并可按该 `spec` 的既有规则访问成员与发起调用。
+- 收窄到 object-form `spec` member 后，分支内值仍处于该 `spec` 的抽象视角，**不能进一步收窄到具体实现类型**。原因在于 object-form `spec` 是开放类型——任意在当前可见契约闭包中 fit 该 `spec` 的类型均可进入，编译期无法穷举全部候选；因此，该分支内只允许通过该 `spec` 的方法或成员发起调用，不存在继续向下收窄的路径。若程序需要对具体实现类型做进一步判别，应将各具体类型作为独立 union member 直接列出，而不是通过它们共同满足的 object-form `spec` 间接列入。
 - 若某个分支先收窄到具体类型，且当前可见契约闭包可证明该具体类型满足某个 object-form `spec`，则允许通过显式转换把该值转换到目标 `spec` 视角；该能力与分支匹配收窄分离。
 - 由于不引入独立 `is` 运算符，因此不存在 `&&` / `||` 中基于 `is` 的短路收窄传播规则。
 
@@ -316,7 +318,7 @@ spec Value: int | string | UserType;
 spec Display: Named | string;
 ```
 
-则 `Display` 的默认零值先按归一化后的第一个 member `Named` 的默认零值来理解，也就是 active variant 为 `Named`，payload 为该 `spec` 的默认 witness。
+则 `Display` 的默认零值先按归一化后的第一个 member `Named` 的默认零值来理解，也就是 active variant 为 `Named`，payload 按 `Named` 自身的默认零值规则初始化（如果 `Named` 有合法默认零值）。
 
 ### 3.10 union-form 的 `==` / `!=` 也必须先收窄
 
@@ -343,6 +345,29 @@ spec Display: Named | string;
 - 若新类型最终装箱到堆上，本质是 `managed-pointer`。
 - 若新类型按值布局且内部含托管成员，本质是 `aggregate`。
 - 若新类型最终只是纯字节 payload，本质是 `trivial`。
+
+### 3.12 union-form 可作为泛型类型参数约束
+
+union-form `spec` 可用于声明泛型类型参数的约束，例如：
+
+```feng
+spec Value: int | string;
+
+type Cell<V: Value> {
+  let value: V;
+}
+
+func use<V: Value>(v: V): void { ... }
+```
+
+约束细则：
+
+- 在泛型声明体内，被约束参数 `V` 的值处于 union 视角；**未经 `if 目标值 { ... }` 收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
+- 利用 `if 目标值 { ... }` 对参数值进行 member 匹配后，分支内的值按已收窄到的 member 的既有规则操作。
+- union-form 约束不为参数类型物化 witness；调用点只传入值本身，而不是 object-form `spec` 约束所需的「值 + witness」对。
+- 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一个类型参数。
+- 在约束链传递中（如子 `spec` 继承父 `spec` 的约束），union-form 约束遵循与 object-form `spec` 约束相同的参数传递规则：向上传递的约束不得比目标约束更宽松。
+- union-form 约束不是进入 union 的值流站点；传入泛型函数的实际实参类型必须已是该 union-form 的某个 member，而不是先进入 union 再传入。
 
 ## 4 基于三分类的映射原则
 
@@ -518,7 +543,7 @@ spec Display: Named | string;
 - 多个 member 可以在同一分支中以逗号罗列；这类分支只收窄到对应 member 子集，而不是单一确定类型。
 - 当某个分支收窄后的 member 子集大小仍大于 1 时，分支内值仍是 union 视角；若要访问、调用或比较，必须继续收窄到单一 member。
 - `else` 分支收窄为剩余 member 集合；若剩余集合可唯一确定，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
-- 当目标 member 本身是 object-form `spec` 且该分支只命中这一个 member 时，分支内值直接按该 `spec` 视角操作。
+- 当目标 member 本身是 object-form `spec` 且该分支只命中这一个 member 时，分支内值直接按该 `spec` 视角操作。收窄到 object-form `spec` member 后，值仍处于该 `spec` 的抽象视角，不能进一步收窄到具体实现类型；object-form `spec` 是开放类型，编译期无法穷举其全部实现，该分支内只允许调用该 `spec` 本身定义的方法与成员。若需对具体实现类型做判别，应将各具体类型作为独立 union member 直接列出。
 - 已收窄到具体类型后，若当前可见契约闭包能证明其满足某个 object-form `spec`，则应通过显式转换进入该 `spec` 视角。
 - 即使某个 union 视角值的全部可能 member 都满足同一个 object-form `spec`，当前阶段也不支持直接把该 union 视角值显式转换到该共同 `spec`；这类能力一般可能需要一次基于 `tag` 的运行时投影，因此暂不纳入本轮设计。
 - 当前阶段无剩余未决项。

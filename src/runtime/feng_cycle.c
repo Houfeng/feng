@@ -222,6 +222,8 @@ static void cyc_aggregate_for_each_pointer_slot(
         const FengManagedSlotDescriptor *s = &desc->managed_slots[i];
         unsigned char *p = value + s->offset;
         switch (s->kind) {
+            case FENG_SLOT_NONE:
+                break;
             case FENG_SLOT_POINTER: {
                 FengManagedHeader **slot = (FengManagedHeader **)p;
                 visit(slot, *slot, ctx);
@@ -230,6 +232,35 @@ static void cyc_aggregate_for_each_pointer_slot(
             case FENG_SLOT_NESTED_AGGREGATE:
                 cyc_aggregate_for_each_pointer_slot(p, s->nested, visit, ctx);
                 break;
+            case FENG_SLOT_FORWARD: {
+                const FengManagedSlotDescriptor *forwarded =
+                    (const FengManagedSlotDescriptor *)p;
+                unsigned char *forwarded_value = value + forwarded->offset;
+                switch (forwarded->kind) {
+                    case FENG_SLOT_NONE:
+                        break;
+                    case FENG_SLOT_POINTER: {
+                        FengManagedHeader **slot =
+                            (FengManagedHeader **)forwarded_value;
+                        visit(slot, *slot, ctx);
+                        break;
+                    }
+                    case FENG_SLOT_NESTED_AGGREGATE:
+                        cyc_aggregate_for_each_pointer_slot(forwarded_value,
+                                                            forwarded->nested,
+                                                            visit,
+                                                            ctx);
+                        break;
+                    case FENG_SLOT_FORWARD:
+                        feng_panic("feng_cycle: aggregate slot cannot forward again");
+                        break;
+                    default:
+                        feng_panic("feng_cycle: unknown forwarded aggregate slot kind %d",
+                                   (int)forwarded->kind);
+                        break;
+                }
+                break;
+            }
         }
     }
 }

@@ -34,6 +34,8 @@ static void feng_visit_aggregate_managed_slots(
         const FengManagedSlotDescriptor *slot = &slots[i];
         void *slot_addr = base + slot->offset;
         switch (slot->kind) {
+            case FENG_SLOT_NONE:
+                break;
             case FENG_SLOT_POINTER:
                 visitor((void **)slot_addr, ctx);
                 break;
@@ -47,6 +49,38 @@ static void feng_visit_aggregate_managed_slots(
                 feng_visit_aggregate_managed_slots(slot_addr, slot->nested,
                                                    visitor, ctx);
                 break;
+            case FENG_SLOT_FORWARD: {
+                const FengManagedSlotDescriptor *forwarded =
+                    (const FengManagedSlotDescriptor *)slot_addr;
+                void *forwarded_addr = base + forwarded->offset;
+                switch (forwarded->kind) {
+                    case FENG_SLOT_NONE:
+                        break;
+                    case FENG_SLOT_POINTER:
+                        visitor((void **)forwarded_addr, ctx);
+                        break;
+                    case FENG_SLOT_NESTED_AGGREGATE:
+                        if (forwarded->nested == NULL) {
+                            feng_panic("feng_aggregate: forwarded nested slot in '%s' has no descriptor",
+                                       desc->name != NULL ? desc->name : "<unknown>");
+                        }
+                        feng_visit_aggregate_managed_slots(forwarded_addr,
+                                                           forwarded->nested,
+                                                           visitor,
+                                                           ctx);
+                        break;
+                    case FENG_SLOT_FORWARD:
+                        feng_panic("feng_aggregate: forwarded slot in '%s' cannot forward again",
+                                   desc->name != NULL ? desc->name : "<unknown>");
+                        break;
+                    default:
+                        feng_panic("feng_aggregate: unknown forwarded slot kind %d in '%s'",
+                                   (int)forwarded->kind,
+                                   desc->name != NULL ? desc->name : "<unknown>");
+                        break;
+                }
+                break;
+            }
             default:
                 feng_panic("feng_aggregate: unknown slot kind %d in '%s'",
                            (int)slot->kind,

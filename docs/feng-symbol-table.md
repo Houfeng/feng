@@ -712,9 +712,12 @@ RELS
 - `FT_TYPE_KIND_SPEC_OBJECT = 8`
 - `FT_TYPE_KIND_SPEC_CALLABLE = 9`
 
-未来若出现新的不可约类型构造（如元组、union spec），优先追加新的 `FT_TYPE_*` kind 常量，而不是改动既有 `TYPS` 记录壳。预留位置：
+若出现新的不可约类型构造，优先追加新的 `FT_TYPE_*` kind 常量，而不是改动既有 `TYPS` 记录壳。本轮确认新增：
 
-- `FT_TYPE_KIND_SPEC_UNION = 10`（未来 union spec form）
+- `FT_TYPE_KIND_SPEC_UNION = 10`（union-form spec，本轮交付）
+
+预留位置：
+
 - `FT_TYPE_KIND_TUPLE = 11`（未来元组）
 
 类型节点建议以 DAG 形式表达,供多个符号共享引用。复杂类型一律通过子节点 ID 组合,不在字符串里重新编码一份"类型文本"。
@@ -748,6 +751,12 @@ RELS
 - spec 的 form 通过 TYPS.kind 区分，不通过 SYMS.kind；
 - `sym_ref`：spec 声明符号 ID；其余字段见 spec 具体编码规则。
 
+**`FT_TYPE_KIND_SPEC_UNION`**（union-form spec）:
+
+- spec 的 form 通过 TYPS.kind 区分，不通过 SYMS.kind；
+- `sym_ref`：spec 声明符号 ID；
+- `elem_start` / `elem_count`：在 TSEQ 中的归一化 member 类型范围；每个元素 `name_str = 0`，`type_id` = 对应 member 的 TYPS.id，按声明顺序排列。
+
 **`FT_TYPE_KIND_TYPE_PARAM_REF`**（类型参数引用）:
 
 - `string_ref`：参数名字符串；`sym_ref`：被引用的 `type_param` 符号 ID；其余字段为 `0`。
@@ -771,6 +780,7 @@ RELS
 | NAMED_GENERIC | 基名称字符串 | 声明符号 ID | TSEQ 起始下标 | 类型实参数量 |
 | CALLABLE | 0 | 0 | TSEQ 起始下标 | 参数数量 + 1 |
 | SPEC_OBJECT / SPEC_CALLABLE | 0 | spec 声明符号 ID | 0 | 0 |
+| SPEC_UNION | 0 | spec 声明符号 ID | TSEQ 起始下标 | member 数量 |
 | TYPE_PARAM_REF | 参数名字符串 | type_param 符号 ID | 0 | 0 |
 | ARRAY | mutability_bitmap | 0 | 元素类型 TYPS.id | rank |
 | C_POINTER | 0 | 0 | 指向元素 TYPS.id | 0 |
@@ -809,7 +819,7 @@ RELS
 | 函数/方法签名 | CALLABLE | 前 N 个是参数（`name_str` = 参数名），最后 1 个是返回类型（`name_str = 0`） |
 | 泛型类型实参 | NAMED_GENERIC | 各实参（`name_str = 0`） |
 | 元组（未来） | TUPLE | 各元素（`name_str = 0` 或有标签） |
-| union spec（未来） | SPEC_UNION | 各变体类型（`name_str` 可为变体名） |
+| union spec 成员列表 | SPEC_UNION | 各归一化 member 类型（`name_str = 0`，`type_id` = member 的 TYPS.id） |
 
 补充规则:
 

@@ -264,6 +264,58 @@ type Box {
 let e = foo<Map:<int>>(data);
 ```
 
+## 4 约束语义细则
+
+### 4.1 object-form `spec` 约束
+
+当泛型类型参数的约束是 object-form `spec` 时：
+
+- 调用点需要同时提供 `subject` 与 `witness`；编译器负责在调用点构造对应的胖值对。
+- 在泛型声明体内，被约束参数的值已持有 witness；可直接访问该 `spec` 声明的字段与方法，不需要额外收窄。
+- 约束传递：向父 `spec` 传递的参数约束不得比目标 `spec` 的参数约束更宽松。
+
+### 4.2 union-form `spec` 约束
+
+当泛型类型参数的约束是 union-form `spec` 时：
+
+- 调用点只传入值本身，**不传入 witness**；union-form 约束不物化 witness。
+- 在泛型声明体内，被约束参数的值处于 union 视角；**未经 `if 目标值 { ... }` 收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
+- 利用 `if 目标值 { ... }` 对参数值进行 member 匹配后，分支内的值按已收窄到的 member 的既有规则操作。
+- 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一参数。
+- 约束传递规则与 object-form `spec` 约束相同：向上传递的约束不得比目标约束更宽松。
+
+以下示例说明两种约束的区别：
+
+```feng
+spec Named {
+  let name: string;
+}
+
+spec Value: int | string;
+
+// object-form 约束：声明体内可直接访问 name
+type NamedBox<T: Named> {
+  func get_name(value: T): string {
+    return value.name;   // 合法：T 持有 Named 的 witness
+  }
+}
+
+// union-form 约束：声明体内必须先收窄
+type ValueBox<V: Value> {
+  func describe(value: V): string {
+    if value {
+      int {
+        return "is int";   // 收窄后合法
+      }
+      string {
+        return "is string"; // 收窄后合法
+      }
+    }
+    // return value.something;  // 非法：未收窄时不可访问
+  }
+}
+```
+
 错语法八，在非调用位置使用旧 `:<...>`：
 
 ```feng
