@@ -41,17 +41,17 @@ Feng 的每个值类型，无论内建类型还是用户类型，都可以归类
 
 ```c
 typedef bool (*FengValueEqualFn)(const void *left, const void *right);
-typedef uint64_t (*FengValueHashFn)(const void *value);
 
 typedef struct FengTrivialDescriptor {
     const char     *name;
     size_t          size;
-    FengValueEqualFn equal_fn;
-    FengValueHashFn  hash_fn;   /* 可后续加，暂 NULL */
+    FengValueEqualFn equal_fn;  /* NULL 时退回 memcmp(left, right, size) == 0 */
 } FengTrivialDescriptor;
 ```
 
 典型类型：`bool`、整数类型、浮点类型、用户 enum、C pointer、全 trivial tuple（如 `type Point(int, int)`）。
+
+`equal_fn` 仅在字节比较不满足语义时才需要填写。例如浮点类型需要覆盖，因为 IEEE 754 规定 `NaN != NaN`，而两个 NaN 的位模式相同，`memcmp` 会误判为相等；整数、bool、enum、C pointer 均可用 NULL（字节比较即为正确语义）。
 
 内建类型由 runtime 预定义：
 
@@ -90,7 +90,6 @@ typedef struct FengAggregateDescriptor {
     size_t managed_slot_count;
     const FengManagedSlotDescriptor *managed_slots;
     FengValueEqualFn equal_fn;   /* 新增，支持 tuple equality */
-    FengValueHashFn  hash_fn;    /* 可后续加 */
 } FengAggregateDescriptor;
 ```
 
@@ -197,7 +196,30 @@ static inline size_t feng_generic_value_size(const FengGenericParamDescriptor *p
 
 `FengGenericParamDescriptor` 和 `kind` 判断完全不出现在非泛型热路径中，与本次重构无关。
 
-## 实施范围
+## 实施任务清单
+
+### 阶段一：描述符重构
+
+- [ ] **runtime** 新增 `FengTrivialDescriptor` 结构定义（`feng_runtime.h`）
+- [ ] **runtime** 为内建标量类型预定义 `FengTrivialDescriptor` 实例（bool、i8-i64、u8-u64、f32/f64）
+- [ ] **runtime** `FengAggregateValueDescriptor` 重命名为 `FengAggregateDescriptor`，更新所有引用
+- [ ] **runtime** `FengTypeDescriptor` 追加 `equal_fn` 字段
+- [ ] **runtime** `FengGenericParamDescriptor` 精简为 3 字段（`kind` / `descriptor` / `witness`），删除 `size`、`type_kind`、`aggregate`
+- [ ] **runtime** 更新 `runtime_contract_copy_value_to_out`：将 `type->size` 改为通过 descriptor 读取
+- [ ] **codegen** 标量 / enum / C pointer / 全 trivial tuple：生成或引用对应 `FengTrivialDescriptor`
+- [ ] **codegen** 含 managed slot 的 tuple / spec fat value：生成 `FengAggregateDescriptor`
+- [ ] **codegen** `FengGenericParamDescriptor` 初始化：去除 `size`、`type_kind`、`aggregate`，改为 `descriptor`
+- [ ] **runtime** 确认 `FengRuntimeTypeKind` 在所有 runtime / codegen 文件中无残留读取点，随后删除
+- [ ] 全量回归测试通过
+
+### 阶段二：Tuple 相等性
+
+- [ ] **runtime** `FengAggregateDescriptor` 追加 `equal_fn` 字段
+- [ ] **codegen** 为含 managed slot 的 tuple 生成 `equal_fn` 函数实现
+- [ ] **runtime** `feng_expression_equal` 的 `AGGREGATE` 分支调用 `descriptor->equal_fn`
+- [ ] 全量回归测试通过
+
+## 实施范围（概述）
 
 1. **runtime**：新增 `FengTrivialDescriptor`；为内建标量类型预定义 descriptor；`FengAggregateValueDescriptor` 重命名为 `FengAggregateDescriptor`，追加 `equal_fn`；`FengTypeDescriptor` 追加 `equal_fn`；`FengRuntimeTypeKind` 标记废弃或删除
 2. **codegen**：
