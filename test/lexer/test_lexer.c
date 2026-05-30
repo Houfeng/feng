@@ -44,7 +44,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengAnnotationKind annotation_kind;
 
     ASSERT(feng_keyword_count() == 28U);
-    ASSERT(feng_reserved_word_count() == 8U);
+    ASSERT(feng_reserved_word_count() == 5U);
     ASSERT(feng_builtin_annotation_count() == 5U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
@@ -67,6 +67,9 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(!feng_is_reserved_word("enum", 4U));
     ASSERT(feng_is_reserved_word("const", 5U));
     ASSERT(feng_is_reserved_word("export", 6U));
+    ASSERT(!feng_is_reserved_word("fn", 2U));
+    ASSERT(!feng_is_reserved_word("mod", 3U));
+    ASSERT(!feng_is_reserved_word("use", 3U));
     ASSERT(feng_lookup_keyword("import", 6U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_IMPORT);
     ASSERT(feng_lookup_keyword("module", 6U, &keyword_kind));
@@ -96,9 +99,6 @@ static void test_reserved_words_rejected(void) {
         "struct",
         "const",
         "export",
-        "fn",
-        "mod",
-        "use",
         "prop"
     };
     size_t index;

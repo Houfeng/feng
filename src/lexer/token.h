@@ -44,9 +44,6 @@ extern "C" {
     X(STRUCT, "struct") \
     X(CONST, "const") \
     X(EXPORT, "export") \
-    X(FN, "fn") \
-    X(MOD, "mod") \
-    X(USE, "use") \
     X(PROP, "prop")
 
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
