@@ -6567,7 +6567,22 @@ static const FengTypeMember *find_decl_instance_member(const ResolveContext *con
 
 static bool field_has_declaration_initializer(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
-           member->as.field.initializer != NULL;
+           (member->as.field.initializer != NULL || member->as.field.declaration_bound);
+}
+
+static bool constructor_has_imported_bound_name(const FengTypeMember *constructor,
+                                                FengSlice field_name) {
+    size_t index;
+
+    if (constructor == NULL || constructor->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+        return false;
+    }
+    for (index = 0U; index < constructor->as.callable.bound_member_count; ++index) {
+        if (slice_equals(constructor->as.callable.bound_member_names[index], field_name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool expr_is_direct_self_member(const FengExpr *expr, FengSlice *out_name) {
@@ -10388,6 +10403,9 @@ static bool constructor_block_binds_let_field(const FengDecl *type_decl,
 static bool constructor_binds_let_field(const FengDecl *type_decl,
                                         const FengTypeMember *constructor,
                                         FengSlice field_name) {
+    if (constructor_has_imported_bound_name(constructor, field_name)) {
+        return true;
+    }
     return constructor != NULL &&
            constructor->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
            constructor_block_binds_let_field(type_decl,

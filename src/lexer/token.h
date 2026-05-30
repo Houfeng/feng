@@ -55,8 +55,7 @@ extern "C" {
     X(CDECL, "cdecl") \
     X(STDCALL, "stdcall") \
     X(FASTCALL, "fastcall") \
-    X(RUNTIME, "runtime") \
-    X(BOUNDED, "bounded")
+    X(RUNTIME, "runtime")
 
 typedef enum FengTokenKind {
     FENG_TOKEN_EOF = 0,
@@ -126,8 +125,7 @@ typedef enum FengAnnotationKind {
     FENG_ANNOTATION_CDECL = 5,
     FENG_ANNOTATION_STDCALL = 6,
     FENG_ANNOTATION_FASTCALL = 7,
-    FENG_ANNOTATION_RUNTIME = 8,
-    FENG_ANNOTATION_BOUNDED = 9
+    FENG_ANNOTATION_RUNTIME = 8
 } FengAnnotationKind;
 
 typedef struct FengToken {

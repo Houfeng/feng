@@ -238,11 +238,13 @@ static void test_member_annotations_and_constructors(void) {
         "module demo.user;\n"
         "type User {\n"
         "    open var name: string;\n"
-        "    @bounded\n"
-        "    open let id: int;\n"
+        "    @memo\n"
+        "    open let id: int = 1;\n"
         "    open let created_at: int;\n"
-        "    @bounded(created_at)\n"
-        "    func User(ts: int) {}\n"
+        "    @memo(created_at)\n"
+        "    func User(ts: int) {\n"
+        "        self.created_at = ts;\n"
+        "    }\n"
         "    open func info(): string {\n"
         "        return self.name;\n"
         "    }\n"
@@ -257,7 +259,7 @@ static void test_member_annotations_and_constructors(void) {
     ASSERT(decl->kind == FENG_DECL_TYPE);
     ASSERT(decl->as.type_decl.member_count == 5U);
     ASSERT(decl->as.type_decl.members[1]->annotation_count == 1U);
-    ASSERT(decl->as.type_decl.members[1]->annotations[0].builtin_kind == FENG_ANNOTATION_BOUNDED);
+    ASSERT(decl->as.type_decl.members[1]->annotations[0].builtin_kind == FENG_ANNOTATION_CUSTOM);
     ASSERT(decl->as.type_decl.members[2]->kind == FENG_TYPE_MEMBER_FIELD);
     ASSERT(decl->as.type_decl.members[3]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
     ASSERT(decl->as.type_decl.members[3]->annotation_count == 1U);
@@ -427,7 +429,7 @@ static void test_ast_source_tokens(void) {
     const char *source =
         "open module demo.main;\n"
         "import demo.base;\n"
-        "@bounded\n"
+        "@memo\n"
         "func main(arg: int) {\n"
         "    let answer: int = 42;\n"
         "    return answer;\n"
@@ -500,12 +502,12 @@ static void test_doc_comments_bind_to_declarations_and_members(void) {
     const char *source =
         "module demo.docs;\n"
         "/** top func doc */\n"
-        "@bounded\n"
+        "@memo\n"
         "open func run() {}\n"
         "/** type doc */\n"
         "type User {\n"
         "    /** field doc */\n"
-        "    @bounded\n"
+        "    @memo\n"
         "    open let id: int;\n"
         "    /** method doc */\n"
         "    open func info(): int {\n"

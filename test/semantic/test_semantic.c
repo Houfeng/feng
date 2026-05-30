@@ -1131,6 +1131,29 @@ static void test_unknown_top_level_annotation_is_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_bounded_annotation_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@bounded\n"
+        "type User {\n"
+        "    let id: int = 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("bounded_annotation_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "bounded_annotation_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "unknown annotation '@bounded' is not supported") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fixed_function_accepts_abi_stable_signature(void) {
     const char *source =
         "module demo.main;\n"
@@ -6649,6 +6672,95 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "external_field_type_main.f") == 0);
     ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_decl_bound_let_member_rejects_object_literal_rebind(void) {
+    const char *external_source =
+        "open module vendor.bound_model;\n"
+        "open type User {\n"
+        "    open let id: int = 1;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import vendor.bound_model as model;\n"
+        "func make(): model.User {\n"
+        "    return model.User { id: 2 };\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_bound_model.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_decl_bound_object_literal_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "external_decl_bound_object_literal_main.f") == 0);
+    ASSERT(strstr(errors[0].message, "declaration initializer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_external_imported_ctor_bound_let_member_rejects_object_literal_rebind(void) {
+    const char *external_source =
+        "open module vendor.ctor_bound_model;\n"
+        "open type User {\n"
+        "    open let id: int;\n"
+        "    open func User(value: int) {\n"
+        "        self.id = value;\n"
+        "    }\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import vendor.ctor_bound_model as model;\n"
+        "func make(): model.User {\n"
+        "    return model.User(1) { id: 2 };\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture, "external_ctor_bound_model.ff", external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+
+    program = parse_program_or_die("external_ctor_bound_object_literal_main.f", main_source);
+    programs[0] = program;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "external_ctor_bound_object_literal_main.f") == 0);
+    ASSERT(strstr(errors[0].message, "already completed by constructor") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -14089,6 +14201,7 @@ int main(void) {
     test_fixed_type_rejects_direct_array_field_type();
     test_fixed_type_rejects_direct_callable_field_type();
     test_unknown_top_level_annotation_is_rejected();
+    test_bounded_annotation_is_rejected();
     test_fixed_function_accepts_abi_stable_signature();
     test_fixed_function_accepts_fieldless_abi_type_pointer_signature();
     test_fixed_function_rejects_fieldless_abi_type_value_parameter();
@@ -14307,6 +14420,8 @@ int main(void) {
     test_external_imported_function_argument_type_mismatch();
     test_external_imported_function_argument_type_match();
     test_external_imported_field_type_participates_in_typecheck();
+    test_external_imported_decl_bound_let_member_rejects_object_literal_rebind();
+    test_external_imported_ctor_bound_let_member_rejects_object_literal_rebind();
     test_external_imported_static_members_are_visible();
     test_external_full_path_type_refs_do_not_require_use();
     test_external_alias_type_ref_still_requires_use_alias();

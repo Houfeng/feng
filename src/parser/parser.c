@@ -871,6 +871,8 @@ static FengCallableSignature parse_callable_signature(Parser *parser,
     callable.param_count = 0U;
     callable.return_type = NULL;
     callable.body = NULL;
+    callable.bound_member_names = NULL;
+    callable.bound_member_count = 0U;
 
     /* Optional generic type parameters: func name<T: Bound, U>(...) */
     if (parser_match(parser, FENG_TOKEN_LT)) {
@@ -1370,6 +1372,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             member->as.field.name = binding.name;
             member->as.field.type = binding.type;
             member->as.field.initializer = binding.initializer;
+            member->as.field.declaration_bound = binding.initializer != NULL;
         } else if (parser_match(parser, FENG_TOKEN_KW_FUNC)) {
             FengCallableSignature callable;
             FengSlice name;
@@ -4238,6 +4241,18 @@ static void free_stmt(FengStmt *stmt) {
     free(stmt);
 }
 
+static void free_bound_member_names(FengSlice *names, size_t count) {
+    size_t index;
+
+    if (names == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        free((void *)names[index].data);
+    }
+    free(names);
+}
+
 static void free_type_member(FengTypeMember *member) {
     if (member == NULL) {
         return;
@@ -4252,6 +4267,8 @@ static void free_type_member(FengTypeMember *member) {
         free_parameters(member->as.callable.params, member->as.callable.param_count);
         free_type_ref(member->as.callable.return_type);
         free_block(member->as.callable.body);
+        free_bound_member_names(member->as.callable.bound_member_names,
+                                member->as.callable.bound_member_count);
     }
 
     free(member);

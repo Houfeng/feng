@@ -328,6 +328,71 @@ static void test_roundtrip_public_module(void) {
     free(tmp_dir);
 }
 
+static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.bounded;\n"
+        "open let module_id: int = 9;\n"
+        "open type User {\n"
+        "    open let id: int = 1;\n"
+        "    open let created_at: int;\n"
+        "    open static let version: int = 2;\n"
+        "    func User(ts: int) {\n"
+        "        self.created_at = ts;\n"
+        "    }\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice module_segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *user_decl = NULL;
+    const FengSymbolDeclView *module_id_decl = NULL;
+    const FengSymbolDeclView *id_field = NULL;
+    const FengSymbolDeclView *created_at_field = NULL;
+    const FengSymbolDeclView *version_field = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("bounded.ff", kSource, public_root);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    module_segments[0] = slice_from_cstr("feng");
+    module_segments[1] = slice_from_cstr("test");
+    module_segments[2] = slice_from_cstr("symbol");
+    module_segments[3] = slice_from_cstr("bounded");
+    module = feng_symbol_provider_find_module(provider, module_segments, 4U);
+    ASSERT(module != NULL);
+
+    module_id_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("module_id"));
+    ASSERT(module_id_decl != NULL);
+    ASSERT(!feng_symbol_decl_has_bounded_decl(module_id_decl));
+
+    user_decl = feng_symbol_module_find_public_type(module, slice_from_cstr("User"));
+    ASSERT(user_decl != NULL);
+    id_field = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("id"));
+    ASSERT(id_field != NULL);
+    ASSERT(feng_symbol_decl_has_bounded_decl(id_field));
+
+    created_at_field = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("created_at"));
+    ASSERT(created_at_field != NULL);
+    ASSERT(!feng_symbol_decl_has_bounded_decl(created_at_field));
+
+    version_field = feng_symbol_decl_find_public_member(user_decl, slice_from_cstr("version"));
+    ASSERT(version_field != NULL);
+    ASSERT(feng_symbol_decl_is_static(version_field));
+    ASSERT(!feng_symbol_decl_has_bounded_decl(version_field));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_roundtrip_public_module_docs(void) {
     static const char *kSource =
         "open module feng.test.symbol.docs;\n"
@@ -1518,6 +1583,7 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
 
 int main(void) {
     test_roundtrip_public_module();
+    test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_roundtrip_public_module_docs();
     test_private_module_skipped();
     test_reader_rejects_bad_magic();

@@ -36,7 +36,7 @@ Feng 在跨模块边界上采用“**编译产出符号表,消费侧走查询**�
 - 让 `build`、`check`、`pack` 在一次语义分析后同时产出可复用的符号信息。
 - 让编译器消费依赖包时走“查表”路径,不再重解析接口源码。
 - 让语言服务优先消费 `build/` 目录中的本地缓存,提升 hover、completion、definition 等类型感知速度。
-- 让 `fit`、`spec`、`@bounded`、文档注释等影响语义与 IDE 展示的事实都能进入符号表。
+- 让 `fit`、`spec`、type 实例成员绑定推断事实、文档注释等影响语义与 IDE 展示的事实都能进入符号表。
 - 让 C 实现保持简单: 固定小端编码、固定宽度整数、分节布局、字符串池去重,避免引入过重序列化依赖。
 
 ### 2.2 非目标
@@ -136,7 +136,7 @@ build/
 2. 遇到 `import mylib.api;` 时,直接定位 `mod/mylib/api.ft`。
 3. 由 `src/symbol/` 中的 `.ft` 读取模块把该文件解析为统一的“已导入模块查询视图”,其中包含公开 `type`、公开 `enum`、`spec`、`fit`、顶层 `func`、模块级 `let` / `var`、公开成员等声明级事实。
 4. 编译驱动把这些查询视图通过抽象查询接口注入核心分析器。
-5. 后续类型检查、名称查找、契约关系判断、`@bounded` 重复绑定检查都基于该抽象查询接口进行,不重解析文本接口,也不让核心分析器直接依赖 `.ft` 模块。
+5. 后续类型检查、名称查找、契约关系判断、`let` 成员重复绑定检查都基于该抽象查询接口进行,不重解析文本接口,也不让核心分析器直接依赖 `.ft` 模块。
 
 Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.ft` entry; 该策略只属于 Provider 内部实现。未来切换为按 `import` 懒加载时,上层接口与核心分析器语义不得改变。
 
@@ -167,7 +167,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开泛型父 `spec` 使用、泛型 `fit` 契约使用以及其有序类型实参事实。
 - 支撑跨包重载决议与泛型推导所需的泛型参数数量、参数类型与约束事实。
 - 公开 `extern func` 与 `@abi` 声明所需的 ABI 元信息。
-- 公开 `let` 成员的 `@bounded` 声明事实,以及构造函数 `@bounded(...)` 绑定关系。
+- 公开 `let` 成员从源码推断出的已绑定声明事实,以及构造函数体赋值推断出的成员绑定关系。
 - 公开声明的文档注释。
 
 公开包表 `.ft` 明确不包含:
@@ -622,6 +622,7 @@ attr key 常量建议如下:
 说明:
 
 - `owner_id` 负责表达层级关系,例如字段/方法归属于某个 `type` 或某个 `fit`。
+- `bounded_decl` 仅用于 `type` 实例 `let` 字段,表示该字段已在成员声明初始化阶段完成最终显式绑定; 顶层 `let`、`static let` 以及其他非实例成员不使用该标志记录绑定状态。
 - `enum_item` 是 `enum` 的子符号而不是独立顶层声明: `owner_id` 指向所属 `enum`, `name_str` 表达 item 名称, `extra_ref` 固定表达其 0-based 声明顺序。
 - `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
@@ -839,7 +840,7 @@ RELS
 - `spec_extends_spec`: `spec Child: Parent`
 - `fit_implements_spec`: `fit A: B`
 - `fit_extends_type`: `fit A { ... }` 或 `fit A: B { ... }` 对目标类型 `A` 的扩展归属
-- `ctor_binds_member`: 构造函数 `@bounded(foo, bar)` 绑定了哪些公开 `let` 成员
+- `ctor_binds_member`: 构造函数体赋值推断出绑定了哪些公开 `let` 成员
 
 建议第一版 `RELS.kind` 固定常量值如下:
 
@@ -849,7 +850,7 @@ RELS
 - `FT_REL_CTOR_BINDS_MEMBER = 4`
 - `FT_REL_SPEC_EXTENDS_SPEC = 5`（追加常量）
 
-无参数 `@bounded` 的成员绑定状态由 `SYMS.flags.bounded_decl` 表达,无需额外 relation。
+带初始化器的 type 实例成员绑定状态由 `SYMS.flags.bounded_decl` 表达,无需额外 relation。读取 `.ft` 时,`bounded_decl` 与 `ctor_binds_member` 都必须还原为语义分析可直接消费的 type 实例成员绑定事实,保证跨包三段式构造的重复绑定检查与本包一致。顶层 `let`、`static let` 以及其他非实例成员的绑定状态不参与对象字面量初始化约束,不得为此写入 `bounded_decl` 或构造绑定 relation。
 
 针对泛型,`RELS` 还必须满足以下规则:
 
@@ -912,8 +913,7 @@ open module mylib.api;
 open type User: Named {
     open var name: string;
 
-    @bounded
-    open let id: int;
+    open let id: int = 0;
 
     open func get_info(): string;
 }

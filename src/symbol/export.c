@@ -1238,11 +1238,9 @@ static char *resolve_abi_library(const FengSemanticModule *module,
 
 static bool field_is_bounded_decl(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
+           !member->is_static &&
            normalize_mutability(member->as.field.mutability) == FENG_MUTABILITY_LET &&
-           (member->as.field.initializer != NULL ||
-            annotations_contain_kind(member->annotations,
-                                     member->annotation_count,
-                                     FENG_ANNOTATION_BOUNDED));
+           (member->as.field.initializer != NULL || member->as.field.declaration_bound);
 }
 
 typedef struct BuildContext {
@@ -1905,32 +1903,8 @@ static bool collect_constructor_bound_names(const FengDecl *type_decl,
                                             size_t *out_count,
                                             const char *path,
                                             FengSymbolError *out_error) {
-    size_t annotation_index;
-
     *out_names = NULL;
     *out_count = 0U;
-
-    for (annotation_index = 0U; annotation_index < constructor->annotation_count; ++annotation_index) {
-        const FengAnnotation *annotation = &constructor->annotations[annotation_index];
-        size_t arg_index;
-
-        if (annotation->builtin_kind != FENG_ANNOTATION_BOUNDED || annotation->arg_count == 0U) {
-            continue;
-        }
-        for (arg_index = 0U; arg_index < annotation->arg_count; ++arg_index) {
-            const FengExpr *arg = annotation->args[arg_index];
-            if (arg != NULL && arg->kind == FENG_EXPR_IDENTIFIER &&
-                !append_unique_slice(out_names,
-                                     out_count,
-                                     arg->as.identifier,
-                                     path,
-                                     constructor->token,
-                                     out_error)) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     return collect_ctor_bound_names_from_block(type_decl,
                                                constructor->as.callable.body,
@@ -2560,7 +2534,8 @@ static bool build_ctor_bound_relations(BuildContext *ctx,
         for (name_index = 0U; name_index < name_count; ++name_index) {
             FengSymbolDeclView *field_decl = find_member_decl_by_name(type_decl, names[name_index]);
             if (field_decl != NULL && field_decl->kind == FENG_SYMBOL_DECL_KIND_FIELD &&
-                field_decl->mutability == FENG_MUTABILITY_LET && !field_decl->bounded_decl &&
+                !field_decl->is_static && field_decl->mutability == FENG_MUTABILITY_LET &&
+                !field_decl->bounded_decl &&
                 !append_unique_relation(ctx,
                                         FENG_SYMBOL_RELATION_CTOR_BINDS_MEMBER,
                                         ctor_decl,

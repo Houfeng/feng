@@ -45,7 +45,7 @@ static void test_keyword_and_annotation_counts(void) {
 
     ASSERT(feng_keyword_count() == 28U);
     ASSERT(feng_reserved_word_count() == 8U);
-    ASSERT(feng_builtin_annotation_count() == 7U);
+    ASSERT(feng_builtin_annotation_count() == 6U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
@@ -87,8 +87,7 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(annotation_kind == FENG_ANNOTATION_FIXED);
     ASSERT(feng_lookup_builtin_annotation("runtime", 7U, &annotation_kind));
     ASSERT(annotation_kind == FENG_ANNOTATION_RUNTIME);
-    ASSERT(feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
-    ASSERT(annotation_kind == FENG_ANNOTATION_BOUNDED);
+    ASSERT(!feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
     ASSERT(!feng_lookup_builtin_annotation("union", 5U, &annotation_kind));
 }
 
@@ -370,7 +369,7 @@ static void test_comments_crlf_and_custom_annotations(void) {
 static void test_doc_comment_attaches_to_next_token(void) {
     const char *source =
         "/** doc for run */\n"
-        "@bounded\n"
+        "@memoize\n"
         "open func run() {}\n";
     FengLexer lexer;
     FengToken token;

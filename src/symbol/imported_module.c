@@ -312,6 +312,18 @@ static void free_synthetic_type_params(FengTypeParam *params, size_t count) {
     free(params);
 }
 
+static void free_synthetic_bound_member_names(FengSlice *names, size_t count) {
+    size_t index;
+
+    if (names == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        free((void *)names[index].data);
+    }
+    free(names);
+}
+
 static void free_synthetic_type_member(FengTypeMember *member) {
     if (member == NULL) {
         return;
@@ -328,6 +340,8 @@ static void free_synthetic_type_member(FengTypeMember *member) {
         free_synthetic_type_params(member->as.callable.type_params, member->as.callable.type_param_count);
         free_synthetic_parameters(member->as.callable.params, member->as.callable.param_count);
         free_synthetic_type_ref(member->as.callable.return_type);
+        free_synthetic_bound_member_names(member->as.callable.bound_member_names,
+                                          member->as.callable.bound_member_count);
     }
 
     free(member);
@@ -657,6 +671,74 @@ static FengTypeRef **synthesize_type_ref_list(FengSymbolTypeView *const *types,
     return refs;
 }
 
+static bool append_synthetic_bound_member_name(FengSlice **names,
+                                               size_t *count,
+                                               size_t *capacity,
+                                               const char *name) {
+    FengSlice slice;
+
+    if (names == NULL || count == NULL || capacity == NULL) {
+        return false;
+    }
+    if (!clone_cstr_as_slice(name, &slice)) {
+        return false;
+    }
+    if (*count == *capacity) {
+        size_t new_capacity = *capacity == 0U ? 4U : *capacity * 2U;
+        FengSlice *grown = (FengSlice *)realloc(*names, new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            free((void *)slice.data);
+            return false;
+        }
+        *names = grown;
+        *capacity = new_capacity;
+    }
+    (*names)[*count] = slice;
+    ++(*count);
+    return true;
+}
+
+static bool synthesize_constructor_bound_member_names(const FengSymbolModuleGraph *module,
+                                                      const FengSymbolDeclView *constructor_decl,
+                                                      FengSlice **out_names,
+                                                      size_t *out_count) {
+    FengSlice *names = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    size_t relation_index;
+
+    if (out_names == NULL || out_count == NULL) {
+        return false;
+    }
+    *out_names = NULL;
+    *out_count = 0U;
+    if (module == NULL || constructor_decl == NULL) {
+        return true;
+    }
+
+    for (relation_index = 0U; relation_index < module->relation_count; ++relation_index) {
+        const FengSymbolRelation *relation = &module->relations[relation_index];
+
+        if (relation->kind != FENG_SYMBOL_RELATION_CTOR_BINDS_MEMBER ||
+            relation->left != constructor_decl || relation->right == NULL ||
+            relation->right->is_static || relation->right->name == NULL) {
+            continue;
+        }
+        if (!append_synthetic_bound_member_name(&names,
+                                                &count,
+                                                &capacity,
+                                                relation->right->name)) {
+            free_synthetic_bound_member_names(names, count);
+            return false;
+        }
+    }
+
+    *out_names = names;
+    *out_count = count;
+    return true;
+}
+
 static bool synthesize_callable_signature(FengCallableSignature *signature,
                                           const FengSymbolDeclView *symbol_decl,
                                           FengSlice name) {
@@ -684,10 +766,13 @@ static bool synthesize_callable_signature(FengCallableSignature *signature,
         return false;
     }
     signature->body = NULL;
+    signature->bound_member_names = NULL;
+    signature->bound_member_count = 0U;
     return true;
 }
 
-static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_decl) {
+static FengTypeMember *synthesize_type_member(const FengSymbolModuleGraph *module,
+                                              const FengSymbolDeclView *member_decl) {
     FengTypeMember *member;
     FengSlice member_name = {0};
 
@@ -721,6 +806,7 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
                 return NULL;
             }
             member->as.field.initializer = NULL;
+            member->as.field.declaration_bound = !member->is_static && member_decl->bounded_decl;
             if (!synthesize_decl_annotations_from_symbol(member_decl,
                                                         &member->annotations,
                                                         &member->annotation_count)) {
@@ -749,6 +835,14 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
         free(member);
         return NULL;
     }
+    if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
+        !synthesize_constructor_bound_member_names(module,
+                                                   member_decl,
+                                                   &member->as.callable.bound_member_names,
+                                                   &member->as.callable.bound_member_count)) {
+        free_synthetic_type_member(member);
+        return NULL;
+    }
     if (!synthesize_decl_annotations_from_symbol(member_decl,
                                                 &member->annotations,
                                                 &member->annotation_count)) {
@@ -758,7 +852,8 @@ static FengTypeMember *synthesize_type_member(const FengSymbolDeclView *member_d
     return member;
 }
 
-static FengTypeMember **synthesize_type_members(const FengSymbolDeclView *symbol_decl,
+static FengTypeMember **synthesize_type_members(const FengSymbolModuleGraph *module,
+                                                const FengSymbolDeclView *symbol_decl,
                                                 size_t *out_count) {
     FengTypeMember **members;
     size_t index;
@@ -797,7 +892,7 @@ static FengTypeMember **synthesize_type_members(const FengSymbolDeclView *symbol
             symbol_decl->members[index]->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
             continue;
         }
-        m = synthesize_type_member(symbol_decl->members[index]);
+        m = synthesize_type_member(module, symbol_decl->members[index]);
         if (m == NULL) {
             for (cleanup_index = 0U; cleanup_index < *out_count; ++cleanup_index) {
                 free_synthetic_type_member(members[cleanup_index]);
@@ -892,6 +987,7 @@ static FengEnumItem *synthesize_enum_items(const FengSymbolDeclView *symbol_decl
 }
 
 static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
+                                        const FengSymbolModuleGraph *module,
                                         const FengSymbolDeclView *symbol_decl) {
     FengSlice name;
 
@@ -927,7 +1023,9 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 break;
             }
             synth_decl->decl.as.type_decl.members =
-                synthesize_type_members(symbol_decl, &synth_decl->decl.as.type_decl.member_count);
+                synthesize_type_members(module,
+                                        symbol_decl,
+                                        &synth_decl->decl.as.type_decl.member_count);
             if (symbol_decl->member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
                 break;
             }
@@ -962,7 +1060,8 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 (symbol_decl->return_type == NULL && symbol_decl->param_count == 0U)) {
                 synth_decl->decl.as.spec_decl.form = FENG_SPEC_FORM_OBJECT;
                 synth_decl->decl.as.spec_decl.as.object.members =
-                    synthesize_type_members(symbol_decl,
+                    synthesize_type_members(module,
+                                            symbol_decl,
                                             &synth_decl->decl.as.spec_decl.as.object.member_count);
                 if (symbol_decl->member_count > 0U &&
                     synth_decl->decl.as.spec_decl.as.object.members == NULL) {
@@ -1026,7 +1125,8 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
             }
             synth_decl->decl.as.fit_decl.spec_count = symbol_decl->declared_spec_count;
             synth_decl->decl.as.fit_decl.members =
-                synthesize_type_members(symbol_decl,
+                synthesize_type_members(module,
+                                        symbol_decl,
                                         &synth_decl->decl.as.fit_decl.member_count);
             if (symbol_decl->member_count > 0U &&
                 synth_decl->decl.as.fit_decl.members == NULL) {
@@ -1157,7 +1257,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
         }
 
         synth_decl = &entry.prog->decls[entry.prog->decl_count];
-        if (!synthesize_decl_from_symbol(synth_decl, symbol_decl)) {
+        if (!synthesize_decl_from_symbol(synth_decl, imp_mod->module, symbol_decl)) {
             goto fail;
         }
 

@@ -364,6 +364,8 @@ typedef struct FengCallableSignature {
     size_t param_count;
     FengTypeRef *return_type;
     FengBlock *body;
+    FengSlice *bound_member_names; /* constructor-stage final bindings imported from .ft */
+    size_t bound_member_count;
 } FengCallableSignature;
 
 typedef struct FengEnumItem {
@@ -387,6 +389,7 @@ struct FengTypeMember {
             FengSlice name;
             FengTypeRef *type;
             FengExpr *initializer;
+            bool declaration_bound; /* declaration-stage final binding fact */
         } field;
         FengCallableSignature callable;
     } as;
