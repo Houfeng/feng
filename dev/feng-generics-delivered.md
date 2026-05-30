@@ -1079,7 +1079,7 @@ struct {
 | G5-3 | **NAMED_GENERIC 类型节点**：为泛型具名使用（如 `Box<T>`、`List<int>`）生成 `FT_TYPE_KIND_NAMED_GENERIC` 节点 + TSEQ 类型实参 | `src/symbol/ft_write.c` |
 | G5-4 | **CALLABLE 类型节点**：泛型函数/方法的 type_ref 指向 CALLABLE 节点，其 TSEQ 中参数类型可含 TYPE_PARAM_REF | `src/symbol/ft_write.c` |
 | G5-5 | **泛型 spec 的 TYPS 编码**：按 SPEC_OBJECT / SPEC_CALLABLE TYPS.kind 区分 form，sym_ref = spec 符号 ID | `src/symbol/ft_write.c` |
-| G5-6 | **泛型 fit 的 extra_ref 与 attr**：fit 符号的 extra_ref 指向 NAMED_GENERIC 类型节点；FT_ATTR_FIT_SPECS 范围存 `Reader<T>` 等结构化使用 | `src/symbol/ft_write.c` |
+| G5-6 | **泛型 fit 的 extra_ref 与 attr**：fit 符号的 extra_ref 指向 NAMED_GENERIC 类型节点；FT_ATTR_DECLARED_SPECS 范围存 `Reader<T>` 等结构化使用 | `src/symbol/ft_write.c` |
 | G5-7 | **泛型声明的跨模块读取**：在 `src/symbol/imported_module.c` 中扩展 .ft 读取，重建泛型声明的类型参数和 NAMED_GENERIC 使用节点 | `src/symbol/imported_module.c` |
 | G5-8 | **符号表单元测试**：泛型 type/spec/fn/fit 的导出内容验证；跨模块读取后符号查询正确 | `test/symbol/` |
 

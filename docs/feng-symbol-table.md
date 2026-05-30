@@ -515,18 +515,18 @@ attr key 常量建议如下:
 
 | 常量 | 值 | owner | 说明 |
 | --- | --- | --- | --- |
-| `FT_ATTR_DECLARED_SPECS` | `0x0001` | `type` / `spec` | 头部 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
-| `FT_ATTR_CALL_CONV` | `0x0003` | `extern_fn` | ABI 调用约定枚举值；`value0` = 调用约定枚举 |
-| `FT_ATTR_ABI_LIBRARY` | `0x0004` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
-| `FT_ATTR_FIT_SPECS` | `0x0005` | `fit` | `fit A: B, C` 右侧 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
-| `FT_ATTR_ENUM_ITEM_VALUE` | `0x0006` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
+| `FT_ATTR_DECLARED_SPECS` | `0x0001` | `type` / `spec` / `fit` | 声明级 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
+| `FT_ATTR_CALL_CONV` | `0x0002` | `extern_fn` | ABI 调用约定枚举值；`value0` = 调用约定枚举 |
+| `FT_ATTR_ABI_LIBRARY` | `0x0003` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
+| `FT_ATTR_ENUM_ITEM_VALUE` | `0x0004` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
+| `FT_ATTR_STATIC_MEMBER` | `0x0005` | `field` / `method` | `type` 静态成员标记 |
 
 补充规则:
 
-- `FT_ATTR_DECLARED_SPECS` 在 `type` 上表示 `type A: B, C` 头部的 `spec` 使用列表,在 `spec` 上表示 `spec Child: Parent, Other` 的父 `spec` 使用列表。
-- `FT_ATTR_FIT_SPECS` 用于 `fit` 右侧 `spec` 使用列表; `fit` 目标类型自身继续走 `SYMS.extra_ref`。
+- `FT_ATTR_DECLARED_SPECS` 在 `type` 上表示 `type A: B, C` 头部的 `spec` 使用列表,在 `spec` 上表示 `spec Child: Parent, Other` 的父 `spec` 使用列表,在 `fit` 上表示右侧 `spec` 使用列表; `fit` 目标类型自身继续走 `SYMS.extra_ref`。
 - `FT_ATTR_CALL_CONV` 与 `FT_ATTR_ABI_LIBRARY` 仅出现在 `extern_fn` 符号上; 普通函数与方法无需这两个 attr。
 - `FT_ATTR_ENUM_ITEM_VALUE` 只出现在 `enum_item` 子符号上,记录 consumer 恢复 `Enum.Item` 所需的稳定值事实; 不再额外导出“原本是显式赋值还是隐式赋值”的源码细节。
+- `FT_ATTR_STATIC_MEMBER` 只出现在 `type` 的静态字段或静态方法符号上,表示 consumer 恢复成员时必须设置 `static` 语义。
 - 泛型第一阶段不要求新增其他 attr key。类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达,而不是把核心语义塞进 `ATRS`。
 
 ### 6.4 `STRS` 字符串池
@@ -855,10 +855,10 @@ RELS
 
 针对泛型,`RELS` 还必须满足以下规则:
 
-- `RELS` 本身继续只保存声明符号关系,不新增额外字段。关系右侧若存在结构化 `spec` 使用,其具体 `TYPS` 负载通过 owner 上的 attr 范围表达: `type` / `spec` 使用 `FT_ATTR_DECLARED_SPECS`, `fit` 使用 `FT_ATTR_FIT_SPECS`。
+- `RELS` 本身继续只保存声明符号关系,不新增额外字段。关系右侧若存在结构化 `spec` 使用,其具体 `TYPS` 负载通过 owner 上的 `FT_ATTR_DECLARED_SPECS` 范围表达。
 - 对同一个 owner,对应 attr 范围中的 `TYPS` 节点顺序必须与同 owner、同 relation kind 的 `RELS` 记录顺序严格一致。consumer 通过“owner + relation kind + ordinal”配对恢复每条关系对应的结构化使用。
 - 因而,`spec Child<T>: Parent<T>` 与 `spec Child<T>: Parent<int>` 必须导出为两条 `FT_REL_SPEC_EXTENDS_SPEC` relation,并在 owner 为 `Child` 的 `FT_ATTR_DECLARED_SPECS` 范围中按源代码顺序提供各自的 `TYPS` 使用节点。
-- `fit UserType<T, U>: UserSpec<T, U>` 这类泛型 `fit` 必须同时导出“fit 扩展哪个目标 `type`”和“fit 建立了哪个泛型 `spec` 使用关系”两类事实: 目标 `type` 使用继续保存在 `fit` 符号的 `extra_ref`,右侧 `spec` 使用则按 `FT_ATTR_FIT_SPECS` 范围与 `FT_REL_FIT_IMPLEMENTS_SPEC` 顺序配对恢复。
+- `fit UserType<T, U>: UserSpec<T, U>` 这类泛型 `fit` 必须同时导出“fit 扩展哪个目标 `type`”和“fit 建立了哪个泛型 `spec` 使用关系”两类事实: 目标 `type` 使用继续保存在 `fit` 符号的 `extra_ref`,右侧 `spec` 使用则按 `FT_ATTR_DECLARED_SPECS` 范围与 `FT_REL_FIT_IMPLEMENTS_SPEC` 顺序配对恢复。
 - 若关系右侧无类型实参,则对应 attr 范围中的 `TYPS` 节点使用普通 `FT_TYPE_KIND_NAMED`; 不得为兼容旧 consumer 而隐式补出不存在的泛型参数。
 
 ### 6.9 `DOCS` 文档注释
@@ -967,7 +967,7 @@ open fit Box<T>: Reader<T> {
 - `type_param(T)` owned by `Reader`,其顺序为 `0`
 - `fit(Box<T>: Reader<T>)`
 - `fit.extra_ref -> TYPS(NAMED_GENERIC, string_ref='Box', sym_ref=Box符号ID, elem_start=K, elem_count=1)`，TSEQ[K] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}`
-- attr `fit_specs(fit#2)` 记录一个长度为 `1` 的 `TYPS` 范围,其中唯一节点为 `TYPS(NAMED_GENERIC, string_ref='Reader', elem_start=M, elem_count=1)`，TSEQ[M] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}`
+- attr `declared_specs(fit#2)` 记录一个长度为 `1` 的 `TYPS` 范围,其中唯一节点为 `TYPS(NAMED_GENERIC, string_ref='Reader', elem_start=M, elem_count=1)`，TSEQ[M] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}`
 - relation `fit_extends_type(fit#2 -> Box)`
 - relation `fit_implements_spec(fit#2 -> Reader)`,并按 attr 顺序与 `Reader<T>` 这一结构化使用配对
 - `method(get)` owned by `fit#2`,其 `type_ref` 为 `TYPS(CALLABLE, elem_start=P, elem_count=1)`，TSEQ[P] = `{name_str=0, type_id=TYPS(TYPE_PARAM_REF, 'T')}` （返回类型 T）
@@ -1004,7 +1004,7 @@ open fit Box<T>: Reader<T> {
 
 1. Phase 3 的本地缓存 `.ft` 是否只缓存声明级符号,还是要把局部符号也一并纳入。当前建议是**先不纳入局部符号**。
 2. 公开 `.ft` 是否在第一版就强制包含 `DOCS`; 当前建议是**应包含**,这样外部依赖包的 hover 才不需要额外侧车文件。
-3. `ATRS` 第一版是否把泛型所需 attr key 一并纳入,还是继续只覆盖非泛型 ABI 元信息。当前建议是**一并纳入**,至少覆盖 `FT_ATTR_DECLARED_SPECS` 与 `FT_ATTR_FIT_SPECS` 对泛型结构化使用范围的表达。
+3. `ATRS` 第一版是否把泛型所需 attr key 一并纳入,还是继续只覆盖非泛型 ABI 元信息。当前建议是**一并纳入**,由 `FT_ATTR_DECLARED_SPECS` 覆盖 `type` / `spec` / `fit` 的泛型结构化 `spec` 使用范围。
 4. 泛型 capability 是否直接沿用当前 `FST1` major 的 append-only 演进方式。当前建议是**可以**,但必须通过新增 `FT_SYM_KIND_TYPE_PARAM`、`FT_TYPE_KIND_TYPE_PARAM_REF`、`FT_TYPE_KIND_NAMED_GENERIC`、`FT_TYPE_KIND_CALLABLE`、`FT_REL_SPEC_EXTENDS_SPEC` 与新增 TSEQ section、新增 attr key 明确表达,让旧 consumer 显式拒绝,不得把泛型结构偷偷编码进旧 kind 的字符串语义里。
 5. 若实现阶段需要兼容读取旧 `.fi`,是否只作为临时 reader 兼容而不进入规范。当前建议是**即使短期兼容读取,仓库文档与新产物也只使用 `.ft`**。
 

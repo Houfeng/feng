@@ -16,10 +16,10 @@ typedef enum FengSymbolRelationKind {
 
 typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_DECLARED_SPECS = 1,
-    FENG_SYMBOL_ATTR_CALL_CONV = 3,
-    FENG_SYMBOL_ATTR_ABI_LIBRARY = 4,
-    FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE = 6,
-    FENG_SYMBOL_ATTR_STATIC_MEMBER = 7
+    FENG_SYMBOL_ATTR_CALL_CONV = 2,
+    FENG_SYMBOL_ATTR_ABI_LIBRARY = 3,
+    FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE = 4,
+    FENG_SYMBOL_ATTR_STATIC_MEMBER = 5
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {

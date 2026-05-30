@@ -285,7 +285,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 - 新增 TYPS kind 常量：`FT_TYPE_KIND_CALLABLE=7`、`FT_TYPE_KIND_SPEC_OBJECT=8`、`FT_TYPE_KIND_SPEC_CALLABLE=9`；去掉 `FT_TYPE_KIND_TYPE_ARG_PACK`
 - 更新 `ft_write.c`：函数/方法签名改写为 CALLABLE + TSEQ；spec form 通过 TYPS.kind 区分
 - 更新 `ft_read.c` / `imported_module.c`：适配新字段布局与新 section 编号
-- 将 ABI 信息（`call_conv`、`abi_library`）从 SIGS 移入 ATRS（`FT_ATTR_CALL_CONV=0x0003`、`FT_ATTR_ABI_LIBRARY=0x0004`）
+- 将 ABI 信息（`call_conv`、`abi_library`）从 SIGS 移入 ATRS（`FT_ATTR_CALL_CONV=0x0002`、`FT_ATTR_ABI_LIBRARY=0x0003`）
 - 全量回归测试验证重构后的符号表读写正确性
 
 说明：
