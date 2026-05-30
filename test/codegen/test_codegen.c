@@ -5222,9 +5222,13 @@ static void test_tuple_fit_codegen(void) {
         "        return self.item1 + self.item2;\n"
         "    }\n"
         "}\n"
+        "func consume(value: Summable): int {\n"
+        "    return value.sum();\n"
+        "}\n"
         "func run(): int {\n"
         "    let point: Point = (5, 6);\n"
-        "    return point.sum();\n"
+        "    let value: Summable = point;\n"
+        "    return point.sum() + consume(point) + value.sum();\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/tuple_fit_codegen.ff");
     const FengProgram *programs[1] = {program};
@@ -5258,6 +5262,9 @@ static void test_tuple_fit_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "__sum(") != NULL);
+    ASSERT(strstr(out.c_source, "__spec_box") != NULL);
+    ASSERT(strstr(out.c_source, "feng_object_new") != NULL);
+    ASSERT(strstr(out.c_source, "tuple_box__as") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);

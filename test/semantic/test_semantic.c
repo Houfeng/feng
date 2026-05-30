@@ -13944,6 +13944,28 @@ static void test_tuple_type_constraint_is_rejected(void) {
                                                  "tuple type cannot be used as a constraint");
 }
 
+static void test_tuple_fit_spec_coercion_semantics(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Summable {\n"
+        "    func sum(): int;\n"
+        "}\n"
+        "type Point(int, int);\n"
+        "fit Point: Summable {\n"
+        "    func sum(): int { return self.item1 + self.item2; }\n"
+        "}\n"
+        "func consume(value: Summable): int {\n"
+        "    return value.sum();\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let point: Point = (1, 2);\n"
+        "    let value: Summable = point;\n"
+        "    return consume(point) + value.sum();\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("tuple_fit_spec_coercion.f", source);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -14436,6 +14458,7 @@ int main(void) {
     test_tuple_item_assignment_is_rejected();
     test_tuple_whole_assignment_semantics();
     test_tuple_type_constraint_is_rejected();
+    test_tuple_fit_spec_coercion_semantics();
     test_variadic_accepts_zero_one_many_arguments();
     test_fixed_and_variadic_parameters_accept_calls();
     test_variadic_rejects_mismatched_element_type();

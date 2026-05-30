@@ -220,6 +220,16 @@ p.describe();  // ✅
 p.length();    // ✅
 ```
 
+当元组值被转换为对象形态 `spec` 值或作为 `spec` 形参传递时，编译器会为该元组值创建一个运行时管理的 tuple box 作为 `spec` subject。tuple box 持有元组值本身，并复用聚合值描述符释放其中的托管元素；直接 `p.describe()` / `p.length()` 调用不需要 tuple box。
+
+```feng
+func print(d: Describable): string {
+  return d.describe();
+}
+
+let text = print(p);  // ✅ 元组值安全装箱为 Describable subject
+```
+
 泛型元组的 `fit` 可以针对具体实例化类型，也可以对全量类型参数扩展：
 
 ```feng

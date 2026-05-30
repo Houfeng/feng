@@ -528,6 +528,9 @@ struct UserType {
     char   *c_aggregate_slots_name;
     char   *c_aggregate_default_name;
     char   *c_aggregate_desc_name;
+    char   *c_tuple_box_struct_name;
+    char   *c_tuple_box_desc_name;
+    char   *c_tuple_box_release_children_name;
     bool    is_abi_type;
     char   *c_abi_layout_name;
     char   *c_abi_ptr_name;
@@ -572,6 +575,50 @@ static bool cg_user_type_is_tuple(const struct UserType *t) {
 
 static bool cg_type_is_tuple_user(const CGType *t) {
     return t != NULL && t->kind == CG_TYPE_OBJECT && cg_user_type_is_tuple(t->user);
+}
+
+/* Initialise generated symbols owned by tuple lowering. The aggregate
+ * descriptor represents the by-value tuple; the tuple box descriptor is used
+ * only when a tuple value becomes an object-form spec subject. */
+static bool cg_init_user_type_tuple_symbols(UserType *t) {
+    Buf slots_name;
+    Buf aggregate_default_name;
+    Buf aggregate_desc_name;
+    Buf box_struct_name;
+    Buf box_desc_name;
+    Buf box_release_name;
+
+    if (!cg_user_type_is_tuple(t)) {
+        return true;
+    }
+
+    buf_init(&slots_name);
+    buf_init(&aggregate_default_name);
+    buf_init(&aggregate_desc_name);
+    buf_init(&box_struct_name);
+    buf_init(&box_desc_name);
+    buf_init(&box_release_name);
+
+    buf_append_fmt(&slots_name, "%s__aggregate_slots", t->c_struct_name);
+    buf_append_fmt(&aggregate_default_name, "%s__aggregate_default", t->c_struct_name);
+    buf_append_fmt(&aggregate_desc_name, "%s__aggregate_desc", t->c_struct_name);
+    buf_append_fmt(&box_struct_name, "%s__spec_box", t->c_struct_name);
+    buf_append_fmt(&box_desc_name, "%s__spec_box_desc", t->c_struct_name);
+    buf_append_fmt(&box_release_name, "%s__spec_box_release_children", t->c_struct_name);
+
+    t->c_aggregate_slots_name = slots_name.data;
+    t->c_aggregate_default_name = aggregate_default_name.data;
+    t->c_aggregate_desc_name = aggregate_desc_name.data;
+    t->c_tuple_box_struct_name = box_struct_name.data;
+    t->c_tuple_box_desc_name = box_desc_name.data;
+    t->c_tuple_box_release_children_name = box_release_name.data;
+
+    return t->c_aggregate_slots_name != NULL &&
+           t->c_aggregate_default_name != NULL &&
+           t->c_aggregate_desc_name != NULL &&
+           t->c_tuple_box_struct_name != NULL &&
+           t->c_tuple_box_desc_name != NULL &&
+           t->c_tuple_box_release_children_name != NULL;
 }
 
 /* Spec registry. Object-form specs lower to by-value fat structs; callable-
@@ -1022,6 +1069,13 @@ typedef struct CG {
     } *spec_slot_witness_tables;
     size_t spec_slot_witness_table_count;
     size_t spec_slot_witness_table_capacity;
+    struct {
+        const struct UserType *type;
+        const struct UserSpec *spec;
+        char *c_var;
+    } *tuple_box_witness_tables;
+    size_t tuple_box_witness_table_count;
+    size_t tuple_box_witness_table_capacity;
     bool scalar_box_support_emitted;
     size_t subject_witness_counter;
     ModuleBinding *module_bindings;
@@ -1255,6 +1309,11 @@ static bool cg_ensure_witness_instance_for_type(CG *cg,
                                                 const UserSpec *s,
                                                 FengToken blame,
                                                 const char **out_var);
+static bool cg_ensure_tuple_box_witness_instance(CG *cg,
+                                                 const UserType *t,
+                                                 const UserSpec *s,
+                                                 FengToken blame,
+                                                 const char **out_var);
 static bool cg_ensure_witness_instance_for_subject_key(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
@@ -5090,16 +5149,11 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     Buf zero_name; buf_init(&zero_name);
     buf_append_fmt(&zero_name, "%s__default_zero", t->c_struct_name);
     t->c_default_zero_name = zero_name.data;
-    if (cg_user_type_is_tuple(t)) {
-        Buf slots_name; buf_init(&slots_name);
-        Buf aggregate_default_name; buf_init(&aggregate_default_name);
-        Buf aggregate_desc_name; buf_init(&aggregate_desc_name);
-        buf_append_fmt(&slots_name, "%s__aggregate_slots", t->c_struct_name);
-        buf_append_fmt(&aggregate_default_name, "%s__aggregate_default", t->c_struct_name);
-        buf_append_fmt(&aggregate_desc_name, "%s__aggregate_desc", t->c_struct_name);
-        t->c_aggregate_slots_name = slots_name.data;
-        t->c_aggregate_default_name = aggregate_default_name.data;
-        t->c_aggregate_desc_name = aggregate_desc_name.data;
+    if (!cg_init_user_type_tuple_symbols(t)) {
+        free(owner_mangle);
+        free(base_san);
+        buf_free(&symbol);
+        return false;
     }
     t->is_abi_type = cg_annotations_contain_kind(decl->annotations,
                                                  decl->annotation_count,
@@ -5116,7 +5170,9 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     buf_free(&symbol);
     if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name ||
         (cg_user_type_is_tuple(t) &&
-         (!t->c_aggregate_slots_name || !t->c_aggregate_default_name || !t->c_aggregate_desc_name))) {
+         (!t->c_aggregate_slots_name || !t->c_aggregate_default_name ||
+          !t->c_aggregate_desc_name || !t->c_tuple_box_struct_name ||
+          !t->c_tuple_box_desc_name || !t->c_tuple_box_release_children_name))) {
         return false;
     }
 
@@ -6816,20 +6872,9 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     buf_append_fmt(&d, "FengTypeDesc__%s__%s", cg->module_mangle, san);
     t->c_desc_name = d.data;
 
-    if (cg_user_type_is_tuple(t)) {
-        Buf slots_name; buf_init(&slots_name);
-        Buf aggregate_default_name; buf_init(&aggregate_default_name);
-        Buf aggregate_desc_name; buf_init(&aggregate_desc_name);
-        buf_append_fmt(&slots_name, "%s__aggregate_slots", t->c_struct_name);
-        buf_append_fmt(&aggregate_default_name, "%s__aggregate_default", t->c_struct_name);
-        buf_append_fmt(&aggregate_desc_name, "%s__aggregate_desc", t->c_struct_name);
-        t->c_aggregate_slots_name = slots_name.data;
-        t->c_aggregate_default_name = aggregate_default_name.data;
-        t->c_aggregate_desc_name = aggregate_desc_name.data;
-        if (!t->c_aggregate_slots_name || !t->c_aggregate_default_name || !t->c_aggregate_desc_name) {
-            free(san);
-            return false;
-        }
+    if (!cg_init_user_type_tuple_symbols(t)) {
+        free(san);
+        return false;
     }
 
     /* release_children symbol is materialised lazily in
@@ -8652,6 +8697,59 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     out->owns_ref = cgtype_is_aggregate(expected_type);
     free(tmp);
     return out->c_expr != NULL && out->type != NULL;
+}
+
+/* Box a by-value tuple when it is coerced to an object-form spec value. The
+ * returned subject is a managed object reference owned by the spec fat value. */
+static bool cg_emit_tuple_spec_box_subject(CG *cg,
+                                           ExprResult *source,
+                                           const UserType *tuple_type,
+                                           FengToken blame,
+                                           char **out_subject_expr) {
+    char *box_tmp;
+
+    if (source == NULL || tuple_type == NULL || out_subject_expr == NULL ||
+        !cg_user_type_is_tuple(tuple_type) || tuple_type->c_tuple_box_struct_name == NULL ||
+        tuple_type->c_tuple_box_desc_name == NULL) {
+        return cg_fail(cg, blame, "codegen: tuple spec coercion is missing box metadata");
+    }
+
+    if (cg_materialize_to_local(cg, source, "_tuple_subject") == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    box_tmp = cg_fresh_temp(cg, "_tuple_box");
+    if (box_tmp == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    buf_append_fmt(cg->cur_body,
+                   "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+                   tuple_type->c_tuple_box_struct_name,
+                   box_tmp,
+                   tuple_type->c_tuple_box_struct_name,
+                   tuple_type->c_tuple_box_desc_name);
+
+    if (cgtype_is_aggregate(source->type)) {
+        const char *desc = cg_aggregate_desc_name(source->type);
+
+        if (desc == NULL) {
+            free(box_tmp);
+            return cg_fail(cg, blame, "codegen: missing tuple aggregate descriptor for spec coercion");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    feng_aggregate_assign(&%s->value, &%s, &%s);\n",
+                       box_tmp,
+                       source->c_expr,
+                       desc);
+    } else {
+        buf_append_fmt(cg->cur_body,
+                       "    %s->value = %s;\n",
+                       box_tmp,
+                       source->c_expr);
+    }
+
+    *out_subject_expr = box_tmp;
+    return true;
 }
 
 static bool cg_emit_tuple_cast_to_type(CG *cg,
@@ -15425,12 +15523,35 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             if (out->type->kind == CG_TYPE_OBJECT && out->type->user != NULL) {
                 src_t = out->type->user;
-                if (!cg_ensure_witness_instance_for_type(cg,
-                                                         src_t,
-                                                         tgt_s,
-                                                         e->token,
-                                                         &witness_var)) {
-                    return false;
+                if (cg_user_type_is_tuple(src_t)) {
+                    if (!cg_ensure_tuple_box_witness_instance(cg,
+                                                              src_t,
+                                                              tgt_s,
+                                                              e->token,
+                                                              &witness_var)) {
+                        return false;
+                    }
+                    if (!cg_emit_tuple_spec_box_subject(cg,
+                                                        out,
+                                                        src_t,
+                                                        e->token,
+                                                        &subject_expr)) {
+                        return false;
+                    }
+                    subject_owned = true;
+                } else {
+                    if (!cg_ensure_witness_instance_for_type(cg,
+                                                             src_t,
+                                                             tgt_s,
+                                                             e->token,
+                                                             &witness_var)) {
+                        return false;
+                    }
+                    /* Materialise the source so the subject expression evaluates exactly
+                     * once; object-form spec borrows that managed reference. */
+                    cg_materialize_to_local(cg, out, "_t");
+                    subject_expr = strdup(out->c_expr);
+                    subject_owned = false;
                 }
             } else {
                 if (!cg_ensure_witness_instance(cg,
@@ -15441,12 +15562,12 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                                 &witness_var)) {
                     return false;
                 }
+                /* Materialise the source so the subject expression evaluates exactly
+                 * once; object-form spec borrows that managed reference. */
+                cg_materialize_to_local(cg, out, "_t");
+                subject_expr = strdup(out->c_expr);
+                subject_owned = false;
             }
-            /* Materialise the source so the subject expression evaluates exactly
-             * once; object-form spec borrows that managed reference. */
-            cg_materialize_to_local(cg, out, "_t");
-            subject_expr = strdup(out->c_expr);
-            subject_owned = false;
         } else {
             if (!cg_ensure_witness_instance_for_subject_key(cg,
                                                             &cs->src_subject_key,
@@ -21736,6 +21857,317 @@ static bool cg_ensure_witness_instance_for_subject_key(
                                       out_var);
 }
 
+/* Tuple object-form spec coercion stores the subject in a managed box, while
+ * generic constraint dispatch still passes an address of the by-value tuple.
+ * This separate witness table reads `box->value` before forwarding to the
+ * normal fit method body. */
+static bool cg_ensure_tuple_box_witness_instance(CG *cg,
+                                                 const UserType *t,
+                                                 const UserSpec *s,
+                                                 FengToken blame,
+                                                 const char **out_var) {
+    if (cg == NULL || t == NULL || s == NULL || out_var == NULL ||
+        !cg_user_type_is_tuple(t) || t->c_tuple_box_struct_name == NULL) {
+        return false;
+    }
+    for (size_t cached_index = 0U;
+         cached_index < cg->tuple_box_witness_table_count;
+         ++cached_index) {
+        if (cg->tuple_box_witness_tables[cached_index].type == t &&
+            cg->tuple_box_witness_tables[cached_index].spec == s) {
+            *out_var = cg->tuple_box_witness_tables[cached_index].c_var;
+            return true;
+        }
+    }
+
+    FengSemanticSubjectKey subject_key =
+        feng_semantic_subject_key_for_type_decl(t->decl);
+    const FengSpecWitness *witness = t->is_generic_instance
+        ? NULL
+        : feng_semantic_lookup_spec_witness(cg->analysis, &subject_key, s->decl);
+    char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
+    const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_witness_struct_name
+        ? s->c_witness_struct_name
+        : s->feng_name;
+    char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
+    if (t_san == NULL || s_san == NULL) {
+        free(t_san);
+        free(s_san);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    Buf prefix;
+    buf_init(&prefix);
+    buf_append_fmt(&prefix, "FengSpecThunk__%s__%s__tuple_box__as__%s__%s",
+                   cg->module_mangle, t_san, cg->module_mangle, s_san);
+    if (prefix.data == NULL) {
+        free(t_san);
+        free(s_san);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    for (size_t i = 0U; i < s->member_count; ++i) {
+        const UserSpecMember *sm = &s->members[i];
+        CGWitnessBinding binding;
+
+        memset(&binding, 0, sizeof binding);
+        if (witness != NULL) {
+            const FengSpecWitnessMember *wm;
+
+            if (i >= witness->member_count) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: internal: witness slot count mismatch for tuple box (%s, %s)",
+                    t->feng_name, s->feng_name);
+            }
+            wm = &witness->members[i];
+            if (wm->impl_member == NULL) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: tuple type '%s' is missing an implementation for spec '%s' member '%s'",
+                    t->feng_name, s->feng_name, sm->feng_name);
+            }
+            binding.source_kind = wm->source_kind;
+            if (wm->source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
+                const UserFit *uf = cg_find_user_fit_by_decl_and_target(cg,
+                                                                        wm->via_fit_decl,
+                                                                        t);
+
+                if (uf == NULL || uf->target != t) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: tuple fit decl for spec '%s' member '%s' not registered for type '%s'",
+                        s->feng_name, sm->feng_name, t->feng_name);
+                }
+                binding.fit = uf;
+                for (size_t method_index = 0U; method_index < uf->method_count; ++method_index) {
+                    if (uf->methods[method_index].member == wm->impl_member) {
+                        binding.method = &uf->methods[method_index];
+                        break;
+                    }
+                }
+                if (binding.method == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: tuple fit method '%s' not found in fit body for type '%s'",
+                        sm->feng_name, t->feng_name);
+                }
+            } else if (sm->kind == USM_KIND_FIELD) {
+                binding.field = cg_user_type_field(t,
+                                                   wm->impl_member->as.field.name.data,
+                                                   wm->impl_member->as.field.name.length);
+                if (binding.field == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "codegen: internal: tuple type '%s' has no field '%s' to satisfy spec '%s'",
+                        t->feng_name, sm->feng_name, s->feng_name);
+                }
+            } else {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
+                    t->feng_name, sm->feng_name);
+            }
+        } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return false;
+        }
+
+        if (binding.source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
+            const UserMethod *fm = binding.method;
+
+            if (sm->kind != USM_KIND_METHOD || fm == NULL) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "codegen: tuple spec member '%s' must be implemented by a fit method",
+                    sm->feng_name);
+            }
+
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                Buf *fp = &cg->fn_protos;
+                Buf *fd = &cg->witness_defs;
+
+                buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    buf_append_cstr(fp, ", ");
+                    cg_emit_c_type(fp, sm->param_types[pi]);
+                    buf_append_fmt(fp, " p%zu", pi);
+                }
+                buf_append_cstr(fp, ", void *_out);\n");
+
+                buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    buf_append_cstr(fd, ", ");
+                    cg_emit_c_type(fd, sm->param_types[pi]);
+                    buf_append_fmt(fd, " p%zu", pi);
+                }
+                buf_append_cstr(fd, ", void *_out) {\n    ");
+                cg_emit_c_type(fd, fm->return_type);
+                buf_append_fmt(fd,
+                               " _ret = %s(((struct %s *)_subject)->value",
+                               fm->c_name,
+                               t->c_tuple_box_struct_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    char pname[32];
+
+                    snprintf(pname, sizeof pname, "p%zu", pi);
+                    buf_append_cstr(fd, ", ");
+                    if (!cg_append_witness_forward_arg(cg,
+                                                       fd,
+                                                       sm->param_types[pi],
+                                                       fm->param_types[pi],
+                                                       pname,
+                                                       blame)) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return false;
+                    }
+                }
+                buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                continue;
+            }
+
+            Buf *fp = &cg->fn_protos;
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fp, ", ");
+                cg_emit_c_type(fp, sm->param_types[pi]);
+                buf_append_fmt(fp, " p%zu", pi);
+            }
+            buf_append_cstr(fp, ");\n");
+
+            Buf *fd = &cg->witness_defs;
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fd, ", ");
+                cg_emit_c_type(fd, sm->param_types[pi]);
+                buf_append_fmt(fd, " p%zu", pi);
+            }
+            buf_append_cstr(fd, ") {\n");
+            if (sm->type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(fd,
+                               "    %s(((struct %s *)_subject)->value",
+                               fm->c_name,
+                               t->c_tuple_box_struct_name);
+            } else {
+                buf_append_fmt(fd,
+                               "    return %s(((struct %s *)_subject)->value",
+                               fm->c_name,
+                               t->c_tuple_box_struct_name);
+            }
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                char pname[32];
+
+                snprintf(pname, sizeof pname, "p%zu", pi);
+                buf_append_cstr(fd, ", ");
+                if (!cg_append_witness_forward_arg(cg,
+                                                   fd,
+                                                   sm->param_types[pi],
+                                                   fm->param_types[pi],
+                                                   pname,
+                                                   blame)) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return false;
+                }
+            }
+            buf_append_cstr(fd, ");\n}\n\n");
+            continue;
+        }
+
+        if (sm->kind != USM_KIND_FIELD ||
+            binding.source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD ||
+            binding.field == NULL) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: tuple spec field '%s' must be satisfied by a tuple field",
+                sm->feng_name);
+        }
+
+        const UserField *field = binding.field;
+        Buf *fd = &cg->witness_defs;
+        buf_append_cstr(fd, "static ");
+        cg_emit_c_type(fd, sm->type);
+        buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
+                       prefix.data, sm->c_field_name);
+        buf_append_fmt(fd,
+                       "    return ((struct %s *)_subject)->value.%s;\n",
+                       t->c_tuple_box_struct_name,
+                       field->c_name);
+        buf_append_cstr(fd, "}\n\n");
+
+        Buf *fp = &cg->fn_protos;
+        buf_append_cstr(fp, "static ");
+        cg_emit_c_type(fp, sm->type);
+        buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
+                       prefix.data, sm->c_field_name);
+
+        if (sm->is_var) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return cg_fail(cg, blame,
+                "codegen: tuple fields are immutable and cannot satisfy var spec field '%s'",
+                sm->feng_name);
+        }
+    }
+
+    Buf var;
+    buf_init(&var);
+    buf_append_fmt(&var, "FengWitness__%s__%s__tuple_box__as__%s__%s",
+                   cg->module_mangle, t_san, cg->module_mangle, s_san);
+    if (var.data == NULL) {
+        buf_free(&prefix); free(t_san); free(s_san);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    buf_append_fmt(&cg->fn_protos, "static const struct %s %s;\n",
+                   s->c_witness_struct_name, var.data);
+
+    Buf *fd = &cg->witness_defs;
+    buf_append_fmt(fd, "static const struct %s %s = {\n",
+                   s->c_witness_struct_name, var.data);
+    for (size_t i = 0U; i < s->member_count; ++i) {
+        const UserSpecMember *sm = &s->members[i];
+
+        if (sm->kind == USM_KIND_METHOD) {
+            buf_append_fmt(fd, "    .%s = &%s__%s,\n",
+                           sm->c_field_name, prefix.data, sm->c_field_name);
+        } else if (sm->kind == USM_KIND_FIELD) {
+            buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
+                           sm->c_field_name, prefix.data, sm->c_field_name);
+        }
+    }
+    buf_append_cstr(fd, "};\n\n");
+
+    if (cg->tuple_box_witness_table_count + 1U > cg->tuple_box_witness_table_capacity) {
+        size_t cap = cg->tuple_box_witness_table_capacity
+                         ? cg->tuple_box_witness_table_capacity * 2U
+                         : 4U;
+        void *p = realloc(cg->tuple_box_witness_tables,
+                          cap * sizeof *cg->tuple_box_witness_tables);
+
+        if (p == NULL) {
+            buf_free(&prefix); buf_free(&var); free(t_san); free(s_san);
+            return false;
+        }
+        cg->tuple_box_witness_tables = p;
+        cg->tuple_box_witness_table_capacity = cap;
+    }
+    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].type = t;
+    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].spec = s;
+    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].c_var = var.data;
+    *out_var = var.data;
+    cg->tuple_box_witness_table_count++;
+
+    buf_free(&prefix);
+    free(t_san);
+    free(s_san);
+    return true;
+}
+
 /* Ensure a witness table for (T, S) has been materialised in fn_protos /
  * fn_defs and write its C variable name to *out_var (borrowed pointer into
  * the cache). The preferred source is the semantic witness sidecar. When the
@@ -24384,6 +24816,72 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "    .managed_slots = NULL,\n");
     }
     buf_append_cstr(td, "};\n\n");
+
+    CGType tuple_value_type;
+    memset(&tuple_value_type, 0, sizeof tuple_value_type);
+    tuple_value_type.kind = CG_TYPE_OBJECT;
+    tuple_value_type.user = t;
+
+    size_t box_pointer_slot_count = cg_aggregate_pointer_slot_count(&tuple_value_type);
+    buf_append_fmt(td,
+                   "struct %s {\n"
+                   "    FengManagedHeader _hdr;\n"
+                   "    struct %s value;\n"
+                   "};\n\n",
+                   t->c_tuple_box_struct_name,
+                   t->c_struct_name);
+    if (box_pointer_slot_count > 0U) {
+        Buf value_base;
+
+        buf_init(&value_base);
+        buf_append_fmt(&value_base,
+                       "offsetof(struct %s, value)",
+                       t->c_tuple_box_struct_name);
+        if (value_base.data == NULL) {
+            (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+            return;
+        }
+        buf_append_fmt(td,
+                       "static void %s(void *_self) {\n"
+                       "    struct %s *_box = (struct %s *)_self;\n"
+                       "    feng_aggregate_release(&_box->value, &%s);\n"
+                       "}\n\n",
+                       t->c_tuple_box_release_children_name,
+                       t->c_tuple_box_struct_name,
+                       t->c_tuple_box_struct_name,
+                       t->c_aggregate_desc_name);
+        buf_append_fmt(td,
+                       "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
+                       t->c_tuple_box_desc_name);
+        cg_emit_aggregate_pointer_slot_rows(td,
+                                            value_base.data,
+                                            &tuple_value_type);
+        buf_append_cstr(td, "};\n\n");
+        buf_free(&value_base);
+    }
+    buf_append_fmt(td,
+        "const FengTypeDescriptor %s = {\n"
+        "    .name = \"%s.%s.__tuple_box\",\n"
+        "    .size = sizeof(struct %s),\n"
+        "    .finalizer = NULL,\n"
+        "    .release_children = %s,\n"
+        "    .is_potentially_cyclic = %s,\n"
+        "    .managed_field_count = %zu,\n",
+        t->c_tuple_box_desc_name,
+        cg->module_dot_name,
+        t->feng_name,
+        t->c_tuple_box_struct_name,
+        box_pointer_slot_count > 0U ? t->c_tuple_box_release_children_name : "NULL",
+        box_pointer_slot_count > 0U ? "true" : "false",
+        box_pointer_slot_count);
+    if (box_pointer_slot_count > 0U) {
+        buf_append_fmt(td,
+                       "    .managed_fields = %s__managed_fields,\n",
+                       t->c_tuple_box_desc_name);
+    } else {
+        buf_append_cstr(td, "    .managed_fields = NULL,\n");
+    }
+    buf_append_cstr(td, "};\n\n");
 }
 
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
@@ -24392,6 +24890,10 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
         buf_append_fmt(&cg->headers,
                        "static const FengAggregateValueDescriptor %s;\n",
                        t->c_aggregate_desc_name);
+        buf_append_fmt(&cg->headers,
+                       "struct %s;\nextern const FengTypeDescriptor %s;\n",
+                       t->c_tuple_box_struct_name,
+                       t->c_tuple_box_desc_name);
         return;
     }
     if (t->is_abi_type && t->c_abi_layout_name != NULL) {
@@ -26144,6 +26646,9 @@ static void cg_dispose(CG *cg) {
         free(ut->c_aggregate_slots_name);
         free(ut->c_aggregate_default_name);
         free(ut->c_aggregate_desc_name);
+        free(ut->c_tuple_box_struct_name);
+        free(ut->c_tuple_box_desc_name);
+        free(ut->c_tuple_box_release_children_name);
         free(ut->c_abi_layout_name);
         free(ut->c_abi_ptr_name);
         free(ut->c_abi_base_offset_name);
@@ -26316,6 +26821,10 @@ static void cg_dispose(CG *cg) {
         free(cg->spec_slot_witness_tables[i].c_var);
     }
     free(cg->spec_slot_witness_tables);
+    for (size_t i = 0; i < cg->tuple_box_witness_table_count; ++i) {
+        free(cg->tuple_box_witness_tables[i].c_var);
+    }
+    free(cg->tuple_box_witness_tables);
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         free(cg->module_bindings[i].feng_name);
         free(cg->module_bindings[i].c_name);

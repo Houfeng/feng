@@ -53,7 +53,7 @@
 - [x] T10. 字面量元组解构：`let (x, y) = (1, 2)`
 - [x] T11. 嵌套解构报编译错误
 - [x] T12. 泛型元组：`Pair<int, string>` 声明、绑定、成员访问、函数调用类型推断
-- [x] T13. `fit`：具名元组实现 spec，方法内通过 `self.itemN` 访问元素
+- [x] T13. `fit`：具名元组实现 spec，方法内通过 `self.itemN` 访问元素；覆盖直接调用、spec 参数 coercion、spec 局部 coercion
 - [x] T14. 具名元组作泛型上界报编译错误
 
 ---
@@ -102,7 +102,7 @@ struct {
 
 合成成员时直接用 C 字符串字面量赋给 `FengSlice.data`，无需额外数组：字面量 `"item1"` 等已具有静态存储期，可安全持有指针。
 
-**好处**：成员访问（`.item1`）、`fit` 中 `self.itemN`、spec coercion、codegen 字段遍历全部走已有路径，**零改动**。S5（禁止元素原地赋值）也由现有的 `FENG_MUTABILITY_LET` 字段不可变检查自动覆盖，**无需新增 semantic 逻辑**。
+**好处**：成员访问（`.item1`）、`fit` 中 `self.itemN`、直接 fit 方法调用、codegen 字段遍历全部走已有路径，**低改动**。对象形态 spec coercion 需要 codegen 为具名元组创建运行时管理的 tuple box，避免把栈上 by-value 元组直接作为可逃逸 subject。S5（禁止元素原地赋值）也由现有的 `FENG_MUTABILITY_LET` 字段不可变检查自动覆盖，**无需新增 semantic 逻辑**。
 
 **2. 新增 `FENG_EXPR_TUPLE_LITERAL`（`parser.h`）**
 
@@ -189,6 +189,17 @@ static const FengAggregateValueDescriptor MyTuple_aggregate = {
 
 运行时操作完全通过 `feng_aggregate_retain` / `feng_aggregate_release` /
 `feng_aggregate_assign` / `feng_aggregate_take` 完成，与对象类型一致，**无需新增任何 runtime 函数**。
+
+对象形态 spec coercion 额外生成一个内部 tuple box：
+
+```c
+struct MyTuple__spec_box {
+  FengManagedHeader _hdr;
+  MyTuple_t value;
+};
+```
+
+tuple box 是普通运行时管理对象，`release_children` 对 `value` 调用 `feng_aggregate_release()`；witness thunk 从 box 的 `value` 字段恢复 by-value `self`，因此元组值作为 spec 参数、spec 局部或返回值逃逸时不会悬垂。
 
 ---
 
