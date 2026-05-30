@@ -2654,16 +2654,6 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
                 decl->as.function_decl.name.data));
     }
 
-    if (annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED)) {
-        return resolver_append_error(
-            context,
-            decl->as.function_decl.token,
-            format_message(
-                "function '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
-                (int)decl->as.function_decl.name.length,
-                decl->as.function_decl.name.data));
-    }
-
     calling_convention = find_calling_convention_annotation(decl->annotations, decl->annotation_count);
     calling_convention_count =
         count_calling_convention_annotations(decl->annotations, decl->annotation_count);
@@ -6665,7 +6655,7 @@ static size_t count_declared_constructors(const FengDecl *type_decl) {
 static bool validate_type_finalizer_constraints(ResolveContext *context, const FengDecl *type_decl) {
     size_t member_index;
     const FengTypeMember *first_finalizer = NULL;
-    bool type_is_fixed;
+    bool type_has_abi;
 
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
         return true;
@@ -6690,9 +6680,9 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
         return true;
     }
 
-    type_is_fixed = annotations_contain_kind(type_decl->annotations,
-                                             type_decl->annotation_count,
-                                             FENG_ANNOTATION_ABI);
+    type_has_abi = annotations_contain_kind(type_decl->annotations,
+                                            type_decl->annotation_count,
+                                            FENG_ANNOTATION_ABI);
 
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
@@ -6701,7 +6691,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
             continue;
         }
 
-        if (type_is_fixed) {
+        if (type_has_abi) {
             return resolver_append_error(
                 context,
                 member->token,
@@ -13864,26 +13854,13 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
     size_t field_index;
     size_t param_index;
     bool has_abi;
-    bool has_legacy_fixed;
 
     if (context == NULL || decl == NULL || (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_SPEC)) {
         return true;
     }
 
     has_abi = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI);
-    has_legacy_fixed =
-        annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED);
     callconv_count = count_calling_convention_annotations(decl->annotations, decl->annotation_count);
-
-    if (has_legacy_fixed) {
-        return resolver_append_error(
-            context,
-            decl->token,
-            format_message(
-                "type '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
-                (int)decl_typeish_name(decl).length,
-                decl_typeish_name(decl).data));
-    }
 
     /* Object-form `spec` only describes a visible shape contract; it does not
      * fix memory layout or ABI value layout, so it cannot enter the C ABI
@@ -14028,7 +14005,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     const FengAnnotation *calling_convention;
     size_t callconv_count;
     bool has_abi;
-    bool has_legacy_fixed;
     size_t param_index;
 
     if (context == NULL || callable == NULL) {
@@ -14036,20 +14012,8 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     }
 
     has_abi = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
-    has_legacy_fixed = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_FIXED);
     callconv_count = count_calling_convention_annotations(annotations, annotation_count);
     calling_convention = find_calling_convention_annotation(annotations, annotation_count);
-
-    if (has_legacy_fixed) {
-        return resolver_append_error(
-            context,
-            token,
-            format_message(
-                "%s '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
-                callable_kind,
-                (int)name.length,
-                name.data));
-    }
 
     if (!has_abi) {
         if (callconv_count != 0U && !is_extern) {
@@ -14333,31 +14297,18 @@ static bool validate_abi_function_declaration(ResolveContext *context, const Fen
 }
 
 static bool validate_abi_callable_member(ResolveContext *context, const FengTypeMember *member) {
-    bool has_fixed;
-    bool has_legacy_fixed;
+    bool has_abi;
     size_t callconv_count;
 
     if (member == NULL || member->kind == FENG_TYPE_MEMBER_FIELD) {
         return true;
     }
 
-    has_fixed = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_ABI);
-    has_legacy_fixed =
-        annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_FIXED);
+    has_abi = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_ABI);
     callconv_count = count_calling_convention_annotations(member->annotations, member->annotation_count);
 
-    if (has_legacy_fixed) {
-        return resolver_append_error(
-            context,
-            member->token,
-            format_message(
-                "method '%.*s' uses legacy annotation @fixed, which no longer defines ABI semantics; use @abi instead",
-                (int)member->as.callable.name.length,
-                member->as.callable.name.data));
-    }
-
     if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
-        if (!has_fixed && callconv_count == 0U) {
+        if (!has_abi && callconv_count == 0U) {
             return true;
         }
 
@@ -14371,7 +14322,7 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
     }
 
     if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
-        if (!has_fixed && callconv_count == 0U) {
+        if (!has_abi && callconv_count == 0U) {
             return true;
         }
 

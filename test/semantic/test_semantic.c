@@ -902,7 +902,7 @@ static void test_extern_function_rejects_non_abi_array_parameter_type(void) {
     feng_program_free(program);
 }
 
-static void test_extern_function_rejects_non_fixed_object_parameter(void) {
+static void test_extern_function_rejects_non_abi_object_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "type Point {\n"
@@ -911,7 +911,7 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
         "}\n"
         "@cdecl(\"m\")\n"
         "extern func use_point(point: Point): int;\n";
-    FengProgram *program = parse_program_or_die("extern_fn_non_fixed_object_param_error.f", source);
+    FengProgram *program = parse_program_or_die("extern_fn_non_abi_object_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -919,7 +919,7 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "extern_fn_non_fixed_object_param_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "extern_fn_non_abi_object_param_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "parameter 'point' type 'Point' is not C ABI-stable") != NULL);
 
@@ -927,7 +927,7 @@ static void test_extern_function_rejects_non_fixed_object_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
+static void test_extern_function_accepts_abi_object_and_callback_types(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -939,7 +939,7 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
         "spec PointCallback(p: Point): int;\n"
         "@cdecl(\"m\")\n"
         "extern func run_point(point: Point, cb: PointCallback): int;\n";
-    FengProgram *program = parse_program_or_die("extern_fn_fixed_types_ok.f", source);
+    FengProgram *program = parse_program_or_die("extern_fn_abi_types_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -954,14 +954,14 @@ static void test_extern_function_accepts_fixed_object_and_callback_types(void) {
     feng_program_free(program);
 }
 
-static void test_legacy_fixed_annotation_is_rejected(void) {
+static void test_fixed_annotation_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
         "@fixed\n"
         "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("legacy_fixed_annotation_error.f", source);
+    FengProgram *program = parse_program_or_die("fixed_annotation_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -969,15 +969,15 @@ static void test_legacy_fixed_annotation_is_rejected(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "legacy_fixed_annotation_error.f") == 0);
-    ASSERT(strstr(errors[0].message, "legacy annotation @fixed") != NULL);
-    ASSERT(strstr(errors[0].message, "use @abi") != NULL);
+    ASSERT(strcmp(errors[0].path, "fixed_annotation_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "unknown annotation '@fixed' is not supported") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
-static void test_fixed_type_accepts_abi_stable_fields(void) {
+static void test_abi_type_accepts_abi_stable_fields(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -993,7 +993,7 @@ static void test_fixed_type_accepts_abi_stable_fields(void) {
         "    var next: Point*;\n"
         "    var callback: Callback*;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_type_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_type_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1008,14 +1008,14 @@ static void test_fixed_type_accepts_abi_stable_fields(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_type_rejects_managed_field_type(void) {
+static void test_abi_type_rejects_managed_field_type(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "type NameBox {\n"
         "    var name: string;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_type_managed_field_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_type_managed_field_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1023,7 +1023,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_type_managed_field_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_type_managed_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "type 'NameBox' cannot be marked as @abi") != NULL);
 
@@ -1031,7 +1031,7 @@ static void test_fixed_type_rejects_managed_field_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
+static void test_abi_type_rejects_inline_abi_object_field_type(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1042,7 +1042,7 @@ static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
         "type Box {\n"
         "    var point: Point;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_type_inline_object_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_type_inline_object_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1050,7 +1050,7 @@ static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_type_inline_object_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_type_inline_object_error.f") == 0);
     ASSERT(errors[0].token.line == 8U);
     ASSERT(strstr(errors[0].message,
                   "field 'point' uses non-ABI-stable type 'Point'") != NULL);
@@ -1059,14 +1059,14 @@ static void test_fixed_type_rejects_inline_abi_object_field_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_type_rejects_direct_array_field_type(void) {
+static void test_abi_type_rejects_direct_array_field_type(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "type Box {\n"
         "    var values: int[];\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_type_array_field_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_type_array_field_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1074,7 +1074,7 @@ static void test_fixed_type_rejects_direct_array_field_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_type_array_field_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_type_array_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message,
                   "field 'values' uses non-ABI-stable type 'int[]'") != NULL);
@@ -1083,7 +1083,7 @@ static void test_fixed_type_rejects_direct_array_field_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_type_rejects_direct_callable_field_type(void) {
+static void test_abi_type_rejects_direct_callable_field_type(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1092,7 +1092,7 @@ static void test_fixed_type_rejects_direct_callable_field_type(void) {
         "type Holder {\n"
         "    var cb: Callback;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_type_callable_field_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_type_callable_field_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1100,7 +1100,7 @@ static void test_fixed_type_rejects_direct_callable_field_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_type_callable_field_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_type_callable_field_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message,
                   "field 'cb' uses non-ABI-stable type 'Callback'") != NULL);
@@ -1154,14 +1154,14 @@ static void test_bounded_annotation_is_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_accepts_abi_stable_signature(void) {
+static void test_abi_function_accepts_abi_stable_signature(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1176,7 +1176,7 @@ static void test_fixed_function_accepts_abi_stable_signature(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(void) {
+static void test_abi_function_accepts_fieldless_abi_type_pointer_signature(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1186,7 +1186,7 @@ static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(voi
         "func roundtrip(handle: Handle*): Handle* {\n"
         "    return handle;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_pointer_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_fieldless_pointer_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1202,7 +1202,7 @@ static void test_fixed_function_accepts_fieldless_abi_type_pointer_signature(voi
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void) {
+static void test_abi_function_rejects_fieldless_abi_type_value_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1212,7 +1212,7 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void)
         "func close(handle: Handle): int {\n"
         "    return 0;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_param_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_fieldless_value_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1221,7 +1221,7 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void)
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_fieldless_value_param_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_fieldless_value_param_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message,
                   "function 'close' cannot be marked as @abi because parameter 'handle' uses non-ABI-stable type 'Handle'") != NULL);
@@ -1230,7 +1230,7 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_parameter(void)
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
+static void test_abi_function_rejects_fieldless_abi_type_value_return(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1240,7 +1240,7 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
         "func make_handle(): Handle {\n"
         "    return Handle {};\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_fieldless_value_return_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_fieldless_value_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1249,7 +1249,7 @@ static void test_fixed_function_rejects_fieldless_abi_type_value_return(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_fieldless_value_return_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_fieldless_value_return_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message,
                   "function 'make_handle' cannot be marked as @abi because return type 'Handle' is not ABI-stable") != NULL);
@@ -1397,14 +1397,14 @@ static void test_extern_function_rejects_non_abi_type_pointer_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_accepts_abi_array_parameter(void) {
+static void test_abi_function_accepts_abi_array_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "func sum(values: int[]): int {\n"
         "    return 0;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_array_param_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_array_param_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1419,7 +1419,7 @@ static void test_fixed_function_accepts_abi_array_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_parameterized_calling_convention(void) {
+static void test_abi_function_rejects_parameterized_calling_convention(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1427,7 +1427,7 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
         "func cmp(a: int, b: int): int {\n"
         "    return a - b;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_callconv_arg_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_callconv_arg_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1435,7 +1435,7 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_callconv_arg_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_callconv_arg_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "function 'cmp' cannot be marked as @abi") != NULL);
 
@@ -1443,7 +1443,7 @@ static void test_fixed_function_rejects_parameterized_calling_convention(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_method_rejects_managed_signature_type(void) {
+static void test_abi_method_rejects_managed_signature_type(void) {
     const char *source =
         "module demo.main;\n"
         "type CallbackHolder {\n"
@@ -1451,7 +1451,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
         "    func emit(msg: string) {\n"
         "    }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_method_managed_signature_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_method_managed_signature_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1459,7 +1459,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_method_managed_signature_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_method_managed_signature_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "method 'emit' cannot be marked as @abi") != NULL);
 
@@ -1467,7 +1467,7 @@ static void test_fixed_method_rejects_managed_signature_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_type_accepts_fixed_function_value(void) {
+static void test_abi_function_type_accepts_abi_function_value(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1479,7 +1479,7 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
         "func run() {\n"
         "    let cb: Callback = add1;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_callback_fixed_fn_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_callback_abi_fn_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1494,7 +1494,7 @@ static void test_fixed_function_type_accepts_fixed_function_value(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_type_rejects_plain_function_value(void) {
+static void test_abi_function_type_rejects_plain_function_value(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1505,7 +1505,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
         "func run() {\n"
         "    let cb: Callback = add1;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_callback_plain_fn_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callback_plain_fn_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1513,7 +1513,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_callback_plain_fn_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_callback_plain_fn_error.f") == 0);
     ASSERT(errors[0].token.line == 8U);
     ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
 
@@ -1521,7 +1521,7 @@ static void test_fixed_function_type_rejects_plain_function_value(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_type_rejects_direct_lambda_value(void) {
+static void test_abi_function_type_rejects_direct_lambda_value(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1529,7 +1529,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
         "func run() {\n"
         "    let cb: Callback = (x: int) -> x + 1;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_callback_lambda_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callback_lambda_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1537,7 +1537,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_callback_lambda_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_callback_lambda_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
 
@@ -1545,7 +1545,7 @@ static void test_fixed_function_type_rejects_direct_lambda_value(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
+static void test_abi_function_type_rejects_captured_lambda_binding(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1553,7 +1553,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
         "func run(base: int) {\n"
         "    let cb: Callback = (x: int) -> x + base;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_callback_captured_lambda_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callback_captured_lambda_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1561,7 +1561,7 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_callback_captured_lambda_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_callback_captured_lambda_error.f") == 0);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "does not match expected function type 'Callback'") != NULL);
 
@@ -1569,14 +1569,14 @@ static void test_fixed_function_type_rejects_captured_lambda_binding(void) {
     feng_program_free(program);
 }
 
-static void test_object_form_spec_rejects_fixed_annotation(void) {
+static void test_object_form_spec_rejects_abi_annotation(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "spec Shape {\n"
         "    var x: int;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("object_spec_fixed_error.f", source);
+    FengProgram *program = parse_program_or_die("object_spec_abi_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1584,7 +1584,7 @@ static void test_object_form_spec_rejects_fixed_annotation(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "object_spec_fixed_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "object_spec_abi_error.f") == 0);
     ASSERT(strstr(errors[0].message,
                   "object-form spec 'Shape' cannot be marked as @abi") != NULL);
 
@@ -1614,7 +1614,7 @@ static void test_unknown_member_annotation_is_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
+static void test_abi_callable_spec_accepts_abi_type_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1624,7 +1624,7 @@ static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
         "}\n"
         "@abi\n"
         "spec PointHandler(p: Point): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1638,7 +1638,7 @@ static void test_fixed_callable_spec_accepts_fixed_type_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature(void) {
+static void test_abi_callable_spec_accepts_fieldless_abi_type_pointer_signature(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1646,7 +1646,7 @@ static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signatur
         "}\n"
         "@abi\n"
         "spec HandleCb(handle: Handle*): Handle*;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_pointer_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_fieldless_pointer_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1661,12 +1661,12 @@ static void test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signatur
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_accepts_abi_array_parameter(void) {
+static void test_abi_callable_spec_accepts_abi_array_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "spec Batch(values: int[]): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_array_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_array_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1680,12 +1680,12 @@ static void test_fixed_callable_spec_accepts_abi_array_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_non_abi_array_parameter(void) {
+static void test_abi_callable_spec_rejects_non_abi_array_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "spec Batch(values: string[]): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_string_array_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_string_array_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1700,7 +1700,7 @@ static void test_fixed_callable_spec_rejects_non_abi_array_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
+static void test_abi_callable_spec_rejects_non_abi_type_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "type Bag {\n"
@@ -1708,7 +1708,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
         "}\n"
         "@abi\n"
         "spec Cb(b: Bag): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_param_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_non_abi_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1723,7 +1723,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_type_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(void) {
+static void test_abi_callable_spec_rejects_fieldless_abi_type_value_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1731,7 +1731,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(
         "}\n"
         "@abi\n"
         "spec HandleCb(handle: Handle): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_value_param_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_fieldless_value_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1740,7 +1740,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_callable_spec_fieldless_value_param_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_callable_spec_fieldless_value_param_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message,
                   "type 'HandleCb' cannot be marked as @abi because parameter 'handle' uses non-ABI-stable type 'Handle'") != NULL);
@@ -1749,7 +1749,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter(
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
+static void test_abi_callable_spec_rejects_object_spec_parameter(void) {
     const char *source =
         "module demo.main;\n"
         "spec Shape {\n"
@@ -1757,7 +1757,7 @@ static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
         "}\n"
         "@abi\n"
         "spec Cb(s: Shape): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_object_spec_param_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_object_spec_param_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1772,7 +1772,7 @@ static void test_fixed_callable_spec_rejects_object_spec_parameter(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
+static void test_abi_callable_spec_rejects_non_abi_return_type(void) {
     const char *source =
         "module demo.main;\n"
         "type Bag {\n"
@@ -1780,7 +1780,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
         "}\n"
         "@abi\n"
         "spec Cb(x: int): Bag;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_non_fixed_return_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_non_abi_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1795,7 +1795,7 @@ static void test_fixed_callable_spec_rejects_non_fixed_return_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(void) {
+static void test_abi_callable_spec_rejects_fieldless_abi_type_value_return(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -1803,7 +1803,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(voi
         "}\n"
         "@abi\n"
         "spec HandleCb(): Handle;\n";
-    FengProgram *program = parse_program_or_die("fixed_callable_spec_fieldless_value_return_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_callable_spec_fieldless_value_return_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1812,7 +1812,7 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(voi
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_callable_spec_fieldless_value_return_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_callable_spec_fieldless_value_return_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message,
                   "type 'HandleCb' cannot be marked as @abi because return type 'Handle' is not ABI-stable") != NULL);
@@ -1821,14 +1821,14 @@ static void test_fixed_callable_spec_rejects_fieldless_abi_type_value_return(voi
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_uncaught_throw(void) {
+static void test_abi_function_rejects_uncaught_throw(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "func fail(): int {\n"
         "    throw \"boom\";\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_uncaught_throw_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_uncaught_throw_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1836,7 +1836,7 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_uncaught_throw_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
@@ -1844,7 +1844,7 @@ static void test_fixed_function_rejects_uncaught_throw(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_allows_locally_caught_throw(void) {
+static void test_abi_function_allows_locally_caught_throw(void) {
     const char *source =
         "module demo.main;\n"
         "func fail(): int {\n"
@@ -1855,7 +1855,7 @@ static void test_fixed_function_allows_locally_caught_throw(void) {
         "    let value = try fail() catch ex: string { 0; };\n"
         "    return value;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_caught_throw_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_caught_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1870,7 +1870,7 @@ static void test_fixed_function_allows_locally_caught_throw(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_call_to_throwing_function(void) {
+static void test_abi_function_rejects_call_to_throwing_function(void) {
     const char *source =
         "module demo.main;\n"
         "func helper(): int {\n"
@@ -1880,7 +1880,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
         "func run(): int {\n"
         "    return helper();\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_throwing_call_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1888,7 +1888,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_throwing_call_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
@@ -1896,7 +1896,7 @@ static void test_fixed_function_rejects_call_to_throwing_function(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_allows_call_to_catching_function(void) {
+static void test_abi_function_allows_call_to_catching_function(void) {
     const char *source =
         "module demo.main;\n"
         "func fail(): int {\n"
@@ -1910,7 +1910,7 @@ static void test_fixed_function_allows_call_to_catching_function(void) {
         "func run(): int {\n"
         "    return helper();\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_catching_call_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_catching_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1925,7 +1925,7 @@ static void test_fixed_function_allows_call_to_catching_function(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_method_rejects_uncaught_throw(void) {
+static void test_abi_method_rejects_uncaught_throw(void) {
     const char *source =
         "module demo.main;\n"
         "type Worker {\n"
@@ -1934,7 +1934,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
         "        throw \"boom\";\n"
         "    }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_method_uncaught_throw_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_method_uncaught_throw_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1942,7 +1942,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_method_uncaught_throw_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_method_uncaught_throw_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
@@ -1950,7 +1950,7 @@ static void test_fixed_method_rejects_uncaught_throw(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void) {
+static void test_abi_function_allows_unused_lambda_wrapping_throwing_call(void) {
     const char *source =
         "module demo.main;\n"
         "spec Callback(x: int): int;\n"
@@ -1962,7 +1962,7 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return 0;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_unused_lambda_throwing_call_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_unused_lambda_throwing_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1977,7 +1977,7 @@ static void test_fixed_function_allows_unused_lambda_wrapping_throwing_call(void
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
+static void test_abi_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
     const char *source =
         "module demo.main;\n"
         "spec Callback(x: int): int;\n"
@@ -1989,7 +1989,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_throwing_call_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_invoked_lambda_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1997,7 +1997,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_invoked_lambda_throwing_call_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_invoked_lambda_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
@@ -2005,7 +2005,7 @@ static void test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call(vo
     feng_program_free(program);
 }
 
-static void test_fixed_function_rejects_local_function_value_call_to_throwing_function(void) {
+static void test_abi_function_rejects_local_function_value_call_to_throwing_function(void) {
     const char *source =
         "module demo.main;\n"
         "spec Callback(x: int): int;\n"
@@ -2017,7 +2017,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
         "    let cb: Callback = helper;\n"
         "    return cb(1);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_local_function_value_throwing_call_error.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_local_function_value_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -2025,7 +2025,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_fn_local_function_value_throwing_call_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "abi_fn_local_function_value_throwing_call_error.f") == 0);
     ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "uncaught exceptions must not cross the @abi ABI boundary") != NULL);
 
@@ -2033,7 +2033,7 @@ static void test_fixed_function_rejects_local_function_value_call_to_throwing_fu
     feng_program_free(program);
 }
 
-static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(void) {
+static void test_abi_function_allows_invoked_lambda_wrapping_catching_call(void) {
     const char *source =
         "module demo.main;\n"
         "spec Callback(x: int): int;\n"
@@ -2049,7 +2049,7 @@ static void test_fixed_function_allows_invoked_lambda_wrapping_catching_call(voi
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fixed_fn_invoked_lambda_catching_call_ok.f", source);
+    FengProgram *program = parse_program_or_die("abi_fn_invoked_lambda_catching_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -2379,14 +2379,14 @@ static void test_throw_rejects_pointer_value(void) {
     feng_program_free(program);
 }
 
-static void test_throw_rejects_fixed_type_value(void) {
+static void test_throw_rejects_abi_type_value(void) {
     const char *source =
         "module demo.main;\n"
         "@abi type Handle { let id: int; }\n"
         "func run(h: Handle) {\n"
         "    throw h;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("throw_fixed_error.f", source);
+    FengProgram *program = parse_program_or_die("throw_abi_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -2394,7 +2394,7 @@ static void test_throw_rejects_fixed_type_value(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "throw_fixed_error.f") == 0);
+    ASSERT(strcmp(errors[0].path, "throw_abi_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
     ASSERT(strstr(errors[0].message, "@abi types are ABI-bound") != NULL);
@@ -10057,7 +10057,7 @@ static void test_finalizer_rejects_multiple_per_type(void) {
     feng_program_free(program);
 }
 
-static void test_finalizer_rejected_on_fixed_type(void) {
+static void test_finalizer_rejected_on_abi_type(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
@@ -10065,7 +10065,7 @@ static void test_finalizer_rejected_on_fixed_type(void) {
         "    open let size: int;\n"
         "    func ~Buffer() {}\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("fin_fixed.f", source);
+    FengProgram *program = parse_program_or_die("fin_abi.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -14192,52 +14192,52 @@ int main(void) {
     test_extern_function_rejects_bare_string_parameter_type();
     test_extern_function_rejects_bare_string_return_type();
     test_extern_function_rejects_non_abi_array_parameter_type();
-    test_extern_function_rejects_non_fixed_object_parameter();
-    test_extern_function_accepts_fixed_object_and_callback_types();
-    test_legacy_fixed_annotation_is_rejected();
-    test_fixed_type_accepts_abi_stable_fields();
-    test_fixed_type_rejects_managed_field_type();
-    test_fixed_type_rejects_inline_abi_object_field_type();
-    test_fixed_type_rejects_direct_array_field_type();
-    test_fixed_type_rejects_direct_callable_field_type();
+    test_extern_function_rejects_non_abi_object_parameter();
+    test_extern_function_accepts_abi_object_and_callback_types();
+    test_fixed_annotation_is_rejected();
+    test_abi_type_accepts_abi_stable_fields();
+    test_abi_type_rejects_managed_field_type();
+    test_abi_type_rejects_inline_abi_object_field_type();
+    test_abi_type_rejects_direct_array_field_type();
+    test_abi_type_rejects_direct_callable_field_type();
     test_unknown_top_level_annotation_is_rejected();
     test_bounded_annotation_is_rejected();
-    test_fixed_function_accepts_abi_stable_signature();
-    test_fixed_function_accepts_fieldless_abi_type_pointer_signature();
-    test_fixed_function_rejects_fieldless_abi_type_value_parameter();
-    test_fixed_function_rejects_fieldless_abi_type_value_return();
+    test_abi_function_accepts_abi_stable_signature();
+    test_abi_function_accepts_fieldless_abi_type_pointer_signature();
+    test_abi_function_rejects_fieldless_abi_type_value_parameter();
+    test_abi_function_rejects_fieldless_abi_type_value_return();
     test_extern_function_accepts_abi_value_param_and_return();
     test_extern_function_accepts_fieldless_abi_type_pointer_param_and_return();
     test_extern_function_rejects_fieldless_abi_type_value_parameter();
     test_extern_function_rejects_fieldless_abi_type_value_return();
     test_extern_function_rejects_non_abi_type_pointer_parameter();
-    test_fixed_function_accepts_abi_array_parameter();
-    test_fixed_function_rejects_parameterized_calling_convention();
-    test_fixed_method_rejects_managed_signature_type();
-    test_fixed_function_type_accepts_fixed_function_value();
-    test_fixed_function_type_rejects_plain_function_value();
-    test_fixed_function_type_rejects_direct_lambda_value();
-    test_fixed_function_type_rejects_captured_lambda_binding();
-    test_object_form_spec_rejects_fixed_annotation();
+    test_abi_function_accepts_abi_array_parameter();
+    test_abi_function_rejects_parameterized_calling_convention();
+    test_abi_method_rejects_managed_signature_type();
+    test_abi_function_type_accepts_abi_function_value();
+    test_abi_function_type_rejects_plain_function_value();
+    test_abi_function_type_rejects_direct_lambda_value();
+    test_abi_function_type_rejects_captured_lambda_binding();
+    test_object_form_spec_rejects_abi_annotation();
     test_unknown_member_annotation_is_rejected();
-    test_fixed_callable_spec_accepts_fixed_type_parameter();
-    test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature();
-    test_fixed_callable_spec_accepts_abi_array_parameter();
-    test_fixed_callable_spec_rejects_non_abi_array_parameter();
-    test_fixed_callable_spec_rejects_non_fixed_type_parameter();
-    test_fixed_callable_spec_rejects_fieldless_abi_type_value_parameter();
-    test_fixed_callable_spec_rejects_object_spec_parameter();
-    test_fixed_callable_spec_rejects_non_fixed_return_type();
-    test_fixed_callable_spec_rejects_fieldless_abi_type_value_return();
-    test_fixed_function_rejects_uncaught_throw();
-    test_fixed_function_allows_locally_caught_throw();
-    test_fixed_function_rejects_call_to_throwing_function();
-    test_fixed_function_allows_call_to_catching_function();
-    test_fixed_method_rejects_uncaught_throw();
-    test_fixed_function_allows_unused_lambda_wrapping_throwing_call();
-    test_fixed_function_rejects_invoked_lambda_wrapping_throwing_call();
-    test_fixed_function_rejects_local_function_value_call_to_throwing_function();
-    test_fixed_function_allows_invoked_lambda_wrapping_catching_call();
+    test_abi_callable_spec_accepts_abi_type_parameter();
+    test_abi_callable_spec_accepts_fieldless_abi_type_pointer_signature();
+    test_abi_callable_spec_accepts_abi_array_parameter();
+    test_abi_callable_spec_rejects_non_abi_array_parameter();
+    test_abi_callable_spec_rejects_non_abi_type_parameter();
+    test_abi_callable_spec_rejects_fieldless_abi_type_value_parameter();
+    test_abi_callable_spec_rejects_object_spec_parameter();
+    test_abi_callable_spec_rejects_non_abi_return_type();
+    test_abi_callable_spec_rejects_fieldless_abi_type_value_return();
+    test_abi_function_rejects_uncaught_throw();
+    test_abi_function_allows_locally_caught_throw();
+    test_abi_function_rejects_call_to_throwing_function();
+    test_abi_function_allows_call_to_catching_function();
+    test_abi_method_rejects_uncaught_throw();
+    test_abi_function_allows_unused_lambda_wrapping_throwing_call();
+    test_abi_function_rejects_invoked_lambda_wrapping_throwing_call();
+    test_abi_function_rejects_local_function_value_call_to_throwing_function();
+    test_abi_function_allows_invoked_lambda_wrapping_catching_call();
     test_throw_rejects_void_expression();
     test_break_outside_loop_is_rejected();
     test_continue_outside_loop_is_rejected();
@@ -14250,7 +14250,7 @@ int main(void) {
     test_continue_directly_in_try_expr_catch_block_is_rejected();
     test_break_inside_loop_inside_try_expr_catch_block_is_accepted();
     test_throw_rejects_pointer_value();
-    test_throw_rejects_fixed_type_value();
+    test_throw_rejects_abi_type_value();
     test_throw_accepts_string_and_managed_type();
     test_catch_unknown_allows_rethrow_only();
     test_catch_unknown_rejects_value_use();
@@ -14539,7 +14539,7 @@ int main(void) {
     test_duplicate_static_method_signature_is_rejected();
     test_finalizer_basic_ok();
     test_finalizer_rejects_multiple_per_type();
-    test_finalizer_rejected_on_fixed_type();
+    test_finalizer_rejected_on_abi_type();
     test_finalizer_rejects_return_with_value();
     test_constructor_rejects_return_with_value();
     test_constructor_with_explicit_void_return_ok();

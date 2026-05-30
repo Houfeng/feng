@@ -443,9 +443,9 @@ let q: CmpFunc* = c_load_cmp();
 
 ### 10.2 Phase 1：注解与前端入口
 
-- [x] T1.1 统一 ABI 注解入口，把当前实现中的 `@fixed` ABI 语义迁移到 `@abi`。
+- [x] T1.1 统一 ABI 注解入口，把旧 ABI 注解语义迁移到 `@abi`。
 - [x] T1.2 同步 lexer / parser / semantic 中与 ABI 注解相关的诊断文案。
-- [x] T1.3 明确 `@fixed` 当前不再承载 ABI 语义，避免与新实现混用。
+- [x] T1.3 明确旧 ABI 注解当前不再承载 ABI 语义，避免与新实现混用。
 - [x] T1.4 补基础注解识别测试，覆盖 `@abi` 与旧 ABI 入口迁移后的行为。
 
 ### 10.3 Phase 2：一元 `&` 语法与 AST

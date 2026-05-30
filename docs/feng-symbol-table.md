@@ -614,7 +614,7 @@ attr key 常量建议如下:
 
 - `public`
 - `mutable`
-- `fixed`
+- `abi`
 - `extern`
 - `bounded_decl`
 - `has_doc`
@@ -622,6 +622,7 @@ attr key 常量建议如下:
 说明:
 
 - `owner_id` 负责表达层级关系,例如字段/方法归属于某个 `type` 或某个 `fit`。
+- `abi` 表示该声明携带 `@abi` 兼容性元信息。
 - `bounded_decl` 仅用于 `type` 实例 `let` 字段,表示该字段已在成员声明初始化阶段完成最终显式绑定; 顶层 `let`、`static let` 以及其他非实例成员不使用该标志记录绑定状态。
 - `enum_item` 是 `enum` 的子符号而不是独立顶层声明: `owner_id` 指向所属 `enum`, `name_str` 表达 item 名称, `extra_ref` 固定表达其 0-based 声明顺序。
 - `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。

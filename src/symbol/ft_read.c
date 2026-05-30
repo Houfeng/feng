@@ -674,7 +674,7 @@ static bool parse_symbols(ReadContext *ctx,
                                                                           : FENG_VISIBILITY_PRIVATE;
         decl->mutability = (flags & FENG_SYMBOL_FT_SYM_FLAG_MUTABLE) != 0U ? FENG_MUTABILITY_VAR
                                                                             : FENG_MUTABILITY_LET;
-        decl->fixed_annotated = (flags & FENG_SYMBOL_FT_SYM_FLAG_FIXED) != 0U;
+        decl->abi_annotated = (flags & FENG_SYMBOL_FT_SYM_FLAG_ABI) != 0U;
         decl->is_extern = (flags & FENG_SYMBOL_FT_SYM_FLAG_EXTERN) != 0U;
         decl->bounded_decl = (flags & FENG_SYMBOL_FT_SYM_FLAG_BOUNDED_DECL) != 0U;
         decl->has_doc = (flags & FENG_SYMBOL_FT_SYM_FLAG_HAS_DOC) != 0U;

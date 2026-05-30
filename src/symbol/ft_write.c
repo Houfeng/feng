@@ -644,8 +644,8 @@ static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     if (decl->mutability == FENG_MUTABILITY_VAR) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_MUTABLE;
     }
-    if (decl->fixed_annotated) {
-        flags |= FENG_SYMBOL_FT_SYM_FLAG_FIXED;
+    if (decl->abi_annotated) {
+        flags |= FENG_SYMBOL_FT_SYM_FLAG_ABI;
     }
     if (decl->is_extern) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_EXTERN;

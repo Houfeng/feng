@@ -1,10 +1,10 @@
-# spec 运行时与 codegen 可执行方案（fat 值方向，不含 @fixed / C ABI）
+# spec 运行时与 codegen 可执行方案（fat 值方向，不含 C ABI）
 
 > **状态：已交付**（4b-α + 4b-β + 4b-γ 全部落地，18/18 smoke + 全套单测零回归）。
 > 本文档原为实现草案；当 4b 三个子步骤全部完成后由 `feng-spec-codegen-pending.md` 改名收口，作为 4b 阶段的设计与实施记录。
 > 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
 > 值模型基座见 [feng-value-model-delivered.md](./feng-value-model-delivered.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
-> 本文档只讨论非 `@fixed` 场景，不涉及 C ABI 与函数指针桥接（Phase 2 范畴）。
+> 本文档只讨论非 C ABI 场景，不涉及 C ABI 与函数指针桥接（Phase 2 范畴）。
 
 ## 1 目标与范围
 
@@ -24,7 +24,7 @@
 
 - **双托管 box 方案**：先前草案使用 `FengSpecRef__S { FengManagedHeader; subject; witness; }` 作为独立托管对象，已被废弃；本草案禁止再以 box 方式承载 object-form `spec`。
 - callable-form `spec`（含函数值 / 方法值 / lambda 适配 / 默认 stub）：留待 [feng-plan.md](./feng-plan.md) Phase 2，本文档只声明其值模型预期与现有结构的接入方式，不展开发码细节。
-- `@fixed spec` 与 C ABI、跨 TU 符号导出。
+- callable-form `@abi spec` 与 C ABI、跨 TU 符号导出。
 - 运行时反射、全局 registry、自动鸭子类型适配、object-form spec 的去虚化与内联缓存。
 
 ### 1.3 与 value-model 的关系
@@ -140,7 +140,7 @@ struct FengSpecWitness__demo__Named {
 
 - witness 表的成员顺序与 `spec` 源码声明顺序严格一致，便于 codegen / 调试器交叉对照。
 - 表本身是 `static const`，单 TU 内通过 (T,S) 缓存唯一化。
-- 跨 TU 共享留待 Phase 2 一并解决（`@fixed` 章节会决定符号导出策略）。
+- 跨 TU 共享留待 Phase 2 一并解决（C ABI 章节会决定符号导出策略）。
 
 ### 4.3 字段访问槽位 \[4b-β]
 
@@ -482,7 +482,7 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 ### 13.4 Phase 2
 
-callable-form spec、`@fixed` spec、跨 TU 符号导出、devirtualization。
+callable-form spec、callable-form `@abi spec`、跨 TU 符号导出、devirtualization。
 
 ## 14 验收标准
 

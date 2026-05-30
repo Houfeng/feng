@@ -65,7 +65,7 @@ struct FengSymbolDeclView {
     FengVisibility visibility;
     FengMutability mutability;
     bool is_extern;
-    bool fixed_annotated;
+    bool abi_annotated;
     bool bounded_decl;
     bool is_static;
     bool has_doc;

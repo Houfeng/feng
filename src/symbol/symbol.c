@@ -614,7 +614,7 @@ FengSymbolModuleGraph *feng_symbol_internal_module_clone(const FengSymbolModuleG
     clone->root_decl.visibility = module->root_decl.visibility;
     clone->root_decl.mutability = module->root_decl.mutability;
     clone->root_decl.is_extern = module->root_decl.is_extern;
-    clone->root_decl.fixed_annotated = module->root_decl.fixed_annotated;
+    clone->root_decl.abi_annotated = module->root_decl.abi_annotated;
     clone->root_decl.bounded_decl = module->root_decl.bounded_decl;
     clone->root_decl.has_doc = module->root_decl.has_doc;
     clone->root_decl.calling_convention = module->root_decl.calling_convention;

@@ -211,7 +211,7 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
 - 闭包真实捕获、Lambda 表达式发码（仅保留语法解析）。
 - 方法重载、`spec`/`fit` 调度。
 - `match` 表达式 / `match` 语句的发码。
-- `@fixed` 类型与 ABI 桥接。
+- `@abi` 类型与 ABI 桥接。
 - 循环检测器、终结器复活、跨对象 finalize 顺序保证。
 - `extern func` 中除 `@cdecl("c")` 调用 `printf`/`puts`/`exit` 外的其他形态。
 
