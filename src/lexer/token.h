@@ -119,11 +119,10 @@ typedef enum FengAnnotationKind {
     FENG_ANNOTATION_NONE = 0,
     FENG_ANNOTATION_CUSTOM = 1,
     FENG_ANNOTATION_ABI = 2,
-    /* Keep calling-convention values stable in .ft attrs; values 3 and 4 are reserved legacy holes. */
-    FENG_ANNOTATION_CDECL = 5,
-    FENG_ANNOTATION_STDCALL = 6,
-    FENG_ANNOTATION_FASTCALL = 7,
-    FENG_ANNOTATION_RUNTIME = 8
+    FENG_ANNOTATION_CDECL = 3,
+    FENG_ANNOTATION_STDCALL = 4,
+    FENG_ANNOTATION_FASTCALL = 5,
+    FENG_ANNOTATION_RUNTIME = 6
 } FengAnnotationKind;
 
 typedef struct FengToken {
