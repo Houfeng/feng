@@ -1301,7 +1301,7 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, values)") != NULL);
+                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, values)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1341,7 +1341,7 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, values)") != NULL);
+                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, values)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1381,7 +1381,7 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_expression_equal(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, &_rga") != NULL);
+                  "feng_expression_equal(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, &_rga") != NULL);
     ASSERT(count_substr(out.c_source, "int32_t _rga") == 2U);
     compile_generated_c_or_die(out.c_source);
 
@@ -1422,7 +1422,7 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "__test_value_identity(&(const FengGenericParamDescriptor){.size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL, .witness = NULL}, &_rga") != NULL);
+                  "__test_value_identity(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, &_rga") != NULL);
     ASSERT(strstr(out.c_source, ", &_rgr") != NULL);
     ASSERT(count_substr(out.c_source, "int32_t _rga") == 1U);
     ASSERT(count_substr(out.c_source, "int32_t _rgr") == 1U);
@@ -3177,21 +3177,21 @@ static void test_generic_runtime_type_kind_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_BOOL") != NULL);
+                  ".kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_bool_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_ENUM") != NULL);
+                  ".kind = FENG_VALUE_TRIVIAL, .descriptor = &FengEnumDesc__feng__codegen__gf9__Status") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_STRING") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_string_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_ARRAY") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_array_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_OBJECT") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &FengTypeDesc__feng__codegen__gf9__User") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_POINTER") != NULL);
+                  ".kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_pointer_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = FENG_RUNTIME_TYPE_SPEC") != NULL);
+                  ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .descriptor = &FengSpecAgg__feng__codegen__gf9__Named") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_CALLABLE") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &FengClosureDesc__feng__codegen__gf9__Mapper") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -3244,11 +3244,11 @@ static void test_generic_aggregate_facts_shape_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  ".size = sizeof(int32_t), .kind = FENG_VALUE_TRIVIAL, .type_kind = FENG_RUNTIME_TYPE_I32, .aggregate = NULL") != NULL);
+                  ".kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".size = sizeof(void *), .kind = FENG_VALUE_MANAGED_POINTER, .type_kind = FENG_RUNTIME_TYPE_STRING, .aggregate = NULL") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_string_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".size = sizeof(struct FengSpecValue__feng__codegen__gfaggshape__Named), .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = FENG_RUNTIME_TYPE_SPEC, .aggregate = &FengSpecAgg__feng__codegen__gfaggshape__Named") != NULL);
+                  ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .descriptor = &FengSpecAgg__feng__codegen__gfaggshape__Named") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);

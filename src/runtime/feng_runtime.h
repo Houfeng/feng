@@ -48,6 +48,7 @@ typedef void (*FengFinalizerFn)(void *self);
  * Built-in tags (string/array) leave this slot NULL and rely on the
  * tag-specific runtime hook (`feng_string_finalize_internal` etc.). */
 typedef void (*FengReleaseChildrenFn)(void *self);
+typedef bool (*FengValueEqualFn)(const void *left, const void *right);
 
 /* Static description of a single managed reference slot inside an object.
  * `offset` is the byte offset of the slot relative to the object base
@@ -90,12 +91,32 @@ typedef struct FengTypeDescriptor {
      * managed children through a tag-specific runtime hook instead. */
     size_t managed_field_count;
     const FengManagedFieldDescriptor *managed_fields;
+    FengValueEqualFn equal_fn;   /* NULL => managed pointer identity */
 } FengTypeDescriptor;
+
+typedef struct FengTrivialDescriptor {
+    const char *name;            /* fully-qualified or builtin, debug-only */
+    size_t size;                 /* sizeof(T) for the trivial value */
+    FengValueEqualFn equal_fn;   /* NULL => memcmp(left, right, size) == 0 */
+} FengTrivialDescriptor;
 
 /* Built-in descriptors used by string/array helpers. Generated code may also
  * reference them when emitting array-of-string or array-of-array slots. */
 extern const FengTypeDescriptor feng_string_descriptor;
 extern const FengTypeDescriptor feng_array_descriptor;
+
+extern const FengTrivialDescriptor feng_bool_descriptor;
+extern const FengTrivialDescriptor feng_i8_descriptor;
+extern const FengTrivialDescriptor feng_i16_descriptor;
+extern const FengTrivialDescriptor feng_i32_descriptor;
+extern const FengTrivialDescriptor feng_i64_descriptor;
+extern const FengTrivialDescriptor feng_u8_descriptor;
+extern const FengTrivialDescriptor feng_u16_descriptor;
+extern const FengTrivialDescriptor feng_u32_descriptor;
+extern const FengTrivialDescriptor feng_u64_descriptor;
+extern const FengTrivialDescriptor feng_f32_descriptor;
+extern const FengTrivialDescriptor feng_f64_descriptor;
+extern const FengTrivialDescriptor feng_pointer_descriptor;
 
 /* --- Managed object header --------------------------------------------- */
 
@@ -211,7 +232,7 @@ void *feng_take(void **slot);
  *                                 existing single-pointer primitives.
  *   FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS — by-value composite holding
  *                                 at least one managed slot; lifecycle is
- *                                 driven by FengAggregateValueDescriptor
+ *                                 driven by FengAggregateDescriptor
  *                                 below.
  *
  * `FengValueKind` is consumed by codegen for site dispatch and by the
@@ -223,52 +244,22 @@ typedef enum FengValueKind {
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS = 3
 } FengValueKind;
 
-/* Runtime-facing semantic type classification used by runtime-generic
- * helpers. This is intentionally separate from FengValueKind: value kind
- * answers lifecycle/copy strategy, while runtime type kind answers semantic
- * dispatch such as enum/string/array/object/pointer/spec/callable. */
-typedef enum FengRuntimeTypeKind {
-    FENG_RUNTIME_TYPE_BOOL = 1,
-    FENG_RUNTIME_TYPE_I8 = 2,
-    FENG_RUNTIME_TYPE_I16 = 3,
-    FENG_RUNTIME_TYPE_I32 = 4,
-    FENG_RUNTIME_TYPE_I64 = 5,
-    FENG_RUNTIME_TYPE_U8 = 6,
-    FENG_RUNTIME_TYPE_U16 = 7,
-    FENG_RUNTIME_TYPE_U32 = 8,
-    FENG_RUNTIME_TYPE_U64 = 9,
-    FENG_RUNTIME_TYPE_F32 = 10,
-    FENG_RUNTIME_TYPE_F64 = 11,
-    FENG_RUNTIME_TYPE_ENUM = 12,       /* user enum lowered as its integer representation */
-    FENG_RUNTIME_TYPE_STRING = 13,
-    FENG_RUNTIME_TYPE_ARRAY = 14,
-    FENG_RUNTIME_TYPE_OBJECT = 15,     /* concrete user type value, represented as a managed object reference */
-    FENG_RUNTIME_TYPE_POINTER = 16,    /* C interop pointer type written as T* */
-    FENG_RUNTIME_TYPE_SPEC = 17,       /* object-form spec fat value */
-    FENG_RUNTIME_TYPE_CALLABLE = 18    /* callable-form spec value, including lambdas and bound method values */
-} FengRuntimeTypeKind;
-
 /* ---- Generic parameter descriptor (G6 — layout monomorphization + method sharing) ----
  * Passed as one hidden argument per type parameter to generic shared bodies.
  * Carries the minimum runtime information needed by erased code to correctly
  * copy, retain, release, and later dispatch through witness slots for values
  * of the erased type parameter.
  *
- *   size      — sizeof(T); used for memcpy when kind == TRIVIAL or AGGREGATE.
- *   kind      — ARC classification; drives the switch in generic return/copy.
- *   type_kind — semantic runtime type classification for runtime-generic
- *               helper dispatch; ordinary generic shared bodies do not branch
- *               on it.
- *   aggregate — required when kind == AGGREGATE_WITH_MANAGED_SLOTS; NULL
- *               otherwise.
- *   witness   — optional static witness instance for the current generic
- *               constraint surface; NULL when the type parameter is
- *               unconstrained. */
+ *   kind       — ARC classification; drives the switch in generic return/copy.
+ *   descriptor — concrete descriptor for the current kind. Cast target is
+ *                FengTrivialDescriptor, FengTypeDescriptor, or
+ *                FengAggregateDescriptor according to `kind`.
+ *   witness    — optional static witness instance for the current generic
+ *                constraint surface; NULL when the type parameter is
+ *                unconstrained. */
 typedef struct FengGenericParamDescriptor {
-    size_t          size;
     FengValueKind   kind;
-    FengRuntimeTypeKind type_kind;
-    const struct FengAggregateValueDescriptor *aggregate;
+    const void     *descriptor;
     const void     *witness;
 } FengGenericParamDescriptor;
 
@@ -288,7 +279,7 @@ typedef struct FengManagedSlotDescriptor {
     FengManagedSlotKind kind;
     /* Required iff kind == FENG_SLOT_NESTED_AGGREGATE; otherwise must be
      * NULL. */
-    const struct FengAggregateValueDescriptor *nested;
+    const struct FengAggregateDescriptor *nested;
 } FengManagedSlotDescriptor;
 
 /* Default-initialisation strategy for an aggregate value. Some aggregates
@@ -316,7 +307,7 @@ typedef struct FengAggregateDefaultInitDescriptor {
     FengAggregateDefaultInitFn init_fn;
 } FengAggregateDefaultInitDescriptor;
 
-typedef struct FengAggregateValueDescriptor {
+typedef struct FengAggregateDescriptor {
     /* Fully-qualified, debug-only. May be NULL. */
     const char *name;
     /* Total bytes the aggregate occupies. */
@@ -328,7 +319,35 @@ typedef struct FengAggregateValueDescriptor {
      * (trivial bytes) are NOT enumerated. */
     size_t managed_slot_count;
     const FengManagedSlotDescriptor *managed_slots;
-} FengAggregateValueDescriptor;
+    FengValueEqualFn equal_fn;   /* NULL => no aggregate equality support */
+} FengAggregateDescriptor;
+
+static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(
+        const FengGenericParamDescriptor *param) {
+    return (const FengTrivialDescriptor *)param->descriptor;
+}
+
+static inline const FengTypeDescriptor *feng_generic_type_descriptor(
+        const FengGenericParamDescriptor *param) {
+    return (const FengTypeDescriptor *)param->descriptor;
+}
+
+static inline const FengAggregateDescriptor *feng_generic_aggregate_descriptor(
+        const FengGenericParamDescriptor *param) {
+    return (const FengAggregateDescriptor *)param->descriptor;
+}
+
+static inline size_t feng_generic_value_size(const FengGenericParamDescriptor *param) {
+    switch (param->kind) {
+        case FENG_VALUE_TRIVIAL:
+            return feng_generic_trivial_descriptor(param)->size;
+        case FENG_VALUE_MANAGED_POINTER:
+            return sizeof(void *);
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            return feng_generic_aggregate_descriptor(param)->size;
+    }
+    return 0U;
+}
 
 /* Five canonical operations over by-value aggregates. All are NULL-safe
  * with respect to managed slot pointers (NULL pointers are skipped); they
@@ -336,7 +355,7 @@ typedef struct FengAggregateValueDescriptor {
 
 /* Retain every managed pointer reachable from `value` according to `desc`. */
 void feng_aggregate_retain(void *value,
-                           const FengAggregateValueDescriptor *desc);
+                           const FengAggregateDescriptor *desc);
 
 /* Release every managed pointer reachable from `value` according to `desc`.
  * After return, the managed slot bytes are unchanged but the references
@@ -344,7 +363,7 @@ void feng_aggregate_retain(void *value,
  * pointers again (typically the value's storage is about to be overwritten
  * or its stack frame popped). */
 void feng_aggregate_release(void *value,
-                            const FengAggregateValueDescriptor *desc);
+                            const FengAggregateDescriptor *desc);
 
 /* Assignment: semantically equivalent to `*dst = *src` while keeping the
  * refcount invariants of every managed slot.
@@ -354,7 +373,7 @@ void feng_aggregate_release(void *value,
  * memcpys the whole aggregate; this gives correct results when source and
  * destination share managed children. */
 void feng_aggregate_assign(void *dst, const void *src,
-                           const FengAggregateValueDescriptor *desc);
+                           const FengAggregateDescriptor *desc);
 
 /* Move: transfers ownership of every managed slot from `src` to `dst`.
  * After return, every managed slot in `src` is set to NULL; non-managed
@@ -363,11 +382,11 @@ void feng_aggregate_assign(void *dst, const void *src,
  *
  * Self-move (`dst == src`) is a no-op. */
 void feng_aggregate_take(void *dst, void *src,
-                         const FengAggregateValueDescriptor *desc);
+                         const FengAggregateDescriptor *desc);
 
 /* Initialise `value_out` to the descriptor's default value. */
 void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateValueDescriptor *desc);
+                                 const FengAggregateDescriptor *desc);
 
 /* --- String ------------------------------------------------------------ */
 
@@ -416,7 +435,7 @@ typedef struct FengArray FengArray;
  * preconditions are enforced with feng_panic to surface descriptor /
  * codegen mistakes early. */
 FengArray *feng_array_new_kinded(FengValueKind element_kind,
-                                 const FengAggregateValueDescriptor *element_aggregate,
+                                 const FengAggregateDescriptor *element_aggregate,
                                  const FengTypeDescriptor *element_desc,
                                  size_t element_size,
                                  size_t length);
@@ -443,7 +462,7 @@ FengValueKind feng_array_element_kind(const FengArray *array);
 
 /* Returns the per-element aggregate descriptor for AGGREGATE-kind arrays,
  * or NULL otherwise. */
-const FengAggregateValueDescriptor *feng_array_element_aggregate(const FengArray *array);
+const FengAggregateDescriptor *feng_array_element_aggregate(const FengArray *array);
 
 /* Runtime-contract note: `feng_array_slice(array, start, length)` copies the
  * right-open range [start, start + length) into a fresh +1 FengArray. The returned

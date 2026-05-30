@@ -161,7 +161,6 @@ typedef struct CGAggregateFacts {
     CGValueKind value_kind;
     const char *descriptor_name;
     const char *value_struct_name;
-    const char *runtime_type_kind_name;
     size_t pointer_slot_count;
     CGAggregateDefaultInitKind default_init_kind;
     CGAggregateSlotRowEmitter emit_pointer_slot_rows;
@@ -170,6 +169,10 @@ typedef struct CGAggregateFacts {
 } CGAggregateFacts;
 
 static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out);
+static char *cg_enum_trivial_descriptor_name(const CG *cg,
+                                             const FengDecl *enum_decl);
+static char *cg_managed_pointer_descriptor_expr(const CGType *t);
+static bool cg_type_is_tuple_user(const CGType *t);
 
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
@@ -385,36 +388,56 @@ static const char *cgtype_to_c(CGTypeKind k) {
     }
 }
 
-static const char *cg_runtime_type_kind_name(const CGType *t) {
+static char *cg_descriptor_expr_from_symbol(const char *symbol_name) {
+    Buf b;
+
+    if (symbol_name == NULL) {
+        return NULL;
+    }
+    buf_init(&b);
+    buf_append_fmt(&b, "&%s", symbol_name);
+    return b.data;
+}
+
+static char *cg_trivial_descriptor_expr(const CG *cg, const CGType *t) {
+    const char *symbol_name = NULL;
+
     if (t == NULL) {
         return NULL;
     }
     if (t->enum_decl != NULL) {
-        return "FENG_RUNTIME_TYPE_ENUM";
-    }
-    CGAggregateFacts aggregate_facts;
-    if (cg_aggregate_facts(t, &aggregate_facts)) {
-        return aggregate_facts.runtime_type_kind_name;
+        char *enum_desc_name = cg_enum_trivial_descriptor_name(cg, t->enum_decl);
+        char *expr = cg_descriptor_expr_from_symbol(enum_desc_name);
+
+        free(enum_desc_name);
+        return expr;
     }
     switch (t->kind) {
-        case CG_TYPE_BOOL: return "FENG_RUNTIME_TYPE_BOOL";
-        case CG_TYPE_I8: return "FENG_RUNTIME_TYPE_I8";
-        case CG_TYPE_I16: return "FENG_RUNTIME_TYPE_I16";
-        case CG_TYPE_I32: return "FENG_RUNTIME_TYPE_I32";
-        case CG_TYPE_I64: return "FENG_RUNTIME_TYPE_I64";
-        case CG_TYPE_U8: return "FENG_RUNTIME_TYPE_U8";
-        case CG_TYPE_U16: return "FENG_RUNTIME_TYPE_U16";
-        case CG_TYPE_U32: return "FENG_RUNTIME_TYPE_U32";
-        case CG_TYPE_U64: return "FENG_RUNTIME_TYPE_U64";
-        case CG_TYPE_F32: return "FENG_RUNTIME_TYPE_F32";
-        case CG_TYPE_F64: return "FENG_RUNTIME_TYPE_F64";
-        case CG_TYPE_STRING: return "FENG_RUNTIME_TYPE_STRING";
-        case CG_TYPE_ARRAY: return "FENG_RUNTIME_TYPE_ARRAY";
-        case CG_TYPE_OBJECT: return "FENG_RUNTIME_TYPE_OBJECT";
-        case CG_TYPE_POINTER: return "FENG_RUNTIME_TYPE_POINTER";
-        case CG_TYPE_CALLABLE: return "FENG_RUNTIME_TYPE_CALLABLE";
-        default: return NULL;
+        case CG_TYPE_BOOL: symbol_name = "feng_bool_descriptor"; break;
+        case CG_TYPE_I8: symbol_name = "feng_i8_descriptor"; break;
+        case CG_TYPE_I16: symbol_name = "feng_i16_descriptor"; break;
+        case CG_TYPE_I32: symbol_name = "feng_i32_descriptor"; break;
+        case CG_TYPE_I64: symbol_name = "feng_i64_descriptor"; break;
+        case CG_TYPE_U8: symbol_name = "feng_u8_descriptor"; break;
+        case CG_TYPE_U16: symbol_name = "feng_u16_descriptor"; break;
+        case CG_TYPE_U32: symbol_name = "feng_u32_descriptor"; break;
+        case CG_TYPE_U64: symbol_name = "feng_u64_descriptor"; break;
+        case CG_TYPE_F32: symbol_name = "feng_f32_descriptor"; break;
+        case CG_TYPE_F64: symbol_name = "feng_f64_descriptor"; break;
+        case CG_TYPE_POINTER: symbol_name = "feng_pointer_descriptor"; break;
+        case CG_TYPE_OBJECT: {
+            CGAggregateFacts facts;
+
+            if (cg_aggregate_facts(t, &facts) &&
+                facts.value_kind == CG_VK_TRIVIAL) {
+                symbol_name = facts.descriptor_name;
+            }
+            break;
+        }
+        default:
+            break;
     }
+    return cg_descriptor_expr_from_symbol(symbol_name);
 }
 
 static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_type);
@@ -724,6 +747,36 @@ typedef struct BuiltinFit {
     char           *c_prefix;
     const FengProgram *owner_program;
 } BuiltinFit;
+
+static char *cg_managed_pointer_descriptor_expr(const CGType *t) {
+    const char *symbol_name = NULL;
+
+    if (t == NULL) {
+        return NULL;
+    }
+    switch (t->kind) {
+        case CG_TYPE_STRING:
+            symbol_name = "feng_string_descriptor";
+            break;
+        case CG_TYPE_ARRAY:
+            symbol_name = "feng_array_descriptor";
+            break;
+        case CG_TYPE_OBJECT:
+            if (t->user != NULL && !cg_type_is_tuple_user(t) &&
+                t->user->c_desc_name != NULL) {
+                symbol_name = t->user->c_desc_name;
+            }
+            break;
+        case CG_TYPE_CALLABLE:
+            if (t->user_spec != NULL && t->user_spec->c_closure_desc_name != NULL) {
+                symbol_name = t->user_spec->c_closure_desc_name;
+            }
+            break;
+        default:
+            break;
+    }
+    return cg_descriptor_expr_from_symbol(symbol_name);
+}
 
 
 static char *cg_user_type_c_name(const CGType *t) __attribute__((unused));
@@ -3228,6 +3281,38 @@ static char *cg_enum_typedef_name(const CG *cg, const FengDecl *enum_decl) {
     return b.data;
 }
 
+static char *cg_enum_trivial_descriptor_name(const CG *cg, const FengDecl *enum_decl) {
+    const FengProgram *owner_program;
+    char *module_mangle;
+    char *enum_name;
+    Buf b;
+
+    if (cg == NULL || enum_decl == NULL || enum_decl->kind != FENG_DECL_ENUM) {
+        return NULL;
+    }
+    owner_program = cg_find_decl_owner_program(cg, enum_decl);
+    if (owner_program == NULL) {
+        return NULL;
+    }
+    module_mangle = cg_module_mangle(owner_program->module_segments,
+                                     owner_program->module_segment_count);
+    enum_name = cg_sanitize(enum_decl->as.enum_decl.name.data,
+                            enum_decl->as.enum_decl.name.length);
+    if (module_mangle == NULL || enum_name == NULL) {
+        free(module_mangle);
+        free(enum_name);
+        return NULL;
+    }
+    buf_init(&b);
+    buf_append_cstr(&b, "FengEnumDesc__");
+    buf_append_cstr(&b, module_mangle);
+    buf_append_cstr(&b, "__");
+    buf_append_cstr(&b, enum_name);
+    free(module_mangle);
+    free(enum_name);
+    return b.data;
+}
+
 static char *cg_enum_item_c_name(const CG *cg,
                                  const FengDecl *enum_decl,
                                  FengSlice item_name) {
@@ -3437,6 +3522,9 @@ static bool cg_emit_imported_binding_expr(CG *cg,
 static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     const FengSemanticEnumInfo *enum_info;
     char *typedef_name;
+    char *descriptor_name;
+    char *module_dot_name;
+    const FengProgram *owner_program;
     size_t item_index;
 
     if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_ENUM) {
@@ -3455,11 +3543,31 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     }
 
     typedef_name = cg_enum_typedef_name(cg, decl);
-    if (typedef_name == NULL) {
+    descriptor_name = cg_enum_trivial_descriptor_name(cg, decl);
+    owner_program = cg_find_decl_owner_program(cg, decl);
+    module_dot_name = owner_program != NULL
+                          ? cg_module_dot(owner_program->module_segments,
+                                          owner_program->module_segment_count)
+                          : NULL;
+    if (typedef_name == NULL || descriptor_name == NULL || module_dot_name == NULL) {
+        free(typedef_name);
+        free(descriptor_name);
+        free(module_dot_name);
         return cg_fail(cg, decl->token, "codegen: out of memory emitting enum typedef");
     }
 
     buf_append_fmt(&cg->type_defs, "typedef int32_t %s;\n", typedef_name);
+    buf_append_fmt(&cg->type_defs,
+                   "static const FengTrivialDescriptor %s = {\n"
+                   "    .name = \"%s.%.*s\",\n"
+                   "    .size = sizeof(%s),\n"
+                   "    .equal_fn = NULL,\n"
+                   "};\n",
+                   descriptor_name,
+                   module_dot_name,
+                   (int)decl->as.enum_decl.name.length,
+                   decl->as.enum_decl.name.data,
+                   typedef_name);
     for (item_index = 0U; item_index < decl->as.enum_decl.item_count; ++item_index) {
         const FengEnumItem *item = &decl->as.enum_decl.items[item_index];
         const FengSemanticEnumItemInfo *item_info =
@@ -3468,6 +3576,8 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
 
         if (item_info == NULL) {
             free(typedef_name);
+            free(descriptor_name);
+            free(module_dot_name);
             return cg_fail(cg,
                            item->token,
                            "codegen: missing enum item info for '%.*s.%.*s'",
@@ -3480,6 +3590,8 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
         item_c_name = cg_enum_item_c_name(cg, decl, item->name);
         if (item_c_name == NULL) {
             free(typedef_name);
+            free(descriptor_name);
+            free(module_dot_name);
             return cg_fail(cg, item->token, "codegen: out of memory emitting enum item constant");
         }
 
@@ -3493,6 +3605,8 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     buf_append_cstr(&cg->type_defs, "\n");
 
     free(typedef_name);
+    free(descriptor_name);
+    free(module_dot_name);
     return true;
 }
 
@@ -8030,7 +8144,7 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         "struct %s { void *subject; const struct %s *witness; };\n",
         s->c_value_struct_name, s->c_witness_struct_name);
     buf_append_fmt(&cg->headers,
-        "static const FengAggregateValueDescriptor %s;\n",
+        "static const FengAggregateDescriptor %s;\n",
         s->c_aggregate_desc_name);
 }
 
@@ -8409,18 +8523,32 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_aggregate_init_fn_name);
 
     buf_append_fmt(td,
-        "static const FengAggregateValueDescriptor %s __attribute__((unused)) = {\n"
+        "static bool %s__equal(const void *_left, const void *_right) {\n"
+        "    const struct %s *_l = (const struct %s *)_left;\n"
+        "    const struct %s *_r = (const struct %s *)_right;\n"
+        "    return _l->subject == _r->subject;\n"
+        "}\n",
+        s->c_aggregate_desc_name,
+        s->c_value_struct_name,
+        s->c_value_struct_name,
+        s->c_value_struct_name,
+        s->c_value_struct_name);
+
+    buf_append_fmt(td,
+        "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
         "    .name = \"%s\",\n"
         "    .size = sizeof(struct %s),\n"
         "    .default_init = &%s,\n"
         "    .managed_slot_count = 1,\n"
         "    .managed_slots = %s,\n"
+        "    .equal_fn = %s__equal,\n"
         "};\n\n",
         s->c_aggregate_desc_name,
         s->feng_name,
         s->c_value_struct_name,
         s->c_aggregate_default_name,
-        s->c_aggregate_slots_name);
+        s->c_aggregate_slots_name,
+        s->c_aggregate_desc_name);
 }
 
 /* ----- module bindings ----- */
@@ -12066,7 +12194,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                 goto cleanup;
             }
             buf_append_fmt(cg->cur_body,
-                "    max_align_t %s[(%s->size + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
                 "    void *%s = (void *)%s;\n",
                 ret_storage_cname,
                 desc,
@@ -12770,7 +12898,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         "codegen: missing descriptor for generic spec method return");
                 }
                 buf_append_fmt(cg->cur_body,
-                    "    max_align_t %s[(%s->size + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                    "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
                     "    void *%s = (void *)%s;\n"
                     "    ((const struct %s *)%s->witness)->%s(%s%s, %s);\n",
                     ret_storage,
@@ -14020,8 +14148,8 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
             }
             buf_append_fmt(cg->cur_body,
                 "    FengArray *%s = feng_array_new_kinded("
-                "%s->kind, %s->aggregate, NULL, %s->size, (size_t)0);\n",
-                arr_tmp, desc, desc, desc);
+                "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), NULL, feng_generic_value_size(%s), (size_t)0);\n",
+                arr_tmp, desc, desc, desc, desc);
         } else {
             buf_append_fmt(cg->cur_body,
                 "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
@@ -14234,8 +14362,8 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new_kinded("
-            "%s->kind, %s->aggregate, NULL, %s->size, %s);\n",
-            arr_tmp, desc, desc, desc, size_tmp);
+            "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), NULL, feng_generic_value_size(%s), %s);\n",
+            arr_tmp, desc, desc, desc, desc, size_tmp);
     } else if (elem_managed && elem->kind == CG_TYPE_OBJECT && elem->user &&
                elem->user->c_default_zero_name) {
         /* Managed object element: allocate the array of pointers, then
@@ -14327,7 +14455,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
         buf_append_fmt(&b,
             "((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
             "(void *)&((void **)feng_array_data(%s))[%s] : "
-            "(void *)((char *)feng_array_data(%s) + (%s) * %s->size))",
+            "(void *)((char *)feng_array_data(%s) + (%s) * feng_generic_value_size(%s)))",
             desc,
             recv.c_expr, idx_tmp,
             recv.c_expr, idx_tmp, desc);
@@ -16761,11 +16889,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    void *%s = ((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
                 "(void *)&((void **)feng_array_data(%s))[%s] : "
-                "(void *)((char *)feng_array_data(%s) + (%s) * %s->size));\n"
+                "(void *)((char *)feng_array_data(%s) + (%s) * feng_generic_value_size(%s)));\n"
                 "    const void *%s = %s;\n"
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
-                "            memcpy(%s, %s, %s->size);\n"
+                "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
                 "            void *_new_value = *(void *const *)%s;\n"
@@ -16776,7 +16904,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "            break;\n"
                 "        }\n"
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "            feng_aggregate_assign(%s, %s, %s->aggregate);\n"
+                "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                 "            break;\n"
                 "    }\n",
                 slot_tmp, desc,
@@ -17040,7 +17168,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "    const void *%s = %s;\n"
                     "    switch (%s->kind) {\n"
                     "        case FENG_VALUE_TRIVIAL:\n"
-                    "            memcpy(%s, %s, %s->size);\n"
+                    "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                     "            break;\n"
                     "        case FENG_VALUE_MANAGED_POINTER: {\n"
                     "            void *_new_value = *(void *const *)%s;\n"
@@ -17051,7 +17179,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "            break;\n"
                     "        }\n"
                     "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                    "            feng_aggregate_assign(%s, %s, %s->aggregate);\n"
+                    "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                     "            break;\n"
                     "    }\n",
                     dst_tmp, recv.c_expr,
@@ -19131,8 +19259,8 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             }
             Buf adapter; buf_init(&adapter);
             buf_append_fmt(&adapter,
-                "&(const FengGenericParamDescriptor){.size = %s->size, .kind = %s->kind, .type_kind = %s->type_kind, .aggregate = %s->aggregate, .witness = %s->witness}",
-                desc, desc, desc, desc, desc);
+                "&(const FengGenericParamDescriptor){.kind = %s->kind, .descriptor = %s->descriptor, .witness = %s->witness}",
+                desc, desc, desc);
             *out = adapter.data;
             return *out != NULL;
         }
@@ -19142,14 +19270,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
 
     Buf b; buf_init(&b);
     const char *witness_expr = "NULL";
-    const char *runtime_type_kind = cg_runtime_type_kind_name(t);
     char *owned_witness_expr = NULL;
-
-    if (runtime_type_kind == NULL) {
-        buf_free(&b);
-        return cg_fail(cg, *tok,
-            "codegen: concrete generic type argument currently requires a runtime type classification");
-    }
 
     if (constraint_spec) {
         if (t && t->kind == CG_TYPE_OBJECT && t->user) {
@@ -19232,41 +19353,46 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
 
     switch (cgtype_value_kind(t)) {
         case CG_VK_TRIVIAL: {
-            char *cty = cg_ctype_dup(t);
-            if (!cty) {
+            char *descriptor_expr = cg_trivial_descriptor_expr(cg, t);
+            if (!descriptor_expr) {
                 free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
-                    "codegen: out of memory while emitting generic descriptor");
+                    "codegen: trivial generic type argument requires a trivial descriptor");
             }
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_TRIVIAL, .type_kind = %s, .aggregate = NULL, .witness = %s}",
-                cty, runtime_type_kind, witness_expr);
-            free(cty);
+                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = %s, .witness = %s}",
+                descriptor_expr, witness_expr);
+            free(descriptor_expr);
             break;
         }
-        case CG_VK_MANAGED_POINTER:
+        case CG_VK_MANAGED_POINTER: {
+            char *descriptor_expr = cg_managed_pointer_descriptor_expr(t);
+            if (!descriptor_expr) {
+                free(owned_witness_expr);
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "codegen: managed generic type argument requires a type descriptor");
+            }
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.size = sizeof(void *), .kind = FENG_VALUE_MANAGED_POINTER, .type_kind = %s, .aggregate = NULL, .witness = %s}",
-                runtime_type_kind, witness_expr);
+                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_MANAGED_POINTER, .descriptor = %s, .witness = %s}",
+                descriptor_expr, witness_expr);
+            free(descriptor_expr);
             break;
+        }
         case CG_VK_AGGREGATE: {
             CGAggregateFacts facts;
-            char *cty = cg_ctype_dup(t);
             if (!cg_aggregate_facts(t, &facts) ||
                 facts.value_kind != CG_VK_AGGREGATE ||
-                facts.descriptor_name == NULL ||
-                !cty) {
-                free(cty);
+                facts.descriptor_name == NULL) {
                 free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
                     "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
             }
             buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.size = sizeof(%s), .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .type_kind = %s, .aggregate = &%s, .witness = %s}",
-                cty, runtime_type_kind, facts.descriptor_name, witness_expr);
-            free(cty);
+                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .descriptor = &%s, .witness = %s}",
+                facts.descriptor_name, witness_expr);
             break;
         }
     }
@@ -19310,11 +19436,11 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
-                "            memcpy(_out, %s, %s->size); break;\n"
+                "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER:\n"
                 "            *(void **)_out = *(void *const *)%s; break;\n"
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "            memcpy(_out, %s, %s->size); break;\n"
+                "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "    }\n"
                 "    return;\n",
                 desc,
@@ -19325,15 +19451,15 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
-                "            memcpy(_out, %s, %s->size); break;\n"
+                "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
                 "            void *_mptr_ = *(void *const *)%s;\n"
                 "            feng_retain(_mptr_);\n"
                 "            *(void **)_out = _mptr_; break;\n"
                 "        }\n"
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "            feng_aggregate_retain((void *)%s, %s->aggregate);\n"
-                "            memcpy(_out, %s, %s->size); break;\n"
+                "            feng_aggregate_retain((void *)%s, feng_generic_aggregate_descriptor(%s));\n"
+                "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "    }\n"
                 "    return;\n",
                 desc,
@@ -24226,7 +24352,6 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
             facts.value_kind = CG_VK_AGGREGATE;
             facts.descriptor_name = t->user_spec->c_aggregate_desc_name;
             facts.value_struct_name = t->user_spec->c_value_struct_name;
-            facts.runtime_type_kind_name = "FENG_RUNTIME_TYPE_SPEC";
             facts.pointer_slot_count = 1U;
             facts.default_init_kind = CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR;
             if (facts.value_struct_name != NULL) {
@@ -24247,7 +24372,6 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
                                        : CG_VK_TRIVIAL;
                 facts.descriptor_name = t->user->c_aggregate_desc_name;
                 facts.value_struct_name = t->user->c_struct_name;
-                facts.runtime_type_kind_name = "FENG_RUNTIME_TYPE_OBJECT";
                 facts.pointer_slot_count = tuple_slot_count;
                 facts.default_init_kind = tuple_slot_count > 0U
                                               ? CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
@@ -24268,7 +24392,7 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
     return true;
 }
 
-/* Returns the static FengAggregateValueDescriptor symbol for an aggregate
+/* Returns the static FengAggregateDescriptor symbol for an aggregate
  * value type, or NULL if the type has no aggregate facts. */
 static const char *cg_aggregate_desc_name(const CGType *t) {
     CGAggregateFacts facts;
@@ -24678,9 +24802,112 @@ static size_t cg_tuple_aggregate_top_level_slot_count(const UserType *t) {
     return count;
 }
 
+/* Emit field-wise tuple equality used by both trivial and aggregate tuple
+ * descriptors. Field descriptors preserve string, float, and nested aggregate
+ * semantics without changing non-generic call sites. */
+static bool cg_emit_tuple_equal_function(CG *cg,
+                                         UserType *t,
+                                         const char *equal_fn_name) {
+    Buf *td = &cg->type_defs;
+
+    if (equal_fn_name == NULL) {
+        return cg_fail(cg, t->decl->token, "codegen: missing tuple equality function name");
+    }
+    buf_append_fmt(td,
+        "static bool %s(const void *left, const void *right) {\n"
+        "    const struct %s *_left = (const struct %s *)left;\n"
+        "    const struct %s *_right = (const struct %s *)right;\n"
+        "    if (_left == _right) return true;\n"
+        "    if (_left == NULL || _right == NULL) return false;\n",
+        equal_fn_name,
+        t->c_struct_name,
+        t->c_struct_name,
+        t->c_struct_name,
+        t->c_struct_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        const UserField *field = &t->fields[i];
+
+        switch (cgtype_value_kind(field->type)) {
+            case CG_VK_TRIVIAL: {
+                char *descriptor_expr = cg_trivial_descriptor_expr(cg, field->type);
+
+                if (descriptor_expr == NULL) {
+                    return cg_fail(cg,
+                                   t->decl->token,
+                                   "codegen: tuple field '%s' has no trivial equality descriptor",
+                                   field->feng_name);
+                }
+                buf_append_fmt(td,
+                    "    if ((%s)->equal_fn != NULL) {\n"
+                    "        if (!(%s)->equal_fn(&_left->%s, &_right->%s)) return false;\n"
+                    "    } else if (memcmp(&_left->%s, &_right->%s, (%s)->size) != 0) {\n"
+                    "        return false;\n"
+                    "    }\n",
+                    descriptor_expr,
+                    descriptor_expr,
+                    field->c_name,
+                    field->c_name,
+                    field->c_name,
+                    field->c_name,
+                    descriptor_expr);
+                free(descriptor_expr);
+                break;
+            }
+            case CG_VK_MANAGED_POINTER: {
+                char *descriptor_expr = cg_managed_pointer_descriptor_expr(field->type);
+
+                if (descriptor_expr == NULL) {
+                    return cg_fail(cg,
+                                   t->decl->token,
+                                   "codegen: tuple field '%s' has no managed equality descriptor",
+                                   field->feng_name);
+                }
+                buf_append_fmt(td,
+                    "    if ((%s)->equal_fn != NULL) {\n"
+                    "        if (!(%s)->equal_fn(_left->%s, _right->%s)) return false;\n"
+                    "    } else if (_left->%s != _right->%s) {\n"
+                    "        return false;\n"
+                    "    }\n",
+                    descriptor_expr,
+                    descriptor_expr,
+                    field->c_name,
+                    field->c_name,
+                    field->c_name,
+                    field->c_name);
+                free(descriptor_expr);
+                break;
+            }
+            case CG_VK_AGGREGATE: {
+                const char *descriptor_name = cg_aggregate_desc_name(field->type);
+
+                if (descriptor_name == NULL) {
+                    return cg_fail(cg,
+                                   t->decl->token,
+                                   "codegen: tuple field '%s' has no aggregate equality descriptor",
+                                   field->feng_name);
+                }
+                buf_append_fmt(td,
+                    "    if ((&%s)->equal_fn == NULL) {\n"
+                    "        feng_panic(\"tuple equality: aggregate field '%s' has no equality descriptor\");\n"
+                    "    }\n"
+                    "    if (!(&%s)->equal_fn(&_left->%s, &_right->%s)) return false;\n",
+                    descriptor_name,
+                    field->feng_name,
+                    descriptor_name,
+                    field->c_name,
+                    field->c_name);
+                break;
+            }
+        }
+    }
+    buf_append_cstr(td, "    return true;\n}\n\n");
+    return true;
+}
+
 static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
     size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
+    Buf equal_fn_name;
 
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
     if (t->field_count == 0U) {
@@ -24693,6 +24920,17 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         }
     }
     buf_append_cstr(td, "};\n\n");
+
+    buf_init(&equal_fn_name);
+    buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
+    if (equal_fn_name.data == NULL) {
+        (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+        return;
+    }
+    if (!cg_emit_tuple_equal_function(cg, t, equal_fn_name.data)) {
+        buf_free(&equal_fn_name);
+        return;
+    }
 
     if (slot_count > 0U) {
         buf_append_fmt(td,
@@ -24716,6 +24954,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                                       t->decl->token,
                                       "codegen: tuple field '%s' has no aggregate descriptor",
                                       field->feng_name);
+                        buf_free(&equal_fn_name);
                         return;
                     }
                     buf_append_fmt(td,
@@ -24730,14 +24969,16 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "};\n\n");
     }
 
-    Buf init_fn_name;
-    buf_init(&init_fn_name);
     if (slot_count > 0U) {
+        Buf init_fn_name;
+
+        buf_init(&init_fn_name);
         buf_append_fmt(&init_fn_name,
                        "%s__init",
                        t->c_aggregate_default_name);
         if (init_fn_name.data == NULL) {
             (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+            buf_free(&equal_fn_name);
             return;
         }
         buf_append_fmt(td,
@@ -24764,6 +25005,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                                                blame,
                                                &default_expr)) {
                         buf_free(&init_fn_name);
+                        buf_free(&equal_fn_name);
                         return;
                     }
                     buf_append_fmt(td,
@@ -24787,6 +25029,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                         buf_free(&lvalue);
                         buf_free(&init_call);
                         buf_free(&init_fn_name);
+                        buf_free(&equal_fn_name);
                         (void)cg_fail(cg,
                                       *blame,
                                       "codegen: missing tuple field aggregate default initializer");
@@ -24807,33 +25050,37 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
             "};\n",
             t->c_aggregate_default_name,
             init_fn_name.data);
+        buf_free(&init_fn_name);
+
+        buf_append_fmt(td,
+            "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
+            "    .name = \"%s.%s\",\n"
+            "    .size = sizeof(struct %s),\n"
+            "    .default_init = &%s,\n"
+            "    .managed_slot_count = %zu,\n",
+            t->c_aggregate_desc_name,
+            cg->module_dot_name,
+            t->feng_name,
+            t->c_struct_name,
+            t->c_aggregate_default_name,
+            slot_count);
+        buf_append_fmt(td, "    .managed_slots = %s,\n", t->c_aggregate_slots_name);
+        buf_append_fmt(td, "    .equal_fn = &%s,\n", equal_fn_name.data);
+        buf_append_cstr(td, "};\n\n");
     } else {
         buf_append_fmt(td,
-            "static const FengAggregateDefaultInitDescriptor %s = {\n"
-            "    .kind = FENG_DEFAULT_ZERO_BYTES,\n"
-            "    .init_fn = NULL,\n"
-            "};\n",
-            t->c_aggregate_default_name);
+            "static const FengTrivialDescriptor %s __attribute__((unused)) = {\n"
+            "    .name = \"%s.%s\",\n"
+            "    .size = sizeof(struct %s),\n"
+            "    .equal_fn = &%s,\n"
+            "};\n\n",
+            t->c_aggregate_desc_name,
+            cg->module_dot_name,
+            t->feng_name,
+            t->c_struct_name,
+            equal_fn_name.data);
     }
-    buf_free(&init_fn_name);
-    buf_append_fmt(td,
-        "static const FengAggregateValueDescriptor %s __attribute__((unused)) = {\n"
-        "    .name = \"%s.%s\",\n"
-        "    .size = sizeof(struct %s),\n"
-        "    .default_init = &%s,\n"
-        "    .managed_slot_count = %zu,\n",
-        t->c_aggregate_desc_name,
-        cg->module_dot_name,
-        t->feng_name,
-        t->c_struct_name,
-        t->c_aggregate_default_name,
-        slot_count);
-    if (slot_count > 0U) {
-        buf_append_fmt(td, "    .managed_slots = %s,\n", t->c_aggregate_slots_name);
-    } else {
-        buf_append_cstr(td, "    .managed_slots = NULL,\n");
-    }
-    buf_append_cstr(td, "};\n\n");
+    buf_free(&equal_fn_name);
 
     CGType tuple_value_type;
     memset(&tuple_value_type, 0, sizeof tuple_value_type);
@@ -24905,8 +25152,13 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
     buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
     if (cg_user_type_is_tuple(t)) {
+        const char *descriptor_type = cg_tuple_aggregate_top_level_slot_count(t) > 0U
+                                          ? "FengAggregateDescriptor"
+                                          : "FengTrivialDescriptor";
+
         buf_append_fmt(&cg->headers,
-                       "static const FengAggregateValueDescriptor %s;\n",
+                       "static const %s %s;\n",
+                       descriptor_type,
                        t->c_aggregate_desc_name);
         buf_append_fmt(&cg->headers,
                        "struct %s;\nextern const FengTypeDescriptor %s;\n",

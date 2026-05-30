@@ -3,11 +3,15 @@ module feng.smoke;
 @cdecl("libc")
 extern func puts(msg: string*): int;
 
+@runtime
+extern func feng_expression_equal<T>(left: T, right: T): bool;
+
 spec Summable {
     func sum(): i32;
 }
 
 type Point(i32, i32);
+type FloatPair(f64, i32);
 
 type Unit();
 
@@ -28,6 +32,10 @@ func makeUnit(): Unit {
 func unitScore(value: Unit): i32 {
     let () = value;
     return 1;
+}
+
+func same<T>(left: T, right: T): bool {
+    return feng_expression_equal(left, right);
 }
 
 spec Show {
@@ -66,4 +74,25 @@ func main(args: string[]) {
     announce(label);
     let shown: Show = label;
     puts(&shown.show());
+
+    let same_label: Label = ("left", "right");
+    let other_label: Label = ("left", "other");
+    if same(label, same_label) {
+        puts(&"tuple-string-eq-ok");
+    } else {
+        puts(&"tuple-string-eq-fail");
+    }
+    if same(label, other_label) {
+        puts(&"tuple-string-neq-fail");
+    } else {
+        puts(&"tuple-string-neq-ok");
+    }
+
+    let positive_zero: FloatPair = (0.0, 1);
+    let negative_zero: FloatPair = (-0.0, 1);
+    if same(positive_zero, negative_zero) {
+        puts(&"tuple-f64-zero-eq-ok");
+    } else {
+        puts(&"tuple-f64-zero-eq-fail");
+    }
 }

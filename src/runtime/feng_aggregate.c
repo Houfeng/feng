@@ -5,7 +5,7 @@
  * descends FengManagedSlotDescriptor tables, dispatching only on
  * FengManagedSlotKind. Adding a new by-value aggregate type therefore
  * requires zero changes to this file: codegen emits a new
- * FengAggregateValueDescriptor and the walker handles it transparently
+ * FengAggregateDescriptor and the walker handles it transparently
  * (open/closed principle, see §5.4 / §12 of the design doc).
  *
  * The walker calls back into the existing single-pointer primitives
@@ -24,7 +24,7 @@ typedef void (*FengManagedSlotVisitor)(void **pslot, void *ctx);
 
 static void feng_visit_aggregate_managed_slots(
         void *value,
-        const FengAggregateValueDescriptor *desc,
+        const FengAggregateDescriptor *desc,
         FengManagedSlotVisitor visitor,
         void *ctx) {
     const FengManagedSlotDescriptor *slots = desc->managed_slots;
@@ -55,7 +55,7 @@ static void feng_visit_aggregate_managed_slots(
     }
 }
 
-static void feng_aggregate_assert_desc(const FengAggregateValueDescriptor *desc,
+static void feng_aggregate_assert_desc(const FengAggregateDescriptor *desc,
                                         const char *fn) {
     if (desc == NULL) {
         feng_panic("%s: NULL descriptor", fn);
@@ -90,21 +90,21 @@ static void visit_null_out(void **pslot, void *ctx) {
 /* --- public API -------------------------------------------------------- */
 
 void feng_aggregate_retain(void *value,
-                           const FengAggregateValueDescriptor *desc) {
+                           const FengAggregateDescriptor *desc) {
     feng_aggregate_assert_desc(desc, "feng_aggregate_retain");
     feng_aggregate_assert_value(value, "feng_aggregate_retain");
     feng_visit_aggregate_managed_slots(value, desc, visit_retain, NULL);
 }
 
 void feng_aggregate_release(void *value,
-                            const FengAggregateValueDescriptor *desc) {
+                            const FengAggregateDescriptor *desc) {
     feng_aggregate_assert_desc(desc, "feng_aggregate_release");
     feng_aggregate_assert_value(value, "feng_aggregate_release");
     feng_visit_aggregate_managed_slots(value, desc, visit_release, NULL);
 }
 
 void feng_aggregate_assign(void *dst, const void *src,
-                           const FengAggregateValueDescriptor *desc) {
+                           const FengAggregateDescriptor *desc) {
     feng_aggregate_assert_desc(desc, "feng_aggregate_assign");
     feng_aggregate_assert_value(dst, "feng_aggregate_assign");
     feng_aggregate_assert_value(src, "feng_aggregate_assign");
@@ -127,7 +127,7 @@ void feng_aggregate_assign(void *dst, const void *src,
 }
 
 void feng_aggregate_take(void *dst, void *src,
-                         const FengAggregateValueDescriptor *desc) {
+                         const FengAggregateDescriptor *desc) {
     feng_aggregate_assert_desc(desc, "feng_aggregate_take");
     feng_aggregate_assert_value(dst, "feng_aggregate_take");
     feng_aggregate_assert_value(src, "feng_aggregate_take");
@@ -146,7 +146,7 @@ void feng_aggregate_take(void *dst, void *src,
 }
 
 void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateValueDescriptor *desc) {
+                                 const FengAggregateDescriptor *desc) {
     feng_aggregate_assert_desc(desc, "feng_aggregate_default_init");
     feng_aggregate_assert_value(value_out, "feng_aggregate_default_init");
     if (desc->default_init == NULL) {

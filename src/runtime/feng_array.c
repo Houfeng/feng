@@ -133,7 +133,7 @@ void feng_array_finalize_internal(struct FengArray *a) {
 }
 
 FengArray *feng_array_new_kinded(FengValueKind element_kind,
-                                 const FengAggregateValueDescriptor *element_aggregate,
+                                 const FengAggregateDescriptor *element_aggregate,
                                  const FengTypeDescriptor *element_desc,
                                  size_t element_size,
                                  size_t length) {
@@ -263,7 +263,7 @@ FengValueKind feng_array_element_kind(const FengArray *array) {
     return ((const struct FengArray *)array)->element_kind;
 }
 
-const FengAggregateValueDescriptor *feng_array_element_aggregate(const FengArray *array) {
+const FengAggregateDescriptor *feng_array_element_aggregate(const FengArray *array) {
     if (array == NULL) {
         feng_panic("feng_array_element_aggregate: array must not be NULL");
     }

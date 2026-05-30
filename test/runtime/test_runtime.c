@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <math.h>
 
 #define ASSERT(expr)                                                                  \
     do {                                                                              \
@@ -210,24 +211,23 @@ static const FengTypeDescriptor i32_element_descriptor = {
     .finalizer = NULL,
 };
 static const FengGenericParamDescriptor i32_runtime_generic_descriptor = {
-    .size = sizeof(int32_t),
     .kind = FENG_VALUE_TRIVIAL,
-    .type_kind = FENG_RUNTIME_TYPE_I32,
-    .aggregate = NULL,
+    .descriptor = &feng_i32_descriptor,
+    .witness = NULL,
+};
+static const FengGenericParamDescriptor f64_runtime_generic_descriptor = {
+    .kind = FENG_VALUE_TRIVIAL,
+    .descriptor = &feng_f64_descriptor,
     .witness = NULL,
 };
 static const FengGenericParamDescriptor object_runtime_generic_descriptor = {
-    .size = sizeof(void *),
     .kind = FENG_VALUE_MANAGED_POINTER,
-    .type_kind = FENG_RUNTIME_TYPE_OBJECT,
-    .aggregate = NULL,
+    .descriptor = &test_object_descriptor,
     .witness = NULL,
 };
 static const FengGenericParamDescriptor string_runtime_generic_descriptor = {
-    .size = sizeof(void *),
     .kind = FENG_VALUE_MANAGED_POINTER,
-    .type_kind = FENG_RUNTIME_TYPE_STRING,
-    .aggregate = NULL,
+    .descriptor = &feng_string_descriptor,
     .witness = NULL,
 };
 
@@ -393,6 +393,9 @@ static void test_expression_equal_contract_uses_descriptor(void) {
     int32_t left_i32 = 10;
     int32_t right_i32 = 10;
     int32_t other_i32 = 30;
+    double positive_zero = 0.0;
+    double negative_zero = -0.0;
+    double nan_value = NAN;
     FengString *left_string = feng_string_literal("hello", 5U);
     FengString *right_string = feng_string_concat(feng_string_literal("he", 2U),
                                                   feng_string_literal("llo", 3U));
@@ -403,6 +406,8 @@ static void test_expression_equal_contract_uses_descriptor(void) {
 
     ASSERT(feng_expression_equal(&i32_runtime_generic_descriptor, &left_i32, &right_i32));
     ASSERT(!feng_expression_equal(&i32_runtime_generic_descriptor, &left_i32, &other_i32));
+    ASSERT(feng_expression_equal(&f64_runtime_generic_descriptor, &positive_zero, &negative_zero));
+    ASSERT(!feng_expression_equal(&f64_runtime_generic_descriptor, &nan_value, &nan_value));
 
     ASSERT(feng_expression_equal(&string_runtime_generic_descriptor,
                                  &left_string,
@@ -1116,7 +1121,7 @@ static void test_cycle_collector_multithreaded_stress(void) {
     feng_cycle_runtime_shutdown();
 }
 
-/* --- By-value aggregate (FengAggregateValueDescriptor) ----------------
+/* --- By-value aggregate (FengAggregateDescriptor) ----------------
  *
  * These tests exercise the five public APIs declared in feng_runtime.h
  * (retain / release / assign / take / default_init) against the existing
@@ -1153,7 +1158,7 @@ static const FengManagedSlotDescriptor fat_pair_slots[] = {
     { offsetof(FatPair, subject), FENG_SLOT_POINTER, NULL },
 };
 
-static const FengAggregateValueDescriptor fat_pair_desc = {
+static const FengAggregateDescriptor fat_pair_desc = {
     .name = "test.FatPair",
     .size = sizeof(FatPair),
     .default_init = &fat_pair_default,
@@ -1162,10 +1167,8 @@ static const FengAggregateValueDescriptor fat_pair_desc = {
 };
 
 static const FengGenericParamDescriptor fat_pair_runtime_generic_descriptor = {
-    .size = sizeof(FatPair),
     .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
-    .type_kind = FENG_RUNTIME_TYPE_SPEC,
-    .aggregate = &fat_pair_desc,
+    .descriptor = &fat_pair_desc,
     .witness = NULL,
 };
 
@@ -1238,7 +1241,7 @@ static const FengAggregateDefaultInitDescriptor outer_default_zero = {
     .init_fn = NULL,
 };
 
-static const FengAggregateValueDescriptor outer_desc = {
+static const FengAggregateDescriptor outer_desc = {
     .name = "test.OuterAgg",
     .size = sizeof(OuterAgg),
     .default_init = &outer_default_zero,

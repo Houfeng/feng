@@ -8,10 +8,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Descriptor equality compares immutable string payload bytes, not pointer
+ * identity, so generic equality preserves the language-level string contract. */
+static bool feng_string_descriptor_equal(const void *left, const void *right) {
+    const FengString *left_string = (const FengString *)left;
+    const FengString *right_string = (const FengString *)right;
+    size_t left_length = feng_string_length(left_string);
+    size_t right_length = feng_string_length(right_string);
+
+    return left_length == right_length &&
+           (left_length == 0U ||
+            memcmp(feng_string_data(left_string),
+                   feng_string_data(right_string),
+                   left_length) == 0);
+}
+
 const FengTypeDescriptor feng_string_descriptor = {
     .name = "feng.builtin.string",
     .size = 0U, /* variable length; allocator computes per instance */
     .finalizer = NULL,
+    .equal_fn = feng_string_descriptor_equal,
 };
 
 void feng_string_finalize_internal(struct FengString *s) {

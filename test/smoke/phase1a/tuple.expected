@@ -1,3 +1,6 @@
 tuple-int-ok
 left:right
 left:right
+tuple-string-eq-ok
+tuple-string-neq-ok
+tuple-f64-zero-eq-ok

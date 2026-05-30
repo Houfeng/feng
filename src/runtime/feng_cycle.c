@@ -210,7 +210,7 @@ void feng_cycle_remove_candidate(FengManagedHeader *header) {
  * automatically. */
 static void cyc_aggregate_for_each_pointer_slot(
         unsigned char *value,
-        const FengAggregateValueDescriptor *desc,
+        const FengAggregateDescriptor *desc,
         void (*visit)(FengManagedHeader **slot,
                       FengManagedHeader *child,
                       void *ctx),

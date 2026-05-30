@@ -27,7 +27,7 @@ struct FengArray {
      *              `element_aggregate->size`; `element_aggregate` MUST be
      *              non-NULL when element_kind == AGGREGATE. */
     FengValueKind element_kind;
-    const FengAggregateValueDescriptor *element_aggregate;
+    const FengAggregateDescriptor *element_aggregate;
     /* No payload pointer/placeholder member exists in this struct.
      * Element bytes live in the same allocation, tail-inline after an
      * alignment-adjusted offset computed by feng_array_payload_inline(). */

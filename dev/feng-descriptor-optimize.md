@@ -200,24 +200,24 @@ static inline size_t feng_generic_value_size(const FengGenericParamDescriptor *p
 
 ### 阶段一：描述符重构
 
-- [ ] **runtime** 新增 `FengTrivialDescriptor` 结构定义（`feng_runtime.h`）
-- [ ] **runtime** 为内建标量类型预定义 `FengTrivialDescriptor` 实例（bool、i8-i64、u8-u64、f32/f64）
-- [ ] **runtime** `FengAggregateValueDescriptor` 重命名为 `FengAggregateDescriptor`，更新所有引用
-- [ ] **runtime** `FengTypeDescriptor` 追加 `equal_fn` 字段
-- [ ] **runtime** `FengGenericParamDescriptor` 精简为 3 字段（`kind` / `descriptor` / `witness`），删除 `size`、`type_kind`、`aggregate`
-- [ ] **runtime** 更新 `runtime_contract_copy_value_to_out`：将 `type->size` 改为通过 descriptor 读取
-- [ ] **codegen** 标量 / enum / C pointer / 全 trivial tuple：生成或引用对应 `FengTrivialDescriptor`
-- [ ] **codegen** 含 managed slot 的 tuple / spec fat value：生成 `FengAggregateDescriptor`
-- [ ] **codegen** `FengGenericParamDescriptor` 初始化：去除 `size`、`type_kind`、`aggregate`，改为 `descriptor`
-- [ ] **runtime** 确认 `FengRuntimeTypeKind` 在所有 runtime / codegen 文件中无残留读取点，随后删除
-- [ ] 全量回归测试通过
+- [x] **runtime** 新增 `FengTrivialDescriptor` 结构定义（`feng_runtime.h`）
+- [x] **runtime** 为内建标量类型预定义 `FengTrivialDescriptor` 实例（bool、i8-i64、u8-u64、f32/f64）
+- [x] **runtime** `FengAggregateValueDescriptor` 重命名为 `FengAggregateDescriptor`，更新所有引用
+- [x] **runtime** `FengTypeDescriptor` 追加 `equal_fn` 字段
+- [x] **runtime** `FengGenericParamDescriptor` 精简为 3 字段（`kind` / `descriptor` / `witness`），删除 `size`、`type_kind`、`aggregate`
+- [x] **runtime** 更新 `runtime_contract_copy_value_to_out`：将 `type->size` 改为通过 descriptor 读取
+- [x] **codegen** 标量 / enum / C pointer / 全 trivial tuple：生成或引用对应 `FengTrivialDescriptor`
+- [x] **codegen** 含 managed slot 的 tuple / spec fat value：生成 `FengAggregateDescriptor`
+- [x] **codegen** `FengGenericParamDescriptor` 初始化：去除 `size`、`type_kind`、`aggregate`，改为 `descriptor`
+- [x] **runtime** 确认 `FengRuntimeTypeKind` 在所有 runtime / codegen 文件中无残留读取点，随后删除
+- [x] 全量回归测试通过
 
 ### 阶段二：Tuple 相等性
 
-- [ ] **runtime** `FengAggregateDescriptor` 追加 `equal_fn` 字段
-- [ ] **codegen** 为含 managed slot 的 tuple 生成 `equal_fn` 函数实现
-- [ ] **runtime** `feng_expression_equal` 的 `AGGREGATE` 分支调用 `descriptor->equal_fn`
-- [ ] 全量回归测试通过
+- [x] **runtime** `FengAggregateDescriptor` 追加 `equal_fn` 字段
+- [x] **codegen** 为含 managed slot 的 tuple 生成 `equal_fn` 函数实现
+- [x] **runtime** `feng_expression_equal` 的 `AGGREGATE` 分支调用 `descriptor->equal_fn`
+- [x] 全量回归测试通过
 
 ## 实施范围（概述）
 

@@ -24,7 +24,7 @@ static void runtime_contract_copy_value_to_out(const char *name,
 
     switch (type->kind) {
         case FENG_VALUE_TRIVIAL:
-            memcpy(out, value, type->size);
+            memcpy(out, value, feng_generic_value_size(type));
             return;
         case FENG_VALUE_MANAGED_POINTER: {
             void *managed = *(void *const *)value;
@@ -34,11 +34,12 @@ static void runtime_contract_copy_value_to_out(const char *name,
             return;
         }
         case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
-            if (type->aggregate == NULL) {
+            if (type->descriptor == NULL) {
                 feng_panic("%s: aggregate descriptor must not be NULL", name);
             }
-            feng_aggregate_retain((void *)value, type->aggregate);
-            memcpy(out, value, type->size);
+            feng_aggregate_retain((void *)value,
+                                  feng_generic_aggregate_descriptor(type));
+            memcpy(out, value, feng_generic_value_size(type));
             return;
     }
 

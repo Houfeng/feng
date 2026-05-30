@@ -1,26 +1,9 @@
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
-#include <inttypes.h>
-#include <stdint.h>
 #include <string.h>
 
-/* Compare Feng strings by UTF-8 byte contents, following runtime NULL-as-empty convention. */
-static bool expression_string_equal(const FengString *left,
-                                    const FengString *right) {
-    size_t left_length = feng_string_length(left);
-    size_t right_length = feng_string_length(right);
-
-    return left_length == right_length &&
-           (left_length == 0U ||
-            memcmp(feng_string_data(left), feng_string_data(right), left_length) == 0);
-}
-
-typedef struct FengExpressionSpecValue {
-    void *subject;
-    const void *witness;
-} FengExpressionSpecValue;
-
+/* Validate the erased value carriers before dispatching by value kind. */
 static void expression_require_value_carriers(const FengGenericParamDescriptor *type,
                                               const void *left,
                                               const void *right) {
@@ -32,51 +15,49 @@ static void expression_require_value_carriers(const FengGenericParamDescriptor *
     }
 }
 
-static bool expression_scalar_equal(FengRuntimeTypeKind type_kind,
-                                    const void *left,
-                                    const void *right) {
-    switch (type_kind) {
-        case FENG_RUNTIME_TYPE_BOOL:
-            return *(const bool *)left == *(const bool *)right;
-        case FENG_RUNTIME_TYPE_I8:
-            return *(const int8_t *)left == *(const int8_t *)right;
-        case FENG_RUNTIME_TYPE_I16:
-            return *(const int16_t *)left == *(const int16_t *)right;
-        case FENG_RUNTIME_TYPE_I32:
-            return *(const int32_t *)left == *(const int32_t *)right;
-        case FENG_RUNTIME_TYPE_I64:
-            return *(const int64_t *)left == *(const int64_t *)right;
-        case FENG_RUNTIME_TYPE_U8:
-            return *(const uint8_t *)left == *(const uint8_t *)right;
-        case FENG_RUNTIME_TYPE_U16:
-            return *(const uint16_t *)left == *(const uint16_t *)right;
-        case FENG_RUNTIME_TYPE_U32:
-            return *(const uint32_t *)left == *(const uint32_t *)right;
-        case FENG_RUNTIME_TYPE_U64:
-            return *(const uint64_t *)left == *(const uint64_t *)right;
-        case FENG_RUNTIME_TYPE_F32:
-            return *(const float *)left == *(const float *)right;
-        case FENG_RUNTIME_TYPE_F64:
-            return *(const double *)left == *(const double *)right;
-        case FENG_RUNTIME_TYPE_ENUM:
-            return *(const int32_t *)left == *(const int32_t *)right;
-        default:
-            feng_panic("feng_expression_equal: unsupported scalar type_kind=%d",
-                       (int)type_kind);
+/* Compare trivial values through their optional descriptor equality hook. */
+static bool expression_trivial_equal(const FengGenericParamDescriptor *type,
+                                     const void *left,
+                                     const void *right) {
+    const FengTrivialDescriptor *desc = feng_generic_trivial_descriptor(type);
+
+    if (desc == NULL) {
+        feng_panic("feng_expression_equal: trivial descriptor must not be NULL");
     }
+    if (desc->equal_fn != NULL) {
+        return desc->equal_fn(left, right);
+    }
+    return memcmp(left, right, desc->size) == 0;
 }
 
-static bool expression_pointer_slot_equal(const void *left,
-                                          const void *right) {
-    return *(void *const *)left == *(void *const *)right;
+/* Compare managed pointers by descriptor semantics when present, else identity. */
+static bool expression_managed_pointer_equal(const FengGenericParamDescriptor *type,
+                                             const void *left,
+                                             const void *right) {
+    const FengTypeDescriptor *desc = feng_generic_type_descriptor(type);
+    void *left_value = *(void *const *)left;
+    void *right_value = *(void *const *)right;
+
+    if (desc != NULL && desc->equal_fn != NULL) {
+        return desc->equal_fn(left_value, right_value);
+    }
+    return left_value == right_value;
 }
 
-static bool expression_spec_equal(const void *left,
-                                  const void *right) {
-    const FengExpressionSpecValue *left_value = (const FengExpressionSpecValue *)left;
-    const FengExpressionSpecValue *right_value = (const FengExpressionSpecValue *)right;
+/* Compare by-value aggregates through the aggregate descriptor equality hook. */
+static bool expression_aggregate_equal(const FengGenericParamDescriptor *type,
+                                       const void *left,
+                                       const void *right) {
+    const FengAggregateDescriptor *desc = feng_generic_aggregate_descriptor(type);
 
-    return left_value->subject == right_value->subject;
+    if (desc == NULL) {
+        feng_panic("feng_expression_equal: aggregate descriptor must not be NULL");
+    }
+    if (desc->equal_fn == NULL) {
+        feng_panic("feng_expression_equal: aggregate descriptor '%s' has no equality function",
+                   desc->name != NULL ? desc->name : "<unknown>");
+    }
+    return desc->equal_fn(left, right);
 }
 
 bool feng_expression_equal(const FengGenericParamDescriptor *type,
@@ -84,32 +65,15 @@ bool feng_expression_equal(const FengGenericParamDescriptor *type,
                            const void *right) {
     expression_require_value_carriers(type, left, right);
 
-    switch (type->type_kind) {
-        case FENG_RUNTIME_TYPE_BOOL:
-        case FENG_RUNTIME_TYPE_I8:
-        case FENG_RUNTIME_TYPE_I16:
-        case FENG_RUNTIME_TYPE_I32:
-        case FENG_RUNTIME_TYPE_I64:
-        case FENG_RUNTIME_TYPE_U8:
-        case FENG_RUNTIME_TYPE_U16:
-        case FENG_RUNTIME_TYPE_U32:
-        case FENG_RUNTIME_TYPE_U64:
-        case FENG_RUNTIME_TYPE_F32:
-        case FENG_RUNTIME_TYPE_F64:
-        case FENG_RUNTIME_TYPE_ENUM:
-            return expression_scalar_equal(type->type_kind, left, right);
-        case FENG_RUNTIME_TYPE_STRING:
-            return expression_string_equal(*(FengString *const *)left,
-                                           *(FengString *const *)right);
-        case FENG_RUNTIME_TYPE_ARRAY:
-        case FENG_RUNTIME_TYPE_OBJECT:
-        case FENG_RUNTIME_TYPE_POINTER:
-        case FENG_RUNTIME_TYPE_CALLABLE:
-            return expression_pointer_slot_equal(left, right);
-        case FENG_RUNTIME_TYPE_SPEC:
-            return expression_spec_equal(left, right);
+    switch (type->kind) {
+        case FENG_VALUE_TRIVIAL:
+            return expression_trivial_equal(type, left, right);
+        case FENG_VALUE_MANAGED_POINTER:
+            return expression_managed_pointer_equal(type, left, right);
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            return expression_aggregate_equal(type, left, right);
         default:
-            feng_panic("feng_expression_equal: unsupported type_kind=%d",
-                       (int)type->type_kind);
+            feng_panic("feng_expression_equal: unsupported value kind=%d",
+                       (int)type->kind);
     }
 }
