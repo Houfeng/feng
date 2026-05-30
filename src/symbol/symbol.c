@@ -183,6 +183,7 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
 
     free(decl->abi_library);
+    free(decl->abi_symbol);
     free(decl->doc);
     free(decl->name);
     free(decl->path);
@@ -420,6 +421,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     *clone = *decl;
     clone->owner = owner;
     clone->abi_library = feng_symbol_internal_dup_cstr(decl->abi_library);
+    clone->abi_symbol = feng_symbol_internal_dup_cstr(decl->abi_symbol);
     clone->doc = feng_symbol_internal_dup_cstr(decl->doc);
     clone->name = feng_symbol_internal_dup_cstr(decl->name);
     clone->path = feng_symbol_internal_dup_cstr(decl->path);
@@ -431,6 +433,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->members = NULL;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
+        (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
         (decl->doc != NULL && clone->doc == NULL) ||
         (decl->name != NULL && clone->name == NULL) ||
         (decl->path != NULL && clone->path == NULL) ||

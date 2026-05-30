@@ -765,6 +765,28 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    if (decl->abi_symbol != NULL && decl->abi_symbol[0] != '\0') {
+        FengSymbolFtAttrRecord attr;
+        uint32_t symbol_str;
+
+        symbol_str = writer_intern_string(ctx, decl->abi_symbol, path, token, out_error);
+        if (symbol_str == 0U) {
+            return false;
+        }
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_ABI_SYMBOL;
+        attr.value0 = symbol_str;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
     if (decl->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM && decl->has_enum_item_value) {
         FengSymbolFtAttrRecord attr;
 

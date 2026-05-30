@@ -807,6 +807,75 @@ static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
     free(tmp_dir);
 }
 
+static void test_imported_module_cache_preserves_extern_c_symbol_name(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.imported_extern_symbol;\n"
+        "@cdecl(\"m\", \"fabs\")\n"
+        "open extern func abs_value(x: double): double;\n";
+
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSemanticModule *module = NULL;
+    const FengProgram *program = NULL;
+    const FengDecl *decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/imported_extern_symbol_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/imported_extern_symbol.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/imported_extern_symbol.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("imported_extern_symbol.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/imported_extern_symbol.ft",
+                                  public_ft);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("imported_extern_symbol");
+    module = query.get_module(query.user, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(module->program_count == 1U);
+
+    program = module->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl != NULL);
+    ASSERT(decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(decl->is_extern);
+    ASSERT(slice_equals_cstr(decl->as.function_decl.name, "abs_value"));
+    ASSERT(decl->annotation_count == 1U);
+    ASSERT(decl->annotations[0].builtin_kind == FENG_ANNOTATION_CDECL);
+    ASSERT(decl->annotations[0].arg_count == 2U);
+    ASSERT(decl->annotations[0].args[0]->kind == FENG_EXPR_STRING);
+    ASSERT(decl->annotations[0].args[1]->kind == FENG_EXPR_STRING);
+    ASSERT(slice_equals_cstr(decl->annotations[0].args[0]->as.string, "\"m\""));
+    ASSERT(slice_equals_cstr(decl->annotations[0].args[1]->as.string, "\"fabs\""));
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_imported_module_cache_preserves_enum_items(void) {
     static const char *kSource =
         "open module feng.test.symbol.imported_enum_cache;\n"
@@ -1592,6 +1661,7 @@ int main(void) {
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();
+    test_imported_module_cache_preserves_extern_c_symbol_name();
     test_imported_module_cache_preserves_enum_items();
     test_imported_enum_value_participates_in_semantic_analysis();
     test_imported_module_cache_keeps_bundle_fit_modules_alive();

@@ -820,6 +820,48 @@ static void test_extern_calling_convention_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_extern_c_symbol_name_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.externsymbol;\n"
+        "let c_name = \"fabs\";\n"
+        "@cdecl(\"m\", c_name)\n"
+        "extern func abs_value(x: double): double;\n"
+        "func run(x: double): double {\n"
+        "    return abs_value(x);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "extern_symbol.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (extern C symbol): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "extern double fabs(double);") != NULL);
+    ASSERT(strstr(out.c_source, "fabs(") != NULL);
+    ASSERT(strstr(out.c_source, "extern double abs_value(double);") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_address_of_scalar_and_array_codegen(void) {
     static const char *kSource =
         "module feng.codegen.addr;\n"
@@ -5305,6 +5347,7 @@ int main(void) {
     test_generic_static_methods_codegen();
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
+    test_extern_c_symbol_name_codegen();
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();

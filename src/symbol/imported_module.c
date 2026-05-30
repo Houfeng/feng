@@ -222,7 +222,9 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     FengAnnotation *annotations = NULL;
     FengExpr **args = NULL;
     FengExpr *arg_expr = NULL;
+    FengExpr *symbol_expr = NULL;
     const char *annotation_name;
+    size_t arg_count;
 
     if (out_annotations == NULL || out_count == NULL) {
         return false;
@@ -240,10 +242,18 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         return false;
     }
 
+    arg_count = symbol_decl->abi_symbol != NULL && symbol_decl->abi_symbol[0] != '\0'
+        ? 2U
+        : 1U;
     annotations = (FengAnnotation *)calloc(1U, sizeof(*annotations));
-    args = (FengExpr **)calloc(1U, sizeof(*args));
+    args = (FengExpr **)calloc(arg_count, sizeof(*args));
     arg_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_library);
-    if (annotations == NULL || args == NULL || arg_expr == NULL) {
+    if (arg_count > 1U) {
+        symbol_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_symbol);
+    }
+    if (annotations == NULL || args == NULL || arg_expr == NULL ||
+        (arg_count > 1U && symbol_expr == NULL)) {
+        free_synthetic_annotation_expr(symbol_expr);
         free_synthetic_annotation_expr(arg_expr);
         free(args);
         free(annotations);
@@ -256,7 +266,10 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     annotations[0].builtin_kind = symbol_decl->calling_convention;
     annotations[0].args = args;
     annotations[0].args[0] = arg_expr;
-    annotations[0].arg_count = 1U;
+    if (arg_count > 1U) {
+        annotations[0].args[1] = symbol_expr;
+    }
+    annotations[0].arg_count = arg_count;
 
     *out_annotations = annotations;
     *out_count = 1U;

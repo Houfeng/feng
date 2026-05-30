@@ -73,6 +73,29 @@ static void test_top_level_declarations(void) {
     feng_program_free(program);
 }
 
+static void test_annotation_accepts_two_arguments(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@cdecl(\"m\", \"fabs\")\n"
+        "extern func abs_value(x: double): double;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "annotation_two_args.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_FUNCTION);
+    ASSERT(program->declarations[0]->annotation_count == 1U);
+    ASSERT(program->declarations[0]->annotations[0].builtin_kind == FENG_ANNOTATION_CDECL);
+    ASSERT(program->declarations[0]->annotations[0].arg_count == 2U);
+    ASSERT(program->declarations[0]->annotations[0].args[0]->kind == FENG_EXPR_STRING);
+    ASSERT(program->declarations[0]->annotations[0].args[1]->kind == FENG_EXPR_STRING);
+    assert_slice_text(program->declarations[0]->annotations[0].args[0]->as.string, "\"m\"");
+    assert_slice_text(program->declarations[0]->annotations[0].args[1]->as.string, "\"fabs\"");
+
+    feng_program_free(program);
+}
+
 static void test_extern_rejects_non_function_top_level_declarations(void) {
     static const char *kCases[] = {
         "module demo.main;\nextern let value: int;\n",
@@ -2154,6 +2177,7 @@ static void test_destructuring_binding_errors(void) {
 
 int main(void) {
     test_top_level_declarations();
+    test_annotation_accepts_two_arguments();
     test_extern_rejects_non_function_top_level_declarations();
     test_statements_and_expressions();
     test_try_block_form_is_rejected();

@@ -2609,7 +2609,7 @@ static bool validate_supported_member_annotations(ResolveContext *context,
     return true;
 }
 
-static bool extern_library_annotation_arg_is_valid(ResolveContext *context, const FengExpr *expr) {
+static bool extern_string_annotation_arg_is_valid(ResolveContext *context, const FengExpr *expr) {
     const VisibleValueEntry *visible_value;
 
     if (expr == NULL) {
@@ -2663,27 +2663,39 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
     }
 
     if (decl->annotation_count != 1U || calling_convention_count != 1U ||
-        calling_convention == NULL || calling_convention->arg_count != 1U) {
+        calling_convention == NULL || calling_convention->arg_count < 1U ||
+        calling_convention->arg_count > 2U) {
         return resolver_append_error(
             context,
             decl->as.function_decl.token,
             format_message(
-                "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a single library argument",
+                "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a library argument and an optional C function name argument",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
     }
 
-    if (extern_library_annotation_arg_is_valid(context, calling_convention->args[0])) {
-        return true;
+    if (!extern_string_annotation_arg_is_valid(context, calling_convention->args[0])) {
+        return resolver_append_error(
+            context,
+            calling_convention->token,
+            format_message(
+                "extern function annotation '@%.*s' library argument must be a string literal or a visible let binding initialized directly with a string literal",
+                (int)calling_convention->name.length,
+                calling_convention->name.data));
     }
 
-    return resolver_append_error(
-        context,
-        calling_convention->token,
-        format_message(
-            "extern function annotation '@%.*s' library argument must be a string literal or a visible let binding initialized directly with a string literal",
-            (int)calling_convention->name.length,
-            calling_convention->name.data));
+    if (calling_convention->arg_count > 1U &&
+        !extern_string_annotation_arg_is_valid(context, calling_convention->args[1])) {
+        return resolver_append_error(
+            context,
+            calling_convention->token,
+            format_message(
+                "extern function annotation '@%.*s' C function name argument must be a string literal or a visible let binding initialized directly with a string literal",
+                (int)calling_convention->name.length,
+                calling_convention->name.data));
+    }
+
+    return true;
 }
 
 static const FengDecl *find_module_public_function_decl(const FengSemanticModule *module, FengSlice name) {

@@ -504,6 +504,53 @@ static void test_extern_function_accepts_module_string_library_binding(void) {
     feng_program_free(program);
 }
 
+static void test_extern_function_accepts_c_symbol_name_argument(void) {
+    const char *source =
+        "module demo.main;\n"
+        "let c_name = \"fabs\";\n"
+        "@cdecl(\"m\", c_name)\n"
+        "extern func abs_value(x: double): double;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_c_symbol_arg_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_extern_function_accepts_imported_string_c_symbol_binding(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open let c_name = \"fabs\";\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "@cdecl(\"m\", c_name)\n"
+        "extern func abs_value(x: double): double;\n";
+    FengProgram *base_program = parse_program_or_die("extern_fn_imported_c_symbol_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("extern_fn_imported_c_symbol_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 static void test_extern_function_without_calling_convention_annotation_is_accepted(void) {
     const char *source =
         "module demo.main;\n"
@@ -719,6 +766,28 @@ static void test_extern_function_rejects_multiple_calling_convention_annotations
     feng_program_free(program);
 }
 
+static void test_extern_function_rejects_too_many_calling_convention_arguments(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@cdecl(\"m\", \"fabs\", \"extra\")\n"
+        "extern func abs_value(x: double): double;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_too_many_callconv_args_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_too_many_callconv_args_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "with a library argument and an optional C function name argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_non_string_library_binding(void) {
     const char *source =
         "module demo.main;\n"
@@ -737,6 +806,29 @@ static void test_extern_function_rejects_non_string_library_binding(void) {
     ASSERT(errors[0].token.line == 3U);
     ASSERT(strstr(errors[0].message,
                   "library argument must be a string literal or a visible let binding") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_extern_function_rejects_non_string_c_symbol_binding(void) {
+    const char *source =
+        "module demo.main;\n"
+        "var c_name = \"fabs\";\n"
+        "@cdecl(\"m\", c_name)\n"
+        "extern func abs_value(x: double): double;\n";
+    FengProgram *program = parse_program_or_die("extern_fn_non_string_c_symbol_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "extern_fn_non_string_c_symbol_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message,
+                  "C function name argument must be a string literal or a visible let binding") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -14174,9 +14266,13 @@ int main(void) {
     test_top_level_overload_two_specs_no_common_type_accepted();
     test_member_method_overload_overlap_via_fit_rejected();
     test_extern_function_accepts_module_string_library_binding();
+    test_extern_function_accepts_c_symbol_name_argument();
+    test_extern_function_accepts_imported_string_c_symbol_binding();
     test_extern_function_without_calling_convention_annotation_is_accepted();
     test_extern_function_rejects_multiple_calling_convention_annotations();
+    test_extern_function_rejects_too_many_calling_convention_arguments();
     test_extern_function_rejects_non_string_library_binding();
+    test_extern_function_rejects_non_string_c_symbol_binding();
     test_extern_function_accepts_imported_string_library_binding();
     test_extern_function_rejects_imported_var_library_binding();
     test_extern_function_accepts_string_parameter_without_c_abi_annotation();

@@ -1203,19 +1203,21 @@ static const FengDecl *find_module_global_string_binding(const FengSemanticModul
     return NULL;
 }
 
-static char *resolve_abi_library(const FengSemanticModule *module,
-                                 const FengAnnotation *annotation,
-                                 const char *path,
-                                 FengToken token,
-                                 FengSymbolError *out_error) {
+static char *resolve_abi_annotation_string_arg(const FengSemanticModule *module,
+                                               const FengAnnotation *annotation,
+                                               size_t arg_index,
+                                               const char *role,
+                                               const char *path,
+                                               FengToken token,
+                                               FengSymbolError *out_error) {
     const FengExpr *arg;
     const FengDecl *binding_decl;
 
-    if (annotation == NULL || annotation->arg_count == 0U) {
+    if (annotation == NULL || arg_index >= annotation->arg_count) {
         return NULL;
     }
 
-    arg = annotation->args[0];
+    arg = annotation->args[arg_index];
     if (arg == NULL) {
         return NULL;
     }
@@ -1232,7 +1234,9 @@ static char *resolve_abi_library(const FengSemanticModule *module,
     feng_symbol_internal_set_error(out_error,
                                    path,
                                    token,
-                                   "extern callable annotation library must resolve to a string literal");
+                                   role != NULL
+                                       ? role
+                                       : "extern callable annotation argument must resolve to a string literal");
     return NULL;
 }
 
@@ -1433,9 +1437,29 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
     if (callconv != NULL) {
         decl->calling_convention = callconv->builtin_kind;
         if (allow_library && callconv->arg_count > 0U) {
-            decl->abi_library = resolve_abi_library(module, callconv, path, token, out_error);
+            decl->abi_library = resolve_abi_annotation_string_arg(
+                module,
+                callconv,
+                0U,
+                "extern callable annotation library must resolve to a string literal",
+                path,
+                token,
+                out_error);
             if (decl->abi_library == NULL) {
                 return false;
+            }
+            if (callconv->arg_count > 1U) {
+                decl->abi_symbol = resolve_abi_annotation_string_arg(
+                    module,
+                    callconv,
+                    1U,
+                    "extern callable annotation C function name must resolve to a string literal",
+                    path,
+                    token,
+                    out_error);
+                if (decl->abi_symbol == NULL) {
+                    return false;
+                }
             }
         }
     }

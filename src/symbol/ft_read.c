@@ -984,6 +984,17 @@ static bool parse_attrs(ReadContext *ctx,
             }
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_ABI_SYMBOL) {
+            free(decl->abi_symbol);
+            decl->abi_symbol = feng_symbol_internal_dup_cstr(string_at(ctx, value0));
+            if (value0 != 0U && decl->abi_symbol == NULL) {
+                return feng_symbol_internal_set_error(out_error,
+                                                      path,
+                                                      (FengToken){0},
+                                                      "out of memory loading abi_symbol string");
+            }
+            continue;
+        }
         if (kind == FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE) {
             decl->enum_item_value = (int64_t)(int32_t)value0;
             decl->has_enum_item_value = true;

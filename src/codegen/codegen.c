@@ -976,7 +976,8 @@ static const Local *scope_lookup(const Scope *s, const char *name, size_t len) {
 /* ===================== codegen context ===================== */
 
 typedef struct ExternFn {
-    char    *name;          /* Feng name, also C symbol */
+    char    *name;          /* Feng name used for language-level lookup */
+    char    *c_name;        /* Imported C symbol; defaults to `name` */
     CGType **param_types;
     size_t   param_count;
     CGType  *return_type;
@@ -3448,6 +3449,130 @@ static const FengDecl *cg_resolve_imported_module_binding_decl(const CG *cg,
     }
 }
 
+static char *cg_decode_annotation_string_literal(CG *cg,
+                                                 const FengExpr *expr,
+                                                 const char *role) {
+    const char *raw;
+    size_t raw_length;
+    const char *body;
+    size_t body_length;
+    char *decoded;
+    size_t decoded_index = 0U;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_STRING) {
+        cg_fail(cg,
+                expr != NULL ? expr->token : (FengToken){0},
+                "codegen: extern annotation %s argument must resolve to a string literal",
+                role != NULL ? role : "string");
+        return NULL;
+    }
+
+    raw = expr->as.string.data;
+    raw_length = expr->as.string.length;
+    if (raw_length < 2U || raw == NULL || raw[0] != '"' || raw[raw_length - 1U] != '"') {
+        cg_fail(cg, expr->token, "codegen: malformed extern annotation string literal");
+        return NULL;
+    }
+
+    body = raw + 1U;
+    body_length = raw_length - 2U;
+    decoded = (char *)malloc(body_length + 1U);
+    if (decoded == NULL) {
+        cg_fail(cg, expr->token, "codegen: out of memory");
+        return NULL;
+    }
+
+    for (size_t index = 0U; index < body_length; ++index) {
+        char ch = body[index];
+
+        if (ch == '\\' && index + 1U < body_length) {
+            char esc = body[++index];
+
+            switch (esc) {
+                case '\\': decoded[decoded_index++] = '\\'; break;
+                case '"':  decoded[decoded_index++] = '"'; break;
+                case 'n':  decoded[decoded_index++] = '\n'; break;
+                case 'r':  decoded[decoded_index++] = '\r'; break;
+                case 't':  decoded[decoded_index++] = '\t'; break;
+                case '0':  decoded[decoded_index++] = '\0'; break;
+                default:
+                    free(decoded);
+                    cg_fail(cg, expr->token, "codegen: unknown extern annotation string escape '\\%c'", esc);
+                    return NULL;
+            }
+        } else {
+            decoded[decoded_index++] = ch;
+        }
+    }
+    decoded[decoded_index] = '\0';
+    return decoded;
+}
+
+static char *cg_resolve_extern_annotation_string_arg(CG *cg,
+                                                     const FengExpr *expr,
+                                                     const char *role) {
+    const FengDecl *decl;
+
+    if (expr == NULL) {
+        cg_fail(cg,
+                (FengToken){0},
+                "codegen: extern annotation %s argument is missing",
+                role != NULL ? role : "string");
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_STRING) {
+        return cg_decode_annotation_string_literal(cg, expr, role);
+    }
+    if (expr->kind != FENG_EXPR_IDENTIFIER) {
+        cg_fail(cg,
+                expr->token,
+                "codegen: extern annotation %s argument must be a string literal or visible let binding",
+                role != NULL ? role : "string");
+        return NULL;
+    }
+
+    decl = cg_find_visible_binding_decl(cg,
+                                        expr->as.identifier.data,
+                                        expr->as.identifier.length);
+    if (decl == NULL || decl->kind != FENG_DECL_GLOBAL_BINDING ||
+        decl->as.binding.mutability == FENG_MUTABILITY_VAR ||
+        decl->as.binding.initializer == NULL ||
+        decl->as.binding.initializer->kind != FENG_EXPR_STRING) {
+        cg_fail(cg,
+                expr->token,
+                "codegen: extern annotation %s argument must be a string literal or visible let binding initialized directly with a string literal",
+                role != NULL ? role : "string");
+        return NULL;
+    }
+
+    return cg_decode_annotation_string_literal(cg, decl->as.binding.initializer, role);
+}
+
+static const FengAnnotation *cg_find_calling_convention_annotation(
+    const FengAnnotation *annotations,
+    size_t annotation_count);
+
+static char *cg_extern_c_symbol_name(CG *cg,
+                                     const FengDecl *decl,
+                                     const FengCallableSignature *sig) {
+    const FengAnnotation *callconv;
+
+    if (sig == NULL) {
+        return NULL;
+    }
+
+    callconv = decl != NULL
+        ? cg_find_calling_convention_annotation(decl->annotations, decl->annotation_count)
+        : NULL;
+    if (callconv != NULL && callconv->arg_count > 1U) {
+        return cg_resolve_extern_annotation_string_arg(cg,
+                                                       callconv->args[1],
+                                                       "C function name");
+    }
+
+    return strndup(sig->name.data, sig->name.length);
+}
+
 static bool cg_binding_public_surface_names(const CG *cg,
                                             const FengDecl *decl,
                                             char **out_slot_name,
@@ -5068,17 +5193,26 @@ static bool cg_annotation_kind_is_calling_convention(FengAnnotationKind kind) {
            kind == FENG_ANNOTATION_FASTCALL;
 }
 
-static FengAnnotationKind cg_find_calling_convention_kind(const FengAnnotation *annotations,
-                                                          size_t annotation_count) {
+static const FengAnnotation *cg_find_calling_convention_annotation(
+    const FengAnnotation *annotations,
+    size_t annotation_count) {
     if (annotations == NULL) {
-        return FENG_ANNOTATION_NONE;
+        return NULL;
     }
     for (size_t i = 0; i < annotation_count; ++i) {
         if (cg_annotation_kind_is_calling_convention(annotations[i].builtin_kind)) {
-            return annotations[i].builtin_kind;
+            return &annotations[i];
         }
     }
-    return FENG_ANNOTATION_NONE;
+    return NULL;
+}
+
+static FengAnnotationKind cg_find_calling_convention_kind(const FengAnnotation *annotations,
+                                                          size_t annotation_count) {
+    const FengAnnotation *annotation = cg_find_calling_convention_annotation(annotations,
+                                                                             annotation_count);
+
+    return annotation != NULL ? annotation->builtin_kind : FENG_ANNOTATION_NONE;
 }
 
 static const char *cg_extern_calling_convention_macro(FengAnnotationKind kind) {
@@ -6768,8 +6902,23 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     }
 
     ef->name = strndup(sig->name.data, sig->name.length);
+    if (ef->name == NULL) {
+        cg_fail(cg, sig->token, "codegen: out of memory");
+        goto cleanup;
+    }
+    ef->c_name = cg_extern_c_symbol_name(cg, decl, sig);
+    if (ef->c_name == NULL) {
+        if (!cg->failed) {
+            cg_fail(cg, sig->token, "codegen: out of memory");
+        }
+        goto cleanup;
+    }
     ef->param_count = sig->param_count;
     ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+    if (sig->param_count > 0U && ef->param_types == NULL) {
+        cg_fail(cg, sig->token, "codegen: out of memory");
+        goto cleanup;
+    }
 
     if (sig->type_param_count > 0U) {
         if (!cg_callable_type_param_names(cg, sig, sig->token, &type_param_names)) {
@@ -6830,6 +6979,18 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     ok = true;
 
 cleanup:
+    if (!ok) {
+        free(ef->name);
+        free(ef->c_name);
+        if (ef->param_types != NULL) {
+            for (size_t param_index = 0U; param_index < ef->param_count; ++param_index) {
+                cgtype_free(ef->param_types[param_index]);
+            }
+        }
+        free(ef->param_types);
+        cgtype_free(ef->return_type);
+        memset(ef, 0, sizeof(*ef));
+    }
     cg->in_generic_fn = saved_in_generic_fn;
     cg->generic_fn_type_param_count = saved_tp_count;
     cg->generic_fn_type_param_names = saved_tp_names;
@@ -6872,7 +7033,7 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
             buf_append_fmt(h, " %s", callconv_macro);
         }
     }
-    buf_append_fmt(h, " %s(", ef->name);
+    buf_append_fmt(h, " %s(", ef->c_name != NULL ? ef->c_name : ef->name);
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
     } else {
@@ -11136,6 +11297,7 @@ static bool cg_emit_registered_call(CG *cg,
     Buf b;
     buf_init(&b);
     if (ext) {
+        const char *extern_c_name = ext->c_name != NULL ? ext->c_name : ext->name;
         const UserType *return_abi_user =
             ext->uses_runtime_contract ? NULL : cg_abi_value_user_type(ext->return_type);
 
@@ -11155,7 +11317,7 @@ static bool cg_emit_registered_call(CG *cg,
                 "    struct %s *%s = %s(%s);\n",
                 return_abi_user->c_abi_layout_name,
                 abi_tmp,
-                ext->name,
+                extern_c_name,
                 args_buf.data ? args_buf.data : "",
                 return_abi_user->c_struct_name,
                 ret_tmp,
@@ -11169,7 +11331,7 @@ static bool cg_emit_registered_call(CG *cg,
             return out->c_expr && out->type;
         }
 
-        buf_append_fmt(&b, "%s(%s)", ext->name, args_buf.data ? args_buf.data : "");
+        buf_append_fmt(&b, "%s(%s)", extern_c_name, args_buf.data ? args_buf.data : "");
         out->type = cgtype_clone(ext->return_type);
     } else {
         buf_append_fmt(&b, "%s(%s)", fn->c_name, args_buf.data ? args_buf.data : "");
@@ -19952,9 +20114,11 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     char **desc_exprs = NULL;
     ExternFn concrete = {
         .name = ext != NULL ? ext->name : NULL,
+        .c_name = ext != NULL ? ext->c_name : NULL,
         .param_types = param_types,
         .param_count = sig->param_count,
         .return_type = NULL,
+        .calling_convention = ext != NULL ? ext->calling_convention : FENG_ANNOTATION_NONE,
         .uses_runtime_contract = ext != NULL && ext->uses_runtime_contract,
     };
     bool return_is_direct_type_param = false;
@@ -20221,7 +20385,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             buf_append_fmt(&args_buf, "&%s", ret_cname);
             buf_append_fmt(cg->cur_body,
                            "    %s(%s);\n",
-                           concrete.name,
+                           concrete.c_name != NULL ? concrete.c_name : concrete.name,
                            args_buf.data ? args_buf.data : "");
 
             out->c_expr = strdup(ret_cname);
@@ -20260,7 +20424,10 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             Buf b;
 
             buf_init(&b);
-            buf_append_fmt(&b, "%s(%s)", concrete.name, args_buf.data ? args_buf.data : "");
+            buf_append_fmt(&b,
+                           "%s(%s)",
+                           concrete.c_name != NULL ? concrete.c_name : concrete.name,
+                           args_buf.data ? args_buf.data : "");
             out->c_expr = b.data;
             out->type = cgtype_clone(concrete.return_type);
             out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
@@ -26886,6 +27053,7 @@ static void cg_dispose(CG *cg) {
     free(cg->module_dot_name);
     for (size_t i = 0; i < cg->extern_count; i++) {
         free(cg->externs[i].name);
+        free(cg->externs[i].c_name);
         for (size_t j = 0; j < cg->externs[i].param_count; j++)
             cgtype_free(cg->externs[i].param_types[j]);
         free(cg->externs[i].param_types);
