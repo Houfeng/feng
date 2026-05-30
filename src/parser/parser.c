@@ -722,7 +722,8 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
     }
 
     if (parser_check(parser, FENG_TOKEN_RPAREN)) {
-        return parser_error_current(parser, "destructuring bindings require at least two positions");
+        (void)parser_advance(parser);
+        return true;
     }
 
     for (;;) {
@@ -779,10 +780,10 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
     if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close destructuring binding")) {
         return false;
     }
-    if (binding->destructure_count < 2U) {
+    if (binding->destructure_count == 1U) {
         return parser_error_at(parser,
                                &binding->token,
-                               "destructuring bindings require at least two positions");
+                               "destructuring bindings require 0 or 2 to 8 positions");
     }
     return true;
 }
@@ -1221,10 +1222,10 @@ static bool parse_tuple_type_declaration_tail(Parser *parser, FengDecl *decl) {
     if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close tuple type declaration")) {
         return false;
     }
-    if (decl->as.type_decl.member_count < 2U) {
+    if (decl->as.type_decl.member_count == 1U) {
         return parser_error_at(parser,
                                &decl->token,
-                               "tuple type declarations require 2 to 8 elements");
+                               "tuple type declarations require 0 or 2 to 8 elements");
     }
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
@@ -2535,6 +2536,19 @@ static FengExpr *parse_tuple_literal_tail(Parser *parser, FengToken token, FengE
     return expr;
 }
 
+static FengExpr *parse_empty_tuple_literal(Parser *parser, FengToken token) {
+    FengExpr *expr = new_expr(parser, FENG_EXPR_TUPLE_LITERAL, token);
+
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (!parser_expect(parser, FENG_TOKEN_RPAREN, "expected ')' to close tuple literal")) {
+        free_expr(expr);
+        return NULL;
+    }
+    return expr;
+}
+
 /* ---------------- if / match shared helpers ---------------- */
 
 static bool is_match_label_atom_token(FengTokenKind kind) {
@@ -2963,6 +2977,10 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
     }
 
     {
+        if (parser_check(parser, FENG_TOKEN_RPAREN)) {
+            return parse_empty_tuple_literal(parser, group_token);
+        }
+
         FengExpr *expr = parse_expression(parser);
 
         if (expr == NULL) {

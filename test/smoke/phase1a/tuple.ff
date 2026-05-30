@@ -9,6 +9,8 @@ spec Summable {
 
 type Point(i32, i32);
 
+type Unit();
+
 fit Point: Summable {
     func sum(): i32 {
         return self.item1 + self.item2;
@@ -17,6 +19,15 @@ fit Point: Summable {
 
 func consume(value: Summable): i32 {
     return value.sum();
+}
+
+func makeUnit(): Unit {
+    return ();
+}
+
+func unitScore(value: Unit): i32 {
+    let () = value;
+    return 1;
 }
 
 spec Show {
@@ -36,13 +47,16 @@ func announce(value: Show) {
 }
 
 func main(args: string[]) {
+    let unit: Unit = ();
+    let () = unit;
+    let () = ();
     let point: Point = (5, 6);
     let as_spec: Summable = point;
     var replacement: Point = (1, 2);
     replacement = (3, 4);
     let (x, , z) = (7, 8, 9);
 
-    if point.sum() + consume(point) + as_spec.sum() + replacement.item1 + replacement.item2 + x + z == 56 {
+    if unitScore(unit) + unitScore(()) + unitScore(makeUnit()) + point.sum() + consume(point) + as_spec.sum() + replacement.item1 + replacement.item2 + x + z == 59 {
         puts(&"tuple-int-ok");
     } else {
         puts(&"tuple-int-fail");

@@ -1923,18 +1923,25 @@ static void test_parse_error_extern_fn_variadic(void) {
 static void test_tuple_type_declaration_parses(void) {
     const char *source =
         "module demo.tuple;\n"
+        "type Unit();\n"
         "type Point(float, float);\n"
         "type Pair<T, U>(T, U);\n";
     FengProgram *program = NULL;
     FengParseError error;
     const FengDecl *point;
     const FengDecl *pair;
+    const FengDecl *unit;
 
     ASSERT(feng_parse_source(source, strlen(source), "tuple_type.f", &program, &error));
     ASSERT(program != NULL);
-    ASSERT(program->declaration_count == 2U);
+    ASSERT(program->declaration_count == 3U);
 
-    point = program->declarations[0];
+    unit = program->declarations[0];
+    ASSERT(unit->kind == FENG_DECL_TYPE);
+    ASSERT(unit->as.type_decl.is_tuple);
+    ASSERT(unit->as.type_decl.member_count == 0U);
+
+    point = program->declarations[1];
     ASSERT(point->kind == FENG_DECL_TYPE);
     ASSERT(point->as.type_decl.is_tuple);
     ASSERT(point->as.type_decl.member_count == 2U);
@@ -1944,7 +1951,7 @@ static void test_tuple_type_declaration_parses(void) {
     assert_slice_text(point->as.type_decl.members[1]->as.field.name, "item2");
     assert_slice_text(point->as.type_decl.members[0]->as.field.type->as.named.segments[0], "float");
 
-    pair = program->declarations[1];
+    pair = program->declarations[2];
     ASSERT(pair->kind == FENG_DECL_TYPE);
     ASSERT(pair->as.type_decl.is_tuple);
     ASSERT(pair->as.type_decl.type_param_count == 2U);
@@ -1962,13 +1969,8 @@ static void test_tuple_type_arity_errors(void) {
     } cases[] = {
         {
             "module demo.tuple;\n"
-            "type Unit();\n",
-            "tuple type declarations require 2 to 8 elements"
-        },
-        {
-            "module demo.tuple;\n"
             "type Single(int);\n",
-            "tuple type declarations require 2 to 8 elements"
+            "tuple type declarations require 0 or 2 to 8 elements"
         },
         {
             "module demo.tuple;\n"
@@ -2000,6 +2002,7 @@ static void test_tuple_literal_and_grouped_expression_parse(void) {
         "    let grouped = (1);\n"
         "    let tupled: Point = (1, 2);\n"
         "    let casted = (Point)(1, 2);\n"
+        "    let empty: Unit = ();\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2007,11 +2010,12 @@ static void test_tuple_literal_and_grouped_expression_parse(void) {
     const FengExpr *grouped;
     const FengExpr *tupled;
     const FengExpr *casted;
+    const FengExpr *empty;
 
     ASSERT(feng_parse_source(source, strlen(source), "tuple_literal_parse.f", &program, &error));
     ASSERT(program != NULL);
     body = program->declarations[1]->as.function_decl.body;
-    ASSERT(body->statement_count == 3U);
+    ASSERT(body->statement_count == 4U);
 
     grouped = body->statements[0]->as.binding.initializer;
     ASSERT(grouped->kind == FENG_EXPR_INTEGER);
@@ -2024,6 +2028,10 @@ static void test_tuple_literal_and_grouped_expression_parse(void) {
     ASSERT(casted->kind == FENG_EXPR_CAST);
     ASSERT(casted->as.cast.value->kind == FENG_EXPR_TUPLE_LITERAL);
     ASSERT(casted->as.cast.value->as.tuple_literal.count == 2U);
+
+    empty = body->statements[3]->as.binding.initializer;
+    ASSERT(empty->kind == FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(empty->as.tuple_literal.count == 0U);
 
     feng_program_free(program);
 }
@@ -2064,6 +2072,7 @@ static void test_destructuring_binding_parse(void) {
     const char *source =
         "module demo.tuple;\n"
         "func run(point: Point, tuple: Triple) {\n"
+        "    let () = ();\n"
         "    let (x, , z) = point;\n"
         "    var (, middle, ) = tuple;\n"
         "}\n";
@@ -2072,13 +2081,20 @@ static void test_destructuring_binding_parse(void) {
     const FengBlock *body;
     const FengBinding *first;
     const FengBinding *second;
+    const FengBinding *empty;
 
     ASSERT(feng_parse_source(source, strlen(source), "destructure_parse.f", &program, &error));
     ASSERT(program != NULL);
     body = program->declarations[0]->as.function_decl.body;
-    ASSERT(body->statement_count == 2U);
+    ASSERT(body->statement_count == 3U);
 
-    first = &body->statements[0]->as.binding;
+    empty = &body->statements[0]->as.binding;
+    ASSERT(empty->is_destructure);
+    ASSERT(empty->destructure_count == 0U);
+    ASSERT(empty->initializer->kind == FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(empty->initializer->as.tuple_literal.count == 0U);
+
+    first = &body->statements[1]->as.binding;
     ASSERT(first->is_destructure);
     ASSERT(first->destructure_count == 3U);
     assert_slice_text(first->destructure_names[0], "x");
@@ -2086,7 +2102,7 @@ static void test_destructuring_binding_parse(void) {
     assert_slice_text(first->destructure_names[2], "z");
     ASSERT(first->initializer->kind == FENG_EXPR_IDENTIFIER);
 
-    second = &body->statements[1]->as.binding;
+    second = &body->statements[2]->as.binding;
     ASSERT(second->is_destructure);
     ASSERT(second->mutability == FENG_MUTABILITY_VAR);
     ASSERT(second->destructure_count == 3U);
@@ -2105,7 +2121,7 @@ static void test_destructuring_binding_errors(void) {
         {
             "module demo.tuple;\n"
             "func run(value: Tuple) { let (x) = value; }\n",
-            "destructuring bindings require at least two positions"
+            "destructuring bindings require 0 or 2 to 8 positions"
         },
         {
             "module demo.tuple;\n"

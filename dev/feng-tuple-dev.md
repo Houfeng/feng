@@ -8,10 +8,10 @@
 
 - [x] P1. 解析具名元组类型声明：`type Foo(T1, T2)` — 以 `(` 与对象类型 `{` 在 parse 层区分，生成元组 type 节点
 - [x] P2. 解析元组类型在类型位置的出现（参数类型、返回类型、绑定类型注解）
-- [x] P3. 解析元组字面量 `(expr, expr, ...)` 作为值表达式
+- [x] P3. 解析元组字面量 `()` / `(expr, expr, ...)` 作为值表达式
 - [x] P4. 解析解构绑定 `let (x, y) = ...` / `var (x, y) = ...`，支持空位（相邻逗号间无标识符）
 - [x] P5. 解析显式类型转换 `(TupleType)expr`（与现有转换语法复用）
-- [x] P6. 元素数量检查：具名元组类型仅允许 2~8 个元素；0 个、1 个或超过 8 个元素，Parser 立即报错；`(expr)` 始终解析为普通括号表达式
+- [x] P6. 元素数量检查：具名元组类型仅允许 0 个或 2~8 个元素；1 个或超过 8 个元素，Parser 立即报错；`()` 解析为 0 元组字面量；`(expr)` 始终解析为普通括号表达式
 
 ## Semantic
 
@@ -45,7 +45,7 @@
 - [x] T2. 值语义：赋值拷贝、传参拷贝（修改副本不影响原值）
 - [x] T3. 不可变：`let`/`var` 均禁止 `.itemN = x`，期望编译错误
 - [x] T4. `var` 整体替换合法，`let` 整体替换报错
-- [x] T5. 元素数量：2 元素、8 元素均合法；0 元素、1 元素、9 元素类型报错；`(expr)` 作为括号表达式合法
+- [x] T5. 元素数量：0 元素、2 元素、8 元素均合法；1 元素、9 元素类型报错；`()` 作为 0 元组字面量合法；`(expr)` 作为括号表达式合法
 - [x] T6. 字面量绑定类型匹配：元素数量或类型不符报错
 - [x] T7. `let a = (1, 2)` 无具名类型上下文报错
 - [x] T8. 具名元组间显式转换：结构相同允许，结构不同报错，隐式转换报错
@@ -168,7 +168,7 @@ FENG_SPEC_COERCION_FORM_OBJECT  →  保持（用于 spec 贴合）
   检测目标类型 is_tuple == true，逐位置递归检查元素类型
 ```
 
-### Runtime 层（无需新增结构体）
+### Runtime 层（无需新增 runtime API）
 
 具名元组复用现有的 **`FengAggregateValueDescriptor`** 路径：
 
@@ -188,7 +188,7 @@ static const FengAggregateValueDescriptor MyTuple_aggregate = {
 ```
 
 运行时操作完全通过 `feng_aggregate_retain` / `feng_aggregate_release` /
-`feng_aggregate_assign` / `feng_aggregate_take` 完成，与对象类型一致，**无需新增任何 runtime 函数**。
+`feng_aggregate_assign` / `feng_aggregate_take` 完成，与对象类型一致，**无需新增任何 runtime 函数或 runtime ABI**。
 
 对象形态 spec coercion 额外生成一个内部 tuple box：
 
@@ -208,11 +208,11 @@ tuple box 是普通运行时管理对象，`release_children` 对 `value` 调用
 ### 整体流程
 
 ```
-Feng 源码
+  Feng 源码
   │
   ▼ parser.c — parse_type_declaration() 识别 ( 开头 → is_tuple=true
   │            parse_binding() 识别 let/var (x,,z) = ... → is_destructure=true
-  │            parse_expr_primary() 识别 (e1,e2,...) → FENG_EXPR_TUPLE_LITERAL
+  │            parse_expr_primary() 识别 () / (e1,e2,...) → FENG_EXPR_TUPLE_LITERAL
   ▼
 FengProgram (AST)
   │

@@ -13779,20 +13779,27 @@ static void assert_single_source_semantic_error_contains(const char *path,
 static void test_tuple_literal_expected_contexts_pass(void) {
     const char *source =
         "module demo.main;\n"
+        "type Unit();\n"
         "type Point(int, int);\n"
         "type Pair<T, U>(T, U);\n"
         "type Holder {\n"
         "    let point: Point;\n"
+        "    let unit: Unit;\n"
         "}\n"
         "func take(p: Point): int { return p.item1; }\n"
+        "func takeUnit(value: Unit): int { let () = value; return 1; }\n"
+        "func makeUnit(): Unit { return (); }\n"
         "func make(): Point { return (1, 2); }\n"
         "func takePair(p: Pair<int, string>): int { return p.item1; }\n"
         "func run(): int {\n"
+        "    let unit: Unit = ();\n"
+        "    let () = unit;\n"
+        "    let () = ();\n"
         "    let p: Point = (1, 2);\n"
         "    let q = (Point)(3, 4);\n"
-        "    let h: Holder = Holder{point: (5, 6)};\n"
+        "    let h: Holder = Holder{point: (5, 6), unit: ()};\n"
         "    let pair: Pair<int, string> = (7, \"s\");\n"
-        "    return take((8, 9)) + make().item1 + p.item2 + q.item1 + h.point.item2 + pair.item1 + takePair((10, \"t\"));\n"
+        "    return takeUnit(()) + takeUnit(makeUnit()) + take((8, 9)) + make().item1 + p.item2 + q.item1 + h.point.item2 + pair.item1 + takePair((10, \"t\"));\n"
         "}\n";
 
     assert_single_source_semantic_ok("tuple_contexts.f", source);
@@ -13809,6 +13816,17 @@ static void test_tuple_literal_without_target_is_rejected(void) {
     assert_single_source_semantic_error_contains("tuple_no_target.f",
                                                  source,
                                                  "tuple literal requires");
+
+    const char *empty_source =
+        "module demo.main;\n"
+        "func run(): int {\n"
+        "    let value = ();\n"
+        "    return 0;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains("tuple_empty_no_target.f",
+                                                 empty_source,
+                                                 "tuple literal requires");
 }
 
 static void test_tuple_literal_shape_mismatch_is_rejected(void) {
@@ -13824,6 +13842,12 @@ static void test_tuple_literal_shape_mismatch_is_rejected(void) {
         "func run(): void {\n"
         "    let p: Point = (1, \"two\");\n"
         "}\n";
+    const char *empty_source =
+        "module demo.main;\n"
+        "type Point(int, int);\n"
+        "func run(): void {\n"
+        "    let p: Point = ();\n"
+        "}\n";
 
     assert_single_source_semantic_error_contains("tuple_bad_arity.f",
                                                  arity_source,
@@ -13831,14 +13855,21 @@ static void test_tuple_literal_shape_mismatch_is_rejected(void) {
     assert_single_source_semantic_error_contains("tuple_bad_item.f",
                                                  type_source,
                                                  "does not match expected type");
+    assert_single_source_semantic_error_contains("tuple_empty_bad_arity.f",
+                                                 empty_source,
+                                                 "tuple literal has 0 element");
 }
 
 static void test_tuple_named_conversion_rules(void) {
     const char *explicit_ok =
         "module demo.main;\n"
+        "type UnitA();\n"
+        "type UnitB();\n"
         "type A(int, string);\n"
         "type B(int, string);\n"
         "func run(): int {\n"
+        "    let unit_b: UnitB = ();\n"
+        "    let unit_a: UnitA = (UnitA)unit_b;\n"
         "    let b: B = (1, \"ok\");\n"
         "    let a: A = (A)b;\n"
         "    return a.item1;\n"
@@ -13847,7 +13878,11 @@ static void test_tuple_named_conversion_rules(void) {
         "module demo.main;\n"
         "type A(int, int);\n"
         "type B(int, int);\n"
+        "type UnitA();\n"
+        "type UnitB();\n"
         "func run(): void {\n"
+        "    let unit_b: UnitB = ();\n"
+        "    let unit_a: UnitA = unit_b;\n"
         "    let b: B = (1, 2);\n"
         "    let a: A = b;\n"
         "}\n";
@@ -13872,8 +13907,11 @@ static void test_tuple_named_conversion_rules(void) {
 static void test_tuple_destructuring_semantics(void) {
     const char *source =
         "module demo.main;\n"
+        "type Unit();\n"
         "type Point(int, int);\n"
         "func run(): int {\n"
+        "    let unit: Unit = ();\n"
+        "    let () = unit;\n"
         "    let p: Point = (1, 2);\n"
         "    let (x, y) = p;\n"
         "    let (a, , c) = (3, 4, 5);\n"

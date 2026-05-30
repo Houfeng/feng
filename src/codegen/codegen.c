@@ -8675,6 +8675,10 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
     free(cty);
 
+    if (item_count == 0U) {
+        buf_append_fmt(cg->cur_body, "    memset(&%s, 0, sizeof %s);\n", tmp, tmp);
+    }
+
     for (size_t i = 0; i < item_count; ++i) {
         ExprResult value;
         if (!cg_emit_expr_for_expected_type(cg,
@@ -8796,6 +8800,10 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
     free(cty);
+
+    if (target->user->field_count == 0U) {
+        buf_append_fmt(cg->cur_body, "    memset(&%s, 0, sizeof %s);\n", tmp, tmp);
+    }
 
     for (size_t i = 0; i < target->user->field_count; ++i) {
         ExprResult field_value;
@@ -16121,6 +16129,12 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
         er_free(&source);
         return cg_fail(cg, binding->token,
                        "codegen: destructuring arity mismatch");
+    }
+    if (binding->destructure_count == 0U) {
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body, "    (void)(%s);\n", source.c_expr);
+        er_free(&source);
+        return true;
     }
     if (cg_materialize_to_local(cg, &source, "_tuple") == NULL) {
         er_free(&source);
@@ -24669,10 +24683,14 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
 
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
-    for (size_t i = 0; i < t->field_count; i++) {
-        buf_append_cstr(td, "    ");
-        cg_emit_c_type(td, t->fields[i].type);
-        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+    if (t->field_count == 0U) {
+        buf_append_cstr(td, "    unsigned char _unit;\n");
+    } else {
+        for (size_t i = 0; i < t->field_count; i++) {
+            buf_append_cstr(td, "    ");
+            cg_emit_c_type(td, t->fields[i].type);
+            buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+        }
     }
     buf_append_cstr(td, "};\n\n");
 
