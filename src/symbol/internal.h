@@ -16,7 +16,6 @@ typedef enum FengSymbolRelationKind {
 
 typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_DECLARED_SPECS = 1,
-    FENG_SYMBOL_ATTR_UNION = 2,
     FENG_SYMBOL_ATTR_CALL_CONV = 3,
     FENG_SYMBOL_ATTR_ABI_LIBRARY = 4,
     FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE = 6,
@@ -68,7 +67,6 @@ struct FengSymbolDeclView {
     bool is_extern;
     bool fixed_annotated;
     bool bounded_decl;
-    bool union_annotated;
     bool is_static;
     bool has_doc;
     FengAnnotationKind calling_convention;

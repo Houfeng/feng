@@ -143,7 +143,7 @@ type Box: Choice {}
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
 - [禁止] `spec` 中声明 `static` 成员; 该限制由 Parser 阶段诊断。
 - [禁止] object-form `spec` 声明构造器或终结器; 该限制属于语义规则,由语义分析阶段诊断。
-- [禁止] 对象形状的 `spec` 不得标记 `@abi`、`@union` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
+- [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的顶层函数、方法值与 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
 - [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
 - [必须] 不同 callable-form `spec` 之间的显式转换仅在实例化后的签名完全一致时允许,且资格必须在编译期确定。
@@ -167,7 +167,7 @@ type Box: Choice {}
 - 编译器必须在 object-form `spec` 的父子闭包成员收集中对“同名且签名完全一致”的方法按“子 `spec` 优先”去重,避免把继承覆盖关系误判为多重重载歧义。
 - 编译器必须检查并拒绝 `spec` 列表中的重复项。
 - 编译器必须在语义分析阶段检查并拒绝 object-form `spec` 中的构造器与终结器声明。
-- 编译器必须检查并拒绝在对象形状 `spec` 上使用 `@abi`、`@union` 或调用方式注解。
+- 编译器必须检查并拒绝在对象形状 `spec` 上使用 `@abi` 或调用方式注解。
 - 编译器必须区分“未绑定可调用值 → callable-form `spec`”的结构匹配与“callable-form `spec` → callable-form `spec`”的名义匹配。
 - 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
 - 编译器必须把实例化后签名完全一致的 callable-form `spec` 显式转换 lower 为零转发的目标视角重解释; 不得为该转换生成新的 wrapper/closure,也不得让转换后的每次调用比转换前多一层 invoke forwarding。

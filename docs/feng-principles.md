@@ -14,7 +14,7 @@
 
 - `extern func` 用于声明无函数体的外部函数; `extern` 只能用于顶层 `func`,不得用于 `type`、`enum`、`spec`、`fit`、模块级 `let` / `var` 或其他声明。当前公共规范明确定义的目标路径是 C ABI 导入。
 - `@abi` 仅用于标记对象形式的 `type`、callable-form 的 `spec` 与顶层 `func` 需要接受 ABI 兼容性检查; `@abi` 不改变运行时表示。
-- 对象形式的 `@abi type` 用于声明可导出 ABI payload 的对象类型; `@abi @union type` 用于声明 ABI 联合体 payload。
+- 对象形式的 `@abi type` 用于声明可导出 ABI payload 的对象类型。
 - callable-form 的 `@abi spec` 用于声明 ABI 函数签名; 对应的原生函数指针类型写作 `Foo*`。
 - 带参数的 `@cdecl`、`@stdcall` 和 `@fastcall` 定义 `extern func` 的 C ABI 导入路径; 无参数形式只用于描述顶层 `@abi func` 进入 ABI 边界时的调用方式,不改变其“由 Feng 提供实现”的语义身份。
 - 哪些声明与类型能够进入 C ABI 边界,以及对应的兼容资格、借用规则与函数指针规则,统一见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。

@@ -726,22 +726,6 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             }
         }
     }
-    if (decl->union_annotated) {
-        FengSymbolFtAttrRecord attr;
-
-        memset(&attr, 0, sizeof(attr));
-        attr.symbol_id = symbol_id;
-        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_UNION;
-        if (!append_record((void **)&ctx->attrs,
-                           &ctx->attr_count,
-                           sizeof(attr),
-                           &attr,
-                           path,
-                           token,
-                           out_error)) {
-            return false;
-        }
-    }
     if (decl->calling_convention != FENG_ANNOTATION_NONE) {
         FengSymbolFtAttrRecord attr;
 

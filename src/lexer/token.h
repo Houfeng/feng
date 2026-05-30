@@ -52,7 +52,6 @@ extern "C" {
 #define FENG_BUILTIN_ANNOTATION_LIST(X) \
     X(ABI, "abi") \
     X(FIXED, "fixed") \
-    X(UNION, "union") \
     X(CDECL, "cdecl") \
     X(STDCALL, "stdcall") \
     X(FASTCALL, "fastcall") \
@@ -120,10 +119,15 @@ typedef enum FengTokenKind {
 
 typedef enum FengAnnotationKind {
     FENG_ANNOTATION_NONE = 0,
-    FENG_ANNOTATION_CUSTOM,
-#define FENG_DECLARE_ANNOTATION_KIND(name, text) FENG_ANNOTATION_##name,
-    FENG_BUILTIN_ANNOTATION_LIST(FENG_DECLARE_ANNOTATION_KIND)
-#undef FENG_DECLARE_ANNOTATION_KIND
+    FENG_ANNOTATION_CUSTOM = 1,
+    FENG_ANNOTATION_ABI = 2,
+    FENG_ANNOTATION_FIXED = 3,
+    /* Keep calling-convention values stable in .ft attrs; value 4 was @union. */
+    FENG_ANNOTATION_CDECL = 5,
+    FENG_ANNOTATION_STDCALL = 6,
+    FENG_ANNOTATION_FASTCALL = 7,
+    FENG_ANNOTATION_RUNTIME = 8,
+    FENG_ANNOTATION_BOUNDED = 9
 } FengAnnotationKind;
 
 typedef struct FengToken {

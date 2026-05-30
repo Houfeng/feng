@@ -1109,13 +1109,13 @@ static void test_fixed_type_rejects_direct_callable_field_type(void) {
     feng_program_free(program);
 }
 
-static void test_fixed_function_type_rejects_union_annotation(void) {
+static void test_unknown_top_level_annotation_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
         "@abi\n"
         "@union\n"
         "spec Cmp(a: int, b: int): int;\n";
-    FengProgram *program = parse_program_or_die("fixed_function_type_union_error.f", source);
+    FengProgram *program = parse_program_or_die("unknown_top_level_annotation_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1123,9 +1123,9 @@ static void test_fixed_function_type_rejects_union_annotation(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "fixed_function_type_union_error.f") == 0);
-    ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "type 'Cmp' cannot be marked as @abi") != NULL);
+    ASSERT(strcmp(errors[0].path, "unknown_top_level_annotation_error.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "unknown annotation '@union' is not supported") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -1569,14 +1569,14 @@ static void test_object_form_spec_rejects_fixed_annotation(void) {
     feng_program_free(program);
 }
 
-static void test_object_form_spec_rejects_union_annotation(void) {
+static void test_unknown_member_annotation_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
-        "@union\n"
-        "spec Shape {\n"
+        "type Shape {\n"
+        "    @union\n"
         "    var x: int;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("object_spec_union_error.f", source);
+    FengProgram *program = parse_program_or_die("unknown_member_annotation_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -1585,7 +1585,7 @@ static void test_object_form_spec_rejects_union_annotation(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message,
-                  "spec 'Shape' cannot use @union") != NULL);
+                  "unknown annotation '@union' is not supported") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -14088,7 +14088,7 @@ int main(void) {
     test_fixed_type_rejects_inline_abi_object_field_type();
     test_fixed_type_rejects_direct_array_field_type();
     test_fixed_type_rejects_direct_callable_field_type();
-    test_fixed_function_type_rejects_union_annotation();
+    test_unknown_top_level_annotation_is_rejected();
     test_fixed_function_accepts_abi_stable_signature();
     test_fixed_function_accepts_fieldless_abi_type_pointer_signature();
     test_fixed_function_rejects_fieldless_abi_type_value_parameter();
@@ -14106,7 +14106,7 @@ int main(void) {
     test_fixed_function_type_rejects_direct_lambda_value();
     test_fixed_function_type_rejects_captured_lambda_binding();
     test_object_form_spec_rejects_fixed_annotation();
-    test_object_form_spec_rejects_union_annotation();
+    test_unknown_member_annotation_is_rejected();
     test_fixed_callable_spec_accepts_fixed_type_parameter();
     test_fixed_callable_spec_accepts_fieldless_abi_type_pointer_signature();
     test_fixed_callable_spec_accepts_abi_array_parameter();

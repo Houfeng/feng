@@ -969,10 +969,6 @@ static bool parse_attrs(ReadContext *ctx,
         if (decl == NULL) {
             continue;
         }
-        if (kind == FENG_SYMBOL_ATTR_UNION) {
-            decl->union_annotated = true;
-            continue;
-        }
         if (kind == FENG_SYMBOL_ATTR_CALL_CONV) {
             decl->calling_convention = (FengAnnotationKind)value0;
             continue;

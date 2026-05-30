@@ -33,7 +33,7 @@ static void test_top_level_declarations(void) {
         "let point_lib = \"./libpoint.so\";\n"
         "@cdecl(point_lib)\n"
         "extern func point_distance(p1: Point, p2: Point): float;\n"
-        "@union\n"
+        "@abi\n"
         "type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
@@ -60,7 +60,7 @@ static void test_top_level_declarations(void) {
     ASSERT(program->declarations[2]->kind == FENG_DECL_TYPE);
     ASSERT(!program->declarations[2]->is_extern);
     ASSERT(program->declarations[2]->annotation_count == 1U);
-    ASSERT(program->declarations[2]->annotations[0].builtin_kind == FENG_ANNOTATION_UNION);
+    ASSERT(program->declarations[2]->annotations[0].builtin_kind == FENG_ANNOTATION_ABI);
     ASSERT(program->declarations[2]->as.type_decl.member_count == 2U);
 
     ASSERT(program->declarations[3]->kind == FENG_DECL_SPEC);

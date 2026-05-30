@@ -2535,6 +2535,32 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
     return true;
 }
 
+static bool validate_supported_decl_annotations(ResolveContext *context, const FengDecl *decl) {
+    size_t annotation_index;
+
+    if (context == NULL || decl == NULL) {
+        return true;
+    }
+
+    for (annotation_index = 0U; annotation_index < decl->annotation_count; ++annotation_index) {
+        const FengAnnotation *annotation = &decl->annotations[annotation_index];
+
+        if (annotation->builtin_kind != FENG_ANNOTATION_CUSTOM) {
+            continue;
+        }
+
+        return resolver_append_error(
+            context,
+            annotation->token,
+            format_message(
+                "unknown annotation '@%.*s' is not supported",
+                (int)annotation->name.length,
+                annotation->name.data));
+    }
+
+    return true;
+}
+
 static bool validate_runtime_annotation_on_member(ResolveContext *context,
                                                   const FengTypeMember *member) {
     const FengAnnotation *runtime_annotation;
@@ -2554,6 +2580,33 @@ static bool validate_runtime_annotation_on_member(ResolveContext *context,
         runtime_annotation->token,
         format_message("@runtime only applies to top-level extern func declarations")) &&
            false;
+}
+
+static bool validate_supported_member_annotations(ResolveContext *context,
+                                                  const FengTypeMember *member) {
+    size_t annotation_index;
+
+    if (context == NULL || member == NULL) {
+        return true;
+    }
+
+    for (annotation_index = 0U; annotation_index < member->annotation_count; ++annotation_index) {
+        const FengAnnotation *annotation = &member->annotations[annotation_index];
+
+        if (annotation->builtin_kind != FENG_ANNOTATION_CUSTOM) {
+            continue;
+        }
+
+        return resolver_append_error(
+            context,
+            annotation->token,
+            format_message(
+                "unknown annotation '@%.*s' is not supported",
+                (int)annotation->name.length,
+                annotation->name.data));
+    }
+
+    return true;
 }
 
 static bool extern_library_annotation_arg_is_valid(ResolveContext *context, const FengExpr *expr) {
@@ -13683,10 +13736,6 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
     }
 
     if (decl_is_function_type(decl)) {
-        if (annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_UNION)) {
-            return false;
-        }
-
         for (param_index = 0U; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
             if (!type_ref_is_abi_stable(context,
                                               decl->as.spec_decl.as.callable.params[param_index].type,
@@ -13798,7 +13847,6 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
     size_t param_index;
     bool has_abi;
     bool has_legacy_fixed;
-    bool has_union;
 
     if (context == NULL || decl == NULL || (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_SPEC)) {
         return true;
@@ -13807,7 +13855,6 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
     has_abi = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_ABI);
     has_legacy_fixed =
         annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_FIXED);
-    has_union = annotations_contain_kind(decl->annotations, decl->annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(decl->annotations, decl->annotation_count);
 
     if (has_legacy_fixed) {
@@ -13822,8 +13869,8 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
 
     /* Object-form `spec` only describes a visible shape contract; it does not
      * fix memory layout or ABI value layout, so it cannot enter the C ABI
-     * boundary. Reject @abi, @union and calling-convention annotations on
-     * object-form spec declarations with an explicit, actionable diagnostic. */
+     * boundary. Reject @abi and calling-convention annotations on object-form
+     * spec declarations with an explicit, actionable diagnostic. */
     if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
         if (has_abi) {
             return resolver_append_error(
@@ -13831,15 +13878,6 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
                 decl->token,
                 format_message(
                     "object-form spec '%.*s' cannot be marked as @abi; @abi only applies to type declarations and callable-form spec",
-                    (int)decl_typeish_name(decl).length,
-                    decl_typeish_name(decl).data));
-        }
-        if (has_union) {
-            return resolver_append_error(
-                context,
-                decl->token,
-                format_message(
-                    "spec '%.*s' cannot use @union; @union only applies to object-form @abi type declarations",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -13856,15 +13894,6 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
     }
 
     if (!has_abi) {
-        if (has_union) {
-            return resolver_append_error(
-                context,
-                decl->token,
-                format_message(
-                    "type '%.*s' cannot use @union unless it is marked as @abi and declared in object form",
-                    (int)decl_typeish_name(decl).length,
-                    decl_typeish_name(decl).data));
-        }
         if (callconv_count != 0U) {
             return resolver_append_error(
                 context,
@@ -13882,16 +13911,6 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             decl->token,
             format_message(
                 "type '%.*s' cannot be marked as @abi because calling convention annotations do not apply to type declarations",
-                (int)decl_typeish_name(decl).length,
-                    decl_typeish_name(decl).data));
-    }
-
-    if (decl_is_function_type(decl) && has_union) {
-        return resolver_append_error(
-            context,
-            decl->token,
-            format_message(
-                "type '%.*s' cannot be marked as @abi because @union only applies to object-form @abi type declarations",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
     }
@@ -13992,7 +14011,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     size_t callconv_count;
     bool has_abi;
     bool has_legacy_fixed;
-    bool has_union;
     size_t param_index;
 
     if (context == NULL || callable == NULL) {
@@ -14001,7 +14019,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
 
     has_abi = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
     has_legacy_fixed = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_FIXED);
-    has_union = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(annotations, annotation_count);
     calling_convention = find_calling_convention_annotation(annotations, annotation_count);
 
@@ -14017,15 +14034,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
     }
 
     if (!has_abi) {
-        if (has_union) {
-            return resolver_append_error(
-                context,
-                token,
-                format_message("%s '%.*s' cannot use @union",
-                               callable_kind,
-                               (int)name.length,
-                               name.data));
-        }
         if (callconv_count != 0U && !is_extern) {
             return resolver_append_error(
                 context,
@@ -14045,17 +14053,6 @@ static bool validate_abi_callable_signature(ResolveContext *context,
             token,
             format_message(
                 "%s '%.*s' cannot be marked as @abi because extern functions declare imported C symbols",
-                callable_kind,
-                (int)name.length,
-                name.data));
-    }
-
-    if (has_union) {
-        return resolver_append_error(
-            context,
-            token,
-            format_message(
-                "%s '%.*s' cannot be marked as @abi because @union only applies to object-form @abi type declarations",
                 callable_kind,
                 (int)name.length,
                 name.data));
@@ -14320,7 +14317,6 @@ static bool validate_abi_function_declaration(ResolveContext *context, const Fen
 static bool validate_abi_callable_member(ResolveContext *context, const FengTypeMember *member) {
     bool has_fixed;
     bool has_legacy_fixed;
-    bool has_union;
     size_t callconv_count;
 
     if (member == NULL || member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -14330,7 +14326,6 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
     has_fixed = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_ABI);
     has_legacy_fixed =
         annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_FIXED);
-    has_union = annotations_contain_kind(member->annotations, member->annotation_count, FENG_ANNOTATION_UNION);
     callconv_count = count_calling_convention_annotations(member->annotations, member->annotation_count);
 
     if (has_legacy_fixed) {
@@ -14344,7 +14339,7 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
     }
 
     if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
-        if (!has_fixed && !has_union && callconv_count == 0U) {
+        if (!has_fixed && callconv_count == 0U) {
             return true;
         }
 
@@ -14358,7 +14353,7 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
     }
 
     if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
-        if (!has_fixed && !has_union && callconv_count == 0U) {
+        if (!has_fixed && callconv_count == 0U) {
             return true;
         }
 
@@ -19129,6 +19124,10 @@ static bool validate_type_param_constraints(ResolveContext *context,
 static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     size_t index;
 
+    if (!validate_supported_decl_annotations(context, decl)) {
+        return false;
+    }
+
     if (!validate_runtime_annotation_on_decl(context, decl)) {
         return false;
     }
@@ -19175,6 +19174,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
+
+                if (!validate_supported_member_annotations(context, member)) {
+                    ok = false;
+                    break;
+                }
 
                 if (!validate_runtime_annotation_on_member(context, member)) {
                     ok = false;
@@ -19335,6 +19339,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             for (index = 0U; ok && index < decl->as.spec_decl.as.object.member_count; ++index) {
                 const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
 
+                if (!validate_supported_member_annotations(context, member)) {
+                    ok = false;
+                    break;
+                }
+
                 if (!validate_runtime_annotation_on_member(context, member)) {
                     ok = false;
                     break;
@@ -19440,6 +19449,14 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengTypeMember *previous_callable_member =
                     context->current_callable_member;
                 bool member_ok;
+
+                if (!validate_supported_member_annotations(context, member)) {
+                    if (fit_scope_pushed) {
+                        resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                    }
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                    return false;
+                }
 
                 if (!member->is_static &&
                     fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE) {

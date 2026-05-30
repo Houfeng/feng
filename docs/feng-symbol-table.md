@@ -491,7 +491,7 @@ read header
 `ATRS` 的用途:
 
 - 承载新语法对应的声明级附加语义,例如未来新增的修饰符、ABI 扩展元信息或额外约束。
-- 承载当前已存在但不适合硬塞进 `SYMS` 固定字段的元信息,例如 `@union`、调用约定、外部库来源。
+- 承载当前已存在但不适合硬塞进 `SYMS` 固定字段的元信息,例如调用约定、外部库来源。
 - 让 future feature 尽量通过“追加 attr key”演进,而不是频繁改动 Header 或 core section 布局。
 
 `ATRS` 的记录策略如下:
@@ -516,7 +516,6 @@ attr key 常量建议如下:
 | 常量 | 值 | owner | 说明 |
 | --- | --- | --- | --- |
 | `FT_ATTR_DECLARED_SPECS` | `0x0001` | `type` / `spec` | 头部 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |
-| `FT_ATTR_UNION` | `0x0002` | `type` | `@union` 标记 |
 | `FT_ATTR_CALL_CONV` | `0x0003` | `extern_fn` | ABI 调用约定枚举值；`value0` = 调用约定枚举 |
 | `FT_ATTR_ABI_LIBRARY` | `0x0004` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
 | `FT_ATTR_FIT_SPECS` | `0x0005` | `fit` | `fit A: B, C` 右侧 `spec` 使用范围；`value0 = first_type_id`, `value1 = count` |

@@ -12,7 +12,6 @@
 - `@abi` 仅用于编译器做 ABI 兼容性检查,不引入新的运行时信息,不改变类型或函数值在 Feng 中的运行时表示。
 - `@abi` 可写为无参形式或带一个目标参数; 当前无参等价于 `@abi("c")`,本文仅定义 `c` 目标语义; 未来可扩展为 `@abi("wasi")` 等其他目标。
 - 当前版本中,`@abi` 仅适用于对象形式的 `type`、callable-form 的 `spec` 和顶层 `func`; 对象形式的 `spec`、方法、lambda 与闭包都不是当前 `@abi` 目标。
-- `@union` 仅适用于对象形式的 `@abi type`; 未标注 `@union` 时按 ABI 结构体 payload 处理,标注 `@union` 时按 ABI 联合体 payload 处理。
 - 指针类型 `T*` 与函数指针类型 `Foo*` 在 Feng 中都是不透明句柄: 不可直接解引用、不可运算、不可显式转换; `Foo*` 也不可直接调用。仅允许同类型指针参与 `==` / `!=`,结果按原生指针地址身份判定。
 - `string` 与 ABI 兼容数组在 ABI 边界上采用默认借用、优先 0 拷贝的规则; 具体 ABI 形状由 `extern func` 签名显式表达,语言不预设未知 C API。
 - 编译器私有的 runtime contract helper 不属于本文定义的公共 C ABI 规则; 本文不展开这类内部入口。
@@ -87,7 +86,7 @@ open func create_point_export(x: int, y: int): Point {
 - `extern func` 参数位或返回位写成 `Foo*` 时,表示开发者声明该 ABI 位承载与 `Foo` 签名兼容的原生函数指针; 编译器只检查静态类型一致。
 - `string` 与 ABI 兼容数组只在可调用 ABI 边界上定义; 它们不属于 `@abi type` 可直接内联的字段类型。
 
-## 4 `@abi type` 与 `@union`
+## 4 `@abi type`
 
 对象形式的 `type` 在标注 `@abi` 后,声明一个可供 ABI 校验与发码的 payload 视图; `@abi` 本身不改变该类型在 Feng 中的命名、对象语义、构造流程、默认零值、`==` / `!=` 语义、终结器规则或自动内存管理规则。
 
@@ -102,7 +101,6 @@ open func create_point_export(x: int, y: int): Point {
     2. 数据指针类型 `T*`,其中 `T` 只能是 `string`、ABI 兼容数组或已通过 ABI 校验的 `@abi` 类型。
     3. 函数指针类型 `Foo*`,其中 `Foo` 必须是 callable-form 的 `@abi spec`。
 - 因此,`@abi type` 不允许直接把 `string`、数组、`@abi` 对象值或 callable-form `spec` 值本体内联为字段; 需要出现这些能力时必须通过对应的 `T*` 或 `Foo*` 字段表达。
-- `@union` 仅适用于对象形式的 `@abi type`,不适用于 callable-form 的 `@abi spec`。
 - 方法、构造函数、访问控制和注解本身都不参与 `@abi type` 的字段 ABI 校验; 方法定义不改变 payload 结果。
 - `@abi type` 进入 ABI 边界时,传值或传指针完全由签名决定: 参数类型为 `T` 则按 ABI payload 值语义传递,参数类型为 `T*` 则传递该 payload 的地址; 编译器不做隐式兜底转换。
 - 在 `extern func`、顶层 `@abi func` 与 callable-form `@abi spec` 中,无字段对象形式 `@abi type` 只能以 `T*` 形态出现,不能按值写成 `T`。
@@ -130,12 +128,6 @@ type UserType2 {
     var q: Point*;   // 合法
 }
 
-@abi
-@union
-type IntOrFloat {
-    var i: int;
-    var f: float;
-}
 ```
 
 ## 5 `@abi spec`、`Foo*` 与 `@abi func`
@@ -144,7 +136,7 @@ callable-form 的 `spec` 在标注 `@abi` 后,用于定义 ABI 函数签名类�
 
 规则说明:
 
-- `@abi spec` 仅适用于 callable-form `spec`; 对象形式的 `spec` 不得标记 `@abi`、`@union` 或调用方式注解。
+- `@abi spec` 仅适用于 callable-form `spec`; 对象形式的 `spec` 不得标记 `@abi` 或调用方式注解。
 - 编译器必须检查 `@abi spec` 的全部参数与返回值是否 ABI 兼容; 其中无字段对象形式 `@abi type` 只能以 `T*` 形态出现。
 - `Foo` 本身仍是普通 callable-form `spec`,不引入新的运行时差异; `Foo*` 属于指针类型体系,与 `T*` 同级并遵循相同的不透明规则。
 - `Foo*` 可直接用作 `extern func` 的参数类型、返回类型以及 `@abi type` 的成员字段类型。
