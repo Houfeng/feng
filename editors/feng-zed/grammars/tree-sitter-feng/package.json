@@ -1,0 +1,12 @@
+{
+  "name": "tree-sitter-feng",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tree-sitter grammar for Feng",
+  "main": "grammar.js",
+  "keywords": ["tree-sitter", "feng"],
+  "license": "MIT",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.24.7"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Feng Debug Adapter Configuration",
+  "type": "object",
+  "required": ["request"],
+  "properties": {
+    "request": {
+      "type": "string",
+      "enum": ["launch", "attach"],
+      "description": "DAP request kind."
+    },
+    "program": {
+      "type": "string",
+      "description": "Path to the program to debug for launch requests."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for the debuggee."
+    },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Arguments passed to the debuggee program."
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Environment variables passed to the debuggee program."
+    },
+    "stopOnEntry": {
+      "type": "boolean",
+      "description": "Whether to break at entry."
+    },
+    "pid": {
+      "type": ["integer", "string"],
+      "description": "Target process id for attach requests."
+    }
+  },
+  "additionalProperties": true
+}

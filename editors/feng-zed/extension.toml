@@ -1,0 +1,18 @@
+id = "feng-language"
+name = "Feng Language"
+version = "0.1.0"
+schema_version = 1
+authors = ["Houfeng <houfeng@outlook.com>"]
+description = "Syntax highlighting, LSP, and DAP support for the Feng language in Zed."
+repository = "https://github.com/Houfeng/feng"
+
+[grammars.feng]
+repository = "file://grammars/tree-sitter-feng"
+commit = "HEAD"
+
+[language_servers.feng_lsp]
+name = "Feng LSP"
+language = "Feng"
+
+[debug_adapters.feng]
+schema_path = "debug_adapter_schemas/feng.json"

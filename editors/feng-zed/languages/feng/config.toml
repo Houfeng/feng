@@ -1,0 +1,14 @@
+name = "Feng"
+grammar = "feng"
+path_suffixes = ["feng", "ff"]
+line_comments = ["// "]
+
+block_comment = { start = "/*", end = "*/" }
+
+debuggers = ["feng"]
+
+brackets = [
+  { start = "{", end = "}", close = true, newline = true },
+  { start = "[", end = "]", close = true, newline = true },
+  { start = "(", end = ")", close = true, newline = true }
+]
