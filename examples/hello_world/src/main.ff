@@ -4,6 +4,10 @@ import std;
 
 let TEST_NAME = "hello_world";
 
+/**
+ * This is a simple "Hello, world!" program in Flare. 
+ * It prints "Hello, world!" 1000 times to the console. 
+ */
 func main(args: string[]) {
   println("Running test: " + TEST_NAME);
   let x = "123".length();
