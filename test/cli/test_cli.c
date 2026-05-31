@@ -7839,6 +7839,155 @@ static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
     free(hover_output);
 }
 
+static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation(void) {
+    static const char *kSource =
+        "module test.lsp.fitmember;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "fit User {\n"
+        "    func tag(let prefix: string): User {\n"
+        "        return self;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let user: User = User { name: \"copilot\" };\n"
+        "    let tagged: User = user.tag(\"hi\");\n"
+        "}\n";
+    char template_path[] = "/tmp/feng_cli_lsp_fit_member_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *hover_method;
+    char *definition_method;
+    char *hover_param;
+    char *hover_return_type;
+    char *definition_return_type;
+    char *shutdown;
+    char *output;
+    char *expected_method_definition;
+    char *expected_return_definition;
+    FILE *input;
+    unsigned int method_line;
+    unsigned int method_character;
+    unsigned int param_line;
+    unsigned int param_character;
+    unsigned int return_type_line;
+    unsigned int return_type_character;
+    unsigned int user_decl_line;
+    unsigned int user_decl_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource,
+                        "    func tag(let prefix: string): User {",
+                        9U,
+                        &method_line,
+                        &method_character);
+    find_line_character(kSource,
+                        "    func tag(let prefix: string): User {",
+                        strlen("    func tag(let "),
+                        &param_line,
+                        &param_character);
+    find_line_character(kSource,
+                        "    func tag(let prefix: string): User {",
+                        strlen("    func tag(let prefix: string): "),
+                        &return_type_line,
+                        &return_type_character);
+    find_line_character(kSource,
+                        "type User {",
+                        5U,
+                        &user_decl_line,
+                        &user_decl_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+                          uri,
+                          escaped_text);
+    hover_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                              uri,
+                              method_line,
+                              method_character + 1U);
+    definition_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   uri,
+                                   method_line,
+                                   method_character + 1U);
+    hover_param = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                             uri,
+                             param_line,
+                             param_character + 2U);
+    hover_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   uri,
+                                   return_type_line,
+                                   return_type_character + 1U);
+    definition_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                        uri,
+                                        return_type_line,
+                                        return_type_character + 1U);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    expected_method_definition = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u",
+                                         uri,
+                                         method_line);
+    expected_return_definition = dup_printf("\"id\":6,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+                                         uri,
+                                         user_decl_line,
+                                         user_decl_character);
+
+    input = tmpfile();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_method);
+    write_lsp_message(input, definition_method);
+    write_lsp_message(input, hover_param);
+    write_lsp_message(input, hover_return_type);
+    write_lsp_message(input, definition_return_type);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":") != NULL);
+    ASSERT(strstr(output, "func tag(prefix: string): User") != NULL);
+    ASSERT(strstr(output, expected_method_definition) != NULL);
+    ASSERT(strstr(output, "\"id\":4,\"result\":") != NULL);
+    ASSERT(strstr(output, "let prefix: string") != NULL);
+    ASSERT(strstr(output, "\"id\":5,\"result\":") != NULL);
+    ASSERT(strstr(output, "type User") != NULL);
+    ASSERT(strstr(output, expected_return_definition) != NULL);
+
+    free(output);
+    free(expected_return_definition);
+    free(expected_method_definition);
+    free(shutdown);
+    free(definition_return_type);
+    free(hover_return_type);
+    free(hover_param);
+    free(definition_method);
+    free(hover_method);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 static void assert_lsp_completion_contains_labels(const char *source,
                                                   const char *needle,
                                                   size_t char_offset,
@@ -11633,7 +11782,7 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
      * function parameter.  Before the fix, find_expr_hit skipped if-expression
      * bodies, so the result was null. */
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
-    ASSERT(strstr(output, "param n: int") != NULL);
+    ASSERT(strstr(output, "let n: int") != NULL || strstr(output, "var n: int") != NULL);
 
     /* Hover on `i` in `i += 1` (for-loop update) must resolve to the for-init
      * binding.  Before the fix, find_expr_hit_in_block skipped the update
@@ -12730,6 +12879,7 @@ int main(void) {
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_uses_inferred_top_level_binding_type();
     test_lsp_signature_displays_variadic_parameter_syntax();
+    test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
         test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();

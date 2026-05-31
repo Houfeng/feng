@@ -1861,6 +1861,18 @@ static bool offset_in_token(FengToken token, size_t offset) {
     return offset >= token.offset && offset <= token_end_offset(token);
 }
 
+static bool offset_in_slice_from_source(const char *source_text,
+                                        FengSlice slice,
+                                        size_t offset) {
+    size_t start;
+
+    if (source_text == NULL || slice.data == NULL) {
+        return false;
+    }
+    start = (size_t)(slice.data - source_text);
+    return offset >= start && offset <= start + slice.length;
+}
+
 static size_t named_type_ref_end(const FengTypeRef *type_ref) {
     size_t cursor = type_ref->token.offset;
     size_t index;
@@ -4358,7 +4370,8 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
     return NULL;
 }
 
-static bool find_decl_token_hit(const FengDecl *decl,
+static bool find_decl_token_hit(const char *source_text,
+                                const FengDecl *decl,
                                 size_t offset,
                                 FengLspResolvedTarget *target);
 static bool find_type_ref_hit(const FengDecl *decl,
@@ -4366,16 +4379,19 @@ static bool find_type_ref_hit(const FengDecl *decl,
                               const FengLspAnalysisSession *session,
                               size_t offset,
                               FengLspResolvedTarget *target);
+static FengSlice member_name_slice(const FengTypeMember *member);
 static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset);
 static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t offset);
 
-static bool find_decl_token_hit_member(const FengDecl *owner_decl,
+static bool find_decl_token_hit_member(const char *source_text,
+                                       const FengDecl *owner_decl,
                                        const FengTypeMember *member,
                                        size_t offset,
                                        FengLspResolvedTarget *target) {
     size_t index;
 
-    if (offset_in_token(member->token, offset)) {
+    if (offset_in_token(member->token, offset) ||
+        offset_in_slice_from_source(source_text, member_name_slice(member), offset)) {
         target->kind = FENG_LSP_RESOLVED_MEMBER;
         target->decl = owner_decl;
         target->member = member;
@@ -4385,7 +4401,10 @@ static bool find_decl_token_hit_member(const FengDecl *owner_decl,
         return false;
     }
     for (index = 0U; index < member->as.callable.param_count; ++index) {
-        if (offset_in_token(member->as.callable.params[index].token, offset)) {
+        if (offset_in_token(member->as.callable.params[index].token, offset) ||
+            offset_in_slice_from_source(source_text,
+                                        member->as.callable.params[index].name,
+                                        offset)) {
             target->kind = FENG_LSP_RESOLVED_PARAM;
             target->parameter = &member->as.callable.params[index];
             return true;
@@ -4394,12 +4413,17 @@ static bool find_decl_token_hit_member(const FengDecl *owner_decl,
     return false;
 }
 
-static bool find_decl_token_hit(const FengDecl *decl,
+static bool find_decl_token_hit(const char *source_text,
+                                const FengDecl *decl,
                                 size_t offset,
                                 FengLspResolvedTarget *target) {
     size_t index;
+    FengSlice decl_slice;
 
-    if (offset_in_token(decl->token, offset)) {
+    decl_slice = decl_name(decl);
+    if (offset_in_token(decl->token, offset) ||
+        (decl->kind != FENG_DECL_FIT &&
+         offset_in_slice_from_source(source_text, decl_slice, offset))) {
         target->kind = FENG_LSP_RESOLVED_DECL;
         target->decl = decl;
         return true;
@@ -4407,7 +4431,10 @@ static bool find_decl_token_hit(const FengDecl *decl,
     switch (decl->kind) {
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
-                if (offset_in_token(decl->as.function_decl.params[index].token, offset)) {
+                if (offset_in_token(decl->as.function_decl.params[index].token, offset) ||
+                    offset_in_slice_from_source(source_text,
+                                                decl->as.function_decl.params[index].name,
+                                                offset)) {
                     target->kind = FENG_LSP_RESOLVED_PARAM;
                     target->parameter = &decl->as.function_decl.params[index];
                     return true;
@@ -4418,7 +4445,8 @@ static bool find_decl_token_hit(const FengDecl *decl,
             break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
-                if (find_decl_token_hit_member(decl,
+                if (find_decl_token_hit_member(source_text,
+                                               decl,
                                                decl->as.type_decl.members[index],
                                                offset,
                                                target)) {
@@ -4429,7 +4457,8 @@ static bool find_decl_token_hit(const FengDecl *decl,
         case FENG_DECL_SPEC:
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
-                    if (find_decl_token_hit_member(decl,
+                    if (find_decl_token_hit_member(source_text,
+                                                   decl,
                                                    decl->as.spec_decl.as.object.members[index],
                                                    offset,
                                                    target)) {
@@ -4440,7 +4469,8 @@ static bool find_decl_token_hit(const FengDecl *decl,
             break;
         case FENG_DECL_FIT:
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
-                if (find_decl_token_hit_member(decl,
+                if (find_decl_token_hit_member(source_text,
+                                               decl,
                                                decl->as.fit_decl.members[index],
                                                offset,
                                                target)) {
@@ -5554,7 +5584,10 @@ static char *hover_text_for_target(const FengLspAnalysisSession *session,
             doc = normalize_doc_comment(target->member->doc_comment);
             break;
         case FENG_LSP_RESOLVED_PARAM:
-            if (!string_append_cstr(&signature, "param ") ||
+            if (!string_append_cstr(&signature,
+                                    target->parameter->mutability == FENG_MUTABILITY_VAR
+                                        ? "var "
+                                        : "let ") ||
                 !string_append_bytes(&signature,
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
@@ -5951,7 +5984,10 @@ static char *hover_text_for_cache_target(const FengLspCacheResolvedTarget *targe
             doc = feng_symbol_decl_doc(target->member);
             break;
         case FENG_LSP_RESOLVED_PARAM:
-            if (!string_append_cstr(&signature, "param ") ||
+            if (!string_append_cstr(&signature,
+                                    target->parameter->mutability == FENG_MUTABILITY_VAR
+                                        ? "var "
+                                        : "let ") ||
                 !string_append_bytes(&signature,
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
@@ -6658,6 +6694,8 @@ static bool resolve_target_at(const FengLspAnalysisSession *session,
                               size_t offset,
                               FengLspResolvedTarget *target) {
     size_t decl_index;
+    const FengCliLoadedSource *source;
+    const char *source_text;
     const FengDecl *enclosing_decl;
     const FengTypeMember *enclosing_member;
     FengLspLocalList locals = {0};
@@ -6672,12 +6710,17 @@ static bool resolve_target_at(const FengLspAnalysisSession *session,
         local_list_dispose(&locals);
         return false;
     }
+    source = find_source(session, program->path);
+    source_text = source != NULL ? source->source : NULL;
     for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
-        if (find_decl_token_hit(program->declarations[decl_index], offset, target)) {
+        if (find_type_ref_hit(program->declarations[decl_index], program, session, offset, target)) {
             local_list_dispose(&locals);
             return true;
         }
-        if (find_type_ref_hit(program->declarations[decl_index], program, session, offset, target)) {
+        if (find_decl_token_hit(source_text,
+                                program->declarations[decl_index],
+                                offset,
+                                target)) {
             local_list_dispose(&locals);
             return true;
         }
@@ -8517,7 +8560,8 @@ static bool find_symbol_decl_token_hit_member(const FengLspCacheQueryContext *co
                                               FengLspCacheResolvedTarget *target) {
     size_t index;
 
-    if (offset_in_token(member->token, offset)) {
+    if (offset_in_token(member->token, offset) ||
+        offset_in_slice_from_source(context->source_text, member_name_slice(member), offset)) {
         const FengSymbolDeclView *owner_symbol = match_ast_decl_to_symbol(context->current_module,
                                                                           context->program,
                                                                           owner_decl);
@@ -8536,7 +8580,10 @@ static bool find_symbol_decl_token_hit_member(const FengLspCacheQueryContext *co
         return false;
     }
     for (index = 0U; index < member->as.callable.param_count; ++index) {
-        if (offset_in_token(member->as.callable.params[index].token, offset)) {
+        if (offset_in_token(member->as.callable.params[index].token, offset) ||
+            offset_in_slice_from_source(context->source_text,
+                                        member->as.callable.params[index].name,
+                                        offset)) {
             target->kind = FENG_LSP_RESOLVED_PARAM;
             target->parameter = &member->as.callable.params[index];
             return true;
@@ -8550,8 +8597,12 @@ static bool find_symbol_decl_token_hit(const FengLspCacheQueryContext *context,
                                        size_t offset,
                                        FengLspCacheResolvedTarget *target) {
     size_t index;
+    FengSlice decl_slice;
 
-    if (offset_in_token(decl->token, offset)) {
+    decl_slice = decl_name(decl);
+    if (offset_in_token(decl->token, offset) ||
+        (decl->kind != FENG_DECL_FIT &&
+         offset_in_slice_from_source(context->source_text, decl_slice, offset))) {
         const FengSymbolDeclView *symbol_decl = match_ast_decl_to_symbol(context->current_module,
                                                                          context->program,
                                                                          decl);
@@ -8565,7 +8616,10 @@ static bool find_symbol_decl_token_hit(const FengLspCacheQueryContext *context,
     switch (decl->kind) {
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
-                if (offset_in_token(decl->as.function_decl.params[index].token, offset)) {
+                if (offset_in_token(decl->as.function_decl.params[index].token, offset) ||
+                    offset_in_slice_from_source(context->source_text,
+                                                decl->as.function_decl.params[index].name,
+                                                offset)) {
                     target->kind = FENG_LSP_RESOLVED_PARAM;
                     target->parameter = &decl->as.function_decl.params[index];
                     return true;
@@ -8998,17 +9052,17 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
         return false;
     }
     for (decl_index = 0U; decl_index < context->program->declaration_count; ++decl_index) {
-        if (find_symbol_decl_token_hit(context,
-                                       context->program->declarations[decl_index],
-                                       offset,
-                                       target)) {
-            local_list_dispose(&locals);
-            return true;
-        }
         if (find_symbol_type_ref_hit(context,
                                      context->program->declarations[decl_index],
                                      offset,
                                      target)) {
+            local_list_dispose(&locals);
+            return true;
+        }
+        if (find_symbol_decl_token_hit(context,
+                                       context->program->declarations[decl_index],
+                                       offset,
+                                       target)) {
             local_list_dispose(&locals);
             return true;
         }
