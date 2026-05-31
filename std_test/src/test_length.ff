@@ -2,6 +2,7 @@ module std_test;
 
 import std;
 import std.collections;
+import std.text;
 
 func string_length_ascii() {
   check("abc".length() == (long)3, "length/string-ascii");

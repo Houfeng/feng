@@ -1,6 +1,7 @@
 module std_test;
 
 import std;
+import std.text;
 
 func string_from_utf8_bytes_ascii() {
   let bytes: byte[] = [(byte)104, (byte)101, (byte)108, (byte)108, (byte)111];

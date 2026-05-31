@@ -1,6 +1,7 @@
 module std_test;
 
 import std;
+import std.text;
 
 func readLine_reads_one_line_per_call() {
   let first = readLine();

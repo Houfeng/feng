@@ -1,4 +1,4 @@
-open module std;
+open module std.collections;
 
 @runtime
 extern func feng_array_length_i64<T>(value: T[]): long;

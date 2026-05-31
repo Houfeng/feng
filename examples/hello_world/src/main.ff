@@ -1,6 +1,7 @@
 module hello_world;
 
 import std;
+import std.text;
 
 let TEST_NAME = "hello_world";
 

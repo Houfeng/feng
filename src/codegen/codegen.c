@@ -7954,14 +7954,25 @@ static char *cg_builtin_fit_c_prefix(CG *cg, const FengDecl *decl) {
     }
 
     is_public = decl->visibility == FENG_VISIBILITY_PUBLIC;
+    /* Use already-registered builtin fits to compute a module-wide stable
+     * ordinal. Scanning only the current source file causes cross-file fits in
+     * the same module to all mint `m0`, which breaks linker symbol matching. */
     if (owner_program != NULL) {
-        for (size_t decl_index = 0U; decl_index < owner_program->declaration_count; ++decl_index) {
-            const FengDecl *candidate = owner_program->declarations[decl_index];
+        for (size_t i = 0U; i < cg->builtin_fit_count; ++i) {
+            const BuiltinFit *registered = &cg->builtin_fits[i];
+            const FengDecl *candidate = registered->decl;
+            const FengProgram *candidate_owner = registered->owner_program;
 
-            if (candidate == decl) {
-                break;
-            }
             if (candidate == NULL || candidate->kind != FENG_DECL_FIT) {
+                continue;
+            }
+            if (candidate_owner == NULL) {
+                continue;
+            }
+            if (!cg_module_segments_equal(candidate_owner->module_segments,
+                                          candidate_owner->module_segment_count,
+                                          owner_program->module_segments,
+                                          owner_program->module_segment_count)) {
                 continue;
             }
             if (!cg_fit_target_is_builtin_form(candidate->as.fit_decl.target)) {

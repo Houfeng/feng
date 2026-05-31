@@ -1,19 +1,6 @@
 open module std.text;
 
 /**
- * A view of a string as a sequence of graphemes.
- */
-open type GraphemeView {
-  seal let text: string;
-  open func GraphemeView(text: string) {
-    self.text = text;
-  }
-  open func length(): long {
-    return 0;
-  }
-}
-
-/**
  * Extends `string` with standard length-related operations.
  */
 open fit string {
@@ -27,3 +14,17 @@ open fit string {
   }
 
 }
+
+/**
+ * A view of a string as a sequence of graphemes.
+ */
+open type GraphemeView {
+  seal let text: string;
+  open func GraphemeView(text: string) {
+    self.text = text;
+  }
+  open func length(): long {
+    return 0;
+  }
+}
+

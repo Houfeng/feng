@@ -1,6 +1,7 @@
 module std_test;
 
 import std;
+import std.text;
 
 @cdecl("libc")
 extern func write(fd: int, buf: string*, count: long): long;

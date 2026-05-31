@@ -15,7 +15,6 @@ open fit string {
 
 }
 
-
 /**
  * A view of a string as a sequence of runes.
  */

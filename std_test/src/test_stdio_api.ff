@@ -1,6 +1,7 @@
 module std_test;
 
 import std;
+import std.text;
 
 func read_reads_into_buffer() {
   let head: byte[!] = byte[: (long)3];

@@ -1,4 +1,6 @@
-open module std;
+open module std.text;
+
+import std.collections;
 
 @runtime
 extern func feng_string_utf8_length(value: string): long;

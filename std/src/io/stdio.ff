@@ -1,6 +1,7 @@
 open module std;
 
 import std.collections;
+import std.text;
 
 @cdecl("libc")
 extern func read(fd: int, buf: byte*, count: long): long;
