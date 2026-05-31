@@ -8087,6 +8087,39 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kPrefixSource, "user.n;", 6U);
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
 }
+
+static void test_lsp_fit_extension_member_completion_on_builtin_string(void) {
+    static const char *kBindingSource =
+        "module test.lsp.fitstringbinding;\n"
+        "\n"
+        "fit string {\n"
+        "    open func ext_len(): long {\n"
+        "        return (long)0;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let s: string = \"123\";\n"
+        "    let n = s.;\n"
+        "}\n";
+    static const char *kLiteralSource =
+        "module test.lsp.fitstringliteral;\n"
+        "\n"
+        "fit string {\n"
+        "    open func ext_len(): long {\n"
+        "        return (long)0;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let n = \"123\".;\n"
+        "}\n";
+    const char *labels[] = {"ext_len"};
+
+    assert_lsp_completion_contains_labels(kBindingSource, "s.;", 2U, labels, 1U);
+    assert_lsp_completion_contains_labels(kLiteralSource, "\"123\".;", 6U, labels, 1U);
+}
+
 static void test_lsp_enum_member_completion_survives_incomplete_member_access(void) {
     static const char *kDotSource =
         "module test.lsp.enumcompletiondot;\n"
@@ -12914,6 +12947,7 @@ int main(void) {
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
+    test_lsp_fit_extension_member_completion_on_builtin_string();
         test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();

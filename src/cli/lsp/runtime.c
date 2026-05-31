@@ -4240,6 +4240,304 @@ static const FengDecl *owner_decl_from_type_fact(const FengLspAnalysisSession *s
     return NULL;
 }
 
+static bool append_member_completion_item(FengLspString *json,
+                                          bool *first,
+                                          const FengTypeMember *member);
+
+static const char *builtin_name_for_single_segment_type_ref(const FengTypeRef *type_ref) {
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U || type_ref->as.named.type_arg_count != 0U) {
+        return NULL;
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "int") ||
+        slice_equals_cstr(type_ref->as.named.segments[0], "i32")) {
+        return "i32";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "long") ||
+        slice_equals_cstr(type_ref->as.named.segments[0], "i64")) {
+        return "i64";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "byte") ||
+        slice_equals_cstr(type_ref->as.named.segments[0], "u8")) {
+        return "u8";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "float") ||
+        slice_equals_cstr(type_ref->as.named.segments[0], "f32")) {
+        return "f32";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "double") ||
+        slice_equals_cstr(type_ref->as.named.segments[0], "f64")) {
+        return "f64";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "i8")) {
+        return "i8";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "i16")) {
+        return "i16";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "u16")) {
+        return "u16";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "u32")) {
+        return "u32";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "u64")) {
+        return "u64";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "bool")) {
+        return "bool";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "string")) {
+        return "string";
+    }
+    if (slice_equals_cstr(type_ref->as.named.segments[0], "void")) {
+        return "void";
+    }
+    return NULL;
+}
+
+static bool builtin_name_matches_type_ref(const FengTypeRef *type_ref, FengSlice builtin_name) {
+    const char *canonical = builtin_name_for_single_segment_type_ref(type_ref);
+
+    return canonical != NULL && slice_equals_cstr(builtin_name, canonical);
+}
+
+static bool owner_builtin_name_from_type_fact(const FengLspAnalysisSession *session,
+                                              const void *site,
+                                              FengSlice *out_name) {
+    const FengSemanticTypeFact *fact;
+
+    if (out_name == NULL) {
+        return false;
+    }
+    out_name->data = NULL;
+    out_name->length = 0U;
+    if (session == NULL || session->analysis == NULL || site == NULL) {
+        return false;
+    }
+    fact = feng_semantic_lookup_type_fact(session->analysis, site);
+    if (fact == NULL) {
+        return false;
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN) {
+        *out_name = fact->builtin_name;
+        return true;
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        const char *builtin = builtin_name_for_single_segment_type_ref(fact->type_ref);
+
+        if (builtin != NULL) {
+            *out_name = slice_from_cstr(builtin);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool resolve_owner_builtin_name_from_object_expr(const FengLspAnalysisSession *session,
+                                                        const FengProgram *program,
+                                                        const FengExpr *object,
+                                                        const FengLspLocalList *locals,
+                                                        FengSlice *out_name) {
+    const FengLspLocal *local;
+    const FengDecl *decl;
+
+    if (out_name == NULL) {
+        return false;
+    }
+    out_name->data = NULL;
+    out_name->length = 0U;
+    if (object == NULL) {
+        return false;
+    }
+    if (owner_builtin_name_from_type_fact(session, object, out_name)) {
+        return true;
+    }
+    if (object->kind == FENG_EXPR_STRING) {
+        *out_name = slice_from_cstr("string");
+        return true;
+    }
+    if (object->kind != FENG_EXPR_IDENTIFIER) {
+        return false;
+    }
+    local = find_local(locals, object->as.identifier);
+    if (local != NULL) {
+        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local->parameter->type);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+        if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
+            if (owner_builtin_name_from_type_fact(session, local->binding, out_name)) {
+                return true;
+            }
+            if (local->binding->type != NULL) {
+                const char *builtin = builtin_name_for_single_segment_type_ref(local->binding->type);
+
+                if (builtin != NULL) {
+                    *out_name = slice_from_cstr(builtin);
+                    return true;
+                }
+            }
+        }
+        if (local->kind == FENG_LSP_LOCAL_SELF && local->self_owner_decl != NULL &&
+            local->self_owner_decl->kind == FENG_DECL_FIT) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local->self_owner_decl->as.fit_decl.target);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+    }
+    decl = resolve_value_name(session, program, object->as.identifier);
+    if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        if (owner_builtin_name_from_type_fact(session, &decl->as.binding, out_name)) {
+            return true;
+        }
+        if (decl->as.binding.type != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(decl->as.binding.type);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool fit_visible_from_program(const FengLspAnalysisSession *session,
+                                    const FengProgram *program,
+                                    const FengDecl *fit_decl) {
+    const FengProgram *fit_program = NULL;
+    const FengSemanticModule *fit_module;
+    size_t index;
+
+    if (session == NULL || program == NULL || fit_decl == NULL) {
+        return false;
+    }
+    fit_module = find_decl_module(session, fit_decl, &fit_program);
+    if (fit_module == NULL || fit_program == NULL) {
+        return false;
+    }
+    if (fit_program == program) {
+        return true;
+    }
+    if (fit_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return false;
+    }
+    for (index = 0U; index < program->use_count; ++index) {
+        const FengUseDecl *use_decl = &program->uses[index];
+        const FengSemanticModule *module = find_module_by_segments(session->analysis,
+                                                                   use_decl->segments,
+                                                                   use_decl->segment_count);
+
+        if (module == fit_module) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool append_owner_fit_member_completion_items(FengLspString *json,
+                                                     bool *first,
+                                                     const FengLspAnalysisSession *session,
+                                                     const FengProgram *program,
+                                                     const FengDecl *owner_decl,
+                                                     FengSlice owner_builtin_name) {
+    size_t module_index;
+    size_t program_index;
+    size_t decl_index;
+
+    if (session == NULL || program == NULL) {
+        return true;
+    }
+    if (session->analysis == NULL) {
+        for (program_index = 0U; program_index < session->source_count; ++program_index) {
+            const FengProgram *fit_program = session->sources[program_index].program;
+
+            if (fit_program == NULL ||
+                !program_module_matches(fit_program,
+                                        program->module_segments,
+                                        program->module_segment_count)) {
+                continue;
+            }
+            for (decl_index = 0U; decl_index < fit_program->declaration_count; ++decl_index) {
+                const FengDecl *decl = fit_program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_FIT) {
+                    continue;
+                }
+                if (owner_decl != NULL) {
+                    const FengDecl *resolved_target = resolve_named_type_ref(session,
+                                                                             program,
+                                                                             decl->as.fit_decl.target);
+
+                    if (resolved_target != owner_decl) {
+                        continue;
+                    }
+                } else if (owner_builtin_name.length > 0U) {
+                    if (!builtin_name_matches_type_ref(decl->as.fit_decl.target, owner_builtin_name)) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+                for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
+                    if (!append_member_completion_item(json,
+                                                       first,
+                                                       decl->as.fit_decl.members[member_index])) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    for (module_index = 0U; module_index < session->analysis->module_count; ++module_index) {
+        const FengSemanticModule *module = &session->analysis->modules[module_index];
+
+        for (program_index = 0U; program_index < module->program_count; ++program_index) {
+            const FengProgram *fit_program = module->programs[program_index];
+
+            for (decl_index = 0U; decl_index < fit_program->declaration_count; ++decl_index) {
+                const FengDecl *decl = fit_program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_FIT || !fit_visible_from_program(session, program, decl)) {
+                    continue;
+                }
+                if (owner_decl != NULL) {
+                    const FengDecl *resolved_target = resolve_named_type_ref(session,
+                                                                             program,
+                                                                             decl->as.fit_decl.target);
+
+                    if (resolved_target != owner_decl) {
+                        continue;
+                    }
+                } else if (owner_builtin_name.length > 0U) {
+                    if (!builtin_name_matches_type_ref(decl->as.fit_decl.target, owner_builtin_name)) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+                for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
+                    if (!append_member_completion_item(json,
+                                                       first,
+                                                       decl->as.fit_decl.members[member_index])) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSession *session,
                                                      const FengProgram *program,
                                                      const FengExpr *expr) {
@@ -10630,6 +10928,77 @@ static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysis
     return NULL;
 }
 
+static bool resolve_owner_builtin_name_from_object_name(const FengLspAnalysisSession *session,
+                                                        const FengProgram *program,
+                                                        FengSlice object_name,
+                                                        const FengLspLocalList *locals,
+                                                        FengSlice *out_name) {
+    const FengLspLocal *local;
+    const FengDecl *decl;
+
+    if (out_name == NULL) {
+        return false;
+    }
+    out_name->data = NULL;
+    out_name->length = 0U;
+    if (slice_equals_cstr(object_name, "self")) {
+        local = find_local(locals, slice_from_cstr("self"));
+        if (local != NULL && local->self_owner_decl != NULL && local->self_owner_decl->kind == FENG_DECL_FIT) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local->self_owner_decl->as.fit_decl.target);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+        return false;
+    }
+    local = find_local(locals, object_name);
+    if (local != NULL) {
+        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local->parameter->type);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+        if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
+            if (owner_builtin_name_from_type_fact(session, local->binding, out_name)) {
+                return true;
+            }
+            if (local->binding->type != NULL) {
+                const char *builtin = builtin_name_for_single_segment_type_ref(local->binding->type);
+
+                if (builtin != NULL) {
+                    *out_name = slice_from_cstr(builtin);
+                    return true;
+                }
+            }
+            return resolve_owner_builtin_name_from_object_expr(session,
+                                                               program,
+                                                               local->binding->initializer,
+                                                               locals,
+                                                               out_name);
+        }
+    }
+    decl = resolve_value_name(session, program, object_name);
+    if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        if (owner_builtin_name_from_type_fact(session, &decl->as.binding, out_name)) {
+            return true;
+        }
+        if (decl->as.binding.type != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(decl->as.binding.type);
+
+            if (builtin != NULL) {
+                *out_name = slice_from_cstr(builtin);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool build_completion_json(const FengLspAnalysisSession *session,
                                   const FengProgram *program,
                                   const char *source_text,
@@ -10684,6 +11053,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
     }
     if (completion_context.is_member) {
         const FengDecl *owner_decl = NULL;
+        FengSlice owner_builtin_name = {0};
         bool alias_handled = false;
 
         if (find_local(&locals, completion_context.object) == NULL &&
@@ -10707,10 +11077,25 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 local_list_dispose(&locals);
                 return false;
             }
+            (void)resolve_owner_builtin_name_from_object_name(session,
+                                                              program,
+                                                              completion_context.object,
+                                                              &locals,
+                                                              &owner_builtin_name);
+            if (!append_owner_fit_member_completion_items(json,
+                                                          &first,
+                                                          session,
+                                                          program,
+                                                          owner_decl,
+                                                          owner_builtin_name)) {
+                local_list_dispose(&locals);
+                return false;
+            }
         }
     } else if (expr != NULL && expr->kind == FENG_EXPR_MEMBER) {
         const FengSemanticModule *alias_module = NULL;
         const FengDecl *owner_decl = NULL;
+        FengSlice owner_builtin_name = {0};
 
         if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
             find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
@@ -10727,6 +11112,20 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                              expr->as.member.object,
                                                              &locals);
             if (!append_owner_member_completion_items(json, &first, session, program, owner_decl)) {
+                local_list_dispose(&locals);
+                return false;
+            }
+            (void)resolve_owner_builtin_name_from_object_expr(session,
+                                                              program,
+                                                              expr->as.member.object,
+                                                              &locals,
+                                                              &owner_builtin_name);
+            if (!append_owner_fit_member_completion_items(json,
+                                                          &first,
+                                                          session,
+                                                          program,
+                                                          owner_decl,
+                                                          owner_builtin_name)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -10977,21 +11376,38 @@ static bool completion_json_has_items(const FengLspString *json) {
 }
 
 static bool completion_context_is_member_dot(const char *text, size_t offset) {
-    FengLspCompletionContext context = {0};
     size_t length;
+    size_t cursor;
 
     if (text == NULL || offset == 0U) {
         return false;
     }
     length = strlen(text);
-    return offset <= length && text[offset - 1U] == '.' &&
-           completion_context_from_text(text, offset, &context) && context.is_member;
+    if (offset > length) {
+        return false;
+    }
+    cursor = offset;
+    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+        --cursor;
+    }
+    if (cursor == 0U || text[cursor - 1U] != '.') {
+        return false;
+    }
+    while (cursor > 1U && isspace((unsigned char)text[cursor - 2U])) {
+        --cursor;
+    }
+    if (cursor < 2U) {
+        return false;
+    }
+    return completion_identifier_continue(text[cursor - 2U]) ||
+           text[cursor - 2U] == ')' || text[cursor - 2U] == ']' || text[cursor - 2U] == '"';
 }
 
 static bool completion_context_is_member_access(const char *text, size_t offset) {
     FengLspCompletionContext context = {0};
 
-    return completion_context_from_text(text, offset, &context) && context.is_member;
+    return (completion_context_from_text(text, offset, &context) && context.is_member) ||
+           completion_context_is_member_dot(text, offset);
 }
 
 static bool completion_repair_has_expression_tail(const char *text, size_t offset) {
