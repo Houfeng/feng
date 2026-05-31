@@ -1,0 +1,24 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+type Error {
+    let code: int;
+}
+
+spec Result<T>: Error | T;
+
+func print_result(value: Result<int>) {
+    if value {
+        int { puts(&"int"); }
+        Error { puts(&"error"); }
+    }
+}
+
+func main(args: string[]) {
+    let ok: Result<int> = 1;
+    let err: Result<int> = Error { code: 7 };
+    print_result(ok);
+    print_result(err);
+}

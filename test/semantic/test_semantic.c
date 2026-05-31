@@ -14210,6 +14210,41 @@ static void test_union_equality_requires_narrowing(void) {
         "requires union-form operands to be narrowed");
 }
 
+static void test_generic_union_form_accepts_concrete_member_matching(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Error {}\n"
+        "spec Result<T>: Error | T;\n"
+        "func wrap_value(value: int): Result<int> {\n"
+        "    return value;\n"
+        "}\n"
+        "func wrap_error(value: Error): Result<int> {\n"
+        "    return value;\n"
+        "}\n"
+        "func run(value: Result<int>): int {\n"
+        "    return if value {\n"
+        "        int { value + 1; }\n"
+        "        Error { 0; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("generic_union_concrete_member_match.f", source);
+}
+
+static void test_generic_union_form_rejects_mismatched_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Error {}\n"
+        "spec Result<T>: Error | T;\n"
+        "let value: Result<int> = \"oops\";\n";
+
+    assert_single_source_semantic_error_contains(
+        "generic_union_mismatched_member.f",
+        source,
+        "does not match expected type 'Result<int>'");
+}
+
 static void test_tuple_literal_expected_contexts_pass(void) {
     const char *source =
         "module demo.main;\n"
@@ -14822,6 +14857,8 @@ int main(void) {
     test_union_if_match_narrows_object_spec_member();
     test_union_member_access_requires_narrowing();
     test_union_equality_requires_narrowing();
+    test_generic_union_form_accepts_concrete_member_matching();
+    test_generic_union_form_rejects_mismatched_member();
     test_spec_parent_specs_must_be_spec();
     test_spec_parent_specs_rejects_duplicate();
     test_spec_parent_specs_rejects_cycle();

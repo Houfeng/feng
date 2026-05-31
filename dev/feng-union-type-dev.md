@@ -220,6 +220,20 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 - 新增测试能覆盖语法、语义、codegen、runtime 四层。
 - `make test` 全量通过。
 
+### 2.10 泛型 union-form 成员实例化与收窄
+
+- [ ] 在语义层保留 `FengUnionSpecInfo` 的声明态 member（允许 `T` 这类 type param 引用），并在 usage site 基于具体 type args 做成员替换后再匹配。
+- [ ] 保持无泛型 union-form 的既有匹配路径不变；仅在目标 union spec 含 type param 且调用点提供 type args 时启用替换。
+- [ ] 在 union `if` 类型标签匹配路径中应用同一替换规则，确保 `Result<int>` 可用 `int` 标签命中而非 `T`。
+- [ ] 在单 member 收窄时写入替换后的具体类型，避免分支内局部变量仍保留为未替换 type param。
+- [ ] 在 codegen 的 generic spec instance 路径中为 union-form 构建具体 `union_member_types`，保证 `Result<int>` 与 `Result<string>` 各自持有具体 member 映射。
+
+验收口径：
+
+- `spec Result<T>: Error | T;` 在 `Result<int>`、`Result<string>` 场景下的赋值、参数匹配、`if` 收窄均按具体类型工作。
+- 无泛型 union-form 行为与现有测试结果保持一致。
+- 全量回归通过。
+
 ## 3. 当前明确不做
 
 - [ ] 不在当前阶段支持 `union -> common spec` 投影。

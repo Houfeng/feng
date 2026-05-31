@@ -4546,7 +4546,8 @@ static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *co
 
 static UnionMemberSelection select_union_member_for_expr_type(const ResolveContext *context,
                                                               InferredExprType expr_type,
-                                                              const FengDecl *union_decl) {
+                                                              const FengDecl *union_decl,
+                                                              const FengTypeRef *union_spec_type_ref) {
     const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
                                                                          union_decl);
     UnionMemberSelection result;
@@ -4558,26 +4559,38 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
     }
 
     for (size_t index = 0U; index < info->member_count; ++index) {
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            union_decl,
+            union_spec_type_ref,
+            info->members[index].type_ref);
+
         if (inferred_expr_type_exactly_matches_type_ref(context,
                                                         expr_type,
-                                                        info->members[index].type_ref)) {
+                                                        member_type_ref)) {
             result.matched = true;
             result.member_index = index;
-            result.member_type_ref = info->members[index].type_ref;
+            result.member_type_ref = member_type_ref;
             return result;
         }
     }
 
     for (size_t index = 0U; index < info->member_count; ++index) {
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            union_decl,
+            union_spec_type_ref,
+            info->members[index].type_ref);
+
         if (!inferred_expr_type_matches_type_ref(context,
                                                  expr_type,
-                                                 info->members[index].type_ref)) {
+                                                 member_type_ref)) {
             continue;
         }
         if (compatible_count == 0U) {
             result.matched = true;
             result.member_index = index;
-            result.member_type_ref = info->members[index].type_ref;
+            result.member_type_ref = member_type_ref;
         } else {
             result.ambiguous = true;
         }
@@ -6353,6 +6366,7 @@ static size_t union_first_active_member_index(const bool *active_members, size_t
 
 static bool resolve_union_match_label_index(ResolveContext *context,
                                             const FengUnionSpecInfo *info,
+                                            const FengTypeRef *union_spec_type_ref,
                                             const FengMatchLabel *label,
                                             size_t *out_index) {
     if (out_index != NULL) {
@@ -6371,7 +6385,13 @@ static bool resolve_union_match_label_index(ResolveContext *context,
         return false;
     }
     for (size_t index = 0U; index < info->member_count; ++index) {
-        if (type_refs_semantically_equal(context, label->type, info->members[index].type_ref)) {
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            context,
+            info->spec_decl,
+            union_spec_type_ref,
+            info->members[index].type_ref);
+
+        if (type_refs_semantically_equal(context, label->type, member_type_ref)) {
             if (out_index != NULL) {
                 *out_index = index;
             }
@@ -6400,6 +6420,7 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                      const FengExpr *target_expr,
                                                      InferredExprType original_type,
                                                      const FengUnionSpecInfo *info,
+                                                     const FengTypeRef *union_spec_type_ref,
                                                      const bool *active_members) {
     bool ok;
     size_t active_count = union_active_member_count(active_members,
@@ -6415,11 +6436,16 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     if (has_target_name && info != NULL && active_count > 0U) {
         if (active_count == 1U) {
             size_t member_index = union_first_active_member_index(active_members, info->member_count);
+            const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+                context,
+                info->spec_decl,
+                union_spec_type_ref,
+                info->members[member_index].type_ref);
 
             ok = resolver_add_local_typed_name_with_union_narrowing(
                 context,
                 target_name,
-                inferred_expr_type_from_type_ref(info->members[member_index].type_ref),
+                inferred_expr_type_from_type_ref(member_type_ref),
                 target_mutability,
                 target_expr,
                 NULL);
@@ -6450,6 +6476,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                     const FengExpr *target,
                                                     InferredExprType target_type,
                                                     const FengDecl *union_decl,
+                                                    const FengTypeRef *union_spec_type_ref,
                                                     const FengMatchBranch *branches,
                                                     size_t branch_count,
                                                     const FengBlock *else_block,
@@ -6512,7 +6539,11 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
             const FengMatchLabel *label = &branches[branch_index].labels[label_index];
             size_t member_index = info->member_count;
 
-            ok = resolve_union_match_label_index(context, info, label, &member_index);
+            ok = resolve_union_match_label_index(context,
+                                                 info,
+                                                 union_spec_type_ref,
+                                                 label,
+                                                 &member_index);
             if (!ok) {
                 break;
             }
@@ -6551,6 +6582,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           target,
                                                           target_type,
                                                           info,
+                                                          union_spec_type_ref,
                                                           branch_members);
         }
         if (ok && is_expression_form) {
@@ -6580,6 +6612,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           target,
                                                           target_type,
                                                           info,
+                                                          union_spec_type_ref,
                                                           else_members);
             free(else_members);
         }
@@ -6670,10 +6703,42 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
             union_decl = target_type.type_decl;
         }
         if (union_decl != NULL) {
+            const FengTypeRef *union_spec_type_ref =
+                target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+                    ? target_type.type_ref
+                    : NULL;
+
+            if (union_spec_type_ref == NULL && target != NULL &&
+                target->kind == FENG_EXPR_IDENTIFIER) {
+                const LocalNameEntry *target_local =
+                    resolver_find_local_name_entry(context, target->as.identifier);
+
+                if (target_local != NULL &&
+                    target_local->type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+                    union_spec_type_ref = target_local->type.type_ref;
+                }
+            }
+
+            if (union_spec_type_ref == NULL && context->analysis != NULL && target != NULL) {
+                const FengSemanticTypeFact *target_fact =
+                    feng_semantic_lookup_type_fact(context->analysis, target);
+
+                if (target_fact != NULL &&
+                    target_fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    union_spec_type_ref = target_fact->type_ref;
+                }
+            }
+
+            if (union_spec_type_ref != NULL &&
+                resolve_union_spec_type_ref_decl(context, union_spec_type_ref) != union_decl) {
+                union_spec_type_ref = NULL;
+            }
+
             return resolve_and_validate_union_match_common(context,
                                                            target,
                                                            target_type,
                                                            union_decl,
+                                                           union_spec_type_ref,
                                                            branches,
                                                            branch_count,
                                                            else_block,
@@ -13063,7 +13128,10 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
             if (inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
                 return true;
             }
-            selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+            selection = select_union_member_for_expr_type(context,
+                                                          expr_type,
+                                                          target_union_decl,
+                                                          expected_type_ref);
             return selection.matched;
         }
     }
@@ -13228,7 +13296,10 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
         inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
         return;
     }
-    selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+    selection = select_union_member_for_expr_type(context,
+                                                  expr_type,
+                                                  target_union_decl,
+                                                  expected_type_ref);
     if (!selection.matched) {
         return;
     }
@@ -14319,7 +14390,10 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                                                                    expected_type_ref)) {
                 return true;
             } else {
-                selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+                selection = select_union_member_for_expr_type(context,
+                                                              expr_type,
+                                                              target_union_decl,
+                                                              expected_type_ref);
                 if (selection.matched) {
                     (void)feng_semantic_record_union_coercion_site(context->analysis,
                                                                    expr,
