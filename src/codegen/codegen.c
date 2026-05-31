@@ -25887,10 +25887,19 @@ static bool cg_emit_tuple_equal_function(CG *cg,
                 char *descriptor_expr = cg_trivial_descriptor_expr(cg, field->type);
 
                 if (descriptor_expr == NULL) {
-                    return cg_fail(cg,
-                                   t->decl->token,
-                                   "codegen: tuple field '%s' has no trivial equality descriptor",
-                                   field->feng_name);
+                    /* Generic/open tuple fields can be erased placeholders at
+                     * declaration emission time and may not have a concrete
+                     * trivial descriptor yet. Keep declaration-time codegen
+                     * valid by falling back to byte-wise equality on the
+                     * emitted field representation. */
+                    buf_append_fmt(td,
+                        "    if (memcmp(&_left->%s, &_right->%s, sizeof(_left->%s)) != 0) {\n"
+                        "        return false;\n"
+                        "    }\n",
+                        field->c_name,
+                        field->c_name,
+                        field->c_name);
+                    break;
                 }
                 buf_append_fmt(td,
                     "    if ((%s)->equal_fn != NULL) {\n"
