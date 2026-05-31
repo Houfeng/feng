@@ -1276,6 +1276,10 @@ static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const char *cname,
                                                      const CGType *type);
+static bool cg_union_member_index_for_label(CG *cg,
+                                            const UserSpec *spec,
+                                            const FengMatchLabel *label,
+                                            size_t *out_index);
 static bool cg_register_local_for_cleanup(CG *cg,
                                 const char *cname,
                                 const CGType *type,
@@ -15509,32 +15513,17 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         cgtype_free(result_type);
         return false;
     }
-    CGTypeKind tk = tgt.type->kind;
-    if (tk != CG_TYPE_BOOL && tk != CG_TYPE_STRING && !cgtype_is_integer(tk)) {
-        er_free(&tgt);
-        cgtype_free(result_type);
-        return cg_fail(cg, e->token,
-            "codegen: match target must be integer, bool, or string");
-    }
-    /* materialize_to_local registers managed +1 results into the current
-     * scope and emits the cleanup_push, so the target survives every
-     * comparison and is released at scope exit alongside other locals. */
-    char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
-    if (!tgt_tmp) {
-        er_free(&tgt);
-        cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
-    }
-    er_free(&tgt);
-
     char *ifv = cg_fresh_temp(cg, "_ifv");
     if (!ifv) {
-        free(tgt_tmp); cgtype_free(result_type);
+        er_free(&tgt);
+        cgtype_free(result_type);
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
     char *cty = cg_ctype_dup(result_type);
     if (!cty) {
-        free(ifv); free(tgt_tmp); cgtype_free(result_type);
+        free(ifv);
+        er_free(&tgt);
+        cgtype_free(result_type);
         return cg_fail(cg, e->token, "codegen: out of memory");
     }
     if (managed) {
@@ -15542,13 +15531,19 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         cg_emit_cleanup_push_for_managed_local(cg, ifv);
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
-            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            free(cty);
+            free(ifv);
+            er_free(&tgt);
+            cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
     } else if (aggregate) {
         buf_append_fmt(cg->cur_body, "    %s %s; ", cty, ifv);
         if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, ifv)) {
-            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            free(cty);
+            free(ifv);
+            er_free(&tgt);
+            cgtype_free(result_type);
             return cg_fail(cg, e->token,
                 "codegen: missing aggregate default-init rule for match expression result");
         }
@@ -15556,7 +15551,10 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         cg_emit_cleanup_push_for_aggregate_local(cg, ifv, result_type);
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
-            free(cty); free(ifv); free(tgt_tmp); cgtype_free(result_type);
+            free(cty);
+            free(ifv);
+            er_free(&tgt);
+            cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
     } else {
@@ -15564,54 +15562,320 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     free(cty);
 
-    bool first_branch = true;
-    for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
-        const FengMatchBranch *br = &e->as.match_expr.branches[i];
-        if (br->label_count == 0) {
-            free(ifv); free(tgt_tmp); cgtype_free(result_type);
-            return cg_fail(cg, br->token,
-                "codegen: match branch has no labels");
+    if (tgt.type != NULL && tgt.type->kind == CG_TYPE_SPEC &&
+        tgt.type->user_spec != NULL &&
+        tgt.type->user_spec->form == FENG_SPEC_FORM_UNION) {
+        const UserSpec *union_spec = tgt.type->user_spec;
+        FengSlice target_name = {0};
+        bool first_branch = true;
+        bool ok = true;
+        bool *covered_members = NULL;
+        char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_umt");
+
+        if (e->as.match_expr.target->kind == FENG_EXPR_IDENTIFIER) {
+            target_name = e->as.match_expr.target->as.identifier;
         }
-        Buf cond; buf_init(&cond);
-        bool cond_ok = true;
-        for (size_t li = 0; li < br->label_count; li++) {
-            if (li) buf_append_cstr(&cond, " || ");
-            if (!cg_emit_match_label_cond(cg, tgt_tmp, tk, &br->labels[li], &cond)) {
-                cond_ok = false;
+        if (tgt_tmp == NULL) {
+            free(ifv);
+            er_free(&tgt);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+        er_free(&tgt);
+
+        covered_members = union_spec->union_member_count > 0U
+                              ? (bool *)calloc(union_spec->union_member_count,
+                                               sizeof(*covered_members))
+                              : NULL;
+        if (union_spec->union_member_count > 0U && covered_members == NULL) {
+            free(tgt_tmp);
+            free(ifv);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+
+        for (size_t branch_index = 0U;
+             branch_index < e->as.match_expr.branch_count;
+             ++branch_index) {
+            const FengMatchBranch *branch = &e->as.match_expr.branches[branch_index];
+            Buf condition;
+            size_t first_member_index = 0U;
+            size_t matched_member_count = 0U;
+
+            if (branch->label_count == 0U) {
+                ok = cg_fail(cg, branch->token,
+                             "codegen: match branch has no labels");
                 break;
             }
+
+            buf_init(&condition);
+            for (size_t label_index = 0U;
+                 label_index < branch->label_count;
+                 ++label_index) {
+                size_t member_index = 0U;
+
+                if (!cg_union_member_index_for_label(cg,
+                                                     union_spec,
+                                                     &branch->labels[label_index],
+                                                     &member_index)) {
+                    ok = false;
+                    break;
+                }
+                if (label_index != 0U) {
+                    buf_append_cstr(&condition, " || ");
+                }
+                buf_append_fmt(&condition, "%s.tag == %zuU", tgt_tmp, member_index);
+                if (covered_members != NULL) {
+                    covered_members[member_index] = true;
+                }
+                if (matched_member_count == 0U) {
+                    first_member_index = member_index;
+                }
+                matched_member_count++;
+            }
+
+            if (!ok) {
+                buf_free(&condition);
+                break;
+            }
+
+            if (first_branch) {
+                buf_append_fmt(cg->cur_body, "    if (%s) {\n", condition.data);
+                first_branch = false;
+            } else {
+                buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", condition.data);
+            }
+            buf_free(&condition);
+
+            {
+                Scope *branch_scope = scope_push(cg->cur_scope);
+
+                if (branch_scope == NULL) {
+                    ok = cg_fail(cg, branch->token, "codegen: out of memory");
+                    break;
+                }
+                cg->cur_scope = branch_scope;
+                if (target_name.data != NULL && target_name.length > 0U &&
+                    matched_member_count == 1U) {
+                    Buf payload_expr;
+                    CGType *alias_type;
+                    char *alias_name;
+
+                    buf_init(&payload_expr);
+                    buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                    cg_append_union_payload_field_name(&payload_expr, first_member_index);
+                    alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+                    alias_name = strndup(target_name.data, target_name.length);
+                    if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
+                        !scope_add(branch_scope,
+                                   alias_name,
+                                   payload_expr.data,
+                                   alias_type,
+                                   true)) {
+                        cgtype_free(alias_type);
+                        free(alias_name);
+                        buf_free(&payload_expr);
+                        cg->cur_scope = branch_scope->parent;
+                        scope_pop_free(branch_scope);
+                        ok = cg_fail(cg, branch->token, "codegen: out of memory");
+                        break;
+                    }
+                    free(alias_name);
+                    buf_free(&payload_expr);
+                }
+
+                if (!cg_emit_branch_into_slot(cg,
+                                              branch->body,
+                                              ifv,
+                                              result_type,
+                                              managed,
+                                              aggregate,
+                                              e->token)) {
+                    ok = false;
+                }
+                if (ok) {
+                    cg_release_scope(cg, branch_scope);
+                }
+                cg->cur_scope = branch_scope->parent;
+                scope_pop_free(branch_scope);
+                if (!ok) {
+                    break;
+                }
+            }
         }
-        if (!cond_ok) {
-            buf_free(&cond);
-            free(ifv); free(tgt_tmp); cgtype_free(result_type);
+
+        if (ok) {
+            bool else_has_single_member = false;
+            size_t else_member_index = 0U;
+
+            if (covered_members != NULL) {
+                size_t remaining_count = 0U;
+
+                for (size_t member_index = 0U;
+                     member_index < union_spec->union_member_count;
+                     ++member_index) {
+                    if (!covered_members[member_index]) {
+                        else_member_index = member_index;
+                        remaining_count++;
+                    }
+                }
+                else_has_single_member = remaining_count == 1U;
+            }
+
+            if (first_branch) {
+                buf_append_cstr(cg->cur_body, "    {\n");
+            } else {
+                buf_append_cstr(cg->cur_body, "    } else {\n");
+            }
+
+            {
+                Scope *else_scope = scope_push(cg->cur_scope);
+
+                if (else_scope == NULL) {
+                    ok = cg_fail(cg, e->token, "codegen: out of memory");
+                } else {
+                    cg->cur_scope = else_scope;
+                    if (target_name.data != NULL && target_name.length > 0U &&
+                        else_has_single_member) {
+                        Buf payload_expr;
+                        CGType *alias_type;
+                        char *alias_name;
+
+                        buf_init(&payload_expr);
+                        buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                        cg_append_union_payload_field_name(&payload_expr, else_member_index);
+                        alias_type = cgtype_clone(union_spec->union_member_types[else_member_index]);
+                        alias_name = strndup(target_name.data, target_name.length);
+                        if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
+                            !scope_add(else_scope,
+                                       alias_name,
+                                       payload_expr.data,
+                                       alias_type,
+                                       true)) {
+                            cgtype_free(alias_type);
+                            free(alias_name);
+                            buf_free(&payload_expr);
+                            ok = cg_fail(cg, e->token, "codegen: out of memory");
+                        } else {
+                            free(alias_name);
+                            buf_free(&payload_expr);
+                        }
+                    }
+
+                    if (ok && !cg_emit_branch_into_slot(cg,
+                                                        e->as.match_expr.else_block,
+                                                        ifv,
+                                                        result_type,
+                                                        managed,
+                                                        aggregate,
+                                                        e->token)) {
+                        ok = false;
+                    }
+                    if (ok) {
+                        cg_release_scope(cg, else_scope);
+                    }
+                    cg->cur_scope = else_scope->parent;
+                    scope_pop_free(else_scope);
+                }
+            }
+
+            first_branch = false;
+        }
+
+        if (ok && !first_branch) {
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+
+        free(covered_members);
+        free(tgt_tmp);
+        if (!ok) {
+            free(ifv);
+            cgtype_free(result_type);
             return false;
+        }
+
+        out->c_expr = strdup(ifv);
+        out->type = result_type;
+        out->owns_ref = false;
+        free(ifv);
+        return out->c_expr != NULL;
+    }
+
+    {
+        CGTypeKind tk = tgt.type->kind;
+
+        if (tk != CG_TYPE_BOOL && tk != CG_TYPE_STRING && !cgtype_is_integer(tk)) {
+            er_free(&tgt);
+            free(ifv);
+            cgtype_free(result_type);
+            return cg_fail(cg, e->token,
+                "codegen: match target must be integer, bool, or string");
+        }
+    }
+    /* materialize_to_local registers managed +1 results into the current
+     * scope and emits the cleanup_push, so the target survives every
+     * comparison and is released at scope exit alongside other locals. */
+    char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
+    if (!tgt_tmp) {
+        er_free(&tgt);
+        free(ifv);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    {
+        CGTypeKind tk = tgt.type->kind;
+
+        er_free(&tgt);
+
+        bool first_branch = true;
+        for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
+            const FengMatchBranch *br = &e->as.match_expr.branches[i];
+            if (br->label_count == 0) {
+                free(ifv); free(tgt_tmp); cgtype_free(result_type);
+                return cg_fail(cg, br->token,
+                    "codegen: match branch has no labels");
+            }
+            Buf cond; buf_init(&cond);
+            bool cond_ok = true;
+            for (size_t li = 0; li < br->label_count; li++) {
+                if (li) buf_append_cstr(&cond, " || ");
+                if (!cg_emit_match_label_cond(cg, tgt_tmp, tk, &br->labels[li], &cond)) {
+                    cond_ok = false;
+                    break;
+                }
+            }
+            if (!cond_ok) {
+                buf_free(&cond);
+                free(ifv); free(tgt_tmp); cgtype_free(result_type);
+                return false;
+            }
+            if (first_branch) {
+                buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.data);
+                first_branch = false;
+            } else {
+                buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
+            }
+            buf_free(&cond);
+            if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed, aggregate,
+                                          e->token)) {
+                free(ifv); free(tgt_tmp); cgtype_free(result_type);
+                return false;
+            }
         }
         if (first_branch) {
-            buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.data);
-            first_branch = false;
+            /* No value branches — degenerate to a plain block running else only.
+             * Wrap in a C block so the assignment-driven slot setup is consistent. */
+            buf_append_cstr(cg->cur_body, "    {\n");
         } else {
-            buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
+            buf_append_cstr(cg->cur_body, "    } else {\n");
         }
-        buf_free(&cond);
-        if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed, aggregate,
-                                      e->token)) {
+        if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
+                                      result_type, managed, aggregate, e->token)) {
             free(ifv); free(tgt_tmp); cgtype_free(result_type);
             return false;
         }
+        buf_append_cstr(cg->cur_body, "    }\n");
     }
-    if (first_branch) {
-        /* No value branches — degenerate to a plain block running else only.
-         * Wrap in a C block so the assignment-driven slot setup is consistent. */
-        buf_append_cstr(cg->cur_body, "    {\n");
-    } else {
-        buf_append_cstr(cg->cur_body, "    } else {\n");
-    }
-    if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
-                                  result_type, managed, aggregate, e->token)) {
-        free(ifv); free(tgt_tmp); cgtype_free(result_type);
-        return false;
-    }
-    buf_append_cstr(cg->cur_body, "    }\n");
 
     out->c_expr = strdup(ifv);
     out->type = result_type;
