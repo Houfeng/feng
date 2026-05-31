@@ -7848,7 +7848,9 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
         "}\n"
         "\n"
         "fit User {\n"
+        "    /** Tags user with prefix. */\n"
         "    func tag(let prefix: string): User {\n"
+        "        let localName: string = self.name;\n"
         "        return self;\n"
         "    }\n"
         "}\n"
@@ -7864,9 +7866,11 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     char *escaped_text;
     char *initialize;
     char *did_open;
+    char *hover_keyword;
     char *hover_method;
     char *definition_method;
     char *hover_param;
+    char *hover_self_member;
     char *hover_return_type;
     char *definition_return_type;
     char *shutdown;
@@ -7876,8 +7880,12 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     FILE *input;
     unsigned int method_line;
     unsigned int method_character;
+    unsigned int keyword_line;
+    unsigned int keyword_character;
     unsigned int param_line;
     unsigned int param_character;
+    unsigned int self_member_line;
+    unsigned int self_member_character;
     unsigned int return_type_line;
     unsigned int return_type_character;
     unsigned int user_decl_line;
@@ -7897,9 +7905,19 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
                         &method_character);
     find_line_character(kSource,
                         "    func tag(let prefix: string): User {",
+                        5U,
+                        &keyword_line,
+                        &keyword_character);
+    find_line_character(kSource,
+                        "    func tag(let prefix: string): User {",
                         strlen("    func tag(let "),
                         &param_line,
                         &param_character);
+    find_line_character(kSource,
+                        "        let localName: string = self.name;",
+                        strlen("        let localName: string = self."),
+                        &self_member_line,
+                        &self_member_character);
     find_line_character(kSource,
                         "    func tag(let prefix: string): User {",
                         strlen("    func tag(let prefix: string): "),
@@ -7917,31 +7935,39 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
                           uri,
                           escaped_text);
-    hover_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+    hover_keyword = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                               uri,
+                               keyword_line,
+                               keyword_character);
+    hover_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
                               uri,
                               method_line,
                               method_character + 1U);
-    definition_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+    definition_method = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
                                    uri,
                                    method_line,
                                    method_character + 1U);
-    hover_param = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+    hover_param = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
                              uri,
                              param_line,
                              param_character + 2U);
-    hover_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+    hover_self_member = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   uri,
+                                   self_member_line,
+                                   self_member_character + 1U);
+    hover_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
                                    uri,
                                    return_type_line,
                                    return_type_character + 1U);
-    definition_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+    definition_return_type = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
                                         uri,
                                         return_type_line,
                                         return_type_character + 1U);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
-    expected_method_definition = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u",
+    expected_method_definition = dup_printf("\"id\":4,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u",
                                          uri,
                                          method_line);
-    expected_return_definition = dup_printf("\"id\":6,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+    expected_return_definition = dup_printf("\"id\":8,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
                                          uri,
                                          user_decl_line,
                                          user_decl_character);
@@ -7950,9 +7976,11 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_keyword);
     write_lsp_message(input, hover_method);
     write_lsp_message(input, definition_method);
     write_lsp_message(input, hover_param);
+    write_lsp_message(input, hover_self_member);
     write_lsp_message(input, hover_return_type);
     write_lsp_message(input, definition_return_type);
     write_lsp_message(input, shutdown);
@@ -7961,12 +7989,15 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     output = run_lsp_server_capture(input);
     fclose(input);
 
-    ASSERT(strstr(output, "\"id\":2,\"result\":") != NULL);
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") != NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":") != NULL);
     ASSERT(strstr(output, "func tag(prefix: string): User") != NULL);
     ASSERT(strstr(output, expected_method_definition) != NULL);
-    ASSERT(strstr(output, "\"id\":4,\"result\":") != NULL);
-    ASSERT(strstr(output, "let prefix: string") != NULL);
     ASSERT(strstr(output, "\"id\":5,\"result\":") != NULL);
+    ASSERT(strstr(output, "let prefix: string") != NULL);
+    ASSERT(strstr(output, "\"id\":6,\"result\":") != NULL);
+    ASSERT(strstr(output, "let name: string") != NULL);
+    ASSERT(strstr(output, "\"id\":7,\"result\":") != NULL);
     ASSERT(strstr(output, "type User") != NULL);
     ASSERT(strstr(output, expected_return_definition) != NULL);
 
@@ -7976,9 +8007,11 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     free(shutdown);
     free(definition_return_type);
     free(hover_return_type);
+    free(hover_self_member);
     free(hover_param);
     free(definition_method);
     free(hover_method);
+    free(hover_keyword);
     free(did_open);
     free(initialize);
     free(escaped_text);

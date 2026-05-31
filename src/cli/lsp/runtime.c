@@ -3861,11 +3861,22 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_object_expr(cons
     }
     if (object->kind == FENG_EXPR_SELF) {
         const FengLspLocal *self_local = find_local(locals, slice_from_cstr("self"));
-        return self_local != NULL
-                   ? match_ast_decl_to_symbol(context->current_module,
-                                              context->program,
-                                              self_local->self_owner_decl)
-                   : NULL;
+        if (self_local != NULL && self_local->self_owner_decl != NULL) {
+            if (self_local->self_owner_decl->kind == FENG_DECL_FIT) {
+                const FengSymbolDeclView *target_decl = resolve_symbol_named_type_ref(context->provider,
+                                                                                      context->current_module,
+                                                                                      context->program,
+                                                                                      self_local->self_owner_decl->as.fit_decl.target);
+
+                if (target_decl != NULL) {
+                    return target_decl;
+                }
+            }
+            return match_ast_decl_to_symbol(context->current_module,
+                                            context->program,
+                                            self_local->self_owner_decl);
+        }
+        return NULL;
     }
     if (object->kind != FENG_EXPR_IDENTIFIER) {
         return NULL;
@@ -3889,6 +3900,16 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_object_expr(cons
                            : resolve_symbol_owner_decl_from_initializer_expr(context, local->binding->initializer);
             }
             if (local->kind == FENG_LSP_LOCAL_SELF) {
+                if (local->self_owner_decl != NULL && local->self_owner_decl->kind == FENG_DECL_FIT) {
+                    const FengSymbolDeclView *target_decl = resolve_symbol_named_type_ref(context->provider,
+                                                                                          context->current_module,
+                                                                                          context->program,
+                                                                                          local->self_owner_decl->as.fit_decl.target);
+
+                    if (target_decl != NULL) {
+                        return target_decl;
+                    }
+                }
                 return match_ast_decl_to_symbol(context->current_module,
                                                 context->program,
                                                 local->self_owner_decl);
@@ -4331,7 +4352,19 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
     }
     if (object->kind == FENG_EXPR_SELF) {
         const FengLspLocal *self_local = find_local(locals, slice_from_cstr("self"));
-        return self_local != NULL ? self_local->self_owner_decl : NULL;
+        if (self_local != NULL && self_local->self_owner_decl != NULL) {
+            if (self_local->self_owner_decl->kind == FENG_DECL_FIT) {
+                const FengDecl *target_decl = resolve_named_type_ref(session,
+                                                                     program,
+                                                                     self_local->self_owner_decl->as.fit_decl.target);
+
+                if (target_decl != NULL) {
+                    return target_decl;
+                }
+            }
+            return self_local->self_owner_decl;
+        }
+        return NULL;
     }
     if (object->kind != FENG_EXPR_IDENTIFIER) {
         return NULL;
@@ -4347,6 +4380,15 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
                 return owner_decl_from_binding(session, program, local->binding);
             }
             if (local->kind == FENG_LSP_LOCAL_SELF) {
+                if (local->self_owner_decl != NULL && local->self_owner_decl->kind == FENG_DECL_FIT) {
+                    const FengDecl *target_decl = resolve_named_type_ref(session,
+                                                                         program,
+                                                                         local->self_owner_decl->as.fit_decl.target);
+
+                    if (target_decl != NULL) {
+                        return target_decl;
+                    }
+                }
                 return local->self_owner_decl;
             }
         }
@@ -4389,9 +4431,16 @@ static bool find_decl_token_hit_member(const char *source_text,
                                        size_t offset,
                                        FengLspResolvedTarget *target) {
     size_t index;
+    bool hit_member_name = offset_in_slice_from_source(source_text,
+                                                       member_name_slice(member),
+                                                       offset);
+    bool hit_member_token = offset_in_token(member->token, offset);
 
-    if (offset_in_token(member->token, offset) ||
-        offset_in_slice_from_source(source_text, member_name_slice(member), offset)) {
+    if (hit_member_name ||
+        (hit_member_token &&
+         !(owner_decl != NULL &&
+           owner_decl->kind == FENG_DECL_FIT &&
+           member->kind != FENG_TYPE_MEMBER_FIELD))) {
         target->kind = FENG_LSP_RESOLVED_MEMBER;
         target->decl = owner_decl;
         target->member = member;
@@ -6529,26 +6578,28 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
         }
         return NULL;
     }
-    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-        const FengLspLocal *local = find_local(locals, expr->as.member.object->as.identifier);
-        if (local == NULL && program_module != NULL &&
-            find_module_decl_by_name(program_module,
-                                     expr->as.member.object->as.identifier,
-                                     false,
-                                     false,
-                                     false) == NULL) {
-            const FengSemanticModule *alias_module = find_alias_module(session,
-                                                                       program,
-                                                                       expr->as.member.object->as.identifier);
-            if (alias_module != NULL) {
-                target->decl = find_module_decl_by_name(alias_module,
-                                                        expr->as.member.member,
-                                                        false,
-                                                        false,
-                                                        true);
-                if (target->decl != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    return target->decl;
+    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL) {
+        if (expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+            const FengLspLocal *local = find_local(locals, expr->as.member.object->as.identifier);
+            if (local == NULL && program_module != NULL &&
+                find_module_decl_by_name(program_module,
+                                         expr->as.member.object->as.identifier,
+                                         false,
+                                         false,
+                                         false) == NULL) {
+                const FengSemanticModule *alias_module = find_alias_module(session,
+                                                                           program,
+                                                                           expr->as.member.object->as.identifier);
+                if (alias_module != NULL) {
+                    target->decl = find_module_decl_by_name(alias_module,
+                                                            expr->as.member.member,
+                                                            false,
+                                                            false,
+                                                            true);
+                    if (target->decl != NULL) {
+                        target->kind = FENG_LSP_RESOLVED_DECL;
+                        return target->decl;
+                    }
                 }
             }
         }
@@ -8559,9 +8610,16 @@ static bool find_symbol_decl_token_hit_member(const FengLspCacheQueryContext *co
                                               size_t offset,
                                               FengLspCacheResolvedTarget *target) {
     size_t index;
+    bool hit_member_name = offset_in_slice_from_source(context->source_text,
+                                                       member_name_slice(member),
+                                                       offset);
+    bool hit_member_token = offset_in_token(member->token, offset);
 
-    if (offset_in_token(member->token, offset) ||
-        offset_in_slice_from_source(context->source_text, member_name_slice(member), offset)) {
+    if (hit_member_name ||
+        (hit_member_token &&
+         !(owner_decl != NULL &&
+           owner_decl->kind == FENG_DECL_FIT &&
+           member->kind != FENG_TYPE_MEMBER_FIELD))) {
         const FengSymbolDeclView *owner_symbol = match_ast_decl_to_symbol(context->current_module,
                                                                           context->program,
                                                                           owner_decl);
@@ -8991,29 +9049,30 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
         }
         return NULL;
     }
-    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL &&
-        expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-        const FengLspLocal *local = find_local(locals, expr->as.member.object->as.identifier);
+    if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL) {
+        if (expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+            const FengLspLocal *local = find_local(locals, expr->as.member.object->as.identifier);
 
-        if (local == NULL &&
-            (context->current_module == NULL ||
-             find_symbol_module_decl_by_name(context->current_module,
-                                             expr->as.member.object->as.identifier,
-                                             false,
-                                             false,
-                                             false) == NULL)) {
-            const FengSymbolImportedModule *alias_module = find_symbol_alias_module(context->provider,
-                                                                                    context->program,
-                                                                                    expr->as.member.object->as.identifier);
-            if (alias_module != NULL) {
-                target->decl = find_symbol_module_decl_by_name(alias_module,
-                                                               expr->as.member.member,
-                                                               false,
-                                                               false,
-                                                               true);
-                if (target->decl != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    return target->decl;
+            if (local == NULL &&
+                (context->current_module == NULL ||
+                 find_symbol_module_decl_by_name(context->current_module,
+                                                 expr->as.member.object->as.identifier,
+                                                 false,
+                                                 false,
+                                                 false) == NULL)) {
+                const FengSymbolImportedModule *alias_module = find_symbol_alias_module(context->provider,
+                                                                                        context->program,
+                                                                                        expr->as.member.object->as.identifier);
+                if (alias_module != NULL) {
+                    target->decl = find_symbol_module_decl_by_name(alias_module,
+                                                                   expr->as.member.member,
+                                                                   false,
+                                                                   false,
+                                                                   true);
+                    if (target->decl != NULL) {
+                        target->kind = FENG_LSP_RESOLVED_DECL;
+                        return target->decl;
+                    }
                 }
             }
         }
