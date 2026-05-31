@@ -20,11 +20,11 @@
 
 ### 2.1 规范并入
 
-- [ ] 将 union-form 的主定义并入 `docs/feng-spec.md`。
-- [ ] 在 `docs/feng-language.md` 中补 union-form 的总览入口，只做摘要与引用，不重复细则。
-- [ ] 在 `docs/feng-type.md` 中补 union-form 的类型系统位置与引用。
-- [ ] 在 `docs/feng-expression.md` 中补 union-form 显式转换边界的引用关系。
-- [ ] 复核 `docs/` 中涉及 `if 目标值 { ... }`、`spec`、显式转换的交叉引用，避免重复定义与冲突措辞。
+- [x] 将 union-form 的主定义并入 `docs/feng-spec.md`。
+- [x] 在 `docs/feng-language.md` 中补 union-form 的总览入口，只做摘要与引用，不重复细则。
+- [x] 在 `docs/feng-type.md` 中补 union-form 的类型系统位置与引用。
+- [x] 在 `docs/feng-expression.md` 中补 union-form 显式转换边界的引用关系。
+- [x] 复核 `docs/` 中涉及 `if 目标值 { ... }`、`spec`、显式转换的交叉引用，避免重复定义与冲突措辞。
 
 验收口径：
 
@@ -162,6 +162,7 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 - 不新增 `FengUnionDescriptor`。现有 `FengAggregateDescriptor + FENG_SLOT_FORWARD` 已能覆盖生命周期；union member 列表、tag 映射和收窄规则由 semantic/codegen 元数据负责。
 - value/range match 与 union type match 在语义上必须分离。union 目标未收窄前没有统一值比较入口，因此 union target 的 match body 只能写 member type label 与 `else`。
 - 异常 cleanup 链需要支持“按 aggregate descriptor 清理一个 by-value aggregate”这一通用能力。原因是 union-form 的 active payload 由 `_fwd` 动态决定，不能在编译期展开成固定 `void **` 指针槽；该扩展面向所有 aggregate local，不新增 union 专用 runtime 分支，也不改变三类顶层值模型。
+- cleanup 链中的 frame marker 必须同时满足 `slot == NULL` 且 `aggregate_desc == NULL`；aggregate cleanup node 的 `slot` 也为 `NULL`，但其 `aggregate_desc` 非空，释放到 frame marker 时不得被误判为 marker。
 
 #### 2.6.5 TODO
 

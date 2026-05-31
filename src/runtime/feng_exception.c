@@ -44,7 +44,7 @@ static void feng_cleanup_release_to_frame_marker(void) {
     while (g_cleanup_top != NULL) {
         FengCleanupNode *node = g_cleanup_top;
         g_cleanup_top = node->prev;
-        if (node->slot == NULL) {
+        if (node->slot == NULL && node->aggregate_desc == NULL) {
             FengFrameMarker *marker = (FengFrameMarker *)((char *)node - offsetof(FengFrameMarker, node));
             if (marker->is_function_boundary) {
                 return;

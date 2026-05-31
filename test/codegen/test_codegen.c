@@ -5376,6 +5376,68 @@ static void test_union_form_spec_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_tuple_union_cleanup_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.tupleunion;\n"
+        "spec Choice: int | string;\n"
+        "type Wrapped(Choice, string);\n"
+        "func make_choice(name: string): Choice {\n"
+        "    return name;\n"
+        "}\n"
+        "func score(value: Choice): int {\n"
+        "    if value {\n"
+        "        int { return value + 1; }\n"
+        "        string { return 2; }\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(name: string): int {\n"
+        "    let wrapped: Wrapped = (make_choice(name), \"fallback\");\n"
+        "    return score(wrapped.item1);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/tuple_union_cleanup_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (tuple union cleanup): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "feng_cleanup_push_aggregate") != NULL);
+    ASSERT(strstr(out.c_source, ".item1, &FengSpecAgg__feng__codegen__tupleunion__Choice") != NULL);
+    ASSERT(strstr(out.c_source, ".item1.subject") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_tuple_fit_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tuplefit;\n"
@@ -5532,6 +5594,7 @@ int main(void) {
     test_tuple_value_codegen_core();
     test_tuple_managed_slots_codegen();
     test_union_form_spec_codegen();
+    test_tuple_union_cleanup_codegen();
     test_tuple_fit_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;

@@ -14,7 +14,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | --- | --- |
 | 强类型 / 静态类型 | 所有类型在编译期确定，所有类型转换都必须显式写出，无 `any` 类型 |
 | `type` / `enum` 具名类型系统 | `type` 定义对象类型；`enum` 定义简单 int 枚举；普通对象类型采用托管引用语义；`@abi type` 为可参与 ABI 校验的对象类型 |
-| `spec` / `fit` 显式契约 | `spec` 声明契约形状，`fit` 显式建立"类型满足契约"关系，不做结构隐式匹配 |
+| `spec` / `fit` 显式契约 | `spec` 声明 object-form 契约、callable-form 签名或 union-form 候选集合，`fit` 显式建立"类型满足契约"关系，不做结构隐式匹配 |
 | `let` / `var` 绑定 | 不可变 / 可变绑定，支持类型推导与默认零值初始化 |
 | 函数与重载 | `func` 定义函数与方法，支持按参数类型重载，返回值不参与重载 |
 | Lambda 与闭包 | Lambda 是函数字面量简写，闭包可捕获外部变量并延长生命周期 |
@@ -54,7 +54,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | --- | --- |
 | `type` | 定义 Feng 原生具名类型 |
 | `enum` | 定义简单 int 枚举类型 |
-| `spec` | 声明契约形状（字段与行为签名），不提供实现体 |
+| `spec` | 声明 object-form 契约形状、callable-form 可调用形状或 union-form 候选成员集合，不提供实现体 |
 | `fit` | 显式建立"类型满足契约"关系，或为类型补充扩展成员 |
 | `extern` | 仅与顶层 `func` 组合，声明外部函数；不得用于其他声明 |
 | `func` | 定义函数、成员方法与构造函数；与 `extern` 组合时可在顶层声明外部函数 |
@@ -151,7 +151,7 @@ Feng 通过 `extern func` 声明外部函数。`extern` 只能用于顶层 `func
 
 ## 6 类型系统与对象模型
 
-Feng 以 `type` 与 `enum` 定义具名类型；`spec` 声明契约形状；`fit` 显式建立适配关系；`let`/`var` 控制成员与变量的可变性。构造函数与终结器作为 `type` 的特殊成员，其声明与约束也统一见 [Feng 语言类型规范](./feng-type.md)。当前阶段 `enum` 仅支持简单的 int enum。详细规则分别见 [Feng 语言类型规范](./feng-type.md)、[Feng 语言 enum 规范](./feng-enum.md)、[Feng 语言变量绑定与作用域规范](./feng-binding.md)、[Feng 语言 `spec` 规范](./feng-spec.md)、[Feng 语言 `fit` 规范](./feng-fit.md)。
+Feng 以 `type` 与 `enum` 定义具名类型；`spec` 统一声明 object-form 契约、callable-form 签名与 union-form 候选集合；`fit` 显式建立 object-form 适配关系；`let`/`var` 控制成员与变量的可变性。构造函数与终结器作为 `type` 的特殊成员，其声明与约束也统一见 [Feng 语言类型规范](./feng-type.md)。当前阶段 `enum` 仅支持简单的 int enum。详细规则分别见 [Feng 语言类型规范](./feng-type.md)、[Feng 语言 enum 规范](./feng-enum.md)、[Feng 语言变量绑定与作用域规范](./feng-binding.md)、[Feng 语言 `spec` 规范](./feng-spec.md)、[Feng 联合类型规范](./feng-union-type.md)、[Feng 语言 `fit` 规范](./feng-fit.md)。
 
 ## 7 函数、Lambda 与闭包
 

@@ -25062,13 +25062,13 @@ static void cg_spec_aggregate_emit_pointer_slot_rows(Buf *out,
                                                      const CGType *type) {
     if (type->user_spec != NULL && type->user_spec->form == FENG_SPEC_FORM_UNION) {
         buf_append_fmt(out,
-            "    { %s, FENG_SLOT_NESTED_AGGREGATE, &%s },\n",
+            "    { %s, NULL, &%s },\n",
             field_base_offsetof_expr,
             type->user_spec->c_aggregate_desc_name);
         return;
     }
     buf_append_fmt(out,
-        "    { %s + offsetof(struct %s, subject), FENG_SLOT_POINTER, NULL },\n",
+        "    { %s + offsetof(struct %s, subject), NULL, NULL },\n",
         field_base_offsetof_expr,
         type->user_spec->c_value_struct_name);
 }
@@ -25279,21 +25279,21 @@ static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
                 const char *static_desc = cg_managed_pointer_static_desc_expr(field->type);
                 if (static_desc != NULL && static_desc[0] == '&') {
                     buf_append_fmt(out,
-                        "    { %s + offsetof(struct %s, %s), %s },\n",
+                        "    { %s + offsetof(struct %s, %s), %s, NULL },\n",
                         field_base_offsetof_expr,
                         tuple_type->c_struct_name,
                         field->c_name,
                         static_desc);
                 } else if (static_desc != NULL && strcmp(static_desc, "NULL") != 0) {
                     buf_append_fmt(out,
-                        "    { %s + offsetof(struct %s, %s), &%s },\n",
+                        "    { %s + offsetof(struct %s, %s), &%s, NULL },\n",
                         field_base_offsetof_expr,
                         tuple_type->c_struct_name,
                         field->c_name,
                         static_desc);
                 } else {
                     buf_append_fmt(out,
-                        "    { %s + offsetof(struct %s, %s), NULL },\n",
+                        "    { %s + offsetof(struct %s, %s), NULL, NULL },\n",
                         field_base_offsetof_expr,
                         tuple_type->c_struct_name,
                         field->c_name);
@@ -25335,10 +25335,11 @@ static void cg_tuple_emit_cleanup_push_slots(Buf *out,
         case CG_VK_AGGREGATE:
             if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL) {
                 buf_append_fmt(out,
-                               "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s.subject);\n",
+                               "    FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
                                node_prefix,
                                node_prefix,
-                               lvalue_expr);
+                               lvalue_expr,
+                               type->user_spec->c_aggregate_desc_name);
                 return;
             }
             if (cg_type_is_tuple_user(type)) {
@@ -25375,7 +25376,7 @@ static void cg_tuple_emit_cleanup_zero_slots(Buf *out,
             return;
         case CG_VK_AGGREGATE:
             if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL) {
-                buf_append_fmt(out, "%s.subject = NULL; ", lvalue_expr);
+                buf_append_fmt(out, "memset(&%s, 0, sizeof %s); ", lvalue_expr, lvalue_expr);
                 return;
             }
             if (cg_type_is_tuple_user(type)) {

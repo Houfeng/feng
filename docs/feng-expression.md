@@ -44,6 +44,7 @@ let name = item.name;
 - 字符串可使用 `+` 进行拼接。
 - `type` 对象、对象形式的 `@abi type` 和数组上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
 - 基础数值、`bool` 与 `string` 的 `==` / `!=` 按值比较; `string` 的值语义指内容相等,不依赖底层引用身份。
+- union-form `spec` 视角下的值未收窄前不允许直接使用 `==` / `!=`; 收窄到确定 member 后,比较语义复用该 member 自身规则。
 - 指针类型 `T*` / `Foo*` 只允许与同类型指针进行 `==` / `!=`; 结果按原生指针地址身份判定,不支持顺序比较。
 
 ### 3.1 数值运算规则
@@ -156,6 +157,7 @@ Feng 采用与 C 相同风格的显式转换语法:
 - 数组的显式转换资格与限制统一见 [Feng 内建类型规范](./feng-builtin-type.md) 中的数组规则; 本章不重复展开数组转换细则。
 - 对象形状 `spec` 的显式转换资格与限制统一见 [Feng 语言 `spec` 规范](./feng-spec.md); 本章不重复展开 `type -> spec` 与 `spec -> 父 spec` 的细则。
 - callable-form `spec` 的显式转换资格与零转发要求统一见 [Feng 语言 `spec` 规范](./feng-spec.md); 对实例化后签名完全一致的 callable-form `spec`,显式转换只改变静态视角,不得构造新的 wrapper/closure 或增加额外调用转发。
+- union-form `spec` 的进入站点、显式转换边界与当前阶段禁止的 `union -> common spec` 投影统一见 [Feng 语言 `spec` 规范](./feng-spec.md) 与 [Feng 联合类型规范](./feng-union-type.md); 本章不重复展开 union-form 选择与收窄细则。
 - `string`、数组、`type`、`@abi type` 与数值类型之间不支持数值转换。
 
 ```feng

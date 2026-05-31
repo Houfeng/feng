@@ -1,0 +1,43 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+spec Choice: int | string;
+
+type Wrapped(Choice, string);
+
+func make_choice(name: string): Choice {
+    return name;
+}
+
+func make_wrapped(name: string, label: string): Wrapped {
+    return (make_choice(name), label);
+}
+
+func print_choice(value: Choice) {
+    if value {
+        int { puts(&"int"); }
+        string { puts(&value); }
+    }
+}
+
+func print_wrapped(value: Wrapped) {
+    print_choice(value.item1);
+    puts(&value.item2);
+}
+
+func throw_after_wrapped(name: string): string {
+    let wrapped = make_wrapped(name, "caught");
+    throw wrapped.item2;
+}
+
+func main(args: string[]) {
+    let wrapped = make_wrapped("tuple", "label");
+    print_wrapped(wrapped);
+
+    let caught = try throw_after_wrapped("throw-tuple") catch ex: string {
+        ex;
+    };
+    puts(&caught);
+}
