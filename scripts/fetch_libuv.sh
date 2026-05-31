@@ -34,33 +34,6 @@ require_cmd() {
   fi
 }
 
-detect_platform() {
-  local explicit="${LIBUV_PLATFORM:-}"
-
-  if [[ -n "${explicit}" ]]; then
-    case "${explicit}" in
-      darwin|linux)
-        printf '%s' "${explicit}"
-        return 0
-        ;;
-      *)
-        echo "error: unsupported LIBUV_PLATFORM=${explicit}, expected darwin|linux" >&2
-        exit 1
-        ;;
-    esac
-  fi
-
-  case "$(uname -s)" in
-    Darwin) printf 'darwin' ;;
-    Linux)  printf 'linux' ;;
-    *)
-      echo "error: unsupported host platform: $(uname -s)" >&2
-      echo "error: set LIBUV_PLATFORM=darwin or LIBUV_PLATFORM=linux explicitly if needed" >&2
-      exit 1
-      ;;
-  esac
-}
-
 copy_required() {
   local source_path="$1"
   local target_path="$2"
@@ -125,6 +98,21 @@ parse_rel_includes() {
   sed -nE 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"([^"]+)".*/\1/p' "${root}/${current_rel}"
 }
 
+join_make_list() {
+  local output=""
+  local item
+
+  for item in "$@"; do
+    if [[ -z "${output}" ]]; then
+      output="${item}"
+    else
+      output+=" ${item}"
+    fi
+  done
+
+  printf '%s' "${output}"
+}
+
 cleanup() {
   rm -rf "${TMP_ROOT}"
 }
@@ -134,16 +122,22 @@ trap cleanup EXIT
 require_cmd curl
 require_cmd tar
 
-PLATFORM="$(detect_platform)"
+COMMON_HEADERS=(uv.h)
 
-COMMON_HEADERS=(
-  uv.h
+UV_HEADERS=(
+  uv/aix.h
+  uv/bsd.h
+  uv/darwin.h
   uv/errno.h
-  uv/version.h
-  uv/unix.h
+  uv/linux.h
+  uv/os390.h
   uv/posix.h
+  uv/sunos.h
   uv/threadpool.h
   uv/tree.h
+  uv/unix.h
+  uv/version.h
+  uv/win.h
 )
 
 COMMON_SOURCES=(
@@ -159,6 +153,9 @@ COMMON_SOURCES=(
   src/uv-common.c
   src/uv-data-getter-setters.c
   src/version.c
+)
+
+UNIX_BASE_SOURCES=(
   src/unix/async.c
   src/unix/core.c
   src/unix/dl.c
@@ -179,48 +176,53 @@ COMMON_SOURCES=(
   src/unix/udp.c
 )
 
-PLATFORM_HEADERS=()
-PLATFORM_SOURCES=()
-PLATFORM_CPPFLAGS=()
+DARWIN_SOURCES=(
+  src/unix/proctitle.c
+  src/unix/bsd-ifaddrs.c
+  src/unix/kqueue.c
+  src/unix/random-getentropy.c
+  src/unix/darwin-proctitle.c
+  src/unix/darwin.c
+  src/unix/fsevents.c
+)
 
-case "${PLATFORM}" in
-  darwin)
-    PLATFORM_HEADERS=(uv/darwin.h)
-    PLATFORM_SOURCES=(
-      src/unix/proctitle.c
-      src/unix/bsd-ifaddrs.c
-      src/unix/kqueue.c
-      src/unix/random-getentropy.c
-      src/unix/darwin-proctitle.c
-      src/unix/darwin.c
-      src/unix/fsevents.c
-    )
-    PLATFORM_CPPFLAGS=(
-      -D_DARWIN_UNLIMITED_SELECT=1
-      -D_DARWIN_USE_64_BIT_INODE=1
-    )
-    ;;
-  linux)
-    PLATFORM_HEADERS=(uv/linux.h)
-    PLATFORM_SOURCES=(
-      src/unix/proctitle.c
-      src/unix/linux.c
-      src/unix/procfs-exepath.c
-      src/unix/random-getrandom.c
-      src/unix/random-sysctl-linux.c
-    )
-    PLATFORM_CPPFLAGS=(
-      -D_GNU_SOURCE
-      -D_POSIX_C_SOURCE=200112
-    )
-    ;;
-  *)
-    echo "error: unsupported platform: ${PLATFORM}" >&2
-    exit 1
-    ;;
-esac
+LINUX_SOURCES=(
+  src/unix/proctitle.c
+  src/unix/linux.c
+  src/unix/procfs-exepath.c
+  src/unix/random-getrandom.c
+  src/unix/random-sysctl-linux.c
+)
 
-echo "==> Syncing libuv ${LIBUV_VERSION} (${PLATFORM}) into ${TARGET_DIR}"
+WINDOWS_SOURCES=(
+  src/win/async.c
+  src/win/core.c
+  src/win/detect-wakeup.c
+  src/win/dl.c
+  src/win/error.c
+  src/win/fs.c
+  src/win/fs-event.c
+  src/win/getaddrinfo.c
+  src/win/getnameinfo.c
+  src/win/handle.c
+  src/win/loop-watcher.c
+  src/win/pipe.c
+  src/win/thread.c
+  src/win/poll.c
+  src/win/process.c
+  src/win/process-stdio.c
+  src/win/signal.c
+  src/win/snprintf.c
+  src/win/stream.c
+  src/win/tcp.c
+  src/win/tty.c
+  src/win/udp.c
+  src/win/util.c
+  src/win/winapi.c
+  src/win/winsock.c
+)
+
+echo "==> Syncing libuv ${LIBUV_VERSION} (darwin+linux+windows) into ${TARGET_DIR}"
 
 rm -rf "${TARGET_DIR}" "${TMP_ROOT}"
 mkdir -p "${INCLUDE_DIR}" "${SRC_DIR}" "${TMP_DIR}"
@@ -237,12 +239,18 @@ if [[ ! -d "${EXTRACTED_SRC}" ]]; then
 fi
 
 echo "==> Copying public header subset"
-for header_rel in "${COMMON_HEADERS[@]}" "${PLATFORM_HEADERS[@]}"; do
+for header_rel in "${COMMON_HEADERS[@]}" "${UV_HEADERS[@]}"; do
   copy_required "${EXTRACTED_SRC}/include/${header_rel}" "${INCLUDE_DIR}/${header_rel}"
 done
 
 echo "==> Copying minimal source seed set"
-SEED_SOURCES=("${COMMON_SOURCES[@]}" "${PLATFORM_SOURCES[@]}")
+SEED_SOURCES=(
+  "${COMMON_SOURCES[@]}"
+  "${UNIX_BASE_SOURCES[@]}"
+  "${DARWIN_SOURCES[@]}"
+  "${LINUX_SOURCES[@]}"
+  "${WINDOWS_SOURCES[@]}"
+)
 for source_rel in "${SEED_SOURCES[@]}"; do
   copy_required "${EXTRACTED_SRC}/${source_rel}" "${TARGET_DIR}/${source_rel}"
 done
@@ -291,37 +299,35 @@ done
 echo "==> Copying license"
 copy_required "${EXTRACTED_SRC}/LICENSE" "${TARGET_DIR}/LICENSE"
 
-PLATFORM_CPPFLAGS_JOINED=""
-for flag in "${PLATFORM_CPPFLAGS[@]}"; do
-  if [[ -z "${PLATFORM_CPPFLAGS_JOINED}" ]]; then
-    PLATFORM_CPPFLAGS_JOINED="${flag}"
-  else
-    PLATFORM_CPPFLAGS_JOINED="${PLATFORM_CPPFLAGS_JOINED} ${flag}"
-  fi
-done
+COMMON_SOURCES_MAKE="$(join_make_list "${COMMON_SOURCES[@]}")"
+UNIX_BASE_SOURCES_MAKE="$(join_make_list "${UNIX_BASE_SOURCES[@]}")"
+DARWIN_SOURCES_MAKE="$(join_make_list "${DARWIN_SOURCES[@]}")"
+LINUX_SOURCES_MAKE="$(join_make_list "${LINUX_SOURCES[@]}")"
+WINDOWS_SOURCES_MAKE="$(join_make_list "${WINDOWS_SOURCES[@]}")"
 
 cat > "${TARGET_DIR}/README.md" <<EOF
-# libuv minimal subset (${PLATFORM})
+# libuv minimal subset (darwin + linux + windows)
 
-This directory vendors only the host-target minimal libuv closure required by Feng.
+This directory vendors only the minimal libuv closure required by Feng.
 
 Version: ${LIBUV_VERSION}
-Platform closure: ${PLATFORM}
+Platform closure: darwin + linux + windows
 
 Included:
-- Unix public headers used by uv.h
+- public headers (uv.h + include/uv/*.h)
 - common core sources (loop/threadpool/timer/inet/idna/random)
-- unix base sources (async/poll/stream/tcp/udp/fs/process/thread)
-- ${PLATFORM}-specific sources from upstream CMake target graph
+- unix base sources (async/poll/stream/tcp/udp/fs/process/thread/dns)
+- darwin-specific sources from upstream CMake target graph
+- linux-specific sources from upstream CMake target graph
+- windows-specific sources from upstream CMake target graph
 - recursively discovered internal src/* headers required by the selected sources
 
 Excluded:
-- Windows sources/headers
 - tests/benchmarks/examples/docs/tools
 - upstream CMake/Autotools build system
 
 Build:
-- \`make\` builds static archive and stages it into \`../../std/extlib/<host-target>\` by default.
+- \`make\` builds host-target static archive and stages it into \`../../std/extlib/<host-target>\` by default.
 - \`make OUTPUT_DIR=<path>\` overrides the staging directory.
 - \`make install\` is an alias of the staging step.
 - default staged library name: \`libfeng_std_uv.a\`
@@ -331,7 +337,10 @@ cat > "${TARGET_DIR}/Makefile" <<EOF
 CC ?= cc
 AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra
-CPPFLAGS ?= -I./include -I./src -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE ${PLATFORM_CPPFLAGS_JOINED}
+CPPFLAGS ?= -I./include -I./src
+UNIX_CPPFLAGS := -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
+DARWIN_CPPFLAGS := -D_DARWIN_UNLIMITED_SELECT=1 -D_DARWIN_USE_64_BIT_INODE=1
+LINUX_CPPFLAGS := -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112
 
 TARGET ?= libfeng_std_uv.a
 HOST_OS := \
@@ -341,7 +350,21 @@ OUTPUT_DIR ?= ../../std/extlib/\$(HOST_OS)-\$(HOST_ARCH)
 OUTPUT_NAME ?= \$(TARGET)
 OUTPUT_TARGET := \$(OUTPUT_DIR)/\$(OUTPUT_NAME)
 
-SRCS = \$(shell find src -type f -name '*.c' | LC_ALL=C sort)
+COMMON_SRCS = ${COMMON_SOURCES_MAKE}
+UNIX_BASE_SRCS = ${UNIX_BASE_SOURCES_MAKE}
+DARWIN_SRCS = ${DARWIN_SOURCES_MAKE}
+LINUX_SRCS = ${LINUX_SOURCES_MAKE}
+WINDOWS_SRCS = ${WINDOWS_SOURCES_MAKE}
+
+ifeq (\$(HOST_OS),macos)
+  SRCS = \$(COMMON_SRCS) \$(UNIX_BASE_SRCS) \$(DARWIN_SRCS)
+  CPPFLAGS += \$(UNIX_CPPFLAGS) \$(DARWIN_CPPFLAGS)
+else ifeq (\$(HOST_OS),linux)
+  SRCS = \$(COMMON_SRCS) \$(UNIX_BASE_SRCS) \$(LINUX_SRCS)
+  CPPFLAGS += \$(UNIX_CPPFLAGS) \$(LINUX_CPPFLAGS)
+else
+  SRCS = \$(COMMON_SRCS) \$(WINDOWS_SRCS)
+endif
 
 OBJS = \$(SRCS:.c=.o)
 
