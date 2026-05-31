@@ -83,6 +83,8 @@ struct FengSymbolDeclView {
     size_t param_count;
     FengSymbolTypeView **declared_specs;
     size_t declared_spec_count;
+    FengSymbolTypeView **union_members;
+    size_t union_member_count;
     struct FengSymbolDeclView **members;
     size_t member_count;
     struct FengSymbolDeclView *owner;

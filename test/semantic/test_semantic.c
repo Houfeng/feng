@@ -13973,11 +13973,241 @@ static void assert_single_source_semantic_error_contains(const char *path,
             break;
         }
     }
+    if (!found) {
+        fprintf(stderr, "expected semantic error containing: %s\n", expected);
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr, "actual semantic error: %s\n", errors[index].message);
+        }
+    }
     ASSERT(found);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+static bool type_ref_named_single_is(const FengTypeRef *type_ref, const char *name) {
+    size_t length = strlen(name);
+
+    return type_ref != NULL &&
+           type_ref->kind == FENG_TYPE_REF_NAMED &&
+           type_ref->as.named.segment_count == 1U &&
+           type_ref->as.named.segments[0].length == length &&
+           memcmp(type_ref->as.named.segments[0].data, name, length) == 0;
+}
+
+static void test_union_form_spec_records_normalized_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec MaybeText: string | int | string;\n"
+        "spec Value: MaybeText | bool | int;\n";
+    FengProgram *program = parse_program_or_die("union_normalized_members.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengUnionSpecInfo *info;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 2U);
+
+    info = feng_semantic_lookup_union_spec_info(analysis, program->declarations[1]);
+    ASSERT(info != NULL);
+    ASSERT(info->member_count == 3U);
+    ASSERT(type_ref_named_single_is(info->members[0].type_ref, "string"));
+    ASSERT(type_ref_named_single_is(info->members[1].type_ref, "int"));
+    ASSERT(type_ref_named_single_is(info->members[2].type_ref, "bool"));
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_union_form_spec_rejects_type_declared_spec_clause(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "type User: Value {}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_type_declared_spec_clause.f",
+        source,
+        "declared spec list can only contain object-form specs");
+}
+
+static void test_union_form_spec_rejects_fit_spec_clause(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type User {}\n"
+        "spec Value: User | int;\n"
+        "fit User: Value {}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_fit_spec_clause.f",
+        source,
+        "fit specs list can only contain object-form specs");
+}
+
+static void test_union_entry_records_exact_member_site(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "let value: Value = 1;\n";
+    FengProgram *program = parse_program_or_die("union_entry_exact_site.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengExpr *initializer;
+    const FengUnionCoercionSite *site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 2U);
+    ASSERT(program->declarations[1]->kind == FENG_DECL_GLOBAL_BINDING);
+
+    initializer = program->declarations[1]->as.binding.initializer;
+    site = feng_semantic_lookup_union_coercion_site(analysis, initializer);
+    ASSERT(site != NULL);
+    ASSERT(site->target_union_decl == program->declarations[0]);
+    ASSERT(site->member_index == 0U);
+    ASSERT(type_ref_named_single_is(site->member_type_ref, "int"));
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_union_entry_ambiguous_spec_member_requires_explicit_cast(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "type Thing: A, B {}\n"
+        "spec Value: A | B;\n"
+        "func run(t: Thing): void {\n"
+        "    let value: Value = t;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_ambiguous_spec_member.f",
+        source,
+        "matches multiple members of union-form spec 'Value'; use an explicit cast");
+}
+
+static void test_union_entry_explicit_cast_selects_spec_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "type Thing: A, B {}\n"
+        "spec Value: A | B;\n"
+        "func run(t: Thing): void {\n"
+        "    let value: Value = (A)t;\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("union_explicit_spec_member_cast.f", source);
+}
+
+static void test_union_if_match_accepts_type_labels(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): int {\n"
+        "    return if value {\n"
+        "        int { 1; }\n"
+        "        string { 2; }\n"
+        "        else { 3; }\n"
+        "    };\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("union_if_match_type_labels.f", source);
+}
+
+static void test_union_if_match_rejects_literal_label(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): int {\n"
+        "    return if value {\n"
+        "        1 { 1; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_if_match_literal_label.f",
+        source,
+        "union-form match labels must be union member types or 'else'");
+}
+
+static void test_union_if_match_rejects_range_label(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): int {\n"
+        "    return if value {\n"
+        "        1...2 { 1; }\n"
+        "        else { 0; }\n"
+        "    };\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_if_match_range_label.f",
+        source,
+        "union-form match labels must be union member types or 'else'");
+}
+
+static void test_union_if_match_narrows_object_spec_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "type User: Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "spec Value: Named | int;\n"
+        "func run(value: Value): string {\n"
+        "    return if value {\n"
+        "        Named { value.name; }\n"
+        "        else { \"\"; }\n"
+        "    };\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("union_if_match_narrowed_member_access.f", source);
+}
+
+static void test_union_member_access_requires_narrowing(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "spec Value: Named | int;\n"
+        "func run(value: Value): string {\n"
+        "    return value.name;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_member_access_without_narrowing.f",
+        source,
+        "must be narrowed to a single member before accessing member");
+}
+
+static void test_union_equality_requires_narrowing(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(left: Value, right: Value): bool {\n"
+        "    return left == right;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "union_equality_without_narrowing.f",
+        source,
+        "requires union-form operands to be narrowed");
 }
 
 static void test_tuple_literal_expected_contexts_pass(void) {
@@ -14580,6 +14810,18 @@ int main(void) {
     test_spec_type_satisfaction_succeeds();
     test_object_form_spec_rejects_constructor_member();
     test_object_form_spec_rejects_finalizer_member();
+    test_union_form_spec_records_normalized_members();
+    test_union_form_spec_rejects_type_declared_spec_clause();
+    test_union_form_spec_rejects_fit_spec_clause();
+    test_union_entry_records_exact_member_site();
+    test_union_entry_ambiguous_spec_member_requires_explicit_cast();
+    test_union_entry_explicit_cast_selects_spec_member();
+    test_union_if_match_accepts_type_labels();
+    test_union_if_match_rejects_literal_label();
+    test_union_if_match_rejects_range_label();
+    test_union_if_match_narrows_object_spec_member();
+    test_union_member_access_requires_narrowing();
+    test_union_equality_requires_narrowing();
     test_spec_parent_specs_must_be_spec();
     test_spec_parent_specs_rejects_duplicate();
     test_spec_parent_specs_rejects_cycle();

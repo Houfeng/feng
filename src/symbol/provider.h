@@ -123,6 +123,9 @@ const FengSymbolTypeView *feng_symbol_decl_param_type(const FengSymbolDeclView *
 size_t feng_symbol_decl_declared_spec_count(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDeclView *decl,
                                                             size_t index);
+size_t feng_symbol_decl_union_member_count(const FengSymbolDeclView *decl);
+const FengSymbolTypeView *feng_symbol_decl_union_member_at(const FengSymbolDeclView *decl,
+                                                           size_t index);
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl);
 int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl);

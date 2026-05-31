@@ -73,6 +73,7 @@
 #define FENG_SYMBOL_FT_TYPE_KIND_CALLABLE       7U
 #define FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT    8U
 #define FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE  9U
+#define FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION     10U
 
 /* TSEQ element flags: bit 0 = mutable (var) parameter, bit 1 = variadic T... parameter */
 #define FENG_SYMBOL_FT_TSEQ_FLAG_VAR 0x0001U
@@ -131,6 +132,7 @@ typedef struct FengSymbolFtSymRecord {
  *   CALLABLE:      elem_start=TSEQ-start(0-based), elem_count=param_count+1, others=0
  *   SPEC_OBJECT:   sym_ref=spec-sym-id, others=0
  *   SPEC_CALLABLE: sym_ref=spec-sym-id, elem_start=TSEQ-start, elem_count=param_count+1
+ *   SPEC_UNION:    sym_ref=spec-sym-id, elem_start=TSEQ-start, elem_count=member-count
  *   NAMED_GENERIC: string_ref=base-name, sym_ref=decl-sym-id,
  *                  elem_start=TSEQ-start, elem_count=type-arg-count
  *   TYPE_PARAM_REF:string_ref=param-name, sym_ref=type-param-sym-id, others=0 */

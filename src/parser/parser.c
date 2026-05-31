@@ -979,6 +979,14 @@ fail:
     return false;
 }
 
+static bool append_type_ref(Parser *parser,
+                            FengTypeRef ***out_list,
+                            size_t *out_count,
+                            size_t *capacity,
+                            FengTypeRef *type_ref) {
+    return APPEND_VALUE(parser, *out_list, *out_count, *capacity, type_ref);
+}
+
 static bool type_ref_is_void_named(const FengTypeRef *type_ref) {
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED) {
         return false;
@@ -1762,11 +1770,92 @@ static FengDecl *parse_spec_declaration(Parser *parser,
     decl->as.spec_decl.form = FENG_SPEC_FORM_OBJECT;
 
     if (parser_match(parser, FENG_TOKEN_COLON)) {
-        if (!parse_spec_satisfaction_list(parser,
-                                &decl->as.spec_decl.parent_specs,
-                                &decl->as.spec_decl.parent_spec_count)) {
+        FengTypeRef *first_type = parse_type_ref(parser);
+        size_t list_capacity = 0U;
+
+        if (first_type == NULL) {
             free_decl(decl);
             return NULL;
+        }
+        if (parser_match(parser, FENG_TOKEN_PIPE)) {
+            decl->as.spec_decl.form = FENG_SPEC_FORM_UNION;
+            if (type_ref_is_void_named(first_type)) {
+                (void)parser_error_at(parser,
+                                      &first_type->token,
+                                      "union-form spec members cannot be 'void'");
+                free_type_ref(first_type);
+                free_decl(decl);
+                return NULL;
+            }
+            if (!append_type_ref(parser,
+                                 &decl->as.spec_decl.as.union_form.members,
+                                 &decl->as.spec_decl.as.union_form.member_count,
+                                 &list_capacity,
+                                 first_type)) {
+                free_type_ref(first_type);
+                free_decl(decl);
+                return NULL;
+            }
+            do {
+                FengTypeRef *member_type = parse_type_ref(parser);
+
+                if (member_type == NULL) {
+                    free_decl(decl);
+                    return NULL;
+                }
+                if (type_ref_is_void_named(member_type)) {
+                    (void)parser_error_at(parser,
+                                          &member_type->token,
+                                          "union-form spec members cannot be 'void'");
+                    free_type_ref(member_type);
+                    free_decl(decl);
+                    return NULL;
+                }
+                if (!append_type_ref(parser,
+                                     &decl->as.spec_decl.as.union_form.members,
+                                     &decl->as.spec_decl.as.union_form.member_count,
+                                     &list_capacity,
+                                     member_type)) {
+                    free_type_ref(member_type);
+                    free_decl(decl);
+                    return NULL;
+                }
+            } while (parser_match(parser, FENG_TOKEN_PIPE));
+
+            if (!parser_expect(parser,
+                               FENG_TOKEN_SEMICOLON,
+                               "union-form spec declarations must end with ';'")) {
+                free_decl(decl);
+                return NULL;
+            }
+            return decl;
+        }
+
+        if (!append_type_ref(parser,
+                             &decl->as.spec_decl.parent_specs,
+                             &decl->as.spec_decl.parent_spec_count,
+                             &list_capacity,
+                             first_type)) {
+            free_type_ref(first_type);
+            free_decl(decl);
+            return NULL;
+        }
+        while (parser_match(parser, FENG_TOKEN_COMMA)) {
+            FengTypeRef *parent_type = parse_type_ref(parser);
+
+            if (parent_type == NULL) {
+                free_decl(decl);
+                return NULL;
+            }
+            if (!append_type_ref(parser,
+                                 &decl->as.spec_decl.parent_specs,
+                                 &decl->as.spec_decl.parent_spec_count,
+                                 &list_capacity,
+                                 parent_type)) {
+                free_type_ref(parent_type);
+                free_decl(decl);
+                return NULL;
+            }
         }
     }
 
@@ -2559,6 +2648,67 @@ static bool is_match_label_atom_token(FengTokenKind kind) {
            kind == FENG_TOKEN_BOOL || kind == FENG_TOKEN_IDENTIFIER;
 }
 
+static bool is_type_label_start_token(FengTokenKind kind) {
+    return kind == FENG_TOKEN_IDENTIFIER || kind == FENG_TOKEN_KW_VOID ||
+           kind == FENG_TOKEN_KW_UNKNOWN;
+}
+
+static bool peek_scan_type_ref_label(const Parser *parser, size_t start, size_t *out_after) {
+    size_t i = start;
+    int angle_depth = 0;
+
+    if (!is_type_label_start_token(parser->tokens[i].kind)) {
+        return false;
+    }
+    ++i;
+    while (parser->tokens[i].kind == FENG_TOKEN_DOT) {
+        ++i;
+        if (!is_type_label_start_token(parser->tokens[i].kind)) {
+            return false;
+        }
+        ++i;
+    }
+    if (parser->tokens[i].kind == FENG_TOKEN_LT) {
+        angle_depth = 1;
+        ++i;
+        while (angle_depth > 0 && parser->tokens[i].kind != FENG_TOKEN_EOF) {
+            if (parser->tokens[i].kind == FENG_TOKEN_LT) {
+                ++angle_depth;
+            } else if (parser->tokens[i].kind == FENG_TOKEN_GT) {
+                --angle_depth;
+            } else if (parser->tokens[i].kind == FENG_TOKEN_SHR) {
+                angle_depth -= angle_depth >= 2 ? 2 : 1;
+            }
+            ++i;
+        }
+        if (angle_depth > 0) {
+            return false;
+        }
+    }
+    for (;;) {
+        if (parser->tokens[i].kind == FENG_TOKEN_STAR) {
+            ++i;
+            continue;
+        }
+        if (parser->tokens[i].kind == FENG_TOKEN_LBRACKET) {
+            ++i;
+            if (parser->tokens[i].kind == FENG_TOKEN_NOT) {
+                ++i;
+            }
+            if (parser->tokens[i].kind != FENG_TOKEN_RBRACKET) {
+                return false;
+            }
+            ++i;
+            continue;
+        }
+        break;
+    }
+    if (out_after != NULL) {
+        *out_after = i;
+    }
+    return true;
+}
+
 /* Parser cursor must be positioned at the first token after the consumed '{'.
  * Returns true when the body looks like a match branch list (label/else
  * followed by '{', ',' or '...'); returns false to indicate a plain block
@@ -2574,6 +2724,26 @@ static bool peek_match_body(Parser *parser) {
     if (t->kind == FENG_TOKEN_MINUS) {
         ++i;
         t = &parser->tokens[i];
+    }
+    if (!is_match_label_atom_token(t->kind)) {
+        size_t after_type = i;
+
+        if (!peek_scan_type_ref_label(parser, i, &after_type)) {
+            return false;
+        }
+        t = &parser->tokens[after_type];
+        return t->kind == FENG_TOKEN_COMMA || t->kind == FENG_TOKEN_LBRACE;
+    }
+    if (is_type_label_start_token(t->kind)) {
+        size_t after_type = i;
+
+        if (peek_scan_type_ref_label(parser, i, &after_type)) {
+            const FengToken *after = &parser->tokens[after_type];
+
+            if (after->kind == FENG_TOKEN_COMMA || after->kind == FENG_TOKEN_LBRACE) {
+                return true;
+            }
+        }
     }
     if (!is_match_label_atom_token(t->kind)) {
         return false;
@@ -2665,6 +2835,36 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label) {
     out_label->value = NULL;
     out_label->range_low = NULL;
     out_label->range_high = NULL;
+    out_label->type = NULL;
+
+    if (is_type_label_start_token(token.kind)) {
+        size_t before = parser->current;
+        FengTypeRef *type_ref = parse_type_ref(parser);
+
+        if (type_ref == NULL) {
+            return false;
+        }
+        if (!parser_check(parser, FENG_TOKEN_ELLIPSIS) &&
+            (parser_check(parser, FENG_TOKEN_COMMA) || parser_check(parser, FENG_TOKEN_LBRACE))) {
+            out_label->kind = FENG_MATCH_LABEL_TYPE;
+            out_label->type = type_ref;
+            if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+                type_ref->as.named.segment_count == 1U &&
+                type_ref->as.named.type_arg_count == 0U) {
+                FengExpr *fallback = new_expr(parser, FENG_EXPR_IDENTIFIER, type_ref->token);
+
+                if (fallback == NULL) {
+                    free_type_ref(type_ref);
+                    return false;
+                }
+                fallback->as.identifier = type_ref->as.named.segments[0];
+                out_label->value = fallback;
+            }
+            return true;
+        }
+        free_type_ref(type_ref);
+        parser->current = before;
+    }
 
     first = parse_match_label_atom(parser);
     if (first == NULL) {
@@ -2700,6 +2900,7 @@ static void free_match_branch_contents(FengMatchBranch *branch) {
         free_expr(branch->labels[i].value);
         free_expr(branch->labels[i].range_low);
         free_expr(branch->labels[i].range_high);
+        free_type_ref(branch->labels[i].type);
     }
     free(branch->labels);
     free_block(branch->body);
@@ -2724,6 +2925,7 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
             free_expr(label.value);
             free_expr(label.range_low);
             free_expr(label.range_high);
+            free_type_ref(label.type);
             free_match_branch_contents(out_branch);
             return false;
         }
@@ -4320,10 +4522,15 @@ static void free_decl(FengDecl *decl) {
                     free_type_member(decl->as.spec_decl.as.object.members[index]);
                 }
                 free(decl->as.spec_decl.as.object.members);
-            } else {
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 free_parameters(decl->as.spec_decl.as.callable.params,
                                 decl->as.spec_decl.as.callable.param_count);
                 free_type_ref(decl->as.spec_decl.as.callable.return_type);
+            } else {
+                for (index = 0U; index < decl->as.spec_decl.as.union_form.member_count; ++index) {
+                    free_type_ref(decl->as.spec_decl.as.union_form.members[index]);
+                }
+                free(decl->as.spec_decl.as.union_form.members);
             }
             break;
         case FENG_DECL_FIT:

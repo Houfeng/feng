@@ -173,6 +173,8 @@ if v {
 当前已确认的语义要点：
 
 - 单个 member 分支表示“当前 active member 就是该 member”；分支内的值收窄为该确定 member。
+- 当 `if` 的目标表达式静态类型为 union-form 时，该 `if 目标值 { ... }` 的整个匹配体进入 union member 类型匹配模式；只允许 union member 类型标签与 `else`，不允许字面量值标签或区间标签。
+- union-form 未收窄前不具备可直接比较的统一值语义，因此不能在同一次匹配中把 `int { ... }` 这类 member 标签与 `1 { ... }`、`1...5 { ... }` 这类值/区间标签混用。
 - union 值在进入 union-form 的具体站点时，active member 就已经被确定；后续 `if 目标值 { ... }` 条件匹配只针对这个已确定的 active member 做判别，不会先把当前 member 向上转换到别的 `spec` 后再尝试匹配。
 - 多个 member 可在同一分支中以逗号罗列；这类分支只把值收窄到“被列出的 member 子集”，而不是某个单一确定类型。
 - `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
@@ -388,11 +390,11 @@ func use<V: Value>(v: V): void { ... }
 
 本次讨论已确认：union-form 的值级实现统一采用 `aggregate-with-managed-slots` 基线表示。
 
-首版固定包含三个组成部分：
+首版固定包含三个逻辑组成部分：
 
 - 一个 `tag`，用于表达当前 active variant。
-- 一个 `inline value`，用于承载按值 payload。
-- 一个托管指针槽位，用于承载当前 variant 需要的托管引用部分。
+- 一个运行时转发槽 `_fwd`，用于把 aggregate walker 转发到当前 active payload 的托管槽位描述。
+- 一个 inline payload 区域，用于承载当前 active member 的按值表示。
 
 其中，member 本身既可以是基础类型、用户定义类型，也可以是其他 `spec`；这些类别的混合并不改变 union-form 统一落到既有 `aggregate-with-managed-slots` 这一顶层值模型的原则。
 
@@ -418,10 +420,13 @@ func use<V: Value>(v: V): void { ... }
 当前讨论已确认：
 
 - 把 `aggregate-with-managed-slots` 作为 union-form 的**统一基线表示**；
-- 其首版固定布局为“一个 `tag`、一个 `inline value`、一个托管指针槽位”；
-- 其中 `tag` 负责表达当前 active variant；
-- 托管指针槽位是否有效，由当前 active variant 决定；未使用该槽位的 variant 视为该槽位为空；
-- 复制、销毁与托管扫描只按当前 active variant 对应的布局规则处理该托管指针槽位；这套生命周期继续复用现有 aggregate 通用能力，由相应描述符驱动，不要求为 union-form 新增专用 runtime 分支或新的通用 API；
+- 其首版固定布局为“一个 `tag`、一个 `FengManagedSlotDescriptor _fwd`、一个 inline payload 区域”；
+- `tag` 负责表达当前 active member 在归一化 member 列表中的序号，供 `if` member 匹配与收窄发码使用；
+- `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 在 retain / release / assign / take / 托管扫描路径中转发使用；
+- `_fwd` 不承载语言层 member identity；多个 member 可以拥有相同的 `_fwd.kind` 与 payload offset，但仍必须用不同 `tag` 区分；
+- inline payload 区域必须能内联容纳归一化 member 中尺寸与对齐需求最大的 member 表示；不允许为 aggregate member 采用装箱作为首版通用路径；
+- 当前 active member 不含托管槽位时，`_fwd.kind` 写为 `FENG_SLOT_NONE`；active member 是托管指针时，`_fwd.kind` 写为 `FENG_SLOT_POINTER`；active member 是内联 aggregate 时，`_fwd.kind` 写为 `FENG_SLOT_NESTED_AGGREGATE` 且 `nested` 指向对应 aggregate descriptor；
+- 复制、销毁与托管扫描只按 `_fwd` 指向的当前 active payload 生命周期规则处理；这套生命周期继续复用现有 aggregate 通用能力，由相应描述符驱动，不要求为 union-form 新增专用 runtime 分支或新的通用 API；
 - 即使未来对某些受限子集做优化，也不影响 union-form 在抽象层面归类为既有三类之一。
 
 这条结论的含义是：
@@ -535,6 +540,7 @@ func use<V: Value>(v: V): void { ... }
 当前讨论已确认基础收窄语义：
 
 - 基础收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
+- 当 `if` 的目标静态类型为 union-form 时，匹配体只允许 union member 类型标签与 `else`；字面量值标签与区间标签仅适用于非 union 目标。
 - union 值在进入站点选定 active member 后，后续条件匹配只按该 active member 本身判别；不会在匹配阶段自动向上转换后再命中别的 `spec` branch。
 - union-form 的成员访问必须先收窄到确定 member。
 - 可编译期完成的收窄应优先在编译期完成。
@@ -553,14 +559,15 @@ func use<V: Value>(v: V): void { ... }
 当前讨论已确认：union-form 的值级实现固定包含：
 
 - 一个 `tag`。
-- 一个 `inline value`。
-- 一个托管指针槽位。
+- 一个运行时转发槽 `_fwd`。
+- 一个 inline payload 区域。
 
 对应语义为：
 
-- `tag` 负责表达当前 active variant。
-- 托管指针槽位是否有效由当前 active variant 决定；对不使用该槽位的 variant，该槽位视为空。
-- 复制、销毁与托管扫描仅按当前 active variant 对应的 member 规则处理该托管指针槽位。
+- `tag` 负责表达当前 active member 在归一化 member 列表中的序号，供 member 匹配与收窄发码使用。
+- `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 转发到 `NONE` / `POINTER` / `NESTED_AGGREGATE` 路径。
+- inline payload 区域按值承载当前 active member，必须能容纳归一化 member 中尺寸与对齐需求最大的表示。
+- 复制、销毁与托管扫描仅按 `_fwd` 指向的当前 active payload 规则处理。
 - 该设计仍属于既有 `aggregate-with-managed-slots` 顶层值模型，不构成第四类运行时结构。
 
 当前阶段无剩余未决项。
@@ -629,7 +636,7 @@ let t: Display = s;
 
 1. 先落 parser / AST，补齐 union-form 语法、form 边界与成员集合承载。
 2. 再落语义层，完成成员归一化、进入站点 member 选择、显式转换边界与 `if` 收窄规则。
-3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按“一个 `tag`、一个 `inline value`、一个托管指针槽位”的固定布局完成构造、判别、复制、销毁与扫描。
+3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按“一个 `tag`、一个 `_fwd`、一个 inline payload 区域”的固定布局完成构造、判别、复制、销毁与扫描。
 4. 最后补齐 diagnostics、测试与主规范并入。
 
 原因：

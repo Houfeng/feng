@@ -701,6 +701,8 @@ typedef struct UserSpec {
     CGType        **callable_param_types;
     size_t          callable_param_count;
     bool            callable_is_variadic;
+    CGType        **union_member_types;
+    size_t          union_member_count;
     const FengDecl *decl;
     bool            is_generic_instance;
     const FengDecl *generic_origin_decl;
@@ -4150,6 +4152,36 @@ static bool cg_resolve_coercion_target_user_spec(CG *cg,
     return *out_spec != NULL;
 }
 
+static bool cg_resolve_union_target_user_spec(CG *cg,
+                                              const FengUnionCoercionSite *site,
+                                              FengToken blame,
+                                              const UserSpec **out_spec) {
+    CGType *target_type = NULL;
+
+    *out_spec = NULL;
+    if (cg == NULL || site == NULL) {
+        return false;
+    }
+    if (site->target_union_type_ref != NULL) {
+        if (!cg_resolve_type(cg, site->target_union_type_ref, &blame, &target_type)) {
+            return false;
+        }
+        if (target_type == NULL || target_type->kind != CG_TYPE_SPEC ||
+            target_type->user_spec == NULL ||
+            target_type->user_spec->form != FENG_SPEC_FORM_UNION) {
+            cgtype_free(target_type);
+            return cg_fail(cg, blame,
+                           "codegen: union coercion target did not resolve to a concrete union-form spec");
+        }
+        *out_spec = target_type->user_spec;
+        cgtype_free(target_type);
+        return true;
+    }
+
+    *out_spec = cg_find_user_spec_by_decl(cg, site->target_union_decl);
+    return *out_spec != NULL && (*out_spec)->form == FENG_SPEC_FORM_UNION;
+}
+
 static const UserFit *cg_find_user_fit_by_decl_and_target(const CG *cg,
                                                           const FengDecl *decl,
                                                           const UserType *target) {
@@ -5814,14 +5846,10 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         return false;
     }
 
-    if (s->form == FENG_SPEC_FORM_OBJECT) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION) {
         Buf vb; buf_init(&vb);
         buf_append_fmt(&vb, "FengSpecValue__%s__%s", owner_mangle, symbol.data);
         s->c_value_struct_name = vb.data;
-
-        Buf wb; buf_init(&wb);
-        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
-        s->c_witness_struct_name = wb.data;
 
         Buf db; buf_init(&db);
         buf_append_fmt(&db, "FengSpecAgg__%s__%s", owner_mangle, symbol.data);
@@ -5839,25 +5867,31 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", owner_mangle, symbol.data);
         s->c_aggregate_init_fn_name = ib.data;
 
-        Buf dssb; buf_init(&dssb);
-        buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
-                       owner_mangle, symbol.data);
-        s->c_default_subject_struct_name = dssb.data;
+        if (s->form == FENG_SPEC_FORM_OBJECT) {
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
+            s->c_witness_struct_name = wb.data;
 
-        Buf ddb; buf_init(&ddb);
-        buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
-                       owner_mangle, symbol.data);
-        s->c_default_subject_desc_name = ddb.data;
+            Buf dssb; buf_init(&dssb);
+            buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
+                           owner_mangle, symbol.data);
+            s->c_default_subject_struct_name = dssb.data;
 
-        Buf dnb; buf_init(&dnb);
-        buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
-                       owner_mangle, symbol.data);
-        s->c_default_subject_new_name = dnb.data;
+            Buf ddb; buf_init(&ddb);
+            buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
+                           owner_mangle, symbol.data);
+            s->c_default_subject_desc_name = ddb.data;
 
-        Buf dwb; buf_init(&dwb);
-        buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
-                       owner_mangle, symbol.data);
-        s->c_default_witness_name = dwb.data;
+            Buf dnb; buf_init(&dnb);
+            buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
+                           owner_mangle, symbol.data);
+            s->c_default_subject_new_name = dnb.data;
+
+            Buf dwb; buf_init(&dwb);
+            buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
+                           owner_mangle, symbol.data);
+            s->c_default_witness_name = dwb.data;
+        }
     } else {
         Buf wb; buf_init(&wb);
         buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
@@ -5887,6 +5921,12 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
               s->c_default_subject_new_name && s->c_default_witness_name)) {
             return false;
         }
+    } else if (s->form == FENG_SPEC_FORM_UNION) {
+        if (!(s->feng_name && s->c_value_struct_name &&
+              s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
+              s->c_aggregate_default_name && s->c_aggregate_init_fn_name)) {
+            return false;
+        }
     } else if (!(s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
                  s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name)) {
         return false;
@@ -5904,6 +5944,23 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         ok = cg_collect_generic_instances_from_type_ref(cg, sub, parent_scope);
         cg_type_ref_free(sub);
         if (!ok) return false;
+    }
+    if (s->form == FENG_SPEC_FORM_UNION) {
+        for (size_t member_index = 0U;
+             member_index < decl->as.spec_decl.as.union_form.member_count;
+             ++member_index) {
+            CGTypeParamScope member_scope = open_scope != NULL ? *open_scope : (CGTypeParamScope){0};
+            FengTypeRef *sub = cg_type_ref_substitute(decl->as.spec_decl.as.union_form.members[member_index],
+                                                      decl->as.spec_decl.type_params,
+                                                      decl->as.spec_decl.type_param_count,
+                                                      type_args);
+            bool ok;
+
+            if (sub == NULL) return false;
+            ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
+            cg_type_ref_free(sub);
+            if (!ok) return false;
+        }
     }
     return true;
 }
@@ -7522,11 +7579,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
                             decl->as.spec_decl.name.length);
     if (!san) return false;
 
-    Buf wb; buf_init(&wb);
-    buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
-    s->c_witness_struct_name = wb.data;
-
-    if (s->form == FENG_SPEC_FORM_OBJECT) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION) {
         Buf vb; buf_init(&vb);
         buf_append_fmt(&vb, "FengSpecValue__%s__%s", cg->module_mangle, san);
         s->c_value_struct_name = vb.data;
@@ -7547,26 +7600,36 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
         buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
         s->c_aggregate_init_fn_name = ib.data;
 
-        Buf dssb; buf_init(&dssb);
-        buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
-                       cg->module_mangle, san);
-        s->c_default_subject_struct_name = dssb.data;
+        if (s->form == FENG_SPEC_FORM_OBJECT) {
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
+            s->c_witness_struct_name = wb.data;
 
-        Buf ddb; buf_init(&ddb);
-        buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
-                       cg->module_mangle, san);
-        s->c_default_subject_desc_name = ddb.data;
+            Buf dssb; buf_init(&dssb);
+            buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
+                           cg->module_mangle, san);
+            s->c_default_subject_struct_name = dssb.data;
 
-        Buf dnb; buf_init(&dnb);
-        buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
-                       cg->module_mangle, san);
-        s->c_default_subject_new_name = dnb.data;
+            Buf ddb; buf_init(&ddb);
+            buf_append_fmt(&ddb, "FengSpecDefault__%s__%s__Subject_desc",
+                           cg->module_mangle, san);
+            s->c_default_subject_desc_name = ddb.data;
 
-        Buf dwb; buf_init(&dwb);
-        buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
-                       cg->module_mangle, san);
-        s->c_default_witness_name = dwb.data;
+            Buf dnb; buf_init(&dnb);
+            buf_append_fmt(&dnb, "FengSpecDefault__%s__%s__new_subject",
+                           cg->module_mangle, san);
+            s->c_default_subject_new_name = dnb.data;
+
+            Buf dwb; buf_init(&dwb);
+            buf_append_fmt(&dwb, "FengSpecDefaultWitness__%s__%s",
+                           cg->module_mangle, san);
+            s->c_default_witness_name = dwb.data;
+        }
     } else {
+        Buf wb; buf_init(&wb);
+        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
+        s->c_witness_struct_name = wb.data;
+
         Buf cb; buf_init(&cb);
         buf_append_fmt(&cb, "FengClosure__%s__%s", cg->module_mangle, san);
         s->c_closure_struct_name = cb.data;
@@ -7587,6 +7650,11 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
             && s->c_aggregate_default_name && s->c_aggregate_init_fn_name
             && s->c_default_subject_struct_name && s->c_default_subject_desc_name
             && s->c_default_subject_new_name && s->c_default_witness_name;
+    }
+    if (s->form == FENG_SPEC_FORM_UNION) {
+        return s->c_value_struct_name
+            && s->c_aggregate_desc_name && s->c_aggregate_slots_name
+            && s->c_aggregate_default_name && s->c_aggregate_init_fn_name;
     }
     return s->c_witness_struct_name && s->c_closure_struct_name &&
            s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name;
@@ -7624,6 +7692,44 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                                                   &decl->token,
                                                   &s->callable_return_type)) {
             return false;
+        }
+        return true;
+    }
+    if (s->form == FENG_SPEC_FORM_UNION) {
+        const FengUnionSpecInfo *info =
+            feng_semantic_lookup_union_spec_info(cg->analysis, decl);
+        size_t member_count = info != NULL
+                                  ? info->member_count
+                                  : decl->as.spec_decl.as.union_form.member_count;
+
+        if (member_count == 0U) {
+            return cg_fail(cg, decl->token,
+                           "codegen: union-form spec has no normalized members");
+        }
+        s->union_member_types = (CGType **)calloc(member_count,
+                                                  sizeof(*s->union_member_types));
+        if (s->union_member_types == NULL) {
+            return cg_fail(cg, decl->token, "codegen: out of memory");
+        }
+        s->union_member_count = member_count;
+        for (size_t member_index = 0U; member_index < member_count; ++member_index) {
+            const FengTypeRef *member_ref = info != NULL
+                ? info->members[member_index].type_ref
+                : decl->as.spec_decl.as.union_form.members[member_index];
+
+            if (!cg_resolve_type_for_user_spec_member(cg,
+                                                      s,
+                                                      member_ref,
+                                                      member_ref != NULL ? &member_ref->token : &decl->token,
+                                                      &s->union_member_types[member_index])) {
+                return false;
+            }
+            if (s->union_member_types[member_index] != NULL &&
+                s->union_member_types[member_index]->kind == CG_TYPE_GENERIC_PARAM) {
+                return cg_fail(cg,
+                               member_ref != NULL ? member_ref->token : decl->token,
+                               "codegen: union-form spec member layout requires a concrete type argument");
+            }
         }
         return true;
     }
@@ -8289,6 +8395,51 @@ static void cg_emit_callable_abi_function_pointer_typedef(Buf *b, const UserSpec
     buf_append_cstr(b, ");\n");
 }
 
+static void cg_append_union_payload_field_name(Buf *b, size_t member_index) {
+    buf_append_fmt(b, "m%zu", member_index);
+}
+
+static bool cg_append_union_member_slot_descriptor(CG *cg,
+                                                   Buf *b,
+                                                   const UserSpec *s,
+                                                   size_t member_index,
+                                                   FengToken blame) {
+    const CGType *member_type;
+    CGValueKind value_kind;
+
+    if (s == NULL || b == NULL || member_index >= s->union_member_count) {
+        return false;
+    }
+    member_type = s->union_member_types[member_index];
+    value_kind = cgtype_value_kind(member_type);
+    if (value_kind == CG_VK_TRIVIAL) {
+        buf_append_cstr(b,
+                        "(FengManagedSlotDescriptor){ .offset = 0, "
+                        ".kind = FENG_SLOT_NONE, .nested = NULL }");
+        return true;
+    }
+    buf_append_fmt(b,
+                   "(FengManagedSlotDescriptor){ .offset = offsetof(struct %s, payload.",
+                   s->c_value_struct_name);
+    cg_append_union_payload_field_name(b, member_index);
+    if (value_kind == CG_VK_MANAGED_POINTER) {
+        buf_append_cstr(b, "), .kind = FENG_SLOT_POINTER, .nested = NULL }");
+        return true;
+    }
+    if (value_kind == CG_VK_AGGREGATE) {
+        const char *aggregate_desc = cg_aggregate_desc_name(member_type);
+        if (aggregate_desc == NULL) {
+            return cg_fail(cg, blame,
+                           "codegen: union-form aggregate member is missing a descriptor");
+        }
+        buf_append_fmt(b,
+                       "), .kind = FENG_SLOT_NESTED_AGGREGATE, .nested = &%s }",
+                       aggregate_desc);
+        return true;
+    }
+    return false;
+}
+
 /* Forward declarations for spec value-struct + witness-struct, plus the
  * value-struct definition. The witness-struct definition is emitted later in
  * cg_emit_user_spec_definition (which needs every method's CType resolved). */
@@ -8296,6 +8447,34 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
         buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+        return;
+    }
+    if (s->form == FENG_SPEC_FORM_UNION) {
+        buf_append_fmt(&cg->headers, "struct %s {\n", s->c_value_struct_name);
+        buf_append_cstr(&cg->headers, "    uint32_t tag;\n");
+        buf_append_cstr(&cg->headers, "    FengManagedSlotDescriptor _fwd;\n");
+        buf_append_cstr(&cg->headers, "    union {\n");
+        if (s->union_member_count == 0U) {
+            buf_append_cstr(&cg->headers, "        char _empty;\n");
+        }
+        for (size_t member_index = 0U;
+             member_index < s->union_member_count;
+             ++member_index) {
+            buf_append_cstr(&cg->headers, "        ");
+            if (s->union_member_types[member_index] != NULL &&
+                s->union_member_types[member_index]->kind == CG_TYPE_VOID) {
+                buf_append_cstr(&cg->headers, "char ");
+            } else {
+                cg_emit_c_type(&cg->headers, s->union_member_types[member_index]);
+                buf_append_cstr(&cg->headers, " ");
+            }
+            cg_append_union_payload_field_name(&cg->headers, member_index);
+            buf_append_cstr(&cg->headers, ";\n");
+        }
+        buf_append_cstr(&cg->headers, "    } payload;\n};\n");
+        buf_append_fmt(&cg->headers,
+            "static const FengAggregateDescriptor %s;\n",
+            s->c_aggregate_desc_name);
         return;
     }
     /* Witness struct is forward-declared here so the value struct (whose
@@ -8346,7 +8525,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
 
         buf_append_fmt(td,
             "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n"
-            "    { offsetof(struct %s, _self), NULL },\n"
+            "    { offsetof(struct %s, _self), NULL, NULL },\n"
             "};\n\n",
             s->c_closure_desc_name,
             s->c_closure_struct_name);
@@ -8366,6 +8545,103 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             s->c_closure_struct_name,
             s->c_closure_desc_name,
             s->c_closure_desc_name);
+        return;
+    }
+    if (s->form == FENG_SPEC_FORM_UNION) {
+        Buf slot_descriptor;
+        buf_init(&slot_descriptor);
+        if (s->union_member_count == 0U) {
+            (void)cg_fail(cg, s->decl->token,
+                          "codegen: union-form spec has no members");
+            return;
+        }
+        if (!cg_append_union_member_slot_descriptor(cg,
+                                                    &slot_descriptor,
+                                                    s,
+                                                    0U,
+                                                    s->decl->token)) {
+            buf_free(&slot_descriptor);
+            return;
+        }
+
+        buf_append_fmt(td,
+            "static const FengManagedSlotDescriptor %s[] = {\n"
+            "    { offsetof(struct %s, _fwd), FENG_SLOT_FORWARD, NULL },\n"
+            "};\n",
+            s->c_aggregate_slots_name,
+            s->c_value_struct_name);
+
+        buf_append_fmt(td,
+            "static void %s(void *_value_out) {\n"
+            "    struct %s *_v = (struct %s *)_value_out;\n"
+            "    memset(_v, 0, sizeof *_v);\n"
+            "    _v->tag = 0U;\n"
+            "    _v->_fwd = %s;\n",
+            s->c_aggregate_init_fn_name,
+            s->c_value_struct_name,
+            s->c_value_struct_name,
+            slot_descriptor.data);
+        buf_free(&slot_descriptor);
+
+        if (s->union_member_types[0U] != NULL &&
+            s->union_member_types[0U]->kind != CG_TYPE_VOID) {
+            if (cgtype_is_aggregate(s->union_member_types[0U])) {
+                const char *member_desc = cg_aggregate_desc_name(s->union_member_types[0U]);
+
+                if (member_desc == NULL) {
+                    (void)cg_fail(cg,
+                                  s->decl->token,
+                                  "codegen: union default aggregate member is missing a descriptor");
+                    return;
+                }
+                buf_append_fmt(td,
+                    "    feng_aggregate_default_init(&_v->payload.m0, &%s);\n",
+                    member_desc);
+            } else {
+                char *default_expr = NULL;
+                char *member_ctype = cg_ctype_dup(s->union_member_types[0U]);
+
+                if (member_ctype == NULL ||
+                    !cg_default_value_expr(cg,
+                                           s->union_member_types[0U],
+                                           &s->decl->token,
+                                           &default_expr)) {
+                    free(member_ctype);
+                    free(default_expr);
+                    return;
+                }
+                buf_append_fmt(td,
+                    "    _v->payload.m0 = (%s)(%s);\n",
+                    member_ctype,
+                    default_expr);
+                free(member_ctype);
+                free(default_expr);
+            }
+        }
+        buf_append_cstr(td, "}\n");
+
+        buf_append_fmt(td,
+            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "    .kind = FENG_DEFAULT_INIT_FN,\n"
+            "    .init_fn = %s,\n"
+            "};\n",
+            s->c_aggregate_default_name,
+            s->c_aggregate_init_fn_name);
+
+        buf_append_fmt(td,
+            "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
+            "    .name = \"%s\",\n"
+            "    .size = sizeof(struct %s),\n"
+            "    .default_init = &%s,\n"
+            "    .managed_slot_count = 1,\n"
+            "    .managed_slots = %s,\n"
+            "    .equal_fn = NULL,\n"
+            "};\n\n",
+            s->c_aggregate_desc_name,
+            s->feng_name,
+            s->c_value_struct_name,
+            s->c_aggregate_default_name,
+            s->c_aggregate_slots_name);
         return;
     }
     buf_append_fmt(td, "struct %s {\n", s->c_witness_struct_name);
@@ -9270,6 +9546,30 @@ static bool cg_emit_imported_binding_assign(CG *cg,
                 "    feng_assign((void**)&%s, %s);\n",
                 slot_name, v.c_expr);
         }
+    } else if (cgtype_is_aggregate(binding_type)) {
+        const char *aggregate_desc = cg_aggregate_desc_name(binding_type);
+
+        if (aggregate_desc == NULL) {
+            er_free(&v);
+            cgtype_free(binding_type);
+            free(slot_name);
+            free(ensure_init_name);
+            return cg_fail(cg,
+                           stmt->token,
+                           "codegen: missing aggregate descriptor for assignment");
+        }
+        if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+            er_free(&v);
+            cgtype_free(binding_type);
+            free(slot_name);
+            free(ensure_init_name);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+            slot_name,
+            v.c_expr,
+            aggregate_desc);
     } else {
         char *cty = cg_ctype_dup(binding_type);
         buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
@@ -10143,11 +10443,11 @@ static bool cg_emit_lambda_closure_type(CG *cg,
 
     buf_append_fmt(td,
         "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n"
-        "    { offsetof(struct %s, _self), NULL },\n",
+        "    { offsetof(struct %s, _self), NULL, NULL },\n",
         closure_desc_name,
         closure_struct_name);
     for (size_t i = 0; i < capture_count; ++i) {
-        buf_append_fmt(td, "    { offsetof(struct %s, %s), NULL },\n",
+        buf_append_fmt(td, "    { offsetof(struct %s, %s), NULL, NULL },\n",
                        closure_struct_name,
                        capture_field_names[i]);
     }
@@ -10261,9 +10561,6 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         "    (void)_lambda;\n",
         closure_struct_name,
         closure_struct_name);
-    if (!cg_emit_function_eh_prologue(cg, blame)) {
-        goto cleanup;
-    }
     {
         Buf frame_name;
         buf_init(&frame_name);
@@ -11004,6 +11301,87 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
     }
     return cg_fail(cg, e->token,
         "codegen: callable-form lambda/method coercion not yet supported in this step");
+}
+
+static bool cg_emit_union_spec_coercion(CG *cg,
+                                        const FengExpr *e,
+                                        const FengUnionCoercionSite *site,
+                                        ExprResult *out) {
+    const UserSpec *target_spec = NULL;
+    ExprResult source;
+    Buf expr;
+    Buf slot_descriptor;
+    bool payload_owns_ref = false;
+
+    er_init(out);
+    er_init(&source);
+    buf_init(&expr);
+    buf_init(&slot_descriptor);
+
+    if (!cg_resolve_union_target_user_spec(cg, site, e->token, &target_spec)) {
+        return false;
+    }
+    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_UNION ||
+        site->member_index >= target_spec->union_member_count) {
+        return cg_fail(cg, e->token,
+                       "codegen: union coercion target member is invalid");
+    }
+    if (!cg_emit_expr_raw(cg, e, &source)) {
+        return false;
+    }
+    if (!cg_append_union_member_slot_descriptor(cg,
+                                                &slot_descriptor,
+                                                target_spec,
+                                                site->member_index,
+                                                e->token)) {
+        er_free(&source);
+        buf_free(&slot_descriptor);
+        return false;
+    }
+
+    buf_append_fmt(&expr,
+                   "((struct %s){ .tag = %zuU, ._fwd = %s",
+                   target_spec->c_value_struct_name,
+                   site->member_index,
+                   slot_descriptor.data);
+    if (target_spec->union_member_types[site->member_index] != NULL &&
+        target_spec->union_member_types[site->member_index]->kind != CG_TYPE_VOID) {
+        const CGType *member_type = target_spec->union_member_types[site->member_index];
+
+        buf_append_cstr(&expr, ", .payload.");
+        cg_append_union_payload_field_name(&expr, site->member_index);
+        buf_append_cstr(&expr, " = ");
+        if (cgtype_is_by_value_struct(member_type) || cgtype_is_aggregate(member_type)) {
+            buf_append_cstr(&expr, source.c_expr);
+        } else {
+            char *member_ctype = cg_ctype_dup(member_type);
+
+            if (member_ctype == NULL) {
+                er_free(&source);
+                buf_free(&expr);
+                buf_free(&slot_descriptor);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            buf_append_fmt(&expr, "(%s)(%s)", member_ctype, source.c_expr);
+            free(member_ctype);
+        }
+        payload_owns_ref = (cgtype_is_managed(source.type) || cgtype_is_aggregate(source.type)) &&
+                           source.owns_ref;
+    }
+    buf_append_cstr(&expr, " })");
+    buf_free(&slot_descriptor);
+
+    out->c_expr = expr.data;
+    out->type = cgtype_new(CG_TYPE_SPEC);
+    if (out->type == NULL || out->c_expr == NULL) {
+        er_free(&source);
+        er_free(out);
+        return cg_fail(cg, e->token, "codegen: out of memory");
+    }
+    out->type->user_spec = target_spec;
+    out->owns_ref = payload_owns_ref;
+    er_free(&source);
+    return true;
 }
 
 static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -15780,12 +16158,17 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     bool ok;
     const FengSpecCoercionSite *cs =
         feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
+    const FengUnionCoercionSite *union_site =
+        feng_semantic_lookup_union_coercion_site(cg->analysis, e);
 
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER) {
         return cg_emit_abi_function_pointer_site(cg, e, cs, out);
     }
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_CALLABLE) {
         return cg_emit_callable_spec_coercion(cg, e, cs, out);
+    }
+    if (union_site != NULL) {
+        return cg_emit_union_spec_coercion(cg, e, union_site, out);
     }
     ok = cg_emit_expr_raw(cg, e, out);
     if (!ok) return false;
@@ -18155,6 +18538,82 @@ static bool cg_emit_match_stmt_branch(CG *cg, const FengBlock *block, FengToken 
     return ok;
 }
 
+static bool cg_union_member_index_for_label(CG *cg,
+                                            const UserSpec *spec,
+                                            const FengMatchLabel *label,
+                                            size_t *out_index) {
+    CGType *label_type = NULL;
+
+    if (spec == NULL || label == NULL || label->kind != FENG_MATCH_LABEL_TYPE ||
+        label->type == NULL || out_index == NULL) {
+        return false;
+    }
+    if (!cg_resolve_type(cg, label->type, &label->token, &label_type)) {
+        return false;
+    }
+    for (size_t index = 0U; index < spec->union_member_count; ++index) {
+        if (cg_types_equal(label_type, spec->union_member_types[index])) {
+            *out_index = index;
+            cgtype_free(label_type);
+            return true;
+        }
+    }
+    cgtype_free(label_type);
+    return cg_fail(cg, label->token,
+                   "codegen: union-form match label is not a normalized member");
+}
+
+static bool cg_emit_union_match_stmt_branch(CG *cg,
+                                            const FengBlock *block,
+                                            FengToken token,
+                                            FengSlice target_name,
+                                            bool has_single_member,
+                                            const char *target_tmp,
+                                            const UserSpec *spec,
+                                            size_t member_index) {
+    Scope *branch_scope = scope_push(cg->cur_scope);
+    bool ok;
+
+    if (branch_scope == NULL) {
+        return cg_fail(cg, token, "codegen: out of memory");
+    }
+    cg->cur_scope = branch_scope;
+    if (target_name.data != NULL && target_name.length > 0U && has_single_member) {
+        Buf payload_expr;
+        CGType *alias_type;
+        char *alias_name;
+
+        buf_init(&payload_expr);
+        buf_append_fmt(&payload_expr, "%s.payload.", target_tmp);
+        cg_append_union_payload_field_name(&payload_expr, member_index);
+        alias_type = cgtype_clone(spec->union_member_types[member_index]);
+        alias_name = strndup(target_name.data, target_name.length);
+        if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
+            !scope_add(branch_scope,
+                       alias_name,
+                       payload_expr.data,
+                       alias_type,
+                       true)) {
+            cgtype_free(alias_type);
+            free(alias_name);
+            buf_free(&payload_expr);
+            cg->cur_scope = branch_scope->parent;
+            scope_pop_free(branch_scope);
+            return cg_fail(cg, token, "codegen: out of memory");
+        }
+        free(alias_name);
+        buf_free(&payload_expr);
+    }
+
+    ok = cg_emit_block(cg, block);
+    if (ok) {
+        cg_release_scope(cg, branch_scope);
+    }
+    cg->cur_scope = branch_scope->parent;
+    scope_pop_free(branch_scope);
+    return ok;
+}
+
 static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
     buf_append_cstr(cg->cur_body, "    {\n");
     Scope *match_scope = scope_push(cg->cur_scope);
@@ -18166,6 +18625,148 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = match_scope->parent;
         scope_pop_free(match_scope);
         return false;
+    }
+
+    if (target.type != NULL && target.type->kind == CG_TYPE_SPEC &&
+        target.type->user_spec != NULL &&
+        target.type->user_spec->form == FENG_SPEC_FORM_UNION) {
+        const UserSpec *union_spec = target.type->user_spec;
+        FengSlice target_name = {0};
+        char *target_tmp = cg_materialize_to_local(cg, &target, "_umt");
+        bool first_branch = true;
+        bool ok = true;
+        bool *covered_members = NULL;
+
+        if (stmt->as.match_stmt.target->kind == FENG_EXPR_IDENTIFIER) {
+            target_name = stmt->as.match_stmt.target->as.identifier;
+        }
+        if (target_tmp == NULL) {
+            er_free(&target);
+            cg->cur_scope = match_scope->parent;
+            scope_pop_free(match_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        er_free(&target);
+        covered_members = union_spec->union_member_count > 0U
+                              ? (bool *)calloc(union_spec->union_member_count,
+                                               sizeof(*covered_members))
+                              : NULL;
+        if (union_spec->union_member_count > 0U && covered_members == NULL) {
+            free(target_tmp);
+            cg->cur_scope = match_scope->parent;
+            scope_pop_free(match_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+
+        for (size_t branch_index = 0U;
+             branch_index < stmt->as.match_stmt.branch_count;
+             ++branch_index) {
+            const FengMatchBranch *branch = &stmt->as.match_stmt.branches[branch_index];
+            Buf condition;
+            size_t first_member_index = 0U;
+            size_t matched_member_count = 0U;
+
+            if (branch->label_count == 0U) {
+                ok = cg_fail(cg, branch->token,
+                             "codegen: if-match branch has no labels");
+                break;
+            }
+            buf_init(&condition);
+            for (size_t label_index = 0U; label_index < branch->label_count; ++label_index) {
+                size_t member_index = 0U;
+
+                if (!cg_union_member_index_for_label(cg,
+                                                     union_spec,
+                                                     &branch->labels[label_index],
+                                                     &member_index)) {
+                    ok = false;
+                    break;
+                }
+                if (label_index != 0U) {
+                    buf_append_cstr(&condition, " || ");
+                }
+                buf_append_fmt(&condition, "%s.tag == %zuU", target_tmp, member_index);
+                if (covered_members != NULL) {
+                    covered_members[member_index] = true;
+                }
+                if (matched_member_count == 0U) {
+                    first_member_index = member_index;
+                }
+                matched_member_count++;
+            }
+            if (!ok) {
+                buf_free(&condition);
+                break;
+            }
+
+            if (first_branch) {
+                buf_append_fmt(cg->cur_body, "    if (%s) {\n", condition.data);
+                first_branch = false;
+            } else {
+                buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", condition.data);
+            }
+            buf_free(&condition);
+
+            if (!cg_emit_union_match_stmt_branch(cg,
+                                                 branch->body,
+                                                 branch->token,
+                                                 target_name,
+                                                 matched_member_count == 1U,
+                                                 target_tmp,
+                                                 union_spec,
+                                                 first_member_index)) {
+                ok = false;
+                break;
+            }
+        }
+
+        if (ok && stmt->as.match_stmt.else_block != NULL) {
+            bool else_has_single_member = false;
+            size_t else_member_index = 0U;
+
+            if (covered_members != NULL) {
+                size_t remaining_count = 0U;
+
+                for (size_t member_index = 0U;
+                     member_index < union_spec->union_member_count;
+                     ++member_index) {
+                    if (!covered_members[member_index]) {
+                        else_member_index = member_index;
+                        remaining_count++;
+                    }
+                }
+                else_has_single_member = remaining_count == 1U;
+            }
+            if (first_branch) {
+                buf_append_cstr(cg->cur_body, "    {\n");
+            } else {
+                buf_append_cstr(cg->cur_body, "    } else {\n");
+            }
+            if (!cg_emit_union_match_stmt_branch(cg,
+                                                 stmt->as.match_stmt.else_block,
+                                                 stmt->token,
+                                                 target_name,
+                                                 else_has_single_member,
+                                                 target_tmp,
+                                                 union_spec,
+                                                 else_member_index)) {
+                ok = false;
+            }
+            first_branch = false;
+        }
+
+        if (ok) {
+            if (!first_branch) {
+                buf_append_cstr(cg->cur_body, "    }\n");
+            }
+            cg_release_scope(cg, match_scope);
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+        free(covered_members);
+        free(target_tmp);
+        cg->cur_scope = match_scope->parent;
+        scope_pop_free(match_scope);
+        return ok;
     }
 
     CGTypeKind target_kind = target.type->kind;
@@ -23435,6 +24036,17 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                             }
                         }
                     }
+                } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                    for (size_t member_index = 0U;
+                         member_index < decl->as.spec_decl.as.union_form.member_count;
+                         ++member_index) {
+                        if (!cg_collect_generic_instances_from_type_ref(cg,
+                            decl->as.spec_decl.as.union_form.members[member_index],
+                            scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    }
                 } else {
                     for (size_t param_index = 0; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
                         if (!cg_collect_generic_instances_from_type_ref(cg,
@@ -24448,8 +25060,15 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
 static void cg_spec_aggregate_emit_pointer_slot_rows(Buf *out,
                                                      const char *field_base_offsetof_expr,
                                                      const CGType *type) {
+    if (type->user_spec != NULL && type->user_spec->form == FENG_SPEC_FORM_UNION) {
+        buf_append_fmt(out,
+            "    { %s, FENG_SLOT_NESTED_AGGREGATE, &%s },\n",
+            field_base_offsetof_expr,
+            type->user_spec->c_aggregate_desc_name);
+        return;
+    }
     buf_append_fmt(out,
-        "    { %s + offsetof(struct %s, subject), NULL },\n",
+        "    { %s + offsetof(struct %s, subject), FENG_SLOT_POINTER, NULL },\n",
         field_base_offsetof_expr,
         type->user_spec->c_value_struct_name);
 }
@@ -24457,17 +25076,19 @@ static void cg_spec_aggregate_emit_pointer_slot_rows(Buf *out,
 static void cg_spec_aggregate_emit_cleanup_push(Buf *out,
                                                 const char *cname,
                                                 const CGType *type) {
-    (void)type;
     buf_append_fmt(out,
-                   "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s.subject);\n",
-                   cname, cname, cname);
+                   "    FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
+                   cname,
+                   cname,
+                   cname,
+                   type->user_spec->c_aggregate_desc_name);
 }
 
 static void cg_spec_aggregate_emit_cleanup_zero(Buf *out,
                                                 const char *cname,
                                                 const CGType *type) {
     (void)type;
-    buf_append_fmt(out, "%s.subject = NULL;", cname);
+    buf_append_fmt(out, "memset(&%s, 0, sizeof %s);", cname, cname);
 }
 
 static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
@@ -24514,6 +25135,10 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
     switch (t->kind) {
         case CG_TYPE_SPEC:
             if (t->user_spec == NULL) {
+                return false;
+            }
+            if (t->user_spec->form != FENG_SPEC_FORM_OBJECT &&
+                t->user_spec->form != FENG_SPEC_FORM_UNION) {
                 return false;
             }
             facts.value_kind = CG_VK_AGGREGATE;
@@ -24789,12 +25414,12 @@ static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
         case CG_VK_TRIVIAL:         return 0U;
         case CG_VK_MANAGED_POINTER: return 1U;
         case CG_VK_AGGREGATE: {
-            size_t n = cg_aggregate_pointer_slot_count(t);
-            if (n == 0U) {
+            if (cg_aggregate_desc_name(t) == NULL) {
                 (void)cg_fail(cg, err_token,
-                    "codegen: aggregate field has no flatten rule (unknown aggregate kind)");
+                    "codegen: aggregate field has no descriptor (unknown aggregate kind)");
+                return 0U;
             }
-            return n;
+            return 1U;
         }
     }
     return 0U;
@@ -24829,22 +25454,20 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
                     buf_append_cstr(td, "NULL");
                     break;
             }
-            buf_append_cstr(td, " },\n");
+            buf_append_cstr(td, ", NULL },\n");
             return true;
         case CG_VK_AGGREGATE: {
-            if (cg_aggregate_pointer_slot_count(ft) == 0U) {
+            const char *aggregate_desc = cg_aggregate_desc_name(ft);
+
+            if (aggregate_desc == NULL) {
                 return cg_fail(cg, err_token,
-                    "codegen: aggregate field has no flatten rule (unknown aggregate kind)");
+                    "codegen: aggregate field has no descriptor (unknown aggregate kind)");
             }
-            char field_base[256];
-            int n = snprintf(field_base, sizeof(field_base),
-                             "offsetof(struct %s, %s)",
-                             struct_name, field_c_name);
-            if (n < 0 || (size_t)n >= sizeof(field_base)) {
-                return cg_fail(cg, err_token,
-                    "codegen: aggregate field offset expression exceeds buffer");
-            }
-            cg_emit_aggregate_pointer_slot_rows(td, field_base, ft);
+            buf_append_fmt(td,
+                "    { offsetof(struct %s, %s), NULL, &%s },\n",
+                struct_name,
+                field_c_name,
+                aggregate_desc);
             return true;
         }
     }
@@ -27178,6 +27801,10 @@ static void cg_dispose(CG *cg) {
             cgtype_free(us->callable_param_types[j]);
         }
         free(us->callable_param_types);
+        for (size_t j = 0; j < us->union_member_count; ++j) {
+            cgtype_free(us->union_member_types[j]);
+        }
+        free(us->union_member_types);
         for (size_t j = 0; j < us->member_count; j++) {
             UserSpecMember *sm = &us->members[j];
             free(sm->feng_name);

@@ -14,6 +14,7 @@
  *   - Object-form `spec` decls are AGGREGATE (fat value, subject +
  *     witness).
  *   - Callable-form `spec` decls are MANAGED_POINTER (closure pointer).
+ *   - Union-form `spec` decls are AGGREGATE (`tag + _fwd + payload`).
  *
  * The TRIVIAL fallback used for unrecognised built-in names is the
  * defensive choice: the analyzer rejects unknown spellings before this
@@ -74,6 +75,10 @@ FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl) {
                     /* Callable-form specs lower to a closure pointer; no
                      * fat value, no aggregate handling. */
                     return FENG_SEMANTIC_VALUE_MANAGED_POINTER;
+                case FENG_SPEC_FORM_UNION:
+                    /* Union-form specs lower to an inline aggregate carrying
+                     * the active tag, lifecycle forward slot and payload. */
+                    return FENG_SEMANTIC_VALUE_AGGREGATE;
             }
             return FENG_SEMANTIC_VALUE_TRIVIAL;
         default:

@@ -1238,6 +1238,81 @@ static void test_match_statement_form(void) {
     feng_program_free(program);
 }
 
+static void test_union_spec_declaration_parses(void) {
+    const char *source =
+        "module demo.union;\n"
+        "spec Value: int | string | Pair<int, int>[];\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *decl;
+
+    ASSERT(feng_parse_source(source, strlen(source), "union_spec.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl->kind == FENG_DECL_SPEC);
+    ASSERT(decl->as.spec_decl.form == FENG_SPEC_FORM_UNION);
+    ASSERT(decl->as.spec_decl.as.union_form.member_count == 3U);
+    ASSERT(decl->as.spec_decl.as.union_form.members[0]->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(decl->as.spec_decl.as.union_form.members[0]->as.named.segments[0], "int");
+    ASSERT(decl->as.spec_decl.as.union_form.members[1]->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(decl->as.spec_decl.as.union_form.members[1]->as.named.segments[0], "string");
+    ASSERT(decl->as.spec_decl.as.union_form.members[2]->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(decl->as.spec_decl.as.union_form.members[2]->as.inner->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(decl->as.spec_decl.as.union_form.members[2]->as.inner->as.named.type_arg_count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_union_spec_rejects_void_member(void) {
+    const char *source =
+        "module demo.union;\n"
+        "spec Bad: int | void;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "union_void_member.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "union-form spec members cannot be 'void'") != NULL);
+}
+
+static void test_match_type_labels_parse(void) {
+    const char *source =
+        "module demo.union;\n"
+        "func run(value: Value) {\n"
+        "    if value {\n"
+        "        int { print(1); }\n"
+        "        UserType, pkg.Named { print(2); }\n"
+        "        Box<int>[] { print(3); }\n"
+        "        else { print(4); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_type_labels.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_MATCH);
+    ASSERT(stmt->as.match_stmt.branch_count == 3U);
+    ASSERT(stmt->as.match_stmt.branches[0].labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    assert_slice_text(stmt->as.match_stmt.branches[0].labels[0].type->as.named.segments[0], "int");
+    branch = &stmt->as.match_stmt.branches[1];
+    ASSERT(branch->label_count == 2U);
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].value != NULL);
+    ASSERT(branch->labels[1].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[1].type->as.named.segment_count == 2U);
+    branch = &stmt->as.match_stmt.branches[2];
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type->kind == FENG_TYPE_REF_ARRAY);
+
+    feng_program_free(program);
+}
+
 static void test_for_in_loop(void) {
     const char *source =
         "module demo.main;\n"
@@ -2187,6 +2262,9 @@ int main(void) {
     test_enum_declarations_parse();
     test_match_with_range_and_list_labels();
     test_match_statement_form();
+    test_union_spec_declaration_parses();
+    test_union_spec_rejects_void_member();
+    test_match_type_labels_parse();
     test_for_in_loop();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();

@@ -399,6 +399,11 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
                     free_synthetic_type_member(decl->as.spec_decl.as.object.members[index]);
                 }
                 free(decl->as.spec_decl.as.object.members);
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                for (index = 0U; index < decl->as.spec_decl.as.union_form.member_count; ++index) {
+                    free_synthetic_type_ref(decl->as.spec_decl.as.union_form.members[index]);
+                }
+                free(decl->as.spec_decl.as.union_form.members);
             } else {
                 free_synthetic_parameters(decl->as.spec_decl.as.callable.params,
                                           decl->as.spec_decl.as.callable.param_count);
@@ -1069,7 +1074,18 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 break;
             }
             synth_decl->decl.as.spec_decl.parent_spec_count = symbol_decl->declared_spec_count;
-            if (symbol_decl->member_count > 0U ||
+            if (symbol_decl->union_member_count > 0U) {
+                synth_decl->decl.as.spec_decl.form = FENG_SPEC_FORM_UNION;
+                synth_decl->decl.as.spec_decl.as.union_form.members =
+                    synthesize_type_ref_list(symbol_decl->union_members,
+                                             symbol_decl->union_member_count);
+                if (symbol_decl->union_member_count > 0U &&
+                    synth_decl->decl.as.spec_decl.as.union_form.members == NULL) {
+                    break;
+                }
+                synth_decl->decl.as.spec_decl.as.union_form.member_count =
+                    symbol_decl->union_member_count;
+            } else if (symbol_decl->member_count > 0U ||
                 (symbol_decl->return_type == NULL && symbol_decl->param_count == 0U)) {
                 synth_decl->decl.as.spec_decl.form = FENG_SPEC_FORM_OBJECT;
                 synth_decl->decl.as.spec_decl.as.object.members =

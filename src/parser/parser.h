@@ -124,7 +124,8 @@ typedef struct FengLambdaCapture {
 
 typedef enum FengMatchLabelKind {
     FENG_MATCH_LABEL_VALUE = 0,
-    FENG_MATCH_LABEL_RANGE
+    FENG_MATCH_LABEL_RANGE,
+    FENG_MATCH_LABEL_TYPE
 } FengMatchLabelKind;
 
 typedef struct FengMatchLabel {
@@ -135,6 +136,10 @@ typedef struct FengMatchLabel {
     /* RANGE (closed [low, high], integer-only): low and high constant exprs. */
     FengExpr *range_low;
     FengExpr *range_high;
+    /* TYPE: union member type label. For a single-segment identifier label,
+     * value may also be populated so non-union match targets can continue to
+     * treat the same syntax as a named constant. */
+    FengTypeRef *type;
 } FengMatchLabel;
 
 typedef struct FengMatchBranch {
@@ -406,7 +411,8 @@ typedef enum FengDeclKind {
 
 typedef enum FengSpecForm {
     FENG_SPEC_FORM_OBJECT = 0,
-    FENG_SPEC_FORM_CALLABLE
+    FENG_SPEC_FORM_CALLABLE,
+    FENG_SPEC_FORM_UNION
 } FengSpecForm;
 
 typedef struct FengUseDecl {
@@ -459,6 +465,10 @@ struct FengDecl {
                     size_t param_count;
                     FengTypeRef *return_type;
                 } callable;
+                struct {
+                    FengTypeRef **members;
+                    size_t member_count;
+                } union_form;
             } as;
         } spec_decl;
         struct {

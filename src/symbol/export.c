@@ -1061,6 +1061,46 @@ static bool fill_declared_specs_with_tparams(FengSymbolDeclView *decl,
     return true;
 }
 
+static bool fill_union_members_with_tparams(FengSymbolDeclView *decl,
+                                            const FengUnionSpecInfo *union_info,
+                                            const FengTypeParam *type_params,
+                                            size_t type_param_count,
+                                            const char *path,
+                                            FengToken token,
+                                            FengSymbolError *out_error) {
+    if (union_info == NULL) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              token,
+                                              "missing normalized union metadata for symbol export");
+    }
+
+    for (size_t index = 0U; index < union_info->member_count; ++index) {
+        FengSymbolTypeView *type = build_type_from_type_ref_with_tparams(
+            union_info->members[index].type_ref,
+            type_params,
+            type_param_count,
+            path,
+            token,
+            out_error);
+
+        if (union_info->members[index].type_ref != NULL && type == NULL) {
+            return false;
+        }
+        if (!append_type_pointer(&decl->union_members,
+                                 &decl->union_member_count,
+                                 type,
+                                 path,
+                                 token,
+                                 out_error)) {
+            feng_symbol_internal_type_free(type);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool fill_params_with_tparams(FengSymbolDeclView *decl,
                                      const FengParameter *params,
                                      size_t param_count,
@@ -2248,7 +2288,24 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 ctx->type_params = source_decl->as.spec_decl.type_params;
                 ctx->type_param_count = source_decl->as.spec_decl.type_param_count;
             }
-            if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+            if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                if (!fill_union_members_with_tparams(decl,
+                                                     feng_semantic_lookup_union_spec_info(ctx->analysis,
+                                                                                         source_decl),
+                                                     ctx->type_params,
+                                                     ctx->type_param_count,
+                                                     path,
+                                                     source_decl->token,
+                                                     out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
+            } else if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 decl->return_type = build_callable_return_type_with_tparams(ctx->analysis,
                                                                             source_decl,
                                                                             source_decl->as.spec_decl.as.callable.return_type,

@@ -36,6 +36,12 @@ static bool slice_equals_cstr(FengSlice slice, const char *text) {
     return slice.length == length && memcmp(slice.data, text, length) == 0;
 }
 
+static void assert_builtin_type_name(const FengSymbolTypeView *type, const char *name) {
+    ASSERT(type != NULL);
+    ASSERT(feng_symbol_type_kind(type) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
+    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(type), name));
+}
+
 static FengProgram *parse_or_die(const char *path, const char *source) {
     FengProgram *program = NULL;
     FengParseError error;
@@ -323,6 +329,66 @@ static void test_roundtrip_public_module(void) {
     feng_symbol_graph_free(graph);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.union_roundtrip;\n"
+        "open spec Maybe: string | int | string;\n"
+        "open spec Value: Maybe | bool | int;\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *value_decl = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    const FengDecl *synth_value_decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("union_roundtrip.ff", kSource, public_root);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("union_roundtrip");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    value_decl = feng_symbol_module_find_public_spec(module, slice_from_cstr("Value"));
+    ASSERT(value_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(value_decl) == FENG_SYMBOL_DECL_KIND_SPEC);
+    ASSERT(feng_symbol_decl_union_member_count(value_decl) == 3U);
+    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 0U), "string");
+    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 1U), "i32");
+    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 2U), "bool");
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    ASSERT(semantic_module->program_count == 1U);
+    ASSERT(semantic_module->programs[0]->declaration_count == 2U);
+    synth_value_decl = semantic_module->programs[0]->declarations[1];
+    ASSERT(synth_value_decl->kind == FENG_DECL_SPEC);
+    ASSERT(synth_value_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION);
+    ASSERT(synth_value_decl->as.spec_decl.as.union_form.member_count == 3U);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
     feng_symbol_error_free(&error);
     (void)remove_dir_recursive(tmp_dir);
     free(tmp_dir);
@@ -1652,6 +1718,7 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
 
 int main(void) {
     test_roundtrip_public_module();
+    test_union_spec_ft_roundtrip_preserves_normalized_members();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_roundtrip_public_module_docs();
     test_private_module_skipped();

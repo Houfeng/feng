@@ -50,14 +50,13 @@ typedef void (*FengFinalizerFn)(void *self);
 typedef void (*FengReleaseChildrenFn)(void *self);
 typedef bool (*FengValueEqualFn)(const void *left, const void *right);
 
-/* Static description of a single managed reference slot inside an object.
- * `offset` is the byte offset of the slot relative to the object base
- * (i.e. relative to its FengManagedHeader). `static_desc` is the descriptor
- * the slot was declared to hold; it MAY be NULL when the slot is polymorphic
- * (e.g. a closure capture of a managed value whose precise type the codegen
- * cannot pin down at emission time). The cycle collector treats `static_desc`
- * as a hint only — the actual descriptor of the pointed-to object is always
- * read from its own header.
+/* Static description of a managed child surface inside an object. For direct
+ * managed pointers, `offset` is the pointer slot byte offset and `static_desc`
+ * is the descriptor the slot was declared to hold; it MAY be NULL when the
+ * slot is polymorphic. For embedded by-value aggregates, `offset` is the
+ * aggregate value byte offset and `aggregate_desc` drives descriptor-based
+ * traversal. The cycle collector treats `static_desc` as a hint only — the
+ * actual descriptor of a pointed-to object is always read from its own header.
  *
  * This metadata is consumed exclusively by the runtime cycle collector
  * (Phase 1B). The deterministic ARC release path does not consult it; the
@@ -66,6 +65,7 @@ typedef bool (*FengValueEqualFn)(const void *left, const void *right);
 typedef struct FengManagedFieldDescriptor {
     size_t offset;
     const struct FengTypeDescriptor *static_desc;
+    const struct FengAggregateDescriptor *aggregate_desc;
 } FengManagedFieldDescriptor;
 
 typedef struct FengTypeDescriptor {
@@ -535,14 +535,16 @@ typedef struct FengUnwindException {
 
 /* Linked-list node living on the C stack. Generated code pushes one of these
  * at every managed local's declaration site (binding or materialised
- * temporary) and pops it on the corresponding scope exit. On throw, the
- * runtime walks the chain back to the catching frame's snapshot and releases
- * every non-NULL `*slot`, then nulls the slot to avoid double-free. This is
- * how Phase 1A guarantees "exception path cleanup" without hoisting locals
+ * temporary) and pops it on the corresponding scope exit. Pointer locals use
+ * `slot`; by-value aggregates use `aggregate_value + aggregate_desc` so the
+ * same descriptor-driven aggregate lifecycle also runs on exception unwind.
+ * This is how Feng guarantees exception path cleanup without hoisting locals
  * to the function prologue. */
 typedef struct FengCleanupNode {
     struct FengCleanupNode *prev;
     void                  **slot;
+    void                   *aggregate_value;
+    const FengAggregateDescriptor *aggregate_desc;
 } FengCleanupNode;
 
 /* Function-frame boundary marker inserted into the cleanup chain. It carries
@@ -554,9 +556,13 @@ typedef struct FengFrameMarker {
 } FengFrameMarker;
 
 /* Push/pop a managed local onto the cleanup chain. `node` must outlive the
- * scope of `slot` and is typically a stack-allocated FengCleanupNode adjacent
- * to the local. Pop must be called in strict LIFO order. */
+ * scope of the tracked value and is typically a stack-allocated
+ * FengCleanupNode adjacent to the local. Pop must be called in strict LIFO
+ * order. */
 void feng_cleanup_push(FengCleanupNode *node, void **slot);
+void feng_cleanup_push_aggregate(FengCleanupNode *node,
+                                 void *value,
+                                 const FengAggregateDescriptor *desc);
 void feng_cleanup_pop(void);
 void feng_frame_push(FengFrameMarker *marker);
 void feng_try_frame_push(FengFrameMarker *marker);

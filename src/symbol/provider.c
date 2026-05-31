@@ -1010,6 +1010,18 @@ const FengSymbolTypeView *feng_symbol_decl_declared_spec_at(const FengSymbolDecl
     return decl->declared_specs[index];
 }
 
+size_t feng_symbol_decl_union_member_count(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->union_member_count : 0U;
+}
+
+const FengSymbolTypeView *feng_symbol_decl_union_member_at(const FengSymbolDeclView *decl,
+                                                           size_t index) {
+    if (decl == NULL || index >= decl->union_member_count) {
+        return NULL;
+    }
+    return decl->union_members[index];
+}
+
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->type_param_count : 0U;
 }

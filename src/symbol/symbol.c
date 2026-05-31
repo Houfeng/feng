@@ -202,6 +202,11 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
     free(decl->declared_specs);
 
+    for (index = 0U; index < decl->union_member_count; ++index) {
+        feng_symbol_internal_type_free(decl->union_members[index]);
+    }
+    free(decl->union_members);
+
     for (index = 0U; index < decl->member_count; ++index) {
         decl_dispose(decl->members[index], true);
     }
@@ -430,6 +435,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->fit_target = feng_symbol_internal_type_clone(decl->fit_target, out_error);
     clone->params = NULL;
     clone->declared_specs = NULL;
+    clone->union_members = NULL;
     clone->members = NULL;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
@@ -485,6 +491,25 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
             clone->declared_specs[index] = feng_symbol_internal_type_clone(decl->declared_specs[index],
                                                                            out_error);
             if (decl->declared_specs[index] != NULL && clone->declared_specs[index] == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->union_member_count > 0U) {
+        clone->union_members = (FengSymbolTypeView **)calloc(decl->union_member_count,
+                                                             sizeof(*clone->union_members));
+        if (clone->union_members == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token, "out of memory cloning union member list");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->union_member_count = decl->union_member_count;
+        for (index = 0U; index < decl->union_member_count; ++index) {
+            clone->union_members[index] = feng_symbol_internal_type_clone(decl->union_members[index],
+                                                                          out_error);
+            if (decl->union_members[index] != NULL && clone->union_members[index] == NULL) {
                 decl_dispose(clone, true);
                 return NULL;
             }

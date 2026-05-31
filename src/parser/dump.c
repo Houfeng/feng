@@ -336,6 +336,8 @@ static void dump_match_branch(FILE *stream, const FengMatchBranch *branch, int i
             dump_expr(stream, branch->labels[index].range_low, 0);
             fputs("...", stream);
             dump_expr(stream, branch->labels[index].range_high, 0);
+        } else if (branch->labels[index].kind == FENG_MATCH_LABEL_TYPE) {
+            dump_type_ref(stream, branch->labels[index].type);
         } else {
             dump_expr(stream, branch->labels[index].value, 0);
         }
@@ -643,8 +645,12 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                 break;
             case FENG_DECL_SPEC:
                 fprintf(stream,
-                        "spec %s ",
-                        decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ? "object" : "callable");
+                    "spec %s ",
+                    decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT
+                        ? "object"
+                        : (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE
+                           ? "callable"
+                           : "union"));
                 dump_slice(stream, decl->as.spec_decl.name);
                 if (decl->as.spec_decl.type_param_count > 0U) {
                     fputc('<', stream);
@@ -686,7 +692,7 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                             dump_callable(stream, &member->as.callable, 3);
                         }
                     }
-                } else {
+                } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                     dump_indent(stream, 2);
                     dump_slice(stream, decl->as.spec_decl.name);
                     fputc('(', stream);
@@ -700,6 +706,15 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     }
                     fputs("): ", stream);
                     dump_type_ref(stream, decl->as.spec_decl.as.callable.return_type);
+                    fputc('\n', stream);
+                } else {
+                    dump_indent(stream, 2);
+                    for (member_index = 0U; member_index < decl->as.spec_decl.as.union_form.member_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(" | ", stream);
+                        }
+                        dump_type_ref(stream, decl->as.spec_decl.as.union_form.members[member_index]);
+                    }
                     fputc('\n', stream);
                 }
                 break;

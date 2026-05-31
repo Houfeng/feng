@@ -7,13 +7,14 @@
 
 - union-form 语法已确定为 `spec Name: A | B | C;`，不引入新关键字，不允许 `{}` 块体。
 - union-form 的成员收窄已确定复用 `if 目标值 { ... }` 条件匹配语法，不引入独立 `is`。
-- union-form 的值级基线表示已确定为：一个 `tag`、一个 `inline value`、一个托管指针槽位。
+- union-form 的值级基线表示已确定为：一个 `tag`、一个运行时转发槽 `_fwd`、一个 inline payload 区域。
 - 当前阶段不支持 `union -> common spec` 投影，即使全部 member 都满足同一个 object-form `spec`。
 - 首版不为 `all-trivial union` 或 `all-managed-pointer union` 再开顶层值模型特例；统一走 `aggregate-with-managed-slots`。
 - **已确认**：union-form 的 if-match 类型匹配与 union-form 主体必须在同一轮交付；若 union-form 可声明但 if-match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
 - **已确认**：union-form 必须进入 `.ft` 符号表；writer、reader 与 imported-module 三段须在同一轮完成，不得延迟。
 - **已确认**：union-form 可作为泛型类型参数约束（`T: UnionSpec`）；在泛型声明体内，未经 if-match 收窄的参数值不允许做成员访问、方法调用或 `==` / `!=` 比较；收窄后按 narrowed member 的规则操作；union-form 约束不产生额外的 witness 物化，与 object-form `spec` 约束不同。
 - **已确认**：union-form 默认零值取归一化后第一个 member 的默认零值；若该 member 无合法默认零值，则该 union-form 亦无合法默认零值。
+- **已确认**：当 `if` 目标表达式静态类型为 union-form 时，整个 match body 只能使用 union member 类型匹配与 `else`，不得混入字面量值匹配或区间匹配。
 
 ## 2. 分步 TODO
 
@@ -32,14 +33,14 @@
 
 ### 2.2 Parser / AST
 
-- [ ] 扩展 `FengSpecForm`，新增 `UNION`。
-- [ ] 为 union-form 增加独立成员集合承载，例如 `union_members`，不复用 object-form 的 `parent_specs` 或块体成员结构。
-- [ ] 解析 `spec Name: TypeRef ('|' TypeRef)+;`。
-- [ ] 拒绝 union-form 上的 `{}` 块体。
-- [ ] 在语法阶段拒绝 `void` 作为 union member。
-- [ ] 扩展 `FengMatchLabelKind`，新增类型 member 标签形式（区别于现有的 `VALUE` 与 `RANGE`）。
-- [ ] 扩展 `FengMatchLabel`，为类型 member 标签承载对应的 `TypeRef`，而非字面量表达式。
-- [ ] 在 `peek_match_body` 与 `parse_match_label_atom` 中识别类型名标签形式，并与字面量/区间标签稳定区分；禁止两种标签模式在同一 `if 目标值 { ... }` 中混用。
+- [x] 扩展 `FengSpecForm`，新增 `UNION`。
+- [x] 为 union-form 增加独立成员集合承载，例如 `union_members`，不复用 object-form 的 `parent_specs` 或块体成员结构。
+- [x] 解析 `spec Name: TypeRef ('|' TypeRef)+;`。
+- [x] 拒绝 union-form 上的 `{}` 块体。
+- [x] 在语法阶段拒绝 `void` 作为 union member。
+- [x] 扩展 `FengMatchLabelKind`，新增类型 member 标签形式（区别于现有的 `VALUE` 与 `RANGE`）。
+- [x] 扩展 `FengMatchLabel`，为类型 member 标签承载对应的 `TypeRef`，而非字面量表达式。
+- [x] 在 `peek_match_body` 与 `parse_match_label_atom` 中识别类型名标签候选，并保留足够 AST 信息供语义层按目标类型选择 union type match 或普通 value/range match。
 
 验收口径：
 
@@ -48,10 +49,10 @@
 
 ### 2.3 成员归一化与类型记录
 
-- [ ] 解析 union member 后，拍平嵌套 union-form。
-- [ ] 去重并保持声明顺序，形成归一化成员集合。
-- [ ] 记录归一化后的第一个 member，供默认零值与 codegen 使用。
-- [ ] 为后续语义层和 codegen 暴露稳定的 union member 元信息。
+- [x] 解析 union member 后，拍平嵌套 union-form。
+- [x] 去重并保持声明顺序，形成归一化成员集合。
+- [x] 记录归一化后的第一个 member，供默认零值与 codegen 使用。
+- [x] 为后续语义层和 codegen 暴露稳定的 union member 元信息。
 
 验收口径：
 
@@ -60,12 +61,12 @@
 
 ### 2.4 进入站点与显式转换语义
 
-- [ ] 实现赋值、变量初始化、传参、返回等 union 进入站点的可接受性检查。
-- [ ] 实现“精确 member 优先”的 active member 选择规则。
-- [ ] 实现重叠 `spec` member 的进入冲突诊断，禁止按声明顺序兜底。
-- [ ] 只允许开发者先显式转换到目标 `spec` member，再写入 union-form。
-- [ ] 禁止 `union -> common spec` 投影。
-- [ ] 复核 object-form `spec` 的向上转换资格与 union member 选择之间的衔接。
+- [x] 实现赋值、变量初始化、传参、返回等 union 进入站点的可接受性检查。
+- [x] 实现“精确 member 优先”的 active member 选择规则。
+- [x] 实现重叠 `spec` member 的进入冲突诊断，禁止按声明顺序兜底。
+- [x] 只允许开发者先显式转换到目标 `spec` member，再写入 union-form。
+- [x] 禁止 `union -> common spec` 投影。
+- [x] 复核 object-form `spec` 的向上转换资格与 union member 选择之间的衔接。
 
 验收口径：
 
@@ -76,11 +77,12 @@
 
 > **交付阻断依赖**：本节与 §2.2 Parser/AST 扩展、§2.3 成员归一化属于同一轮交付。若 union-form 已可声明但 if-match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
 
-- [ ] 扩展 `if 目标值 { ... }` 的语义分析，使其支持 union member 标签。
-- [ ] 禁止在同一次 union member 匹配中混用字面量/区间标签与 union member 标签。
-- [ ] 实现单 member 分支、多个 member 分支与 `else` 分支的收窄结果计算。
-- [ ] 实现“匹配只检查当前 active member，不自动向上转换后再命中”的规则。
-- [ ] 在未收窄到单一 member 时，禁止成员访问、方法调用与 `==` / `!=`。
+- [x] 扩展 `if 目标值 { ... }` 的语义分析，使其支持 union member 标签。
+- [x] 当 `if` 目标表达式静态类型为 union-form 时，强制整个 match body 进入 union member 类型匹配模式，只允许 union member 类型标签与 `else`。
+- [x] 在 union member 类型匹配模式中拒绝字面量值标签与区间标签；value/range match 仅保留给非 union 目标值。
+- [x] 实现单 member 分支、多个 member 分支与 `else` 分支的收窄结果计算。
+- [x] 实现“匹配只检查当前 active member，不自动向上转换后再命中”的规则。
+- [x] 在未收窄到单一 member 时，禁止成员访问、方法调用与 `==` / `!=`。
 
 验收口径：
 
@@ -91,103 +93,99 @@
 
 #### 2.6.1 C 值布局草案
 
-每个 union-form spec 在 codegen 阶段生成一个对应的 C struct。**三个域的结构是固定的，对所有 union spec 一律如此**，不随 member 种类变化；变化的只有 struct 名称（按 spec 全限定名生成）和 `inline_v` 的宽度（见下）：
+每个 union-form spec 在 codegen 阶段生成一个对应的 C struct。首版布局固定为 `tag + _fwd + payload`；变化的只有 struct 名称和 payload 宽度/对齐，均由归一化 member 集合决定：
 
 ```c
-/* union-form spec 的统一值布局。
- * 三个域对所有 union spec 固定存在，不随 member 类型变化；
- * "FengUnion_SpecName" 仅为示意名，codegen 按 spec 全限定名生成实际名称。 */
 typedef struct {
-    uint32_t  tag;          /* 固定存在。active member 在归一化列表中的序号（0-based） */
-    uintptr_t inline_v;     /* 固定存在。inline payload slot；宽度见下方说明 */
-    void     *managed_ptr;  /* 固定存在。托管指针槽位；active member 不需要托管引用时必须为 NULL */
+    uint32_t tag;                    /* active member 在归一化列表中的 0-based 序号 */
+    FengManagedSlotDescriptor _fwd;  /* 当前 active payload 的生命周期转发描述 */
+    union {
+        /* codegen 按归一化 member 生成足够容纳各 member 的 inline payload */
+    } payload;
 } FengUnion_SpecName;
 ```
 
-三个域的固定性说明：
-- `tag`：绝对固定，所有 union spec 相同，类型为 `uint32_t`。
-- `managed_ptr`：固定为单根 `void *`，**不随 member 种类增减**。不需要托管引用的 variant 令其为 `NULL`，aggregate walker 对 `NULL` 槽位自动 skip。
-- `inline_v`：域本身固定存在，但**宽度是待决项**（见 §2.6.3 待决项 1）。首版基线为 `uintptr_t`（一个 pointer-sized word）；若某个 spec 含宽度超过 pointer 的 trivial member，codegen 可为该 spec 生成更宽的 `inline_v`，仍属于同一布局形状，不引入新的域。
+布局不变量：
+- `tag` 是语言层 active member identity；if-match 的类型分支只依据 `tag` 判别。
+- `_fwd` 是 runtime 生命周期描述，不参与语言层 member 判别；它只告诉 aggregate walker 当前应如何 retain / release / assign / take / 扫描 payload。
+- `_fwd.offset` 始终相对当前 union aggregate 值的基地址，通常指向 `payload` 内当前 active member 的起始偏移。
+- payload 必须 inline 容纳归一化 member 中最大的值表示；aggregate member 首版不装箱。
+- 切换 active member 时，必须先按旧 `_fwd` 释放旧 payload，再覆盖 `tag`、`_fwd` 与新 payload；不得遗留上一 member 的托管槽位状态。
 
-**为什么 `inline_v` 不用 C `union`？**
+#### 2.6.2 各 member 种类的 `_fwd` 策略
 
-codegen 是 `inline_v` 的唯一读写方，它在发码时已经通过语义信息（当前 active member 类型）知道应该如何强转，不需要 C union 的 named field（`.as_int`、`.as_ptr` 等）。改用 C union 会带来三个问题而没有收益：
-
-- 每个 union spec 要生成一个不同的匿名 C union 类型，codegen 复杂度上升；
-- `feng_aggregate_retain` / `feng_aggregate_release` 等 walker 完全不感知 `inline_v` 内部——trivial 字节对它透明，用 C union 还是 `uintptr_t` 对 runtime 无差别；
-- object-form spec 的 `witness` 是 `const void *` 转 `uintptr_t` 存入，若 `inline_v` 同时含 `int32_t`、`bool` 等 named field，语义混杂，不如单一 word 直接强转清晰。
-
-#### 2.6.2 各 member 种类的 slot 分配策略
-
-| member 种类 | `inline_v` 存什么 | `managed_ptr` 存什么 |
+| member 种类 | payload 存什么 | `_fwd` 写什么 |
 |---|---|---|
-| trivial（`int`、`bool` 等，≤ pointer size） | 值本身 | `NULL` |
-| managed-pointer（用户定义托管对象） | 不用（`0`） | 对象的托管指针 |
-| object-form `spec` fat value（`{subject, witness}`） | `witness`（const 静态指针，trivial）| `subject`（托管对象指针）|
-| aggregate member（嵌套 aggregate） | 不用（`0`） | 首版：装箱后的托管指针 |
+| trivial（`int`、`bool` 等） | 值本身 | `{ .offset = payload_offset, .kind = FENG_SLOT_NONE, .nested = NULL }` |
+| managed-pointer（用户定义托管对象） | 对象托管指针 | `{ .offset = payload_offset, .kind = FENG_SLOT_POINTER, .nested = NULL }` |
+| object-form `spec` fat value（`{subject, witness}`） | spec fat value 的完整 inline 表示 | 指向该 spec fat value 内部 managed slot 的描述，通常为 `FENG_SLOT_NESTED_AGGREGATE` |
+| aggregate member（tuple / inline aggregate 等） | aggregate 的完整 inline 表示 | `{ .offset = payload_offset, .kind = FENG_SLOT_NESTED_AGGREGATE, .nested = &member_desc }` |
 
-说明：
-- object-form `spec` 的 fat value 恰好能拆入两个 slot：`subject` 是托管引用，进 `managed_ptr`；`witness` 是 const 静态指针（trivial），进 `inline_v`。无需额外装箱。
-- aggregate member 首版走装箱路径，managed_ptr 指向堆上分配的 aggregate 对象；后续若有内联优化需求，作为独立专项处理。
-- 切换 active member 时，必须先 release 旧 `managed_ptr` 并清零，再写入新值；`inline_v` 亦需整体覆盖，不得留有上一 member 的残余。
-
-**关键不变量**：`managed_ptr` 在 active member 不需要托管引用时必须为 `NULL`。现有 aggregate walker 对 `NULL` 槽位自动 skip（retain / release 均为 no-op），因此不需要为 union-form 特殊改动 `src/runtime/` 的 walker 实现。
+关键点：
+- `_fwd.kind = FENG_SLOT_NONE` 表示当前 payload 没有需要 runtime 管理的托管槽位。
+- `_fwd.kind = FENG_SLOT_POINTER` 表示 payload 起始处是一根托管指针。
+- `_fwd.kind = FENG_SLOT_NESTED_AGGREGATE` 表示 payload 起始处是一个可由 `nested` 描述的 aggregate 值。
+- runtime 已支持 `FENG_SLOT_FORWARD`，union 自身的静态 aggregate descriptor 只需包含一个指向 `_fwd` 字段的 `FENG_SLOT_FORWARD` 槽位。
+- 不允许 `_fwd.kind` 再写成 `FENG_SLOT_FORWARD`；嵌套 forward 是 runtime 防御性 panic 场景。
 
 #### 2.6.3 描述符草案
 
 每个 union-form spec 在 codegen 阶段生成一个静态 `FengAggregateDescriptor`，复用现有 aggregate 通用路径：
 
 ```c
-/* managed_ptr 槽位描述（偏移由 codegen 按 struct 布局确定） */
 static const FengManagedSlotDescriptor kUnionSpecName_slots[] = {
-    { .offset = offsetof(FengUnion_SpecName, managed_ptr),
-      .kind   = FENG_SLOT_POINTER,
+    { .offset = offsetof(FengUnion_SpecName, _fwd),
+      .kind = FENG_SLOT_FORWARD,
       .nested = NULL },
 };
 
-/* union-form spec 描述符 */
 static const FengAggregateDescriptor kUnionSpecName_desc = {
-    .name               = "pkg.SpecName",           /* debug only */
-    .size               = sizeof(FengUnion_SpecName),
-    .default_init       = &kUnionSpecName_default_init, /* 见下 */
+    .name = "pkg.SpecName",
+    .size = sizeof(FengUnion_SpecName),
+    .default_init = &kUnionSpecName_default_init,
     .managed_slot_count = 1,
-    .managed_slots      = kUnionSpecName_slots,
-    .equal_fn           = NULL,  /* union 不直接支持相等性，必须先收窄 */
+    .managed_slots = kUnionSpecName_slots,
+    .equal_fn = NULL,
 };
 ```
 
 `default_init` 策略取决于归一化后第一个 member 的类型：
-- 第一个 member 为 trivial → `FENG_DEFAULT_ZERO_BYTES`（`tag=0`，`inline_v=0`，`managed_ptr=NULL` 即为合法零值）。
-- 第一个 member 需要托管引用 → `FENG_DEFAULT_INIT_FN`，init_fn 负责正确构造该 member 的零值并写入对应 slot。
+- `tag` 固定初始化为 `0`。
+- payload 按第一个 member 的默认零值规则初始化。
+- `_fwd` 按第一个 member 的生命周期分类写入 `NONE` / `POINTER` / `NESTED_AGGREGATE`。
+- 若第一个 member 无合法默认零值，则该 union-form 也无合法默认零值。
 
-**待决项**（供 Review 决策）：
-1. `inline_v` 宽度是否首版固定 `uintptr_t`，还是按 spec 各自生成精确宽度？固定宽度实现更简单，但对宽度不足的 trivial member（如某些扩展整数类型）需要额外处理。
-2. aggregate member 首版是否强制装箱？若 aggregate 本身 size 较小，可在 inline 部分直接嵌入而非装箱，但这要求 `inline_v` 宽度灵活。首版建议：先强制装箱，后续按需优化。
-3. 是否复用 `FengAggregateDescriptor` 还是新增 `FengUnionDescriptor`？现阶段 `FengAggregateDescriptor` 已可完整描述 union 布局与生命周期，建议首版直接复用，不新增类型。
+#### 2.6.4 方案讨论结论
 
-#### 2.6.4 TODO
+- 不能只保留 `_fwd + payload` 而省略 `tag`。`_fwd` 只能表达生命周期路径，无法区分两个同生命周期分类但语义 member 不同的 active variant。
+- 不采用固定单根 `managed_ptr`。该方案会迫使 aggregate member 装箱，破坏 inline 值模型，也会把 object-form `spec` 与 aggregate payload 拆成特例。
+- 不新增 `FengUnionDescriptor`。现有 `FengAggregateDescriptor + FENG_SLOT_FORWARD` 已能覆盖生命周期；union member 列表、tag 映射和收窄规则由 semantic/codegen 元数据负责。
+- value/range match 与 union type match 在语义上必须分离。union 目标未收窄前没有统一值比较入口，因此 union target 的 match body 只能写 member type label 与 `else`。
+- 异常 cleanup 链需要支持“按 aggregate descriptor 清理一个 by-value aggregate”这一通用能力。原因是 union-form 的 active payload 由 `_fwd` 动态决定，不能在编译期展开成固定 `void **` 指针槽；该扩展面向所有 aggregate local，不新增 union 专用 runtime 分支，也不改变三类顶层值模型。
 
-- [ ] 在 codegen / descriptor 层固定 union-form 的值布局：一个 `tag`、一个 `inline value`、一个托管指针槽位。
-- [ ] 定义 `tag` 到 active member 的映射与必要的描述符元信息。
-- [ ] 定义默认零值时如何初始化 `tag`、`inline value` 与托管指针槽位，并决定走 `FENG_DEFAULT_ZERO_BYTES` 还是 `FENG_DEFAULT_INIT_FN`。
-- [ ] 明确未使用托管指针槽位的 variant 在运行时始终视为空。
-- [ ] 复用现有 `feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take` 与 `feng_aggregate_default_init` 完成 union 生命周期，不新增 runtime 通用 API。
-- [ ] 验证现有 aggregate walker 在该布局下即可正确处理复制、销毁与托管扫描。
-- [ ] 验证该实现不引入第四类顶层值模型，也不需要改动 `src/runtime/` 的通用实现。
+#### 2.6.5 TODO
+
+- [x] 在 codegen / descriptor 层固定 union-form 的值布局：一个 `tag`、一个 `_fwd`、一个 inline payload 区域。
+- [x] 定义 `tag` 到 active member 的映射与必要的描述符元信息。
+- [x] 定义默认零值时如何初始化 `tag`、`_fwd` 与 payload。
+- [x] 明确无托管槽位的 variant 在运行时写入 `FENG_SLOT_NONE`。
+- [x] 复用 `feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take` 与 `feng_aggregate_default_init` 完成 union 生命周期；异常路径通过通用 aggregate cleanup 节点调用同一 descriptor，不新增 union 专用 API。
+- [x] 验证 aggregate walker 经由 `FENG_SLOT_FORWARD` 在该布局下即可正确处理复制、销毁与托管扫描。
+- [x] 验证该实现不引入第四类顶层值模型，也不需要在 `src/runtime/` 中新增 union 专用生命周期分支。
 
 验收口径：
 
 - 同一 union 值在构造、复制、销毁、扫描路径上的行为一致。
 - runtime 不需要重新搜索“当前对象还满足哪些 spec”。
-- `src/runtime/` 无需为 union-form 新增专用生命周期分支或新 API。
+- `src/runtime/` 无需为 union-form 新增专用生命周期分支；通用 cleanup 链扩展只依赖 `FengAggregateDescriptor`。
 
 ### 2.7 Codegen
 
-- [ ] 为 union 进入站点发出固定布局构造代码。
-- [ ] 为 `if` 收窄发出 `tag` 判别与分支内直接访问代码。
-- [ ] 为默认零值发出“首个归一化 member 的零值”构造代码。
-- [ ] 处理 object-form `spec` 作为 union member 时的 payload / witness 发码。
-- [ ] 明确拒绝当前阶段不支持的 `union -> common spec` 投影路径。
+- [x] 为 union 进入站点发出固定布局构造代码。
+- [x] 为 `if` 收窄发出 `tag` 判别与分支内直接访问代码。
+- [x] 为默认零值发出“首个归一化 member 的零值”构造代码。
+- [x] 处理 object-form `spec` 作为 union member 时的 payload / witness 发码。
+- [x] 明确拒绝当前阶段不支持的 `union -> common spec` 投影路径。
 
 验收口径：
 
@@ -196,12 +194,12 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 
 ### 2.8 `.ft` 符号表接入
 
-- [ ] 在 `src/symbol/ft_internal.h` 中新增 `FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION = 10U` 常量。
-- [ ] 在 `src/symbol/ft_write.c` 中为 union-form spec 序列化 TYPS（`SPEC_UNION` kind）和 TSEQ（各归一化 member 类型的顺序列表，每个元素 `name_str = 0`）。
-- [ ] 在 `src/symbol/ft_read.c` 中增加 `SPEC_UNION` 读取路径，把 member 类型从 TSEQ 读出并恢复到 `FengSymbolDeclView`。
-- [ ] 在 `src/symbol/export.c` 中让 spec decl 导出时能区分 object / callable / union 三种 form，union-form 的 member list 正确写入 TSEQ。
-- [ ] 在 `src/symbol/imported_module.c` 中从 `.ft` 恢复 union-form spec 时，保留 member 列表并正确标记 spec form。
-- [ ] 验证 union-form spec 在跨包场景下可被 consumer 作为泛型约束识别与消费。
+- [x] 在 `src/symbol/ft_internal.h` 中新增 `FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION = 10U` 常量。
+- [x] 在 `src/symbol/ft_write.c` 中为 union-form spec 序列化 TYPS（`SPEC_UNION` kind）和 TSEQ（各归一化 member 类型的顺序列表，每个元素 `name_str = 0`）。
+- [x] 在 `src/symbol/ft_read.c` 中增加 `SPEC_UNION` 读取路径，把 member 类型从 TSEQ 读出并恢复到 `FengSymbolDeclView`。
+- [x] 在 `src/symbol/export.c` 中让 spec decl 导出时能区分 object / callable / union 三种 form，union-form 的 member list 正确写入 TSEQ。
+- [x] 在 `src/symbol/imported_module.c` 中从 `.ft` 恢复 union-form spec 时，保留 member 列表并正确标记 spec form。
+- [x] 验证 union-form spec 在跨包场景下可被 consumer 作为泛型约束识别与消费。
 
 验收口径：
 
@@ -210,11 +208,11 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 
 ### 2.9 诊断与测试
 
-- [ ] 补 parser 用例：合法语法、非法块体、非法 `void` member、嵌套 union。
-- [ ] 补 semantic 用例：member 归一化、默认零值、进入冲突、显式转换、未收窄访问/比较报错。
-- [ ] 补 codegen / runtime 用例：`tag` 判别、零值构造、复制、销毁、托管扫描。
-- [ ] 补 smoke 用例：基础 union、`spec` member、多个 member 分支、`else` 收窄。
-- [ ] 每轮落地后执行全量回归。
+- [x] 补 parser 用例：合法语法、非法块体、非法 `void` member、嵌套 union。
+- [x] 补 semantic 用例：member 归一化、默认零值、进入冲突、显式转换、未收窄访问/比较报错。
+- [x] 补 codegen / runtime 用例：`tag` 判别、零值构造、复制、销毁、托管扫描。
+- [x] 补 smoke 用例：基础 union、`spec` member、多个 member 分支、`else` 收窄。
+- [x] 每轮落地后执行全量回归。
 
 验收口径：
 

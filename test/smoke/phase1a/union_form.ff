@@ -1,0 +1,71 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+spec Choice: int | string | bool;
+
+spec Named {
+    func greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    func greet(): string {
+        return self.name;
+    }
+}
+
+spec Display: Named | string;
+
+type Holder {
+    let value: Choice;
+}
+
+func print_choice(value: Choice) {
+    if value {
+        int { puts(&"int"); }
+        string { puts(&value); }
+        bool { puts(&"bool"); }
+    }
+}
+
+func print_else(value: Choice) {
+    if value {
+        int { puts(&"else-int"); }
+        else { puts(&"else-other"); }
+    }
+}
+
+func make_name(name: string): Choice {
+    return name;
+}
+
+func make_bool(): Choice {
+    return true;
+}
+
+func make_display(name: string): Display {
+    let named: Named = User { name: name };
+    return named;
+}
+
+func print_display(value: Display) {
+    if value {
+        Named { puts(&value.greet()); }
+        string { puts(&value); }
+    }
+}
+
+func main(args: string[]) {
+    let default_value: Choice;
+    print_choice(default_value);
+
+    let holder = Holder { value: make_name("name") };
+    print_choice(holder.value);
+    print_choice(make_bool());
+    print_else(holder.value);
+    print_display(make_display("spec"));
+    print_display("text");
+}

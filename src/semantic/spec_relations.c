@@ -451,7 +451,8 @@ static bool collect_parent_specs(const FengSemanticAnalysis *analysis,
         const FengDecl *p = resolve_named_type_or_spec(analysis,
                                                        head->as.spec_decl.parent_specs[i]);
 
-        if (p == NULL || p->kind != FENG_DECL_SPEC) {
+        if (p == NULL || p->kind != FENG_DECL_SPEC ||
+            p->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
             continue;
         }
         if (!parent_closure_add(out, p)) {
@@ -514,7 +515,8 @@ static bool process_type_decl(FengSemanticAnalysis *analysis,
         const FengDecl *head = resolve_named_type_or_spec(
             analysis, type_decl->as.type_decl.declared_specs[i]);
 
-        if (head == NULL || head->kind != FENG_DECL_SPEC) {
+        if (head == NULL || head->kind != FENG_DECL_SPEC ||
+            head->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
             continue;
         }
         if (!record_head_and_parents(analysis,
@@ -551,7 +553,8 @@ static bool process_fit_decl(FengSemanticAnalysis *analysis,
         const FengDecl *head = resolve_named_type_or_spec(
             analysis, fit_decl->as.fit_decl.specs[i]);
 
-        if (head == NULL || head->kind != FENG_DECL_SPEC) {
+        if (head == NULL || head->kind != FENG_DECL_SPEC ||
+            head->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
             continue;
         }
         if (!record_head_and_parents(analysis,

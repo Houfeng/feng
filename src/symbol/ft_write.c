@@ -565,6 +565,52 @@ static uint32_t writer_serialize_spec_object_type(WriterContext *ctx,
     return (uint32_t)ctx->type_count;
 }
 
+static uint32_t writer_serialize_spec_union_type(WriterContext *ctx,
+                                                 const FengSymbolDeclView *decl,
+                                                 uint32_t spec_symbol_id,
+                                                 const char *path,
+                                                 FengToken token,
+                                                 FengSymbolError *out_error) {
+    FengSymbolFtTypeRecord record;
+    uint32_t tseq_start;
+
+    if (decl == NULL || decl->union_member_count == 0U) {
+        return 0U;
+    }
+
+    tseq_start = (uint32_t)ctx->tseq_count;
+    for (size_t member_index = 0U; member_index < decl->union_member_count; ++member_index) {
+        uint32_t member_type_id = writer_serialize_type(ctx,
+                                                        decl->union_members[member_index],
+                                                        path,
+                                                        token,
+                                                        out_error);
+
+        if (decl->union_members[member_index] != NULL && member_type_id == 0U) {
+            return 0U;
+        }
+        if (!writer_append_tseq(ctx, 0U, member_type_id, 0U, path, token, out_error)) {
+            return 0U;
+        }
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.kind = FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION;
+    record.sym_ref = spec_symbol_id;
+    record.elem_start = tseq_start;
+    record.elem_count = (uint32_t)decl->union_member_count;
+    if (!append_record((void **)&ctx->types,
+                       &ctx->type_count,
+                       sizeof(record),
+                       &record,
+                       path,
+                       token,
+                       out_error)) {
+        return 0U;
+    }
+    return (uint32_t)ctx->type_count;
+}
+
 static bool writer_append_decl_id(WriterContext *ctx,
                                   const FengSymbolDeclView *decl,
                                   uint32_t id,
@@ -902,7 +948,17 @@ static bool writer_collect_decl(WriterContext *ctx,
             break;
 
         case FENG_SYMBOL_DECL_KIND_SPEC:
-            if (decl->param_count > 0U || decl->return_type != NULL) {
+            if (decl->union_member_count > 0U) {
+                record.type_ref = writer_serialize_spec_union_type(ctx,
+                                                                   decl,
+                                                                   symbol_id,
+                                                                   path,
+                                                                   decl->token,
+                                                                   out_error);
+                if (record.type_ref == 0U) {
+                    return false;
+                }
+            } else if (decl->param_count > 0U || decl->return_type != NULL) {
                 record.type_ref = writer_serialize_callable_type(ctx,
                                                                  decl,
                                                                  FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE,

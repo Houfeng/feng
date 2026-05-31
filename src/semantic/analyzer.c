@@ -110,11 +110,14 @@ typedef struct InferredExprType {
     const FengExpr *lambda_expr;
 } InferredExprType;
 
+typedef struct UnionNarrowingSet UnionNarrowingSet;
+
 typedef struct LocalNameEntry {
     FengSlice name;
     InferredExprType type;
     FengMutability mutability;
     const FengExpr *source_expr;
+    const UnionNarrowingSet *union_narrowing;
 } LocalNameEntry;
 
 /* Compile-time constant evaluation result. Used by evaluate_constant_expr to model the
@@ -220,6 +223,12 @@ typedef struct TypeParamEntry {
     const FengTypeParam *type_param;
 } TypeParamEntry;
 
+struct UnionNarrowingSet {
+    const FengDecl *union_decl;
+    bool *active_members;
+    size_t member_count;
+};
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -258,6 +267,9 @@ typedef struct ResolveContext {
     FengTypeRef **synthetic_type_refs;
     size_t synthetic_type_ref_count;
     size_t synthetic_type_ref_capacity;
+    UnionNarrowingSet **union_narrowings;
+    size_t union_narrowing_count;
+    size_t union_narrowing_capacity;
     CallableReturnCache *callable_return_cache;
     CallableExceptionEscapeCache *callable_exception_escape_cache;
     FengSemanticError **errors;
@@ -356,6 +368,7 @@ static bool path_equals(const FengSlice *left,
 }
 
 static char *format_module_name(const FengSlice *segments, size_t segment_count);
+static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void);
 static bool type_ref_is_void(const FengTypeRef *type_ref);
 static bool type_ref_is_unknown(const FengTypeRef *type_ref);
 static bool type_decl_is_abi_stable(const ResolveContext *context,
@@ -1961,6 +1974,20 @@ static bool inject_external_modules_from_decl(
                     program,
                     decl->as.spec_decl.as.callable.return_type);
             }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                for (size_t member_index = 0U;
+                     member_index < decl->as.spec_decl.as.union_form.member_count;
+                     ++member_index) {
+                    if (!inject_external_modules_from_type_ref(
+                            analysis,
+                            imported_query,
+                            program,
+                            decl->as.spec_decl.as.union_form.members[member_index])) {
+                        return false;
+                    }
+                }
+                return true;
+            }
             for (size_t member_index = 0U;
                  member_index < decl->as.spec_decl.as.object.member_count;
                  ++member_index) {
@@ -2915,7 +2942,8 @@ static bool resolver_add_local_entry(ResolveContext *context,
                                      FengSlice name,
                                      InferredExprType type,
                                      FengMutability mutability,
-                                     const FengExpr *source_expr) {
+                                     const FengExpr *source_expr,
+                                     const UnionNarrowingSet *union_narrowing) {
     ScopeFrame *frame;
     LocalNameEntry entry;
 
@@ -2928,6 +2956,7 @@ static bool resolver_add_local_entry(ResolveContext *context,
     entry.type = type;
     entry.mutability = normalize_mutability(mutability);
     entry.source_expr = source_expr;
+    entry.union_narrowing = union_narrowing;
     return append_raw((void **)&frame->locals,
                       &frame->local_count,
                       &frame->local_capacity,
@@ -2940,7 +2969,22 @@ static bool resolver_add_local_typed_name_with_source(ResolveContext *context,
                                                       InferredExprType type,
                                                       FengMutability mutability,
                                                       const FengExpr *source_expr) {
-    return resolver_add_local_entry(context, name, type, mutability, source_expr);
+    return resolver_add_local_entry(context, name, type, mutability, source_expr, NULL);
+}
+
+static bool resolver_add_local_typed_name_with_union_narrowing(
+    ResolveContext *context,
+    FengSlice name,
+    InferredExprType type,
+    FengMutability mutability,
+    const FengExpr *source_expr,
+    const UnionNarrowingSet *union_narrowing) {
+    return resolver_add_local_entry(context,
+                                    name,
+                                    type,
+                                    mutability,
+                                    source_expr,
+                                    union_narrowing);
 }
 
 static bool resolver_add_local_typed_name(ResolveContext *context,
@@ -3554,6 +3598,17 @@ static void resolver_free_scopes(ResolveContext *context) {
     context->synthetic_type_refs = NULL;
     context->synthetic_type_ref_count = 0U;
     context->synthetic_type_ref_capacity = 0U;
+
+    for (type_ref_index = 0U; type_ref_index < context->union_narrowing_count; ++type_ref_index) {
+        if (context->union_narrowings[type_ref_index] != NULL) {
+            free(context->union_narrowings[type_ref_index]->active_members);
+            free(context->union_narrowings[type_ref_index]);
+        }
+    }
+    free(context->union_narrowings);
+    context->union_narrowings = NULL;
+    context->union_narrowing_count = 0U;
+    context->union_narrowing_capacity = 0U;
 }
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
@@ -4112,6 +4167,227 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
     return false;
 }
 
+static const FengDecl *resolve_union_spec_type_ref_decl(const ResolveContext *context,
+                                                        const FengTypeRef *type_ref) {
+    const FengDecl *decl = resolve_type_ref_decl(context, type_ref);
+
+    if (decl != NULL && decl->kind == FENG_DECL_SPEC &&
+        decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+        return decl;
+    }
+    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U &&
+        type_ref->as.named.type_arg_count == 0U) {
+        const TypeParamEntry *type_param = find_type_param(context, type_ref->as.named.segments[0]);
+
+        if (type_param != NULL && type_param->type_param != NULL) {
+            const FengDecl *constraint_decl =
+                resolve_type_ref_decl(context, type_param->type_param->constraint);
+
+            if (constraint_decl != NULL && constraint_decl->kind == FENG_DECL_SPEC &&
+                constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                return constraint_decl;
+            }
+        }
+    }
+    return NULL;
+}
+
+static bool union_stack_contains(const FengDecl *const *stack,
+                                 size_t stack_count,
+                                 const FengDecl *decl) {
+    for (size_t index = 0U; index < stack_count; ++index) {
+        if (stack[index] == decl) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void free_union_member_infos_local(FengUnionSpecMemberInfo *members,
+                                          size_t member_count) {
+    for (size_t index = 0U; index < member_count; ++index) {
+        free_synthetic_type_ref((FengTypeRef *)members[index].type_ref);
+    }
+    free(members);
+}
+
+static bool append_normalized_union_member(ResolveContext *context,
+                                           FengUnionSpecMemberInfo **members,
+                                           size_t *member_count,
+                                           size_t *member_capacity,
+                                           const FengTypeRef *type_ref) {
+    FengUnionSpecMemberInfo entry;
+
+    for (size_t index = 0U; index < *member_count; ++index) {
+        if (type_refs_semantically_equal(context, (*members)[index].type_ref, type_ref)) {
+            return true;
+        }
+    }
+
+    memset(&entry, 0, sizeof(entry));
+    entry.type_ref = clone_type_ref_for_inference(type_ref);
+    if (entry.type_ref == NULL) {
+        return false;
+    }
+    entry.resolved_decl = resolve_type_ref_decl(context, type_ref);
+    if (!append_raw((void **)members,
+                    member_count,
+                    member_capacity,
+                    sizeof(entry),
+                    &entry)) {
+        free_synthetic_type_ref((FengTypeRef *)entry.type_ref);
+        return false;
+    }
+    return true;
+}
+
+static bool collect_normalized_union_member(ResolveContext *context,
+                                            const FengDecl *owner_union_decl,
+                                            const FengTypeRef *member_ref,
+                                            FengUnionSpecMemberInfo **members,
+                                            size_t *member_count,
+                                            size_t *member_capacity,
+                                            const FengDecl ***stack,
+                                            size_t *stack_count,
+                                            size_t *stack_capacity) {
+    const FengDecl *resolved = resolve_type_ref_decl(context, member_ref);
+
+    if (resolved != NULL && resolved->kind == FENG_DECL_SPEC &&
+        resolved->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+        bool ok = true;
+
+        if (union_stack_contains(*stack, *stack_count, resolved)) {
+            return resolver_append_error(
+                context,
+                member_ref != NULL ? member_ref->token : owner_union_decl->token,
+                format_message("union-form spec '%.*s' forms a cycle through its member list",
+                               (int)owner_union_decl->as.spec_decl.name.length,
+                               owner_union_decl->as.spec_decl.name.data));
+        }
+        if (!append_raw((void **)stack,
+                        stack_count,
+                        stack_capacity,
+                        sizeof(resolved),
+                        &resolved)) {
+            return false;
+        }
+        for (size_t index = 0U;
+             ok && index < resolved->as.spec_decl.as.union_form.member_count;
+             ++index) {
+            const FengTypeRef *nested_ref = resolved->as.spec_decl.as.union_form.members[index];
+            FengTypeRef *substituted = NULL;
+
+            if (member_ref != NULL && member_ref->kind == FENG_TYPE_REF_NAMED &&
+                resolved->as.spec_decl.type_param_count > 0U &&
+                member_ref->as.named.type_arg_count == resolved->as.spec_decl.type_param_count) {
+                substituted = clone_type_ref_substituting_type_params(
+                    nested_ref,
+                    resolved->as.spec_decl.type_params,
+                    resolved->as.spec_decl.type_param_count,
+                    member_ref->as.named.type_args);
+                if (substituted == NULL) {
+                    ok = false;
+                    break;
+                }
+                nested_ref = substituted;
+            }
+
+            if (!resolve_type_ref(context, nested_ref, false)) {
+                ok = false;
+            } else {
+                ok = collect_normalized_union_member(context,
+                                                     owner_union_decl,
+                                                     nested_ref,
+                                                     members,
+                                                     member_count,
+                                                     member_capacity,
+                                                     stack,
+                                                     stack_count,
+                                                     stack_capacity);
+            }
+            free_synthetic_type_ref(substituted);
+        }
+        *stack_count -= 1U;
+        return ok;
+    }
+
+    return append_normalized_union_member(context,
+                                          members,
+                                          member_count,
+                                          member_capacity,
+                                          member_ref);
+}
+
+static bool record_normalized_union_spec_info(ResolveContext *context, const FengDecl *decl) {
+    FengUnionSpecMemberInfo *members = NULL;
+    size_t member_count = 0U;
+    size_t member_capacity = 0U;
+    const FengDecl **stack = NULL;
+    size_t stack_count = 0U;
+    size_t stack_capacity = 0U;
+    bool ok = true;
+
+    if (context == NULL || context->analysis == NULL || decl == NULL ||
+        decl->kind != FENG_DECL_SPEC || decl->as.spec_decl.form != FENG_SPEC_FORM_UNION) {
+        return true;
+    }
+
+    if (!append_raw((void **)&stack,
+                    &stack_count,
+                    &stack_capacity,
+                    sizeof(decl),
+                    &decl)) {
+        return false;
+    }
+
+    for (size_t index = 0U;
+         ok && index < decl->as.spec_decl.as.union_form.member_count;
+         ++index) {
+        const FengTypeRef *member_ref = decl->as.spec_decl.as.union_form.members[index];
+
+        if (type_ref_is_void(member_ref)) {
+            ok = resolver_append_error(
+                context,
+                member_ref != NULL ? member_ref->token : decl->token,
+                format_message("union-form spec members cannot be 'void'"));
+            break;
+        }
+        if (!resolve_type_ref(context, member_ref, false)) {
+            ok = false;
+            break;
+        }
+        ok = collect_normalized_union_member(context,
+                                             decl,
+                                             member_ref,
+                                             &members,
+                                             &member_count,
+                                             &member_capacity,
+                                             &stack,
+                                             &stack_count,
+                                             &stack_capacity);
+    }
+
+    free(stack);
+    if (!ok) {
+        free_union_member_infos_local(members, member_count);
+        return false;
+    }
+    if (member_count == 0U) {
+        free_union_member_infos_local(members, member_count);
+        return resolver_append_error(
+            context,
+            decl->token,
+            format_message("union-form spec '%.*s' must have at least one member",
+                           (int)decl->as.spec_decl.name.length,
+                           decl->as.spec_decl.name.data));
+    }
+    if (!feng_semantic_record_union_spec_info(context->analysis, decl, members, member_count)) {
+        return false;
+    }
+    return true;
+}
+
 static bool function_type_refs_have_equal_signature(const ResolveContext *context,
                                                     const FengTypeRef *src_ref,
                                                     const FengTypeRef *dst_ref);
@@ -4230,6 +4506,105 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
             return false;
     }
 
+    return false;
+}
+
+typedef struct UnionMemberSelection {
+    bool matched;
+    bool ambiguous;
+    size_t member_index;
+    const FengTypeRef *member_type_ref;
+} UnionMemberSelection;
+
+static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *context,
+                                                        InferredExprType expr_type,
+                                                        const FengTypeRef *type_ref) {
+    const char *expr_builtin;
+    const char *target_builtin;
+    const FengDecl *target_decl;
+
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+            expr_builtin = canonical_builtin_type_name(expr_type.builtin_name);
+            target_builtin = type_ref_builtin_canonical_name(type_ref);
+            return expr_builtin != NULL && target_builtin != NULL &&
+                   strcmp(expr_builtin, target_builtin) == 0;
+
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return type_refs_semantically_equal(context, expr_type.type_ref, type_ref);
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            target_decl = resolve_type_ref_decl(context, type_ref);
+            return target_decl != NULL && target_decl == expr_type.type_decl;
+
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return false;
+    }
+    return false;
+}
+
+static UnionMemberSelection select_union_member_for_expr_type(const ResolveContext *context,
+                                                              InferredExprType expr_type,
+                                                              const FengDecl *union_decl) {
+    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
+                                                                         union_decl);
+    UnionMemberSelection result;
+    size_t compatible_count = 0U;
+
+    memset(&result, 0, sizeof(result));
+    if (info == NULL) {
+        return result;
+    }
+
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        if (inferred_expr_type_exactly_matches_type_ref(context,
+                                                        expr_type,
+                                                        info->members[index].type_ref)) {
+            result.matched = true;
+            result.member_index = index;
+            result.member_type_ref = info->members[index].type_ref;
+            return result;
+        }
+    }
+
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        if (!inferred_expr_type_matches_type_ref(context,
+                                                 expr_type,
+                                                 info->members[index].type_ref)) {
+            continue;
+        }
+        if (compatible_count == 0U) {
+            result.matched = true;
+            result.member_index = index;
+            result.member_type_ref = info->members[index].type_ref;
+        } else {
+            result.ambiguous = true;
+        }
+        ++compatible_count;
+    }
+    if (result.ambiguous) {
+        result.matched = false;
+        result.member_type_ref = NULL;
+    }
+    return result;
+}
+
+static bool inferred_expr_type_is_union_view(const ResolveContext *context,
+                                             InferredExprType expr_type) {
+    switch (expr_type.kind) {
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+            return resolve_union_spec_type_ref_decl(context, expr_type.type_ref) != NULL;
+
+        case FENG_INFERRED_EXPR_TYPE_DECL:
+            return expr_type.type_decl != NULL && expr_type.type_decl->kind == FENG_DECL_SPEC &&
+                   expr_type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION;
+
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
+        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
+            return false;
+    }
     return false;
 }
 
@@ -5304,6 +5679,16 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
     char *right_type_name;
     char *message;
 
+    if ((expr->as.binary.op == FENG_TOKEN_EQ || expr->as.binary.op == FENG_TOKEN_NE) &&
+        (inferred_expr_type_is_union_view(context, left_type) ||
+         inferred_expr_type_is_union_view(context, right_type))) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            format_message("binary operator '%s' requires union-form operands to be narrowed to a single member first",
+                           operator_name));
+    }
+
     if (binary_expr_types_are_valid(context, expr->as.binary.op, left_type, right_type)) {
         if (expr->as.binary.op == FENG_TOKEN_SHL || expr->as.binary.op == FENG_TOKEN_SHR) {
             return validate_integer_shift_rhs_range(context,
@@ -5904,6 +6289,355 @@ static bool resolve_match_branch_body(ResolveContext *context,
     return resolve_block(context, branch->body, allow_self);
 }
 
+static const UnionNarrowingSet *resolver_create_union_narrowing(
+    ResolveContext *context,
+    const FengDecl *union_decl,
+    const bool *active_members,
+    size_t member_count) {
+    UnionNarrowingSet *set;
+    bool *active_copy;
+
+    if (context == NULL || union_decl == NULL || active_members == NULL || member_count == 0U) {
+        return NULL;
+    }
+    set = (UnionNarrowingSet *)calloc(1U, sizeof(*set));
+    if (set == NULL) {
+        return NULL;
+    }
+    active_copy = (bool *)malloc(member_count * sizeof(*active_copy));
+    if (active_copy == NULL) {
+        free(set);
+        return NULL;
+    }
+    memcpy(active_copy, active_members, member_count * sizeof(*active_copy));
+    set->union_decl = union_decl;
+    set->active_members = active_copy;
+    set->member_count = member_count;
+    if (!append_raw((void **)&context->union_narrowings,
+                    &context->union_narrowing_count,
+                    &context->union_narrowing_capacity,
+                    sizeof(set),
+                    &set)) {
+        free(active_copy);
+        free(set);
+        return NULL;
+    }
+    return set;
+}
+
+static size_t union_active_member_count(const bool *active_members, size_t member_count) {
+    size_t count = 0U;
+
+    if (active_members == NULL) {
+        return 0U;
+    }
+    for (size_t index = 0U; index < member_count; ++index) {
+        if (active_members[index]) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static size_t union_first_active_member_index(const bool *active_members, size_t member_count) {
+    if (active_members == NULL) {
+        return member_count;
+    }
+    for (size_t index = 0U; index < member_count; ++index) {
+        if (active_members[index]) {
+            return index;
+        }
+    }
+    return member_count;
+}
+
+static bool resolve_union_match_label_index(ResolveContext *context,
+                                            const FengUnionSpecInfo *info,
+                                            const FengMatchLabel *label,
+                                            size_t *out_index) {
+    if (out_index != NULL) {
+        *out_index = info != NULL ? info->member_count : 0U;
+    }
+    if (label == NULL || label->kind != FENG_MATCH_LABEL_TYPE || label->type == NULL) {
+        return resolver_append_error(
+            context,
+            label != NULL ? label->token : context->program->module_token,
+            format_message("union-form match labels must be union member types or 'else'"));
+    }
+    if (!resolve_type_ref(context, label->type, false)) {
+        return false;
+    }
+    if (info == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        if (type_refs_semantically_equal(context, label->type, info->members[index].type_ref)) {
+            if (out_index != NULL) {
+                *out_index = index;
+            }
+            return true;
+        }
+    }
+    {
+        char *label_name = format_type_ref_name(label->type);
+        bool ok = resolver_append_error(
+            context,
+            label->token,
+            format_message("type label '%s' is not a member of the target union-form spec",
+                           label_name != NULL ? label_name : "<type>"));
+
+        free(label_name);
+        return ok;
+    }
+}
+
+static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
+                                                     const FengBlock *block,
+                                                     bool allow_self,
+                                                     FengSlice target_name,
+                                                     bool has_target_name,
+                                                     FengMutability target_mutability,
+                                                     const FengExpr *target_expr,
+                                                     InferredExprType original_type,
+                                                     const FengUnionSpecInfo *info,
+                                                     const bool *active_members) {
+    bool ok;
+    size_t active_count = union_active_member_count(active_members,
+                                                    info != NULL ? info->member_count : 0U);
+
+    if (block == NULL) {
+        return true;
+    }
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+    ok = true;
+    if (has_target_name && info != NULL && active_count > 0U) {
+        if (active_count == 1U) {
+            size_t member_index = union_first_active_member_index(active_members, info->member_count);
+
+            ok = resolver_add_local_typed_name_with_union_narrowing(
+                context,
+                target_name,
+                inferred_expr_type_from_type_ref(info->members[member_index].type_ref),
+                target_mutability,
+                target_expr,
+                NULL);
+        } else {
+            const UnionNarrowingSet *narrowing = resolver_create_union_narrowing(
+                context,
+                info->spec_decl,
+                active_members,
+                info->member_count);
+
+            ok = narrowing != NULL &&
+                 resolver_add_local_typed_name_with_union_narrowing(context,
+                                                                    target_name,
+                                                                    original_type,
+                                                                    target_mutability,
+                                                                    target_expr,
+                                                                    narrowing);
+        }
+    }
+    if (ok) {
+        ok = resolve_block_contents(context, block, allow_self);
+    }
+    resolver_pop_scope(context);
+    return ok;
+}
+
+static bool resolve_and_validate_union_match_common(ResolveContext *context,
+                                                    const FengExpr *target,
+                                                    InferredExprType target_type,
+                                                    const FengDecl *union_decl,
+                                                    const FengMatchBranch *branches,
+                                                    size_t branch_count,
+                                                    const FengBlock *else_block,
+                                                    FengToken anchor,
+                                                    bool is_expression_form,
+                                                    bool allow_self) {
+    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
+                                                                         union_decl);
+    const LocalNameEntry *target_local = NULL;
+    bool *active_members = NULL;
+    bool *covered_members = NULL;
+    bool ok = true;
+    FengSlice target_name = {NULL, 0U};
+    FengMutability target_mutability = FENG_MUTABILITY_LET;
+    bool has_target_name = false;
+
+    if (info == NULL || info->member_count == 0U) {
+        return resolver_append_error(context,
+                                     target != NULL ? target->token : anchor,
+                                     format_message("union-form spec metadata is unavailable"));
+    }
+
+    active_members = (bool *)malloc(info->member_count * sizeof(*active_members));
+    covered_members = (bool *)calloc(info->member_count, sizeof(*covered_members));
+    if (active_members == NULL || covered_members == NULL) {
+        free(active_members);
+        free(covered_members);
+        return false;
+    }
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        active_members[index] = true;
+    }
+
+    if (target != NULL && target->kind == FENG_EXPR_IDENTIFIER) {
+        target_local = resolver_find_local_name_entry(context, target->as.identifier);
+        target_name = target->as.identifier;
+        has_target_name = true;
+        if (target_local != NULL) {
+            target_mutability = target_local->mutability;
+            if (target_local->union_narrowing != NULL &&
+                target_local->union_narrowing->union_decl == union_decl &&
+                target_local->union_narrowing->member_count == info->member_count) {
+                memcpy(active_members,
+                       target_local->union_narrowing->active_members,
+                       info->member_count * sizeof(*active_members));
+            }
+        }
+    }
+
+    for (size_t branch_index = 0U; branch_index < branch_count && ok; ++branch_index) {
+        bool *branch_members = (bool *)calloc(info->member_count, sizeof(*branch_members));
+
+        if (branch_members == NULL) {
+            ok = false;
+            break;
+        }
+        for (size_t label_index = 0U;
+             ok && label_index < branches[branch_index].label_count;
+             ++label_index) {
+            const FengMatchLabel *label = &branches[branch_index].labels[label_index];
+            size_t member_index = info->member_count;
+
+            ok = resolve_union_match_label_index(context, info, label, &member_index);
+            if (!ok) {
+                break;
+            }
+            if (member_index >= info->member_count) {
+                ok = false;
+                break;
+            }
+            if (!active_members[member_index] || covered_members[member_index]) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    format_message("union match label overlaps with an earlier label and is unreachable"));
+                break;
+            }
+            if (branch_members[member_index]) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    format_message("union match branch lists the same member more than once"));
+                break;
+            }
+            branch_members[member_index] = true;
+        }
+        if (ok) {
+            for (size_t index = 0U; index < info->member_count; ++index) {
+                if (branch_members[index]) {
+                    covered_members[index] = true;
+                }
+            }
+            ok = resolve_union_match_block_with_narrowing(context,
+                                                          branches[branch_index].body,
+                                                          allow_self,
+                                                          target_name,
+                                                          has_target_name,
+                                                          target_mutability,
+                                                          target,
+                                                          target_type,
+                                                          info,
+                                                          branch_members);
+        }
+        if (ok && is_expression_form) {
+            ok = validate_block_yields_expression(context,
+                                                  branches[branch_index].body,
+                                                  branches[branch_index].token,
+                                                  "match expression");
+        }
+        free(branch_members);
+    }
+
+    if (ok && else_block != NULL) {
+        bool *else_members = (bool *)malloc(info->member_count * sizeof(*else_members));
+
+        if (else_members == NULL) {
+            ok = false;
+        } else {
+            for (size_t index = 0U; index < info->member_count; ++index) {
+                else_members[index] = active_members[index] && !covered_members[index];
+            }
+            ok = resolve_union_match_block_with_narrowing(context,
+                                                          else_block,
+                                                          allow_self,
+                                                          target_name,
+                                                          has_target_name,
+                                                          target_mutability,
+                                                          target,
+                                                          target_type,
+                                                          info,
+                                                          else_members);
+            free(else_members);
+        }
+        if (ok && is_expression_form) {
+            ok = validate_block_yields_expression(context, else_block, anchor, "match expression else");
+        }
+    } else if (ok && is_expression_form) {
+        ok = resolver_append_error(context,
+                                   anchor,
+                                   format_message("match expressions require an else branch"));
+    }
+
+    free(active_members);
+    free(covered_members);
+    if (!ok) {
+        return false;
+    }
+
+    if (is_expression_form) {
+        InferredExprType expected = block_yield_inferred_type(context, else_block);
+        size_t index;
+
+        if (!inferred_expr_type_is_known(expected)) {
+            for (index = 0U; index < branch_count; ++index) {
+                expected = block_yield_inferred_type(context, branches[index].body);
+                if (inferred_expr_type_is_known(expected)) {
+                    break;
+                }
+            }
+        }
+        if (inferred_expr_type_is_known(expected)) {
+            for (index = 0U; index < branch_count; ++index) {
+                InferredExprType branch_type = block_yield_inferred_type(context, branches[index].body);
+
+                if (!inferred_expr_type_is_known(branch_type)) {
+                    continue;
+                }
+                if (!inferred_expr_types_equal(context, expected, branch_type)) {
+                    char *expected_name = format_inferred_expr_type_name(expected);
+                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    bool result = resolver_append_error(
+                        context,
+                        branches[index].token,
+                        format_message("match expression branches must have the same type, got '%s' and '%s'",
+                                       expected_name != NULL ? expected_name : "<unknown>",
+                                       branch_name != NULL ? branch_name : "<unknown>"));
+
+                    free(expected_name);
+                    free(branch_name);
+                    return result;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool resolve_and_validate_match_common(ResolveContext *context,
                                               const FengExpr *target,
                                               const FengMatchBranch *branches,
@@ -5924,6 +6658,30 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     }
 
     target_type = infer_expr_type(context, target);
+    if (inferred_expr_type_is_known(target_type)) {
+        const FengDecl *union_decl = NULL;
+
+        if (target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+            union_decl = resolve_union_spec_type_ref_decl(context, target_type.type_ref);
+        } else if (target_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+                   target_type.type_decl != NULL &&
+                   target_type.type_decl->kind == FENG_DECL_SPEC &&
+                   target_type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+            union_decl = target_type.type_decl;
+        }
+        if (union_decl != NULL) {
+            return resolve_and_validate_union_match_common(context,
+                                                           target,
+                                                           target_type,
+                                                           union_decl,
+                                                           branches,
+                                                           branch_count,
+                                                           else_block,
+                                                           anchor,
+                                                           is_expression_form,
+                                                           allow_self);
+        }
+    }
     if (inferred_expr_type_is_known(target_type) && !match_target_type_is_allowed(target_type)) {
         char *target_name = format_inferred_expr_type_name(target_type);
         char *message = format_message(
@@ -10147,6 +10905,14 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 owner_type.type_ref->as.named.segment_count == 1U &&
                 owner_type.type_ref->as.named.type_arg_count == 0U &&
                 find_type_param(context, owner_type.type_ref->as.named.segments[0]) != NULL) {
+                if (resolve_union_spec_type_ref_decl(context, owner_type.type_ref) != NULL) {
+                    return resolver_append_error(
+                        context,
+                        expr->token,
+                        format_message("union-form constrained value must be narrowed to a single member before accessing member '%.*s'",
+                                       (int)expr->as.member.member.length,
+                                       expr->as.member.member.data));
+                }
                 return true;
             }
             owner_name = format_inferred_expr_type_name(owner_type);
@@ -10180,6 +10946,16 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
         FengSlice owner_name = decl_typeish_name(owner_type_decl);
 
         if (owner_type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            if (owner_type_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                return resolver_append_error(
+                    context,
+                    expr->token,
+                    format_message("union-form spec '%.*s' must be narrowed to a single member before accessing member '%.*s'",
+                                   (int)owner_name.length,
+                                   owner_name.data,
+                                   (int)expr->as.member.member.length,
+                                   expr->as.member.member.data));
+            }
             return resolver_append_error(
                 context,
                 expr->token,
@@ -12277,6 +13053,21 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
                                                                      expected_type_ref);
     }
 
+    {
+        const FengDecl *target_union_decl = resolve_union_spec_type_ref_decl(context,
+                                                                             expected_type_ref);
+
+        if (target_union_decl != NULL) {
+            UnionMemberSelection selection;
+
+            if (inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
+                return true;
+            }
+            selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+            return selection.matched;
+        }
+    }
+
     return inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref);
 }
 
@@ -12407,6 +13198,48 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
 
 /* Phase S1b — SpecCoercionSite recording helpers (§6.2). */
 
+static void record_union_coercion_site_if_applicable(ResolveContext *context,
+                                                     const FengExpr *expr,
+                                                     const FengTypeRef *expected_type_ref) {
+    const FengDecl *target_union_decl;
+    InferredExprType expr_type;
+    UnionMemberSelection selection;
+
+    if (context == NULL || context->analysis == NULL || expr == NULL || expected_type_ref == NULL) {
+        return;
+    }
+    if (expr->kind == FENG_EXPR_ARRAY_LITERAL &&
+        expected_type_ref->kind == FENG_TYPE_REF_ARRAY &&
+        expected_type_ref->as.inner != NULL) {
+        for (size_t index = 0U; index < expr->as.array_literal.count; ++index) {
+            record_union_coercion_site_if_applicable(context,
+                                                     expr->as.array_literal.items[index],
+                                                     expected_type_ref->as.inner);
+        }
+        return;
+    }
+
+    target_union_decl = resolve_union_spec_type_ref_decl(context, expected_type_ref);
+    if (target_union_decl == NULL) {
+        return;
+    }
+    expr_type = infer_expr_type(context, expr);
+    if (!inferred_expr_type_is_known(expr_type) ||
+        inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
+        return;
+    }
+    selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+    if (!selection.matched) {
+        return;
+    }
+    (void)feng_semantic_record_union_coercion_site(context->analysis,
+                                                   expr,
+                                                   target_union_decl,
+                                                   expected_type_ref,
+                                                   selection.member_index,
+                                                   selection.member_type_ref);
+}
+
 static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *context,
                                                       InferredExprType expr_type) {
     switch (expr_type.kind) {
@@ -12468,6 +13301,9 @@ static void record_object_spec_coercion_site_if_applicable(
     }
     /* Callable-form specs have their own callable hook (§8.4). */
     if (decl_is_function_type(target_decl)) {
+        return;
+    }
+    if (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }
     expr_type = infer_expr_type(context, expr);
@@ -12585,6 +13421,7 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
         }
+        record_union_coercion_site_if_applicable(context, args[i], param_type);
         record_object_spec_coercion_site_if_applicable(context,
                                                        args[i],
                                                        param_type,
@@ -12627,6 +13464,7 @@ static void record_object_arg_coercion_sites_for_owner_instance(
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
         }
+        record_union_coercion_site_if_applicable(context, args[i], param_type);
         record_object_spec_coercion_site_if_applicable(context,
                                                        args[i],
                                                        param_type,
@@ -12871,8 +13709,8 @@ static void record_abi_function_pointer_site(ResolveContext *context,
 }
 
 /* Phase S2-a — SpecDefaultBinding recording helper (§6.3). Records a
- * default-witness site when `binding_type` resolves to a spec decl (object
- * or callable form). Caller is responsible for ensuring this is invoked
+ * default-witness site when `binding_type` resolves to an object-form or
+ * callable-form spec decl. Caller is responsible for ensuring this is invoked
  * only when the slot has no initializer. Silent no-op when the type does
  * not resolve to a spec. */
 static void record_spec_default_binding_if_applicable(
@@ -12889,6 +13727,9 @@ static void record_spec_default_binding_if_applicable(
     }
     decl = resolve_type_ref_decl(context, binding_type);
     if (decl == NULL || decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+    if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
         return;
     }
     form = decl_is_function_type(decl) ? FENG_SPEC_COERCION_FORM_CALLABLE
@@ -13461,7 +14302,52 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
     if (resolve_function_type_decl(context, expected_type_ref) != NULL) {
         return validate_function_typed_expr(context, expr, expected_type_ref);
     }
+    {
+        const FengDecl *target_union_decl = resolve_union_spec_type_ref_decl(context,
+                                                                             expected_type_ref);
+
+        if (target_union_decl != NULL) {
+            UnionMemberSelection selection;
+
+            expr_type = infer_expr_type(context, expr);
+            if (!inferred_expr_type_is_known(expr_type)) {
+                if (!expr_is_callable_value_reference(context, expr)) {
+                    return true;
+                }
+            } else if (inferred_expr_type_exactly_matches_type_ref(context,
+                                                                   expr_type,
+                                                                   expected_type_ref)) {
+                return true;
+            } else {
+                selection = select_union_member_for_expr_type(context, expr_type, target_union_decl);
+                if (selection.matched) {
+                    (void)feng_semantic_record_union_coercion_site(context->analysis,
+                                                                   expr,
+                                                                   target_union_decl,
+                                                                   expected_type_ref,
+                                                                   selection.member_index,
+                                                                   selection.member_type_ref);
+                    return true;
+                }
+                if (selection.ambiguous) {
+                    char *expr_name_local = format_expr_target_name(expr);
+                    char *type_name_local = format_type_ref_name(expected_type_ref);
+                    bool ok = resolver_append_error(
+                        context,
+                        expr->token,
+                        format_message("expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member",
+                                       expr_name_local != NULL ? expr_name_local : "<expression>",
+                                       type_name_local != NULL ? type_name_local : "<type>"));
+
+                    free(expr_name_local);
+                    free(type_name_local);
+                    return ok;
+                }
+            }
+        }
+    }
     if (expr_matches_expected_type_ref(context, expr, expected_type_ref)) {
+        record_union_coercion_site_if_applicable(context, expr, expected_type_ref);
         record_object_spec_coercion_site_if_applicable(context,
                                                        expr,
                                                        expected_type_ref,
@@ -13744,7 +14630,9 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
      * annotation is present. The actual diagnostic is emitted by
      * `validate_abi_type_declaration`; here we simply refuse to treat it as
      * stable so dependent types do not transitively appear ABI-stable. */
-    if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+    if (decl->kind == FENG_DECL_SPEC &&
+        (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ||
+         decl->as.spec_decl.form == FENG_SPEC_FORM_UNION)) {
         return false;
     }
 
@@ -13885,6 +14773,28 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
                 decl->token,
                 format_message(
                     "object-form spec '%.*s' cannot be marked as @abi; @abi only applies to type declarations and callable-form spec",
+                    (int)decl_typeish_name(decl).length,
+                    decl_typeish_name(decl).data));
+        }
+        if (callconv_count != 0U) {
+            return resolver_append_error(
+                context,
+                decl->token,
+                format_message(
+                    "spec '%.*s' cannot use calling convention annotations",
+                    (int)decl_typeish_name(decl).length,
+                    decl_typeish_name(decl).data));
+        }
+        return true;
+    }
+
+    if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+        if (has_abi) {
+            return resolver_append_error(
+                context,
+                decl->token,
+                format_message(
+                    "union-form spec '%.*s' cannot be marked as @abi; union values use compiler-managed aggregate layout",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -17199,6 +18109,12 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
             free(target_name);
             return ok;
         }
+        if (resolved->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return resolver_append_error(
+                context,
+                r->token,
+                format_message("object-form spec parent list can only contain object-form specs"));
+        }
         for (j = 0U; j < i; ++j) {
             const FengDecl *prev = resolve_type_ref_decl(context, spec_decl->as.spec_decl.parent_specs[j]);
 
@@ -18369,6 +19285,7 @@ static bool subject_key_satisfies_spec_decl(const ResolveContext *ctx,
 
     if (ctx == NULL || ctx->analysis == NULL || subject_key == NULL ||
         spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
         subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID) {
         return false;
     }
@@ -18395,7 +19312,8 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
     bool found = false;
 
     if (type_decl == NULL || spec_decl == NULL ||
-        !decl_is_named_fit_target(type_decl) || spec_decl->kind != FENG_DECL_SPEC) {
+        !decl_is_named_fit_target(type_decl) || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return false;
     }
 
@@ -18730,6 +19648,14 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             free(target_name);
             return result;
         }
+        if (resolved->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return resolver_append_error(
+                context,
+                r->token,
+                format_message("type '%.*s' declared spec list can only contain object-form specs",
+                               (int)type_decl->as.type_decl.name.length,
+                               type_decl->as.type_decl.name.data));
+        }
         for (j = 0U; j < i; ++j) {
             const FengDecl *prev = resolve_type_ref_decl(context, type_decl->as.type_decl.declared_specs[j]);
 
@@ -18874,6 +19800,11 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                     format_message("fit spec '%s' could not be resolved",
                                    sname != NULL ? sname : "<unknown>"));
                 free(sname);
+            } else if (sd->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                spec_ok = resolver_append_error(
+                    context,
+                    sr != NULL ? sr->token : fit_decl->token,
+                    format_message("fit specs list can only contain object-form specs"));
             } else if (specs != NULL) {
                 specs[si] = sd;
             }
@@ -18960,6 +19891,12 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
             free(spec_name);
             return result;
+        }
+        if (resolved->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return resolver_append_error(
+                context,
+                r->token,
+                format_message("fit specs list can only contain object-form specs"));
         }
         for (j = 0U; j < i; ++j) {
             const FengDecl *prev = resolve_type_ref_decl(context, fit_decl->as.fit_decl.specs[j]);
@@ -19299,6 +20236,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             }
             if (ok && !validate_object_spec_member_kinds(context, decl)) {
                 ok = false;
+            }
+            if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                if (!record_normalized_union_spec_info(context, decl)) {
+                    ok = false;
+                }
+                if (ok) {
+                    ok = validate_abi_type_declaration(context, decl);
+                }
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                return ok;
             }
             if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 if (!resolve_type_ref(context, decl->as.spec_decl.as.callable.return_type, true)) {
@@ -20496,6 +21443,8 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->spec_relations);
     free(analysis->spec_coercion_sites);
+    feng_semantic_free_union_spec_infos(analysis);
+    free(analysis->union_coercion_sites);
     free(analysis->spec_default_bindings);
     free(analysis->spec_member_accesses);
     for (index = 0U; index < analysis->spec_witness_count; ++index) {

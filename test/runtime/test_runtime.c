@@ -596,8 +596,8 @@ typedef struct CycNode {
 } CycNode;
 
 static const FengManagedFieldDescriptor cyc_node_fields[] = {
-    { offsetof(CycNode, child_a), NULL },
-    { offsetof(CycNode, child_b), NULL },
+    { offsetof(CycNode, child_a), NULL, NULL },
+    { offsetof(CycNode, child_b), NULL, NULL },
 };
 
 static const FengTypeDescriptor cyc_node_descriptor = {

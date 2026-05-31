@@ -241,6 +241,33 @@ typedef struct FengSpecCoercionSite {
     const FengExpr *callable_lambda_expr;
 } FengSpecCoercionSite;
 
+/* Normalized member metadata for a union-form spec. The analyzer flattens
+ * nested union-form members, removes duplicates while preserving declaration
+ * order, and stores the resulting member list here for codegen and tooling.
+ * `type_ref` entries are owned by the semantic analysis object. */
+typedef struct FengUnionSpecMemberInfo {
+    const FengTypeRef *type_ref;
+    const FengDecl *resolved_decl;
+} FengUnionSpecMemberInfo;
+
+typedef struct FengUnionSpecInfo {
+    const FengDecl *spec_decl;
+    FengUnionSpecMemberInfo *members;
+    size_t member_count;
+} FengUnionSpecInfo;
+
+/* Records a value-flow site where expression `expr` is wrapped into a
+ * union-form spec and assigned one normalized active member. Exact member
+ * matches are preferred by the analyzer before spec-satisfaction matches, so
+ * codegen can trust `member_index` as the tag to emit. */
+typedef struct FengUnionCoercionSite {
+    const FengExpr *expr;
+    const FengDecl *target_union_decl;
+    const FengTypeRef *target_union_type_ref;
+    size_t member_index;
+    const FengTypeRef *member_type_ref;
+} FengUnionCoercionSite;
+
 typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
     size_t module_count;
@@ -263,6 +290,12 @@ typedef struct FengSemanticAnalysis {
     FengSpecCoercionSite *spec_coercion_sites;
     size_t spec_coercion_site_count;
     size_t spec_coercion_site_capacity;
+    FengUnionSpecInfo *union_spec_infos;
+    size_t union_spec_info_count;
+    size_t union_spec_info_capacity;
+    FengUnionCoercionSite *union_coercion_sites;
+    size_t union_coercion_site_count;
+    size_t union_coercion_site_capacity;
     struct FengSpecDefaultBinding *spec_default_bindings;
     size_t spec_default_binding_count;
     size_t spec_default_binding_capacity;
@@ -440,6 +473,34 @@ bool feng_semantic_record_abi_function_pointer_site(
 const FengSpecCoercionSite *feng_semantic_lookup_spec_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
+
+/* --- Union-form spec metadata ---------------------------------------- */
+
+/* Takes ownership of `members` and each member's `type_ref`. Re-recording the
+ * same `spec_decl` replaces the previous member list. */
+bool feng_semantic_record_union_spec_info(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *spec_decl,
+    FengUnionSpecMemberInfo *members,
+    size_t member_count);
+
+const FengUnionSpecInfo *feng_semantic_lookup_union_spec_info(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *spec_decl);
+
+bool feng_semantic_record_union_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *target_union_decl,
+    const FengTypeRef *target_union_type_ref,
+    size_t member_index,
+    const FengTypeRef *member_type_ref);
+
+const FengUnionCoercionSite *feng_semantic_lookup_union_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr);
+
+void feng_semantic_free_union_spec_infos(FengSemanticAnalysis *analysis);
 
 /* --- SpecDefaultBinding (Phase S2-a, §6.3 / §9.3) --------------------- */
 

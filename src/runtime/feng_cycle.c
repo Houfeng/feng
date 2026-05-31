@@ -307,11 +307,23 @@ static void cyc_for_each_child(FengManagedHeader *header,
             const FengTypeDescriptor *desc = header->desc;
             for (size_t i = 0U; i < desc->managed_field_count; ++i) {
                 size_t off = desc->managed_fields[i].offset;
-                FengManagedHeader **slot =
-                    (FengManagedHeader **)((char *)header + off);
-                FengManagedHeader *child = *slot;
-                if (child != NULL) {
-                    visit(child, ctx);
+                if (desc->managed_fields[i].aggregate_desc != NULL) {
+                    struct {
+                        void (*visit)(FengManagedHeader *child, void *ctx);
+                        void *ctx;
+                    } bridge = { visit, ctx };
+                    cyc_aggregate_for_each_pointer_slot(
+                        (unsigned char *)header + off,
+                        desc->managed_fields[i].aggregate_desc,
+                        cyc_visit_pointer_only,
+                        &bridge);
+                } else {
+                    FengManagedHeader **slot =
+                        (FengManagedHeader **)((char *)header + off);
+                    FengManagedHeader *child = *slot;
+                    if (child != NULL) {
+                        visit(child, ctx);
+                    }
                 }
             }
             break;
