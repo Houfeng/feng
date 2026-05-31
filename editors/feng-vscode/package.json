@@ -14,6 +14,8 @@
     "vscode": "^1.85.0"
   },
   "activationEvents": [
+    "onLanguage:feng",
+    "onCommand:feng.restartLanguageServer",
     "onDebugResolve:feng",
     "onDebugInitialConfigurations",
     "onTaskType:feng"
@@ -115,7 +117,7 @@
         "editor.quickSuggestions": {
           "other": true,
           "comments": false,
-          "strings": false
+          "strings": true
         },
         "editor.suggestOnTriggerCharacters": true
       }
