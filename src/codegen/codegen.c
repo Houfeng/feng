@@ -9120,6 +9120,74 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         return false;
     }
 
+    if (field->type != NULL && field->type->kind == CG_TYPE_GENERIC_PARAM) {
+        size_t gp_index = field->type->generic_param_index;
+        const char *desc = cg_generic_param_desc_name(cg, gp_index);
+        char *slot_tmp = NULL;
+        char *src_tmp = NULL;
+
+        if (desc == NULL) {
+            return cg_fail(cg,
+                           blame,
+                           "codegen: missing generic descriptor for tuple field '%s'",
+                           field->feng_name);
+        }
+        if (value->type == NULL || value->type->kind != CG_TYPE_GENERIC_PARAM ||
+            value->type->generic_param_index != gp_index) {
+            return cg_fail(cg,
+                           blame,
+                           "codegen: tuple field '%s' generic initializer type mismatch",
+                           field->feng_name);
+        }
+
+        slot_tmp = cg_fresh_temp(cg, "_gslot");
+        src_tmp = cg_fresh_temp(cg, "_gsrc");
+        if (slot_tmp == NULL || src_tmp == NULL) {
+            free(slot_tmp);
+            free(src_tmp);
+            return cg_fail(cg, blame, "codegen: out of memory");
+        }
+
+        buf_append_fmt(cg->cur_body,
+                       "    void *%s = (void *)&%s.%s;\n"
+                       "    const void *%s = %s;\n"
+                       "    switch (%s->kind) {\n"
+                       "        case FENG_VALUE_TRIVIAL:\n"
+                       "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+                       "            break;\n"
+                       "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                       "            void *_new_value = *(void *const *)%s;\n"
+                       "            if (!%s) {\n"
+                       "                feng_retain(_new_value);\n"
+                       "            }\n"
+                       "            *(void **)%s = _new_value;\n"
+                       "            break;\n"
+                       "        }\n"
+                       "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                       "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
+                       "            break;\n"
+                       "    }\n",
+                       slot_tmp,
+                       tuple_expr,
+                       field->c_name,
+                       src_tmp,
+                       value->c_expr,
+                       desc,
+                       slot_tmp,
+                       src_tmp,
+                       desc,
+                       src_tmp,
+                       value->owns_ref ? "true" : "false",
+                       slot_tmp,
+                       slot_tmp,
+                       src_tmp,
+                       desc);
+
+        free(slot_tmp);
+        free(src_tmp);
+        return true;
+    }
+
     if (cgtype_is_managed(field->type)) {
         if (value->owns_ref) {
             buf_append_fmt(cg->cur_body,
@@ -9243,10 +9311,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
     free(cty);
-
-    if (item_count == 0U) {
-        buf_append_fmt(cg->cur_body, "    memset(&%s, 0, sizeof %s);\n", tmp, tmp);
-    }
+    buf_append_fmt(cg->cur_body, "    memset(&%s, 0, sizeof %s);\n", tmp, tmp);
 
     for (size_t i = 0; i < item_count; ++i) {
         ExprResult value;

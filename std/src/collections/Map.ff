@@ -2,13 +2,11 @@ open module std.collections;
 
 /**
  * A map entity stores one key-value pair.
+ * `item1` is key and `item2` is value.
  * @param <K> - the key type
  * @param <V> - the value type
  */
-open type MapEntity<K, V> {
-  let key: K;
-  let value: V;
-}
+open type MapEntity<K, V>(K, V);
 
 /**
  * A map is a collection of key-value pairs
@@ -20,7 +18,7 @@ open type MapEntity<K, V> {
  * - Average O(1) for get/set/remove/has under normal hash distribution.
  * - Collisions are resolved by probing and `same` key comparison.
  * - `get` returns the default zero value of `V` when key is missing.
- * - `entities` returns an immutable dense array of occupied entries.
+ * - `entries` returns an immutable dense array of occupied entries.
  */
 open type Map<K: Hashable<K>, V> {
   // Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
@@ -243,7 +241,7 @@ open type Map<K: Hashable<K>, V> {
     var outputIndex: i32 = 0;
     for var i: i32 = 0; i < self.capacity; i = i + 1 {
       if self.states[i] == 1 {
-        items[outputIndex] = MapEntity<K, V>() { key: self.keys[i], value: self.values[i] };
+        items[outputIndex] = (self.keys[i], self.values[i]);
         outputIndex = outputIndex + 1;
       }
     }

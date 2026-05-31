@@ -1034,6 +1034,7 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
         case FENG_SYMBOL_DECL_KIND_TYPE:
             synth_decl->decl.kind = FENG_DECL_TYPE;
             synth_decl->decl.as.type_decl.name = name;
+            synth_decl->decl.as.type_decl.is_tuple = symbol_decl->is_tuple;
             synth_decl->decl.as.type_decl.type_params =
                 synthesize_type_params(symbol_decl, &synth_decl->decl.as.type_decl.type_param_count);
             if (symbol_decl->type_param_count > 0U &&

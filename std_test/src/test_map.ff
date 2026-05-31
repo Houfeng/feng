@@ -86,6 +86,25 @@ func map_count() {
   check(m.count() == 2, "map/count-after-remove");
 }
 
+func map_entries_tuple_entity() {
+  let m = Map<IntKey, i32>();
+  m.set(IntKey { value: 11 }, 22);
+  let ents = m.entries();
+  var seen: i32 = 0;
+  for let _ in ents {
+    seen = seen + 1;
+  }
+  check(seen == 1, "map/entries-len");
+
+  var found: bool = false;
+  for let ent in ents {
+    if ent.item1.value == 11 && ent.item2 == 22 {
+      found = true;
+    }
+  }
+  check(found, "map/entries-item");
+}
+
 open func run_map_tests() {
   map_set_get();
   map_get_missing_default();
@@ -96,4 +115,5 @@ open func run_map_tests() {
   map_remove_absent();
   map_multiple_keys();
   map_count();
+  map_entries_tuple_entity();
 }

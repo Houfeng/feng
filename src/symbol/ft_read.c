@@ -784,6 +784,7 @@ static bool parse_symbols(ReadContext *ctx,
         decl->is_extern = (flags & FENG_SYMBOL_FT_SYM_FLAG_EXTERN) != 0U;
         decl->bounded_decl = (flags & FENG_SYMBOL_FT_SYM_FLAG_BOUNDED_DECL) != 0U;
         decl->has_doc = (flags & FENG_SYMBOL_FT_SYM_FLAG_HAS_DOC) != 0U;
+        decl->is_tuple = (flags & FENG_SYMBOL_FT_SYM_FLAG_TUPLE_DECL) != 0U;
         decl->name = feng_symbol_internal_dup_cstr(string_at(ctx, name_str));
         decl->path = ctx->module != NULL && ctx->module->primary_path != NULL
                          ? feng_symbol_internal_dup_cstr(ctx->module->primary_path)

@@ -93,6 +93,7 @@ struct FengSymbolDeclView {
     size_t enum_item_ordinal;
     bool has_enum_item_value;
     size_t type_param_count;  /* number of generic type parameters (TYPE_PARAM children) */
+    bool is_tuple;
 };
 
 typedef struct FengSymbolRelation {

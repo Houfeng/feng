@@ -702,6 +702,9 @@ static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     if (decl->has_doc && decl->doc != NULL && decl->doc[0] != '\0') {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_HAS_DOC;
     }
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_tuple) {
+        flags |= FENG_SYMBOL_FT_SYM_FLAG_TUPLE_DECL;
+    }
     return flags;
 }
 

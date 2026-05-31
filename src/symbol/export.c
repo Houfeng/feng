@@ -1989,6 +1989,13 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
             ? FENG_VISIBILITY_PUBLIC
             : member->visibility;
 
+    if (owner_source_decl != NULL &&
+        owner_source_decl->kind == FENG_DECL_TYPE &&
+        owner_source_decl->as.type_decl.is_tuple &&
+        member_visibility == FENG_VISIBILITY_DEFAULT) {
+        member_visibility = owner_source_decl->visibility;
+    }
+
     switch (member->kind) {
         case FENG_TYPE_MEMBER_FIELD:
             decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_FIELD,
@@ -2175,6 +2182,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
+            decl->is_tuple = source_decl->as.type_decl.is_tuple;
             if (!fill_declared_specs(decl,
                                      (const FengTypeRef *const *)source_decl->as.type_decl.declared_specs,
                                      source_decl->as.type_decl.declared_spec_count,
