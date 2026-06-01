@@ -1,1 +1,10 @@
 open module std;
+
+/**
+ * An error.
+ */
+open type Error {
+  let name: string;
+  let message: string;
+  let origin: Option<Error>;
+}
