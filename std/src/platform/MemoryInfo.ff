@@ -16,7 +16,7 @@ extern func uv_get_constrained_memory(): u64;
 extern func uv_resident_set_memory(rss: u64*): int;
 
 /**
- * Provides memory queries backed by `libuv`.
+ * Provides memory queries.
  */
 open type MemoryInfo {
   /**

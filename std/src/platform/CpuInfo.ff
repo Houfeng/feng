@@ -4,11 +4,11 @@ open module std.platform;
 extern func uv_available_parallelism(): int;
 
 /**
- * Provides CPU topology queries backed by `libuv`.
+ * Provides CPU topology queries.
  */
 open type CpuInfo {
   /**
-   * Returns the available parallelism reported by `libuv`.
+   * Returns the available parallelism.
    */
   open static func availableParallelism(): u32 {
     let parallelism = uv_available_parallelism();

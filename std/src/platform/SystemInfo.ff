@@ -13,7 +13,7 @@ extern func uv_os_getpid(): long;
 extern func uv_os_getppid(): long;
 
 /**
- * Provides process and host queries backed by `libuv`.
+ * Provides process and host queries.
  */
 open type SystemInfo {
   /**
