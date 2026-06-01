@@ -948,6 +948,14 @@ bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->is_extern;
 }
 
+FengAnnotationKind feng_symbol_decl_calling_convention(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->calling_convention : FENG_ANNOTATION_NONE;
+}
+
+const char *feng_symbol_decl_abi_library(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->abi_library : NULL;
+}
+
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->bounded_decl;
 }

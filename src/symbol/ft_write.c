@@ -645,6 +645,9 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
     return profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE ||
            (decl != NULL &&
             (decl->visibility == FENG_VISIBILITY_PUBLIC ||
+             (decl->kind == FENG_SYMBOL_DECL_KIND_FUNCTION &&
+              decl->is_extern &&
+              decl->calling_convention != FENG_ANNOTATION_NONE) ||
              decl->kind == FENG_SYMBOL_DECL_KIND_FIELD));
 }
 

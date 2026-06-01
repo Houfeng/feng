@@ -109,6 +109,8 @@ FengToken feng_symbol_decl_token(const FengSymbolDeclView *decl);
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl);
 FengMutability feng_symbol_decl_mutability(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl);
+FengAnnotationKind feng_symbol_decl_calling_convention(const FengSymbolDeclView *decl);
+const char *feng_symbol_decl_abi_library(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl);

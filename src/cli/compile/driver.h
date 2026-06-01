@@ -14,10 +14,11 @@
  *      via FENG_RUNTIME_INCLUDE / FENG_RUNTIME_LIB environment variables
  *      or by probing paths relative to the running `feng` executable.
  *   2. Mine `extern fn` calling-convention annotations (`@cdecl`,
- *      `@stdcall`, `@fastcall`) across all programs to derive additional
- *      `-l<lib>` link flags. The reserved library name "libc" / "c" is
- *      skipped because it is implicit on POSIX hosts. Other names have a
- *      leading "lib" prefix stripped.
+ *      `@stdcall`, `@fastcall`) across all current programs and flattened
+ *      package `.ft` surfaces to derive additional `-l<lib>` link flags.
+ *      The reserved library name "libc" / "c" is skipped because it is
+ *      implicit on POSIX hosts. Other names have a leading "lib" prefix
+ *      stripped.
  *   3. For `bin`, spawn ${CC:-cc} with a fixed compiler flag set, the
  *      generated C source, the runtime archive, `-lpthread`, the
  *      derived link flags, and any explicit `--lib` inputs from direct

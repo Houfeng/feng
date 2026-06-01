@@ -363,6 +363,12 @@ static char *path_join(const char *lhs, const char *rhs) {
     return out;
 }
 
+static bool dir_exists(const char *path) {
+    struct stat st;
+
+    return path != NULL && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 static char *path_dirname_dup(const char *path) {
     const char *slash = strrchr(path, '/');
 
@@ -1613,6 +1619,7 @@ static bool build_local_project_bundle(const char *program,
     char *library_path = NULL;
     char *debug_fd_path = NULL;
     char *public_mod_root = NULL;
+    char *extlib_root = NULL;
     char *fb_error = NULL;
     int rc;
 
@@ -1646,6 +1653,10 @@ static bool build_local_project_bundle(const char *program,
                           0U,
                           "failed to build local dependency project");
     }
+    if (!feng_cli_project_stage_assets(&context, error)) {
+        feng_cli_project_context_dispose(&context);
+        return false;
+    }
 
     host_library_name = feng_fb_host_static_library_file_name(context.manifest.name);
     if (host_library_name == NULL) {
@@ -1668,17 +1679,25 @@ static bool build_local_project_bundle(const char *program,
         debug_fd_path = dup_printf("%s.fd", library_path);
     }
     public_mod_root = dup_printf("%s/mod", context.out_root);
-    if (library_path == NULL || public_mod_root == NULL || (!release && debug_fd_path == NULL)) {
+    extlib_root = dup_printf("%s/extlib", context.out_root);
+    if (library_path == NULL || public_mod_root == NULL || extlib_root == NULL ||
+        (!release && debug_fd_path == NULL)) {
         free(host_library_name);
         free(debug_fd_path);
+        free(extlib_root);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
     }
+    if (!dir_exists(extlib_root)) {
+        free(extlib_root);
+        extlib_root = NULL;
+    }
     if (!release && access(debug_fd_path, F_OK) != 0) {
         free(host_library_name);
         free(debug_fd_path);
+        free(extlib_root);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1694,6 +1713,7 @@ static bool build_local_project_bundle(const char *program,
                                                      error)) {
         free(host_library_name);
         free(debug_fd_path);
+        free(extlib_root);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1707,6 +1727,7 @@ static bool build_local_project_bundle(const char *program,
     spec.dependencies = (const FengFbBundleDependency *)direct_dependencies;
     spec.dependency_count = direct_dependency_count;
     spec.public_mod_root = public_mod_root;
+    spec.extlib_root = extlib_root;
 
     if (!feng_fb_write_library_bundle(&spec, &fb_error)) {
         bool ok = set_errorf(error,
@@ -1718,6 +1739,7 @@ static bool build_local_project_bundle(const char *program,
         feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
         free(host_library_name);
         free(debug_fd_path);
+        free(extlib_root);
         free(public_mod_root);
         free(library_path);
         feng_cli_project_context_dispose(&context);
@@ -1728,6 +1750,7 @@ static bool build_local_project_bundle(const char *program,
     free(fb_error);
     feng_cli_deps_manifest_dependency_list_dispose(direct_dependencies, direct_dependency_count);
     free(host_library_name);
+    free(extlib_root);
     free(public_mod_root);
     free(library_path);
     feng_cli_project_context_dispose(&context);

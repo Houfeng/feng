@@ -84,7 +84,7 @@ extern func ssl_connect(fd: int): int;
 编译器根据公开 `.ft` 中的声明事实与 `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定当前平台可用的链接目标:
 
 - 普通 `open type` / `open func` / `open let` / `open var` 声明 → 链接 `lib/` 下对应平台正式静态库; 当前平台文件名规则固定为 Linux / macOS 使用 `lib<name>.a`,Windows 使用 `<name>.lib`
-- 公开 `extern func` 导入声明 → 从当前源码与导入包公开 `.ft` 的 `extern` 元信息中收集原生库名; 若某个 `--pkg` 包在 `extlib/<当前平台>/` 下携带了与该库名匹配的主机静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
+- `extern func` 导入声明 → 从当前源码与导入包公开 `.ft` 携带的 `extern` 链接事实中收集原生库名; 导入包 `.ft` 可以携带非公开 `extern` 的链接事实,这类事实只参与链接信息收集,不作为用户可见 API 导入。若某个 `--pkg` 包在 `extlib/<当前平台>/` 下携带了与该库名匹配的主机静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
 
 上述自动收集结果与显式 `--lib` 参数最终汇总后统一传递给底层 C 链接器。`--lib` 在 `target=bin` 的最终链接步骤生效; `target=lib` 只生成对象并归档,不会在该阶段闭合原生依赖。
 
@@ -104,7 +104,7 @@ extern func ssl_connect(fd: int): int;
 说明:
 
 - 编译器不定义额外的运行时动态库发现机制。
-- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中收集到的 `extern func` 库名,仅从传入的平铺 `.fb` 中筛出当前平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
+- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中携带的 `extern` 链接事实收集库名,仅从传入的平铺 `.fb` 中筛出当前平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
 - 运行期释放只处理 `.fb/extlib/<当前平台>/` 下与已收集库名精确命中的动态库后缀（Linux `lib<name>.so`、macOS `lib<name>.dylib`、Windows `<name>.dll`）；未命中的动态库、`extlib/` 中的静态库（`.a` / `.lib`）与 `.fb/lib/<平台>/` 中的正式静态库都不参与运行期释放。
 - 若多个依赖包在当前平台提供同名动态库,构建应报错,避免在可执行文件目录中发生静默覆盖。
 
@@ -187,7 +187,7 @@ feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.
 
 1. 在语义分析成功后导出 `build/mod/**/*.ft` 公开符号表
 2. 调用编译器将普通 `type` / `func` / 模块级 `let` / `var` 实现编译为静态库，放入 `lib/` 对应平台目录（若 `abi` 含 `feng`）
-3. 汇总公开 `extern func` 导入声明并保留其原生库来源与调用方式元信息
+3. 汇总需要参与链接的 `extern func` 声明并保留其原生库来源与调用方式元信息
 4. 补全 `feng.fm`（填写 `abi`、`arch` 等字段）
 5. 直接复用 `build/mod/**/*.ft`、正式库文件、可选 `build/extlib/` 目录树（包含 `[assets].extlib` 直接 staging 的内容）与 `build/assets/` 中其余 `[assets]` staging 目录打包为 `.fb` ZIP 归档
 

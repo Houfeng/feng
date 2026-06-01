@@ -21,6 +21,7 @@
 #include "archive/zip.h"
 #include "parser/parser.h"
 #include "symbol/ft.h"
+#include "symbol/provider.h"
 #include "symbol/symbol.h"
 
 /* --- small helpers ------------------------------------------------------- */
@@ -223,6 +224,9 @@ typedef struct BundleScanInfo {
     char **uses;
     size_t use_count;
     size_t use_capacity;
+    char **abi_libraries;
+    size_t abi_library_count;
+    size_t abi_library_capacity;
 } BundleScanInfo;
 
 typedef struct BundleExtlibMatch {
@@ -276,6 +280,7 @@ static void bundle_scan_info_dispose(BundleScanInfo *info) {
     free(info->library_entry_path);
     free_string_array(info->module_names, info->module_count);
     free_string_array(info->uses, info->use_count);
+    free_string_array(info->abi_libraries, info->abi_library_count);
     memset(info, 0, sizeof(*info));
 }
 
@@ -429,6 +434,120 @@ static char *module_name_from_entry_path(const char *entry_path) {
     return out;
 }
 
+static bool annotation_kind_is_link_calling_convention(FengAnnotationKind kind) {
+    return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL
+           || kind == FENG_ANNOTATION_FASTCALL;
+}
+
+static char *decode_raw_string_literal(const char *text) {
+    size_t length;
+    char *out;
+    size_t out_index = 0U;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    length = strlen(text);
+    if (length < 2U || text[0] != '"' || text[length - 1U] != '"') {
+        return str_dup_cstr(text);
+    }
+    out = (char *)malloc(length);
+    if (out == NULL) {
+        return NULL;
+    }
+    for (size_t index = 1U; index + 1U < length; ++index) {
+        char ch = text[index];
+
+        if (ch == '\\' && index + 2U < length) {
+            char escaped = text[++index];
+
+            switch (escaped) {
+                case '\\':
+                    out[out_index++] = '\\';
+                    break;
+                case '"':
+                    out[out_index++] = '"';
+                    break;
+                default:
+                    out[out_index++] = escaped;
+                    break;
+            }
+            continue;
+        }
+        out[out_index++] = ch;
+    }
+    out[out_index] = '\0';
+    return out;
+}
+
+static bool collect_graph_abi_libraries(const FengSymbolGraph *graph,
+                                        BundleScanInfo *info,
+                                        char **out_error_message) {
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError symbol_error = {0};
+    size_t module_index;
+    bool ok = false;
+
+    if (!feng_symbol_provider_create(&provider, &symbol_error)) {
+        set_errorf(out_error_message,
+                   "failed to prepare symbol provider for package link facts: %s",
+                   symbol_error.message != NULL ? symbol_error.message : "unknown error");
+        goto done;
+    }
+    if (!feng_symbol_provider_add_graph(provider, graph, &symbol_error)) {
+        set_errorf(out_error_message,
+                   "failed to read package link facts: %s",
+                   symbol_error.message != NULL ? symbol_error.message : "unknown error");
+        goto done;
+    }
+
+    for (module_index = 0U;
+         module_index < feng_symbol_provider_module_count(provider);
+         ++module_index) {
+        const FengSymbolImportedModule *module = feng_symbol_provider_module_at(provider, module_index);
+        size_t decl_index;
+
+        for (decl_index = 0U;
+             decl_index < feng_symbol_module_decl_count(module);
+             ++decl_index) {
+            const FengSymbolDeclView *decl = feng_symbol_module_decl_at(module, decl_index);
+            const char *raw_library;
+            char *library;
+
+            if (feng_symbol_decl_kind(decl) != FENG_SYMBOL_DECL_KIND_FUNCTION ||
+                !feng_symbol_decl_is_extern(decl) ||
+                !annotation_kind_is_link_calling_convention(
+                    feng_symbol_decl_calling_convention(decl))) {
+                continue;
+            }
+            raw_library = feng_symbol_decl_abi_library(decl);
+            if (raw_library == NULL || raw_library[0] == '\0') {
+                continue;
+            }
+            library = decode_raw_string_literal(raw_library);
+            if (library == NULL) {
+                set_errorf(out_error_message, "out of memory");
+                goto done;
+            }
+            if (!string_array_push_unique(&info->abi_libraries,
+                                          &info->abi_library_count,
+                                          &info->abi_library_capacity,
+                                          library,
+                                          out_error_message)) {
+                free(library);
+                goto done;
+            }
+            free(library);
+        }
+    }
+    ok = true;
+
+done:
+    feng_symbol_error_free(&symbol_error);
+    feng_symbol_provider_free(provider);
+    return ok;
+}
+
 static bool scan_bundle_dependencies(const char *bundle_path,
                                      const char *host_target,
                                      BundleScanInfo *out_info,
@@ -562,6 +681,15 @@ static bool scan_bundle_dependencies(const char *bundle_path,
                         return false;
                     }
                 }
+            }
+
+            if (!collect_graph_abi_libraries(graph, out_info, out_error_message)) {
+                feng_symbol_graph_free(graph);
+                feng_zip_free(data);
+                free(source_name);
+                free(module_name);
+                feng_zip_reader_dispose(&reader);
+                return false;
             }
 
             feng_symbol_graph_free(graph);
@@ -790,11 +918,46 @@ static bool extract_sorted_bundle_libraries(const BundleScanInfo *bundles,
     return true;
 }
 
+static bool collect_scanned_bundle_abi_libraries(const BundleScanInfo *bundles,
+                                                 size_t bundle_count,
+                                                 char ***out_libraries,
+                                                 size_t *out_library_count,
+                                                 char **out_error_message) {
+    char **libraries = NULL;
+    size_t library_count = 0U;
+    size_t library_capacity = 0U;
+
+    *out_libraries = NULL;
+    *out_library_count = 0U;
+    for (size_t bundle_index = 0U; bundle_index < bundle_count; ++bundle_index) {
+        const BundleScanInfo *bundle = &bundles[bundle_index];
+
+        for (size_t library_index = 0U;
+             library_index < bundle->abi_library_count;
+             ++library_index) {
+            if (!string_array_push_unique(&libraries,
+                                          &library_count,
+                                          &library_capacity,
+                                          bundle->abi_libraries[library_index],
+                                          out_error_message)) {
+                free_string_array(libraries, library_count);
+                return false;
+            }
+        }
+    }
+
+    *out_libraries = libraries;
+    *out_library_count = library_count;
+    return true;
+}
+
 static bool collect_bundle_link_libraries(const char *const *bundle_paths,
                                           size_t bundle_count,
                                           const char *host_target,
                                           char ***out_library_paths,
                                           size_t *out_library_count,
+                                          char ***out_abi_libraries,
+                                          size_t *out_abi_library_count,
                                           char **out_temp_dir,
                                           char **out_error_message) {
     BundleScanInfo *bundles;
@@ -818,6 +981,13 @@ static bool collect_bundle_link_libraries(const char *const *bundle_paths,
     if (!topo_sort_bundles(bundles, bundle_count, &order, out_error_message)) {
         goto done;
     }
+    if (!collect_scanned_bundle_abi_libraries(bundles,
+                                              bundle_count,
+                                              out_abi_libraries,
+                                              out_abi_library_count,
+                                              out_error_message)) {
+        goto done;
+    }
     if (!extract_sorted_bundle_libraries(bundles,
                                          bundle_count,
                                          order,
@@ -825,6 +995,9 @@ static bool collect_bundle_link_libraries(const char *const *bundle_paths,
                                          out_library_count,
                                          out_temp_dir,
                                          out_error_message)) {
+        free_string_array(*out_abi_libraries, *out_abi_library_count);
+        *out_abi_libraries = NULL;
+        *out_abi_library_count = 0U;
         goto done;
     }
 
@@ -1434,9 +1607,33 @@ static bool string_array_contains(char *const *arr, size_t count, const char *ne
     return false;
 }
 
-static bool annotation_kind_is_link_calling_convention(FengAnnotationKind kind) {
-    return kind == FENG_ANNOTATION_CDECL || kind == FENG_ANNOTATION_STDCALL
-           || kind == FENG_ANNOTATION_FASTCALL;
+/* Normalize one raw annotation library name and append it once. */
+static int append_unique_link_library(char ***libs,
+                                      size_t *count,
+                                      const char *raw_name) {
+    char *mapped;
+    char **grown;
+
+    if (libs == NULL || count == NULL) {
+        return -1;
+    }
+    mapped = map_library_name(raw_name);
+    if (mapped == NULL) {
+        return 0;
+    }
+    if (string_array_contains(*libs, *count, mapped)) {
+        free(mapped);
+        return 0;
+    }
+    grown = realloc(*libs, (*count + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        free(mapped);
+        return -1;
+    }
+    grown[*count] = mapped;
+    *libs = grown;
+    *count += 1U;
+    return 0;
 }
 
 /* Returns 0 on success, -1 on allocation failure. */
@@ -1446,7 +1643,6 @@ static int collect_link_libs(const FengProgram *const *programs,
                              size_t *out_count) {
     *out_libs = NULL;
     *out_count = 0;
-    size_t cap = 0;
     char **libs = NULL;
     for (size_t pi = 0; pi < program_count; ++pi) {
         const FengProgram *prog = programs[pi];
@@ -1461,26 +1657,13 @@ static int collect_link_libs(const FengProgram *const *programs,
                 if (ann->arg_count < 1U) continue;
                 char *raw = decode_string_literal(ann->args[0]);
                 if (raw == NULL) continue;
-                char *mapped = map_library_name(raw);
+                int append_rc = append_unique_link_library(&libs, out_count, raw);
                 free(raw);
-                if (mapped == NULL) continue;
-                if (string_array_contains(libs, *out_count, mapped)) {
-                    free(mapped);
-                    continue;
+                if (append_rc != 0) {
+                    for (size_t k = 0; k < *out_count; ++k) free(libs[k]);
+                    free(libs);
+                    return -1;
                 }
-                if (*out_count == cap) {
-                    size_t new_cap = cap == 0U ? 4U : cap * 2U;
-                    char **new_libs = realloc(libs, new_cap * sizeof(*libs));
-                    if (new_libs == NULL) {
-                        free(mapped);
-                        for (size_t k = 0; k < *out_count; ++k) free(libs[k]);
-                        free(libs);
-                        return -1;
-                    }
-                    libs = new_libs;
-                    cap = new_cap;
-                }
-                libs[(*out_count)++] = mapped;
             }
         }
     }
@@ -1580,13 +1763,15 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *host_target = NULL;
     char *bundle_error = NULL;
     char *bundle_temp_dir = NULL;
-        char *bundle_extlib_temp_dir = NULL;
+    char *bundle_extlib_temp_dir = NULL;
     char **bundle_libs = NULL;
-        char **bundle_extlib_static_libs = NULL;
-        char **bundle_extlib_satisfied_libs = NULL;
+    char **bundle_abi_libs = NULL;
+    char **bundle_extlib_static_libs = NULL;
+    char **bundle_extlib_satisfied_libs = NULL;
     size_t bundle_lib_count = 0U;
-        size_t bundle_extlib_static_lib_count = 0U;
-        size_t bundle_extlib_satisfied_lib_count = 0U;
+    size_t bundle_abi_lib_count = 0U;
+    size_t bundle_extlib_static_lib_count = 0U;
+    size_t bundle_extlib_satisfied_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         runtime_lib = locate_runtime_lib(opts->program_path);
         if (runtime_lib == NULL) {
@@ -1620,6 +1805,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                host_target,
                                                &bundle_libs,
                                                &bundle_lib_count,
+                                               &bundle_abi_libs,
+                                               &bundle_abi_lib_count,
                                                &bundle_temp_dir,
                                                &bundle_error)) {
                 fprintf(stderr,
@@ -1639,6 +1826,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (opts->target == FENG_COMPILE_TARGET_BIN
         && collect_link_libs(opts->programs, opts->program_count, &libs, &lib_count) != 0) {
         fprintf(stderr, "error: out of memory collecting link libraries\n");
+        free_string_array(bundle_abi_libs, bundle_abi_lib_count);
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
@@ -1646,6 +1834,23 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free(runtime_lib);
         free(include_dir);
         return 1;
+    }
+    if (opts->target == FENG_COMPILE_TARGET_BIN) {
+        for (size_t index = 0U; index < bundle_abi_lib_count; ++index) {
+            if (append_unique_link_library(&libs, &lib_count, bundle_abi_libs[index]) != 0) {
+                fprintf(stderr, "error: out of memory collecting package link libraries\n");
+                for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
+                free(libs);
+                free_string_array(bundle_abi_libs, bundle_abi_lib_count);
+                free_string_array(bundle_libs, bundle_lib_count);
+                remove_tree(bundle_temp_dir);
+                free(bundle_temp_dir);
+                free(host_target);
+                free(runtime_lib);
+                free(include_dir);
+                return 1;
+            }
+        }
     }
     if (opts->target == FENG_COMPILE_TARGET_BIN
         && opts->bundle_count > 0U
@@ -1667,6 +1872,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free(bundle_error);
         for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
         free(libs);
+        free_string_array(bundle_abi_libs, bundle_abi_lib_count);
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
@@ -1699,6 +1905,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free(include_flag);
         for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
         free(libs);
+        free_string_array(bundle_abi_libs, bundle_abi_lib_count);
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
@@ -1862,8 +2069,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (!extract_bundle_runtime_dynamic_libraries(opts->bundle_paths,
                                                       opts->bundle_count,
                                                       host_target,
-                                  libs,
-                                  lib_count,
+                                                      libs,
+                                                      lib_count,
                                                       opts->out_path,
                                                       &bundle_error)) {
             fprintf(stderr,
@@ -1879,6 +2086,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     free_string_array(bundle_extlib_static_libs, bundle_extlib_static_lib_count);
     remove_tree(bundle_extlib_temp_dir);
     free(bundle_extlib_temp_dir);
+    free_string_array(bundle_abi_libs, bundle_abi_lib_count);
     free_string_array(bundle_libs, bundle_lib_count);
     remove_tree(bundle_temp_dir);
     free(bundle_temp_dir);

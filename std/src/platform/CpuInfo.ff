@@ -1,0 +1,21 @@
+open module std.platform;
+
+@cdecl("feng_std_uv", "uv_available_parallelism")
+extern func uv_available_parallelism(): int;
+
+/**
+ * Provides CPU topology queries backed by `libuv`.
+ */
+open type CpuInfo {
+  /**
+   * Returns the available parallelism reported by `libuv`.
+   */
+  open static func availableParallelism(): u32 {
+    let parallelism = uv_available_parallelism();
+    if parallelism <= 0 {
+      return (u32)1;
+    }
+
+    return (u32)parallelism;
+  }
+}

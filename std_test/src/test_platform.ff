@@ -1,0 +1,33 @@
+module std_test;
+
+import std.platform;
+
+func platform_system_info_tests() {
+  let _hostName = SystemInfo.hostName();
+  let _processId = SystemInfo.processId();
+  let _parentProcessId = SystemInfo.parentProcessId();
+
+  check(true, "platform/system-info/call");
+}
+
+func platform_memory_info_tests() {
+  let _totalBytes = MemoryInfo.totalBytes();
+  let _freeBytes = MemoryInfo.freeBytes();
+  let _availableBytes = MemoryInfo.availableBytes();
+  let _constrainedBytes = MemoryInfo.constrainedBytes();
+  let _residentBytes = MemoryInfo.residentBytes();
+
+  check(true, "platform/memory-info/call");
+}
+
+func platform_cpu_info_tests() {
+  let _parallelism = CpuInfo.availableParallelism();
+
+  check(true, "platform/cpu-info/call");
+}
+
+open func run_platform_tests() {
+  platform_system_info_tests();
+  platform_memory_info_tests();
+  platform_cpu_info_tests();
+}
