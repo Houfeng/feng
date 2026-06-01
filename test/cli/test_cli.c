@@ -6739,7 +6739,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     write_text_file(source_path,
                     "module demo;\n"
                     "\n"
-                    "import std;\n"
+                    "import std.io;\n"
                     "\n"
                     "let TEST_NAME: string = \"hello_world\";\n"
                     "\n"

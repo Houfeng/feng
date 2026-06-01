@@ -1,6 +1,6 @@
 module std_test;
 
-import std;
+import std.io;
 import std.text;
 
 func read_reads_into_buffer() {

@@ -1,7 +1,5 @@
 open module std.collections;
 
-import std;
-
 /**
  * Extends immutable arrays with read-only slicing operations.
  * @param <T> - the element type

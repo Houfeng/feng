@@ -1,4 +1,4 @@
-open module std;
+open module std.io;
 
 import std.collections;
 import std.text;

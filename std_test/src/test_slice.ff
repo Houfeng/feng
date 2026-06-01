@@ -1,6 +1,5 @@
 module std_test;
 
-import std;
 import std.collections;
 
 func array_clone_all_readonly() {

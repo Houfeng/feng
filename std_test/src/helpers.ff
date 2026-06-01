@@ -1,6 +1,5 @@
 module std_test;
 
-import std;
 import std.text;
 
 @cdecl("libc")

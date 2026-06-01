@@ -356,7 +356,7 @@ async function run() {
                      `std: "${stdRelativePath}"\n`)
     fs.writeFileSync(sourcePath,
                      'module hello_world;\n\n' +
-                     'import std;\n\n' +
+                     'import std.io;\n\n' +
                      'func main(args: string[]) {\n' +
                      '  for var i = 1; i <= 1000; i += 1 {\n' +
                      '    println("Hello, world!");\n' +

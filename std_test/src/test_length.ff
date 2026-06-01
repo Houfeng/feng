@@ -1,6 +1,5 @@
 module std_test;
 
-import std;
 import std.collections;
 import std.text;
 
