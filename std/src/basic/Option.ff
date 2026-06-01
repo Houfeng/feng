@@ -1,12 +1,14 @@
 open module std;
 
 /**
- * None 类型，不占用任何内存空间，表示没有值。
- * 在 Feng 中没有 Null，通过 None 类型配合联合类型来表示可能没有值的情况。
- * 建议将 None 放在联合类型的开头，能让默认零值不占内存空间，开销更小。
- * 示例：
+ * The None type occupies no memory space and represents the absence of a value.
+ * Feng has no Null; instead, None combined with union types expresses the possibility
+ * of no value. It is recommended to place None at the beginning of a union type so
+ * that the default zero value occupies no memory, resulting in lower overhead.
+ *
+ * Example:
  * ```
- * spec OptionType = None | Type;
+ * spec OptionType: None | Type;
  * let value: OptionType = ...;
  * if value {
  *   Type { ... }
@@ -17,8 +19,9 @@ open module std;
 open type None();
 
 /**
- * Option 联合类型，表示可能没有值。
- * 示例：
+ * The Option union type represents a value that may or may not be present.
+ *
+ * Example:
  * ```
  * let value: Option<Type> = ...;
  * if value {
