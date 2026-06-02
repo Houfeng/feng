@@ -144,8 +144,8 @@ seal func compilePattern(pattern: string, flags: u32): long {
     flags, &errorcode, &erroroffset, (long)0
   );
   if compiled == (long)0 {
-    pcre2_get_error_message(errorcode, &buf, (long)256);
-    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf);
+    let msgLen = pcre2_get_error_message(errorcode, &buf, (long)256);
+    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf, (long)msgLen);
   }
   return compiled;
 }
@@ -393,7 +393,7 @@ open type RegExp {
     if rc == -1 {
       return subject.clone();
     }
-    return string.fromUtf8Bytes((byte[])outBuf);
+    return string.fromUtf8Bytes((byte[])outBuf, actualLen);
   }
 
   /**

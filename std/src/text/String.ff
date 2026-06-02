@@ -49,6 +49,16 @@ open fit string {
   }
 
   /**
+   * Returns a new string by copying the first `length` bytes from `bytes`.
+   * @param bytes - UTF-8 byte sequence to copy from
+   * @param length - number of bytes to copy
+   * @return string containing the copied bytes
+   */
+  open static func fromUtf8Bytes(bytes: byte[], length: long): string {
+    return feng_string_from_utf8_bytes(bytes, length);
+  }
+
+  /**
    * Returns the UTF-8 byte length of this string.
    * @return number of bytes in this string
    */

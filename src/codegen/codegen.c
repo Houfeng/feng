@@ -25244,6 +25244,10 @@ static void cg_emit_string_literal_table(CG *cg) {
     }
 }
 
+/* Emit the assignment statements that initialise this unit's string-literal
+ * slots into the given function body. Original behaviour: previously inlined
+ * into `main()`; now reused by cg_emit_string_literal_ctor() to drive the
+ * same initialisation from a per-TU `__attribute__((constructor))`. */
 static void cg_emit_string_literal_init(CG *cg, Buf *body) {
     for (size_t i = 0; i < cg->string_literal_count; i++) {
         buf_append_fmt(body,
@@ -25266,6 +25270,21 @@ static void cg_emit_string_literal_init(CG *cg, Buf *body) {
         }
         buf_append_fmt(body, "\", %zu);\n", cg->string_literals[i].length);
     }
+}
+
+/* Wrap cg_emit_string_literal_init in a per-TU constructor so the crt/loader
+ * runs it before `main` regardless of which TU the caller links — bin or
+ * lib archive. GCC/clang place the function pointer in `.init_array`. MSVC
+ * is not currently supported by the Feng host-C path; if added later, this
+ * needs a `_MSC_VER` branch using `#pragma section(".CRT$XCU", read)`. */
+static void cg_emit_string_literal_ctor(CG *cg) {
+    if (cg->string_literal_count == 0U) return;
+    Buf *b = &cg->fn_defs;
+    buf_append_cstr(b,
+        "__attribute__((constructor))\n"
+        "static void _feng_init_string_literals(void) {\n");
+    cg_emit_string_literal_init(cg, b);
+    buf_append_cstr(b, "}\n");
 }
 
 static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
@@ -25575,8 +25594,6 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
     }
     buf_append_cstr(b,
         "int main(int argc, char **argv) {\n");
-    /* Initialise string literal slots once. */
-    cg_emit_string_literal_init(cg, b);
     buf_append_cstr(b,
         "    FengArray *_args = feng_array_new(&feng_string_descriptor, sizeof(FengString *), true, (size_t)argc);\n"
         "    FengString **_slots = (FengString **)feng_array_data(_args);\n"
@@ -28595,6 +28612,12 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
             return false;
         }
     }
+
+    /* Emit a per-TU constructor that initialises this unit's string literal
+     * slots before `main`. Both bin and lib targets get one — for libs it is
+     * the only initialisation path, since consumer bins do not enumerate
+     * dependency packages explicitly. */
+    cg_emit_string_literal_ctor(&cg);
 
     free(programs);
 
