@@ -35,4 +35,31 @@ open fit string {
     return feng_string_utf8_length(self);
   }
 
+  /**
+   * Returns a dense copy of this string.
+   * @return new string containing all bytes of this string
+   */
+  open func clone(): string {
+    return self.clone((long)0, self.length());
+  }
+
+  /**
+   * Returns a dense copy of the byte range `[start, end)`.
+   * @param start - zero-based inclusive start byte offset
+   * @param end - zero-based exclusive end byte offset
+   * @return new string containing bytes from `start` to `end`
+   */
+  open func clone(start: long, end: long): string {
+    if start < (long)0 {
+      throw "String clone start out of bounds";
+    }
+    if end < start {
+      throw "String clone end out of bounds";
+    }
+    if end > self.length() {
+      throw "String clone end out of bounds";
+    }
+    return feng_string_slice(self, start, end - start);
+  }
+
 }

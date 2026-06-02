@@ -27,8 +27,53 @@ func string_from_utf8_bytes_empty() {
   writeLine("__STRING_FROM_UTF8_EMPTY__=" + text);
 }
 
+func string_clone_full() {
+  let text = "hello";
+  let cloned = text.clone();
+
+  check(cloned.length() == (long)5, "string/clone-full-length");
+  writeLine("__STRING_CLONE_FULL__=" + cloned);
+}
+
+func string_clone_range() {
+  let text = "hello world";
+  let cloned = text.clone((long)6, (long)11);
+
+  check(cloned.length() == (long)5, "string/clone-range-length");
+  writeLine("__STRING_CLONE_RANGE__=" + cloned);
+}
+
+func string_clone_empty() {
+  let text = "hello";
+  let cloned = text.clone((long)0, (long)0);
+
+  check(cloned.length() == (long)0, "string/clone-empty-length");
+  writeLine("__STRING_CLONE_EMPTY__=" + cloned);
+}
+
+func string_clone_utf8() {
+  let text = "你好世界";
+  let cloned = text.clone();
+
+  check(cloned.length() == (long)12, "string/clone-utf8-length");
+  writeLine("__STRING_CLONE_UTF8__=" + cloned);
+}
+
+func string_clone_utf8_range() {
+  let text = "你好世界";
+  let cloned = text.clone((long)6, (long)12);
+
+  check(cloned.length() == (long)6, "string/clone-utf8-range-length");
+  writeLine("__STRING_CLONE_UTF8_RANGE__=" + cloned);
+}
+
 open func run_string_tests() {
   string_from_utf8_bytes_ascii();
   string_from_utf8_bytes_utf8();
   string_from_utf8_bytes_empty();
+  string_clone_full();
+  string_clone_range();
+  string_clone_empty();
+  string_clone_utf8();
+  string_clone_utf8_range();
 }

@@ -141,6 +141,11 @@ std-tests: cli runtime
 	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
 	grep -q '^__STDIO_PRINTLN__ left/right$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_CLONE_FULL__=hello$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_CLONE_RANGE__=world$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_CLONE_EMPTY__=$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_CLONE_UTF8__=你好世界$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_CLONE_UTF8_RANGE__=世界$$' ./std_test/build/std_test.stdout
 
 smoke: cli runtime
 	./scripts/run_smoke.sh
