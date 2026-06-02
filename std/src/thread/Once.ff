@@ -1,0 +1,45 @@
+open module std.thread;
+
+spec OnceAction(): void;
+
+/**
+ * A synchronization primitive that ensures a block of code is executed
+ * exactly once, even when called from multiple threads.
+ */
+open type Once {
+
+  seal let mutex: Mutex;
+  seal var done: bool;
+
+  /**
+   * Creates a new Once instance.
+   */
+  open func Once() {
+    self.mutex = Mutex();
+    self.done = false;
+  }
+
+  /**
+   * Executes the given function exactly once, regardless of how many
+   * threads call this method. All other callers block until the first
+   * execution completes.
+   */
+  open func call(action: OnceAction): void {
+    self.mutex.lock();
+    if !self.done {
+      self.done = true;
+      self.mutex.unlock();
+      action();
+      return;
+    }
+    self.mutex.unlock();
+  }
+
+  /**
+   * Destroys the Once and releases its resources.
+   */
+  open func destroy(): void {
+    self.mutex.destroy();
+  }
+
+}

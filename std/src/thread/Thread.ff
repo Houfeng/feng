@@ -1,0 +1,160 @@
+open module std.thread;
+
+open spec ThreadFn(): void;
+
+@cdecl("libc")
+extern func malloc(size: long): long;
+
+@cdecl("libc")
+extern func free(ptr: long): void;
+
+@cdecl("feng_std_uv", "uv_thread_create")
+extern func uv_thread_create(tid: long*, entry: ThreadAbiEntry*, arg: long): int;
+
+@cdecl("feng_std_uv", "uv_thread_join")
+extern func uv_thread_join(tid: long*): int;
+
+@cdecl("feng_std_uv", "uv_thread_self")
+extern func uv_thread_self(): long;
+
+@cdecl("feng_std_uv", "uv_thread_getcpu")
+extern func uv_thread_getcpu(): int;
+
+@cdecl("feng_std_uv", "uv_mutex_init")
+extern func uv_mutex_init(handle: long): int;
+
+@cdecl("feng_std_uv", "uv_mutex_lock")
+extern func uv_mutex_lock(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_mutex_unlock")
+extern func uv_mutex_unlock(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_init")
+extern func uv_cond_init(handle: long): int;
+
+@cdecl("feng_std_uv", "uv_cond_signal")
+extern func uv_cond_signal(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_wait")
+extern func uv_cond_wait(cond: long, mutex: long): void;
+
+@cdecl("libc")
+extern func usleep(usec: u32): int;
+
+@cdecl("libc", "sleep")
+extern func posix_sleep(seconds: u32): u32;
+
+@abi
+spec ThreadAbiEntry(arg: long): void;
+
+seal var spawnLock: long = (long)0;
+seal var spawnCond: long = (long)0;
+seal var spawnFn: ThreadFn;
+seal var spawnReady: bool = false;
+
+seal func ensureSpawnInit(): void {
+  if spawnLock != (long)0 {
+    return;
+  }
+  spawnLock = malloc((long)64);
+  spawnCond = malloc((long)48);
+  uv_mutex_init(spawnLock);
+  uv_cond_init(spawnCond);
+}
+
+@abi
+func threadTrampoline(arg: long): void {
+  let fn = spawnFn;
+  spawnReady = true;
+  uv_cond_signal(spawnCond);
+  fn();
+}
+
+/**
+ * Represents a spawned thread handle.
+ */
+open type Thread {
+
+  seal var handle: long;
+  seal var joined: bool;
+
+  seal func Thread(handle: long) {
+    self.handle = handle;
+    self.joined = false;
+  }
+
+  /**
+   * Spawns a new thread that executes the given function.
+   */
+  open static func spawn(fn: ThreadFn): Thread {
+    ensureSpawnInit();
+    uv_mutex_lock(spawnLock);
+    spawnFn = fn;
+    spawnReady = false;
+    let tidBuf: long[!] = long[: (long)1];
+    let result = uv_thread_create(&tidBuf, &threadTrampoline, (long)0);
+    if result != 0 {
+      uv_mutex_unlock(spawnLock);
+      throw "thread/spawn-failed";
+    }
+    while !spawnReady {
+      uv_cond_wait(spawnCond, spawnLock);
+    }
+    uv_mutex_unlock(spawnLock);
+    return Thread(tidBuf[0]);
+  }
+
+  /**
+   * Returns the thread ID of the current thread.
+   */
+  open static func currentId(): long {
+    return uv_thread_self();
+  }
+
+  /**
+   * Returns the CPU core number that the current thread is running on.
+   */
+  open static func currentCpu(): int {
+    return uv_thread_getcpu();
+  }
+
+  /**
+   * Waits for the thread to finish execution.
+   */
+  open func join(): void {
+    if self.joined {
+      return;
+    }
+    let tidBuf: long[!] = long[: (long)1];
+    tidBuf[0] = self.handle;
+    let result = uv_thread_join(&tidBuf);
+    if result != 0 {
+      throw "thread/join-failed";
+    }
+    self.joined = true;
+  }
+
+}
+
+/**
+ * Suspends the current thread for the specified number of milliseconds.
+ */
+open func sleep(ms: u32): void {
+  if ms >= (u32)1000 {
+    let seconds = ms / (u32)1000;
+    let remainder = ms - seconds * (u32)1000;
+    posix_sleep(seconds);
+    if remainder > (u32)0 {
+      usleep(remainder * (u32)1000);
+    }
+  } else {
+    usleep(ms * (u32)1000);
+  }
+}
+
+/**
+ * Suspends the current thread for the specified number of microseconds.
+ */
+open func sleepMicros(us: u32): void {
+  usleep(us);
+}

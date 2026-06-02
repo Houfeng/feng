@@ -1,0 +1,70 @@
+open module std.thread;
+
+@cdecl("feng_std_uv", "uv_mutex_init")
+extern func uv_mutex_init(handle: long): int;
+
+@cdecl("feng_std_uv", "uv_mutex_destroy")
+extern func uv_mutex_destroy(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_mutex_lock")
+extern func uv_mutex_lock(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_mutex_trylock")
+extern func uv_mutex_trylock(handle: long): int;
+
+@cdecl("feng_std_uv", "uv_mutex_unlock")
+extern func uv_mutex_unlock(handle: long): void;
+
+/**
+ * A mutual exclusion lock for synchronizing access to shared data.
+ */
+open type Mutex {
+
+  seal let handle: long;
+
+  /**
+   * Creates a new mutex.
+   */
+  open func Mutex() {
+    self.handle = malloc((long)64);
+    if self.handle == (long)0 {
+      throw "mutex/alloc-failed";
+    }
+    let result = uv_mutex_init(self.handle);
+    if result != 0 {
+      free(self.handle);
+      throw "mutex/init-failed";
+    }
+  }
+
+  /**
+   * Acquires the mutex, blocking the current thread until it is available.
+   */
+  open func lock(): void {
+    uv_mutex_lock(self.handle);
+  }
+
+  /**
+   * Attempts to acquire the mutex without blocking.
+   * Returns true if the lock was acquired, false otherwise.
+   */
+  open func tryLock(): bool {
+    return uv_mutex_trylock(self.handle) == 0;
+  }
+
+  /**
+   * Releases the mutex.
+   */
+  open func unlock(): void {
+    uv_mutex_unlock(self.handle);
+  }
+
+  /**
+   * Destroys the mutex and frees its resources.
+   */
+  open func destroy(): void {
+    uv_mutex_destroy(self.handle);
+    free(self.handle);
+  }
+
+}

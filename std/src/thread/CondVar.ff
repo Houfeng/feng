@@ -1,0 +1,83 @@
+open module std.thread;
+
+@cdecl("feng_std_uv", "uv_cond_init")
+extern func uv_cond_init(handle: long): int;
+
+@cdecl("feng_std_uv", "uv_cond_destroy")
+extern func uv_cond_destroy(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_signal")
+extern func uv_cond_signal(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_broadcast")
+extern func uv_cond_broadcast(handle: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_wait")
+extern func uv_cond_wait(cond: long, mutex: long): void;
+
+@cdecl("feng_std_uv", "uv_cond_timedwait")
+extern func uv_cond_timedwait(cond: long, mutex: long, timeout: u64): int;
+
+/**
+ * A condition variable for thread synchronization.
+ * Must be used together with a Mutex.
+ */
+open type CondVar {
+
+  seal let handle: long;
+
+  /**
+   * Creates a new condition variable.
+   */
+  open func CondVar() {
+    self.handle = malloc((long)48);
+    if self.handle == (long)0 {
+      throw "condvar/alloc-failed";
+    }
+    let result = uv_cond_init(self.handle);
+    if result != 0 {
+      free(self.handle);
+      throw "condvar/init-failed";
+    }
+  }
+
+  /**
+   * Wakes up one thread waiting on this condition variable.
+   */
+  open func signal(): void {
+    uv_cond_signal(self.handle);
+  }
+
+  /**
+   * Wakes up all threads waiting on this condition variable.
+   */
+  open func broadcast(): void {
+    uv_cond_broadcast(self.handle);
+  }
+
+  /**
+   * Atomically releases the mutex and waits on this condition variable.
+   * The mutex is re-acquired before this function returns.
+   */
+  open func wait(mutex: Mutex): void {
+    uv_cond_wait(self.handle, mutex.handle);
+  }
+
+  /**
+   * Waits on this condition variable with a timeout in nanoseconds.
+   * Returns true if signaled, false if the timeout expired.
+   */
+  open func timedWait(mutex: Mutex, timeoutNs: u64): bool {
+    let result = uv_cond_timedwait(self.handle, mutex.handle, timeoutNs);
+    return result == 0;
+  }
+
+  /**
+   * Destroys the condition variable and frees its resources.
+   */
+  open func destroy(): void {
+    uv_cond_destroy(self.handle);
+    free(self.handle);
+  }
+
+}

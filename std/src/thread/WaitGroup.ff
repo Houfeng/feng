@@ -1,0 +1,65 @@
+open module std.thread;
+
+/**
+ * A synchronization primitive that allows waiting for a group of threads
+ * to complete. The counter is incremented with add() and decremented
+ * with done(). The wait() method blocks until the counter reaches zero.
+ */
+open type WaitGroup {
+
+  seal let mutex: Mutex;
+  seal let cond: CondVar;
+  seal var counter: int;
+
+  /**
+   * Creates a new WaitGroup with a zero counter.
+   */
+  open func WaitGroup() {
+    self.mutex = Mutex();
+    self.cond = CondVar();
+    self.counter = 0;
+  }
+
+  /**
+   * Increments the counter by the given delta.
+   */
+  open func add(delta: int): void {
+    self.mutex.lock();
+    self.counter = self.counter + delta;
+    if self.counter < 0 {
+      self.mutex.unlock();
+      throw "waitgroup/negative-counter";
+    }
+    if self.counter == 0 {
+      self.cond.broadcast();
+    }
+    self.mutex.unlock();
+  }
+
+  /**
+   * Decrements the counter by one, signaling completion of one task.
+   */
+  open func done(): void {
+    self.add(-1);
+  }
+
+  /**
+   * Blocks the current thread until the counter reaches zero.
+   */
+  open func wait(): void {
+    self.mutex.lock();
+    while self.counter > 0 {
+      self.cond.wait(self.mutex);
+    }
+    self.mutex.unlock();
+  }
+
+  /**
+   * Destroys the WaitGroup and releases its resources.
+   */
+  open func destroy(): void {
+    self.cond.destroy();
+    self.mutex.destroy();
+  }
+
+}
