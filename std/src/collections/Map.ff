@@ -248,5 +248,3 @@ open type Map<K: Hashable<K>, V> {
     return (MapEntity<K, V>[])items;
   }
 }
-
-open let test_top_binding = "test";

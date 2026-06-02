@@ -13,12 +13,15 @@ extern func uv_get_available_memory(): u64;
 extern func uv_get_constrained_memory(): u64;
 
 @cdecl("feng_std_uv", "uv_resident_set_memory")
-extern func uv_resident_set_memory(rss: u64*): int;
+extern func uv_resident_set_memory(rss: u64 * ): int;
 
 /**
  * Provides memory queries.
  */
 open type MemoryInfo {
+  // The constructor is sealed to prevent instantiation.
+  seal func MemoryInfo() {}
+
   /**
    * Returns total physical memory in bytes.
    */
@@ -51,8 +54,8 @@ open type MemoryInfo {
    * Returns resident set size in bytes.
    */
   open static func residentBytes(): u64 {
-    let rss: u64[!] = u64[: (long)1];
-    let rssRc = uv_resident_set_memory(&rss);
+    let rss: u64[!] = u64[:(long)1];
+    let rssRc = uv_resident_set_memory( & rss);
     if rssRc != 0 {
       throw "platform/memory-info/resident";
     }

@@ -1,0 +1,228 @@
+open module std.process;
+
+import std.text;
+import std.collections;
+
+@runtime
+extern func feng_string_to_utf8_bytes(value: string): byte[];
+
+@cdecl("libc")
+extern func fork(): int;
+
+@cdecl("libc")
+extern func waitpid(pid: int, status: int*, options: int): int;
+
+@cdecl("libc", "kill")
+extern func posix_kill(pid: int, sig: int): int;
+
+@cdecl("libc", "_exit")
+extern func posix_exit(status: int): void;
+
+@cdecl("libc")
+extern func system(command: byte*): int;
+
+@cdecl("libc")
+extern func getpid(): int;
+
+@cdecl("libc")
+extern func pipe(pipefd: int*): int;
+
+@cdecl("libc")
+extern func dup2(oldfd: int, newfd: int): int;
+
+@cdecl("libc")
+extern func close(fd: int): int;
+
+@cdecl("libc")
+extern func read(fd: int, buf: byte*, count: long): long;
+
+seal func emptyBytes(): byte[] {
+  let items: byte[!] = byte[: (long)0];
+  return (byte[])items;
+}
+
+seal func appendToList(target: List<byte>, source: byte[]) {
+  let len = source.length();
+  for var i: long = (long)0; i < len; i += (long)1 {
+    target.add(source[i]);
+  }
+}
+
+seal func shellEscape(arg: byte[]): byte[] {
+  let result = List<byte>();
+  result.add((byte)39);
+  let len = arg.length();
+  for var i: long = (long)0; i < len; i += (long)1 {
+    let b = arg[i];
+    if b == (byte)39 {
+      result.add((byte)39);
+      result.add((byte)92);
+      result.add((byte)39);
+      result.add((byte)39);
+    } else {
+      result.add(b);
+    }
+  }
+  result.add((byte)39);
+  return result.entries();
+}
+
+open type Process {
+
+  /**
+   * Spawns a new process and waits for it to finish.
+   */
+  open static func spawn(path: string, args: string...): Process {
+    let process = Process(path, args);
+    process.run();
+    return process;
+  }
+
+  /**
+   * Returns the PID of the current process.
+   */
+  open static func currentId(): int {
+    return getpid();
+  }
+
+  let path: string;
+  let args: string[];
+  seal var pid: int;
+  seal var exitStatus: int;
+  seal var finished: bool;
+  seal var stdoutData: byte[];
+
+  seal func Process(path: string, args: string[]) {
+    self.path = path;
+    self.args = args;
+    self.pid = -1;
+    self.exitStatus = -1;
+    self.finished = false;
+    self.stdoutData = emptyBytes();
+  }
+
+  seal func buildCommand(): byte[] {
+    let cmd = List<byte>();
+    let pathBytes = feng_string_to_utf8_bytes(self.path);
+    appendToList(cmd, shellEscape(pathBytes));
+    let argsLen = self.args.length();
+    for var i: long = (long)0; i < argsLen; i += (long)1 {
+      cmd.add((byte)32);
+      let argBytes = feng_string_to_utf8_bytes(self.args[i]);
+      appendToList(cmd, shellEscape(argBytes));
+    }
+    cmd.add((byte)0);
+    return cmd.entries();
+  }
+
+  seal func run(): void {
+    let cmdBytes = self.buildCommand();
+
+    let pipeFds: int[!] = int[: 2];
+    let pipeRc = pipe(&pipeFds);
+    if pipeRc != 0 {
+      throw "process/pipe-failed";
+    }
+    let pipeReadFd = pipeFds[0];
+    let pipeWriteFd = pipeFds[1];
+
+    let childPid = fork();
+    if childPid < 0 {
+      close(pipeReadFd);
+      close(pipeWriteFd);
+      throw "process/fork-failed";
+    }
+
+    if childPid == 0 {
+      close(pipeReadFd);
+      dup2(pipeWriteFd, 1);
+      close(pipeWriteFd);
+      let rc = system(&cmdBytes);
+      let code = (rc >> 8) & 255;
+      posix_exit(code);
+    }
+
+    close(pipeWriteFd);
+    self.pid = childPid;
+
+    let outputBuf = List<byte>();
+    let chunk: byte[!] = byte[: (long)4096];
+    while true {
+      let n = read(pipeReadFd, &chunk, (long)4096);
+      if n <= (long)0 {
+        break;
+      }
+      for var j: long = (long)0; j < n; j += (long)1 {
+        outputBuf.add(chunk[j]);
+      }
+    }
+    close(pipeReadFd);
+    self.stdoutData = outputBuf.entries();
+
+    let statusBuf: int[!] = int[: 1];
+    waitpid(self.pid, &statusBuf, 0);
+    self.exitStatus = (statusBuf[0] >> 8) & 255;
+    self.finished = true;
+  }
+
+  /**
+   * Returns the process ID of the spawned process.
+   */
+  open func id(): int {
+    return self.pid;
+  }
+
+  /**
+   * Returns the exit code. Only meaningful after the process has finished.
+   */
+  open func exitCode(): int {
+    return self.exitStatus;
+  }
+
+  /**
+   * Returns the captured standard output as a string.
+   */
+  open func output(): string {
+    return string.fromUtf8Bytes(self.stdoutData);
+  }
+
+  /**
+   * Returns the captured standard output as raw bytes.
+   */
+  open func outputBytes(): byte[] {
+    return self.stdoutData;
+  }
+
+  /**
+   * Returns whether the process has finished executing.
+   */
+  open func isFinished(): bool {
+    return self.finished;
+  }
+
+  /**
+   * Sends SIGTERM to the process.
+   */
+  open func kill(): void {
+    if !self.finished {
+      posix_kill(self.pid, 15);
+    }
+  }
+
+  /**
+   * Sends the specified signal to the process.
+   */
+  open func kill(signal: int): void {
+    if !self.finished {
+      posix_kill(self.pid, signal);
+    }
+  }
+
+  /**
+   * Exits the process with the given exit code.
+   */
+  func exit(code: int): void {
+    posix_exit(code);
+  }
+
+}

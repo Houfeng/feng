@@ -7,6 +7,9 @@ extern func uv_available_parallelism(): int;
  * Provides CPU topology queries.
  */
 open type CpuInfo {
+  // The constructor is sealed to prevent instantiation.
+  seal func CpuInfo() {}
+
   /**
    * Returns the available parallelism.
    */
