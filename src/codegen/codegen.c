@@ -5287,6 +5287,18 @@ static bool cg_runtime_contract_contains_name(FengSlice name) {
     return false;
 }
 
+/* Returns true when the C symbol name is already declared by one of the
+ * system headers that generated C always includes (<stdlib.h>, <math.h>,
+ * <string.h>, etc.).  Emitting a second extern prototype for these symbols
+ * would conflict with the authoritative system-header declaration. */
+static bool cg_is_system_header_symbol(const char *name) {
+#define FENG_SYSTEM_HEADER_SYMBOL(sym) \
+    if (strcmp(name, #sym) == 0) return true;
+#include "runtime/system_header_symbols.inc"
+#undef FENG_SYSTEM_HEADER_SYMBOL
+    return false;
+}
+
 static bool cg_init_user_type_abi_symbols(UserType *t) {
     if (t == NULL || !t->is_abi_type || !cg_decl_has_field_members(t->decl)) {
         return true;
@@ -7093,6 +7105,13 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
      * declaration authority. Emitting a second prototype here would drift on
      * qualifiers such as `const` and create C conflicts for the same symbol. */
     if (ef->uses_runtime_contract) {
+        return true;
+    }
+
+    /* System-header externs are already declared by the always-included
+     * headers (<stdlib.h>, <math.h>, <string.h>, …). Emitting a second
+     * prototype with Feng-mapped types would conflict. */
+    if (cg_is_system_header_symbol(ef->c_name != NULL ? ef->c_name : ef->name)) {
         return true;
     }
 
