@@ -6,7 +6,7 @@
 - 允许列表的唯一权威来源是 `src/runtime/feng_runtime_contract.inc`；本文是解释性索引，不是第二份白名单定义。
 - 若 future 变更新增、删除或重命名 runtime contract API，必须先修改 `src/runtime/feng_runtime_contract.inc`，再同步更新本文。
 
-当前 contract API 共 7 个：
+当前 contract API 共 8 个：
 
 1. `feng_string_utf8_length`
 2. `feng_string_from_utf8_bytes`
@@ -15,6 +15,7 @@
 5. `feng_expression_equal`
 6. `feng_pointer_is_null`
 7. `feng_pointer_equal`
+8. `feng_pointer_get_scalar`
 
 ## 2. API 清单
 
@@ -93,6 +94,20 @@
 - 语义说明：当 `left == right`（指针地址相同）时返回 `true`，否则返回 `false`。
 - 主要使用点：用户代码需要比较两个 C 侧指针是否指向同一对象时使用。
 - 边界说明：仅做地址比较，不比较指向的内容。仅适用于不透明 C 指针类型，不适用于 Feng 托管对象指针。
+
+### 2.8 `feng_pointer_get_scalar`
+
+- C 符号：`void feng_pointer_get_scalar(const FengGenericParamDescriptor *type, void *ptr, void *result)`
+- Feng 声明形态：`extern func feng_pointer_get_scalar<T>(ptr: T*): T;`（其中 `T` 为 ABI 兼容标量类型）
+- 用途：从 C 侧指针 `ptr` 处读取一个标量值。与 `feng_pointer_move` 组合可实现任意偏移处的标量读取，形成完整的不透明指针读取能力。
+- ABI 说明：generated C 把 `T` 对应的 `FengGenericParamDescriptor` 作为隐藏首参传入，用户参数 `ptr` 居中，返回值通过末位 `void *result` out 参数传出，遵循泛型 bare-T return 的标准降低约定（描述符... → 用户参数... → &result_carrier）。
+- 语义说明：
+  - `T` 仅限 ABI 兼容标量类型（`int`、`long`、`byte`、`u32`、`float`、`double`、`bool`、`enum`）。
+  - 非标量类型（`string`、`T[]`、type 实例等）runtime panic。
+  - NULL 指针 runtime panic。
+  - 读取大小由 `FengTrivialDescriptor.size` 决定，执行 `memcpy` 语义。
+- 主要使用点：标准库 `std/src/text/RegExp.ff` 用它读取 PCRE2 ovector（`size_t*` 数组）中的匹配偏移量。
+- 边界说明：指针偏移通过已有 `feng_pointer_move` 完成，`feng_pointer_get_scalar` 仅负责读取，职责单一。
 
 ## 3. 维护规则
 

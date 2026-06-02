@@ -1,1 +1,452 @@
 open module std.text;
+
+import std.collections;
+
+/* ---------- Opaque C types ---------- */
+
+/* PCRE2 match result data (opaque) */
+@abi
+seal type Pcre2MatchData {}
+
+/* ---------- PCRE2 core API ---------- */
+
+@cdecl("feng_std_pcre2", "pcre2_compile_8")
+extern func pcre2_compile(
+  pattern: byte*, length: long, options: u32,
+  errorcode: int*, erroroffset: long*,
+  ccontext: long
+): long;
+
+@cdecl("feng_std_pcre2", "pcre2_code_free_8")
+extern func pcre2_code_free(code: long): void;
+
+@cdecl("feng_std_pcre2", "pcre2_match_data_create_from_pattern_8")
+extern func pcre2_match_data_create_from_pattern(
+  code: long, gcontext: long
+): Pcre2MatchData*;
+
+@cdecl("feng_std_pcre2", "pcre2_match_data_free_8")
+extern func pcre2_match_data_free(match_data: Pcre2MatchData*): void;
+
+@cdecl("feng_std_pcre2", "pcre2_match_8")
+extern func pcre2_match(
+  code: long, subject: byte*, length: long, startoffset: long,
+  options: u32, match_data: Pcre2MatchData*, mcontext: long
+): int;
+
+@cdecl("feng_std_pcre2", "pcre2_get_ovector_pointer_8")
+extern func pcre2_get_ovector_pointer(match_data: Pcre2MatchData*): long*;
+
+@cdecl("feng_std_pcre2", "pcre2_get_ovector_count_8")
+extern func pcre2_get_ovector_count(match_data: Pcre2MatchData*): u32;
+
+@cdecl("feng_std_pcre2", "pcre2_get_error_message_8")
+extern func pcre2_get_error_message(errorcode: int, buffer: byte*, buffer_size: long): int;
+
+@cdecl("feng_std_pcre2", "pcre2_substitute_8")
+extern func pcre2_substitute(
+  code: long, subject: byte*, length: long, startoffset: long,
+  options: u32, match_data: long, mcontext: long,
+  replacement: byte*, rlength: long,
+  outputbuffer: byte*, outlengthptr: long*
+): int;
+
+/* ---------- Runtime pointer primitives ---------- */
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+
+@runtime
+extern func feng_pointer_move(ptr: long*, offset: long): long*;
+
+/* ---------- Constants ---------- */
+
+/* PCRE2_UNSET on 64-bit: ~(size_t)0 = 0xFFFFFFFFFFFFFFFF, read as long = -1 */
+seal let PCRE2_UNSET: long = (long)-1;
+
+/* ---------- RegExpFlag ---------- */
+
+/**
+ * Flags for controlling regex behavior.
+ * Values correspond to PCRE2 option bits and can be combined with bitwise OR.
+ */
+open enum RegExpFlag {
+  CaseInsensitive = 0x00000008,
+  Multiline = 0x00000400,
+  DotAll = 0x00000020,
+  Extended = 0x00000080,
+  Ungreedy = 0x00040000
+}
+
+/* ---------- Match ---------- */
+
+/**
+ * Represents a single regex match result, including captured groups.
+ */
+open type Match {
+  open let text: string;
+  open let start: long;
+  open let end: long;
+  open let groups: string[];
+}
+
+/* ---------- ovector helpers ---------- */
+
+seal func ovectorStart(ovector: long*, index: u32): long {
+  return feng_pointer_get_scalar<long>(
+    feng_pointer_move(ovector, (long)index * (long)16)
+  );
+}
+
+seal func ovectorEnd(ovector: long*, index: u32): long {
+  return feng_pointer_get_scalar<long>(
+    feng_pointer_move(ovector, (long)index * (long)16 + (long)8)
+  );
+}
+
+/* ---------- buildMatch ---------- */
+
+seal func buildMatch(subject: string, md: Pcre2MatchData*): Match {
+  let ovector = pcre2_get_ovector_pointer(md);
+  let ovCount = pcre2_get_ovector_count(md);
+  let groupArr: string[!] = string[: (long)ovCount];
+  var i: u32 = 0;
+  while i < ovCount {
+    let s = ovectorStart(ovector, i);
+    let e = ovectorEnd(ovector, i);
+    if s == PCRE2_UNSET || e == PCRE2_UNSET {
+      groupArr[(long)i] = "";
+    } else {
+      groupArr[(long)i] = subject.clone(s, e);
+    }
+    i += (u32)1;
+  }
+  let matchStart = ovectorStart(ovector, (u32)0);
+  let matchEnd = ovectorEnd(ovector, (u32)0);
+  let matchText = subject.clone(matchStart, matchEnd);
+  return Match {
+    text: matchText,
+    start: matchStart,
+    end: matchEnd,
+    groups: (string[])groupArr
+  };
+}
+
+/* ---------- compilePattern ---------- */
+
+seal func compilePattern(pattern: string, flags: u32): long {
+  let patternBytes = pattern.toBytes();
+  let buf: byte[!] = byte[: (long)256];
+  var errorcode: int = 0;
+  var erroroffset: long = 0;
+  let compiled = pcre2_compile(
+    &patternBytes, (long)patternBytes.length(),
+    flags, &errorcode, &erroroffset, (long)0
+  );
+  if compiled == (long)0 {
+    pcre2_get_error_message(errorcode, &buf, (long)256);
+    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf);
+  }
+  return compiled;
+}
+
+/* ---------- RegExp ---------- */
+
+/**
+ * A compiled regular expression backed by PCRE2.
+ * Instances are immutable and thread-safe after construction.
+ */
+open type RegExp {
+  seal let code: long;
+  seal let pattern: string;
+  seal let flagBits: u32;
+
+  /**
+   * Compiles a regular expression pattern.
+   * UTF-8 and Unicode property matching are enabled by default.
+   * @param pattern - the regex pattern string
+   * @throws string if the pattern is invalid
+   */
+  open func RegExp(pattern: string) {
+    self.pattern = pattern;
+    self.flagBits = (u32)0x00080000 | (u32)0x00020000;
+    self.code = compilePattern(pattern, self.flagBits);
+  }
+
+  /**
+   * Compiles a regular expression pattern with a single RegExpFlag.
+   * @param pattern - the regex pattern string
+   * @param flag - a RegExpFlag value
+   * @throws string if the pattern is invalid
+   */
+  open func RegExp(pattern: string, flag: RegExpFlag) {
+    self.pattern = pattern;
+    self.flagBits = (u32)(int)flag | (u32)0x00080000 | (u32)0x00020000;
+    self.code = compilePattern(pattern, self.flagBits);
+  }
+
+  /**
+   * Returns whether this regex matches anywhere within the subject string.
+   * @param subject - the string to test
+   * @return true if any substring matches
+   */
+  open func test(subject: string): bool {
+    let subjectBytes = subject.toBytes();
+    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    let rc = pcre2_match(
+      self.code, &subjectBytes, (long)subjectBytes.length(),
+      (long)0, (u32)0, md, (long)0
+    );
+    pcre2_match_data_free(md);
+    return rc >= 0;
+  }
+
+  /**
+   * Returns whether this regex matches the entire subject string.
+   * @param subject - the string to test
+   * @return true if the entire subject matches
+   */
+  open func isMatch(subject: string): bool {
+    let subjectBytes = subject.toBytes();
+    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    /* PCRE2_ANCHORED (0x80000000) | PCRE2_ENDANCHORED (0x20000000) */
+    let rc = pcre2_match(
+      self.code, &subjectBytes, (long)subjectBytes.length(),
+      (long)0, (u32)0x80000000 | (u32)0x20000000, md, (long)0
+    );
+    pcre2_match_data_free(md);
+    return rc >= 0;
+  }
+
+  /**
+   * Finds the first match in the subject string.
+   * Returns a single-element array on match, or an empty array if no match.
+   * @param subject - the string to search
+   * @return array with 0 or 1 Match elements
+   */
+  open func find(subject: string): Match[] {
+    let subjectBytes = subject.toBytes();
+    var resultArr: Match[!] = Match[: (long)0];
+    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    let rc = pcre2_match(
+      self.code, &subjectBytes, (long)subjectBytes.length(),
+      (long)0, (u32)0, md, (long)0
+    );
+    if rc >= 0 {
+      resultArr = Match[: (long)1];
+      resultArr[0] = buildMatch(subject, md);
+    }
+    pcre2_match_data_free(md);
+    return (Match[])resultArr;
+  }
+
+  /**
+   * Finds all non-overlapping matches in the subject string.
+   * @param subject - the string to search
+   * @return array of Match objects
+   */
+  open func findAll(subject: string): Match[] {
+    let subjectBytes = subject.toBytes();
+    let subjectLen = (long)subjectBytes.length();
+    var capacity: long = 8;
+    var items: Match[!] = Match[: capacity];
+    var count: long = 0;
+    var scratch: Match[!] = items;
+    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    var offset: long = 0;
+    while offset <= subjectLen {
+      let rc = pcre2_match(
+        self.code, &subjectBytes, subjectLen,
+        offset, (u32)0, md, (long)0
+      );
+      if rc < 0 {
+        break;
+      }
+      if count >= capacity {
+        capacity = capacity * (long)2;
+        scratch = Match[: capacity];
+        var j: long = 0;
+        while j < count {
+          scratch[j] = items[j];
+          j += (long)1;
+        }
+        items = scratch;
+      }
+      items[count] = buildMatch(subject, md);
+      count += (long)1;
+      if items[count - (long)1].end == offset {
+        offset += (long)1;
+      } else {
+        offset = items[count - (long)1].end;
+      }
+    }
+    pcre2_match_data_free(md);
+    var result: Match[!] = Match[: count];
+    var k: long = 0;
+    while k < count {
+      result[k] = items[k];
+      k += (long)1;
+    }
+    return (Match[])result;
+  }
+
+  /**
+   * Splits the subject string by matches of this regex.
+   * @param subject - the string to split
+   * @return array of substrings between matches
+   */
+  open func split(subject: string): string[] {
+    let subjectBytes = subject.toBytes();
+    let subjectLen = (long)subjectBytes.length();
+    let parts = List<string>();
+    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    var pos: long = 0;
+    while pos <= subjectLen {
+      let rc = pcre2_match(
+        self.code, &subjectBytes, subjectLen,
+        pos, (u32)0, md, (long)0
+      );
+      if rc < 0 {
+        break;
+      }
+      let ovector = pcre2_get_ovector_pointer(md);
+      let matchStart = ovectorStart(ovector, (u32)0);
+      let matchEnd = ovectorEnd(ovector, (u32)0);
+      if matchStart > pos {
+        parts.add(subject.clone(pos, matchStart));
+      } else {
+        parts.add("");
+      }
+      if matchEnd == pos {
+        pos += (long)1;
+      } else {
+        pos = matchEnd;
+      }
+    }
+    if pos <= subjectLen {
+      if pos < subjectLen {
+        parts.add(subject.clone(pos, subjectLen));
+      } else {
+        parts.add("");
+      }
+    }
+    pcre2_match_data_free(md);
+    return parts.entries();
+  }
+
+  /**
+   * Replaces the first match with the replacement string.
+   * Replacement may use $0 for full match and $1..$9 for captured groups.
+   * @param subject - the string to search
+   * @param replacement - the replacement string (supports backreferences)
+   * @return new string with the first match replaced
+   */
+  open func replaceFirst(subject: string, replacement: string): string {
+    return self.substituteInternal(subject, replacement, (u32)0);
+  }
+
+  /**
+   * Replaces all matches with the replacement string.
+   * Replacement may use $0 for full match and $1..$9 for captured groups.
+   * @param subject - the string to search
+   * @param replacement - the replacement string (supports backreferences)
+   * @return new string with all matches replaced
+   */
+  open func replaceAll(subject: string, replacement: string): string {
+    return self.substituteInternal(subject, replacement, (u32)0x00000100);
+  }
+
+  seal func substituteInternal(subject: string, replacement: string, options: u32): string {
+    let subjectBytes = subject.toBytes();
+    let replBytes = replacement.toBytes();
+    var outLen: long = subjectBytes.length() * (long)2;
+    if outLen < (long)256 {
+      outLen = (long)256;
+    }
+    var outBuf: byte[!] = byte[: outLen];
+    var actualLen: long = outLen;
+    let subOpts = options | (u32)0x00000200 | (u32)0x00001000;
+    let rc = pcre2_substitute(
+      self.code, &subjectBytes, (long)subjectBytes.length(),
+      (long)0, subOpts,
+      (long)0, (long)0,
+      &replBytes, (long)replBytes.length(),
+      &outBuf, &actualLen
+    );
+    if rc == -48 {
+      outLen = actualLen + (long)1;
+      outBuf = byte[: outLen];
+      actualLen = outLen;
+      let rc2 = pcre2_substitute(
+        self.code, &subjectBytes, (long)subjectBytes.length(),
+        (long)0, subOpts,
+        (long)0, (long)0,
+        &replBytes, (long)replBytes.length(),
+        &outBuf, &actualLen
+      );
+      if rc2 < 0 {
+        throw "RegExp substitute failed";
+      }
+    } else if rc < 0 && rc != -1 {
+      throw "RegExp substitute failed";
+    }
+    if rc == -1 {
+      return subject.clone();
+    }
+    return string.fromUtf8Bytes((byte[])outBuf);
+  }
+
+  /**
+   * Releases the underlying PCRE2 resources.
+   * Must be called when the RegExp is no longer needed.
+   */
+  open func destroy(): void {
+    if self.code != (long)0 {
+      pcre2_code_free(self.code);
+    }
+  }
+}
+
+/**
+ * Extends `string` with regex convenience methods.
+ */
+open fit string {
+
+  /**
+   * Returns whether this string matches the given regex pattern.
+   * @param pattern - regex pattern string
+   * @return true if the entire string matches
+   */
+  open func matches(pattern: string): bool {
+    let re = RegExp(pattern);
+    let result = re.isMatch(self);
+    re.destroy();
+    return result;
+  }
+
+  /**
+   * Replaces all matches of a regex pattern with the replacement string.
+   * @param pattern - regex pattern string
+   * @param replacement - replacement string (supports $0..$9 backreferences)
+   * @return new string with all matches replaced
+   */
+  open func replacePattern(pattern: string, replacement: string): string {
+    let re = RegExp(pattern);
+    let result = re.replaceAll(self, replacement);
+    re.destroy();
+    return result;
+  }
+
+  /**
+   * Splits this string by a regex pattern.
+   * @param pattern - regex pattern string
+   * @return array of substrings
+   */
+  open func splitPattern(pattern: string): string[] {
+    let re = RegExp(pattern);
+    let result = re.split(self);
+    re.destroy();
+    return result;
+  }
+
+}

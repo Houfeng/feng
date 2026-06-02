@@ -161,6 +161,27 @@ int64_t feng_pointer_diff(void *a, void *b) {
     return (int64_t)((char *)a - (char *)b);
 }
 
+/* Reads a scalar value of size determined by the generic type descriptor from
+ * the memory at `ptr` into the caller-provided `result` slot.  Only trivial
+ * (scalar) types are allowed; managed pointers and aggregates cause a panic. */
+void feng_pointer_get_scalar(const FengGenericParamDescriptor *type,
+                             void *ptr, void *result) {
+    if (type == NULL) {
+        feng_panic("feng_pointer_get_scalar: type descriptor must not be NULL");
+    }
+    if (type->kind != FENG_VALUE_TRIVIAL) {
+        feng_panic("feng_pointer_get_scalar: only scalar types allowed, got kind=%d",
+                   (int)type->kind);
+    }
+    if (ptr == NULL) {
+        feng_panic("feng_pointer_get_scalar: null pointer");
+    }
+    if (result == NULL) {
+        feng_panic("feng_pointer_get_scalar: result carrier must not be NULL");
+    }
+    memcpy(result, ptr, feng_generic_trivial_descriptor(type)->size);
+}
+
 /* Compares the byte sub-ranges [a_start, a_end) and [b_start, b_end) of two
  * Feng strings for equality without any intermediate allocation. */
 bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,

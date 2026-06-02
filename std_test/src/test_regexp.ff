@@ -1,0 +1,220 @@
+module std_test;
+
+import std.io;
+import std.text;
+import std.collections;
+
+/* ---------- 10.1 Construction and basic matching ---------- */
+
+func regexp_test_basic() {
+  let re1 = RegExp("hello");
+  check(re1.test("hello world") == true, "regexp/test-found");
+  check(re1.test("world") == false, "regexp/test-not-found");
+  re1.destroy();
+
+  let re2 = RegExp("hello");
+  check(re2.isMatch("hello") == true, "regexp/isMatch-full");
+  check(re2.isMatch("hello world") == false, "regexp/isMatch-partial");
+  re2.destroy();
+
+  let re3 = RegExp("\\d+");
+  check(re3.test("abc123") == true, "regexp/test-digits");
+  check(re3.test("abc") == false, "regexp/test-no-digits");
+  re3.destroy();
+
+  writeLine("__REGEXP_BASIC__=ok");
+}
+
+/* ---------- 10.2 Case insensitive ---------- */
+
+func regexp_test_case_insensitive() {
+  let re = RegExp("hello", RegExpFlag.CaseInsensitive);
+  check(re.test("HELLO") == true, "regexp/ci-test");
+  check(re.isMatch("Hello") == true, "regexp/ci-isMatch");
+  re.destroy();
+
+  writeLine("__REGEXP_CASE_INSENSITIVE__=ok");
+}
+
+/* ---------- 10.3 find ---------- */
+
+func regexp_test_find() {
+  let re1 = RegExp("\\d+");
+  let r1 = re1.find("abc123def");
+  check(r1.length() == (long)1, "regexp/find-found");
+  check(r1[0].text == "123", "regexp/find-text");
+  check(r1[0].start == (long)3, "regexp/find-start");
+  check(r1[0].end == (long)6, "regexp/find-end");
+  re1.destroy();
+
+  let re2 = RegExp("\\d+");
+  let r2 = re2.find("abcdef");
+  check(r2.length() == (long)0, "regexp/find-none");
+  re2.destroy();
+
+  let re3 = RegExp("(\\w+)@(\\w+)");
+  let r3 = re3.find("user@host");
+  check(r3.length() == (long)1, "regexp/find-groups-found");
+  check(r3[0].groups.length() == (long)3, "regexp/find-groups-count");
+  check(r3[0].groups[0] == "user@host", "regexp/find-groups-0");
+  check(r3[0].groups[1] == "user", "regexp/find-groups-1");
+  check(r3[0].groups[2] == "host", "regexp/find-groups-2");
+  re3.destroy();
+
+  writeLine("__REGEXP_FIND__=ok");
+}
+
+/* ---------- 10.4 findAll ---------- */
+
+func regexp_test_findAll() {
+  let re1 = RegExp("\\d+");
+  let r1 = re1.findAll("a1b22c333");
+  check(r1.length() == (long)3, "regexp/findAll-count");
+  check(r1[0].text == "1", "regexp/findAll-first");
+  check(r1[1].text == "22", "regexp/findAll-second");
+  check(r1[2].text == "333", "regexp/findAll-third");
+  re1.destroy();
+
+  let re2 = RegExp("\\d+");
+  let r2 = re2.findAll("abc");
+  check(r2.length() == (long)0, "regexp/findAll-none");
+  re2.destroy();
+
+  writeLine("__REGEXP_FIND_ALL__=ok");
+}
+
+/* ---------- 10.5 split ---------- */
+
+func regexp_test_split() {
+  let re1 = RegExp("[,;]");
+  let r1 = re1.split("a,b;c");
+  check(r1.length() == (long)3, "regexp/split-count");
+  check(r1[0] == "a", "regexp/split-first");
+  check(r1[1] == "b", "regexp/split-mid");
+  check(r1[2] == "c", "regexp/split-last");
+  re1.destroy();
+
+  let re2 = RegExp("\\s+");
+  let r2 = re2.split("hello  world");
+  check(r2.length() == (long)2, "regexp/split-ws-count");
+  check(r2[0] == "hello", "regexp/split-ws-first");
+  check(r2[1] == "world", "regexp/split-ws-last");
+  re2.destroy();
+
+  let re3 = RegExp("\\d+");
+  let r3 = re3.split("abc");
+  check(r3.length() == (long)1, "regexp/split-no-match");
+  check(r3[0] == "abc", "regexp/split-no-match-val");
+  re3.destroy();
+
+  writeLine("__REGEXP_SPLIT__=ok");
+}
+
+/* ---------- 10.6 replaceFirst / replaceAll ---------- */
+
+func regexp_test_replace() {
+  let re1 = RegExp("\\d+");
+  check(re1.replaceFirst("a1b2c3", "X") == "aXb2c3", "regexp/replaceFirst");
+  check(re1.replaceAll("a1b2c3", "X") == "aXbXcX", "regexp/replaceAll");
+  re1.destroy();
+
+  let re2 = RegExp("(\\w+)@(\\w+)");
+  check(re2.replaceAll("user@host", "$2/$1") == "host/user", "regexp/replace-backref");
+  re2.destroy();
+
+  writeLine("__REGEXP_REPLACE__=ok");
+}
+
+/* ---------- 10.7 Unicode ---------- */
+
+func regexp_test_unicode() {
+  let re1 = RegExp("\\p{L}+");
+  let r1 = re1.find("abc123");
+  check(r1.length() == (long)1, "regexp/unicode-pL-found");
+  check(r1[0].text == "abc", "regexp/unicode-pL");
+  re1.destroy();
+
+  let re2 = RegExp("中.");
+  let r2 = re2.find("中文abc");
+  check(r2.length() == (long)1, "regexp/unicode-cjk-found");
+  check(r2[0].text == "中文", "regexp/unicode-cjk");
+  re2.destroy();
+
+  let re3 = RegExp("\\p{Han}+");
+  let r3 = re3.findAll("hello中文world你好");
+  check(r3.length() == (long)2, "regexp/unicode-han-count");
+  check(r3[0].text == "中文", "regexp/unicode-han-first");
+  check(r3[1].text == "你好", "regexp/unicode-han-second");
+  re3.destroy();
+
+  writeLine("__REGEXP_UNICODE__=ok");
+}
+
+/* ---------- 10.8 Compile error ---------- */
+
+func regexp_test_compile_error() {
+  var caught = false;
+  try RegExp("[invalid") catch e: string {
+    caught = e.contains("compile error");
+  };
+  check(caught == true, "regexp/compile-error");
+
+  writeLine("__REGEXP_COMPILE_ERROR__=ok");
+}
+
+/* ---------- 10.9 String convenience methods ---------- */
+
+func regexp_test_string_methods() {
+  check("hello123".matches("\\w+") == true, "regexp/string-matches-true");
+  check("hello123".matches("\\d+") == false, "regexp/string-matches-false");
+  check("a1b2c3".replacePattern("\\d+", "X") == "aXbXcX", "regexp/string-replacePattern");
+
+  let parts = "a,b;c".splitPattern("[,;]");
+  check(parts.length() == (long)3, "regexp/string-splitPattern-count");
+  check(parts[0] == "a", "regexp/string-splitPattern-first");
+  check(parts[1] == "b", "regexp/string-splitPattern-mid");
+  check(parts[2] == "c", "regexp/string-splitPattern-last");
+
+  writeLine("__REGEXP_STRING_METHODS__=ok");
+}
+
+/* ---------- 10.10 Edge cases ---------- */
+
+func regexp_test_edge_cases() {
+  let re1 = RegExp("");
+  check(re1.test("") == true, "regexp/empty-pattern-empty-subject");
+  re1.destroy();
+
+  let re2 = RegExp("");
+  let r2 = re2.findAll("abc");
+  check(r2.length() == (long)4, "regexp/empty-pattern-findAll");
+  re2.destroy();
+
+  let re3 = RegExp("\\d+");
+  let r3 = re3.split("");
+  check(r3.length() == (long)1, "regexp/split-empty-subject");
+  check(r3[0] == "", "regexp/split-empty-subject-val");
+  re3.destroy();
+
+  let re4 = RegExp("\\d+");
+  re4.find("abc");
+  re4.destroy();
+  check(true, "regexp/destroy-no-crash");
+
+  writeLine("__REGEXP_EDGE_CASES__=ok");
+}
+
+/* ---------- Entry point ---------- */
+
+open func run_regexp_tests() {
+  regexp_test_basic();
+  regexp_test_case_insensitive();
+  regexp_test_find();
+  regexp_test_findAll();
+  regexp_test_split();
+  regexp_test_replace();
+  regexp_test_unicode();
+  regexp_test_compile_error();
+  regexp_test_string_methods();
+  regexp_test_edge_cases();
+}

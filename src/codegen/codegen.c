@@ -25069,6 +25069,23 @@ static bool cg_emit_all_programs(CG *cg,
         bool imported_owner = cg_program_origin(cg, cg->user_types[i].owner_program) ==
                               FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
         if (imported_owner && !cg->user_types[i].is_generic_instance) {
+            /* Emit only the struct layout into type_defs.  The descriptor
+             * and __default_zero already reside in the imported package's
+             * compiled library and must NOT be re-emitted here.
+             * All type forward declarations have been appended to headers
+             * before this loop runs, so field type references are safe. */
+            UserType *t = &cg->user_types[i];
+            if (!cg_user_type_is_tuple(t)) {
+                Buf *td = &cg->type_defs;
+                buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
+                buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
+                for (size_t fi = 0; fi < t->field_count; fi++) {
+                    buf_append_cstr(td, "    ");
+                    cg_emit_c_type(td, t->fields[fi].type);
+                    buf_append_fmt(td, " %s;\n", t->fields[fi].c_name);
+                }
+                buf_append_cstr(td, "};\n\n");
+            }
             continue;
         }
         if (imported_owner && cg->user_types[i].generic_context_type_param_count > 0U) {

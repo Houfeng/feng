@@ -14,6 +14,7 @@
     "lldb",
     "miniz",
     "nums",
+    "pcre",
     "println",
     "venv"
   ],

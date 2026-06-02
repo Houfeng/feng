@@ -84,7 +84,7 @@ C 实现：
  * 非标量类型 panic。NULL 指针 panic。
  * 偏移通过 feng_pointer_move 组合完成。 */
 void feng_pointer_get_scalar(const FengGenericParamDescriptor *type,
-                             void *result, void *ptr) {
+                             void *ptr, void *result) {
     if (type->type_kind > FENG_TYPE_KIND_SCALAR_MAX) {
         feng_panic("feng_pointer_get_scalar: only scalar types allowed");
     }
@@ -202,7 +202,7 @@ open enum RegExpFlag {
 }
 ```
 
-值直接对应 PCRE2 的 `uint32_t` 编译选项常量，可通过位或组合。
+值直接对应 PCRE2 的 `uint32_t` 编译选项常量。公开构造函数只接受 `RegExpFlag` 枚举形态，底层 `u32` 组合仅作为内部实现细节使用。
 UTF-8 和 UCP 模式（`PCRE2_UTF | PCRE2_UCP`）在 `RegExp` 构造函数中强制启用，
 用户不需要手动指定。
 
@@ -214,13 +214,13 @@ UTF-8 和 UCP 模式（`PCRE2_UTF | PCRE2_UCP`）在 `RegExp` 构造函数中强
  */
 open type Match {
   /** 匹配的完整子串 */
-  let text: string;
+  open let text: string;
   /** 匹配起始的字节偏移（相对原始 subject） */
-  let start: long;
+  open let start: long;
   /** 匹配结束的字节偏移（右开，相对原始 subject） */
-  let end: long;
+  open let end: long;
   /** 捕获组数组，groups[0] 为整体匹配，groups[1..] 为各捕获组 */
-  let groups: string[];
+  open let groups: string[];
 }
 ```
 
@@ -232,7 +232,7 @@ open type Match {
  * Instances are immutable and thread-safe after construction.
  */
 open type RegExp {
-  seal let code: Pcre2Code*;
+  seal let code: long;
   seal let pattern: string;
   seal let flagBits: u32;
 
@@ -245,12 +245,12 @@ open type RegExp {
   open func RegExp(pattern: string) { ... }
 
   /**
-   * Compiles a regular expression pattern with additional flags.
+   * Compiles a regular expression pattern with a single RegExpFlag.
    * @param pattern - the regex pattern string
-   * @param flags - one or more RegExpFlag values combined with bitwise OR
+   * @param flag - a RegExpFlag value
    * @throws string if the pattern is invalid
    */
-  open func RegExp(pattern: string, flags: u32) { ... }
+  open func RegExp(pattern: string, flag: RegExpFlag) { ... }
 
   /**
    * Returns whether this regex matches the entire subject string.
@@ -320,7 +320,7 @@ open type RegExp {
 | 方法 | 签名 | 语义 |
 |------|------|------|
 | `RegExp(pattern)` | `func RegExp(pattern: string)` | 编译 pattern，默认 UTF-8 + UCP |
-| `RegExp(pattern, flags)` | `func RegExp(pattern: string, flags: u32)` | 编译 pattern，附加 flags |
+| `RegExp(pattern, flag)` | `func RegExp(pattern: string, flag: RegExpFlag)` | 编译 pattern，附加单个公开枚举 flag |
 | `destroy()` | `func destroy(): void` | 释放 `pcre2_code`，之后不可再使用 |
 
 ### 5.2 匹配测试
@@ -351,28 +351,20 @@ open type RegExp {
 
 ```feng
 open func RegExp(pattern: string) {
-  self.RegExp(pattern, (u32)0);
-}
-
-open func RegExp(pattern: string, flags: u32) {
   self.pattern = pattern;
   /* 强制启用 UTF-8 (0x00080000) 和 UCP (0x00020000) */
-  self.flagBits = flags | (u32)0x00080000 | (u32)0x00020000;
-  let patternBytes = pattern.toBytes();
-  var errorcode: int = 0;
-  var erroroffset: long = 0;
-  let compiled = pcre2_compile(
-    &patternBytes, (long)patternBytes.length(),
-    self.flagBits, &errorcode, &erroroffset, (long)0
-  );
-  if feng_pointer_is_null(compiled) {
-    let buf: byte[!] = byte[: (long)256];
-    pcre2_get_error_message(errorcode, &buf, (long)256);
-    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf);
-  }
-  self.code = compiled;
+  self.flagBits = (u32)0x00080000 | (u32)0x00020000;
+  self.code = compilePattern(pattern, self.flagBits);
+}
+
+open func RegExp(pattern: string, flag: RegExpFlag) {
+  self.pattern = pattern;
+  self.flagBits = (u32)(int)flag | (u32)0x00080000 | (u32)0x00020000;
+  self.code = compilePattern(pattern, self.flagBits);
 }
 ```
+
+其中 `compilePattern` 是文件私有辅助函数，包装 `pcre2_compile` 调用与错误转换：上述两个公开构造函数以及 `String.ff` 中的便捷方法均由其负责生成 `pcre2_code` 句柄。
 
 ### 6.2 test / isMatch
 
@@ -627,7 +619,7 @@ open func destroy(): void {
 
 ## 7 string 扩展方法
 
-通过 `fit string` 提供便捷方法，内部创建临时 `RegExp`。
+在 `std/src/text/RegExp.ff` 中通过 `fit string` 提供便捷方法，内部创建临时 `RegExp`。
 
 ```feng
 open fit string {
@@ -697,8 +689,7 @@ PCRE2 的 JIT 编译器（若后续启用）可将 `pcre2_match` 加速 3-10 倍
 |------|------|
 | `src/runtime/feng_runtime_contract.c` | 新增 `feng_pointer_get_scalar` |
 | `src/runtime/feng_runtime_contract.inc` | 注册 `feng_pointer_get_scalar` |
-| `std/src/text/RegExp.ff` | 实现 RegExp / Match / RegExpFlag + @cdecl 声明 |
-| `std/src/text/String.ff` | 新增 `matches` / `replacePattern` / `splitPattern` 便捷方法 |
+| `std/src/text/RegExp.ff` | 实现 RegExp / Match / RegExpFlag + @cdecl 声明；定义 `matches` / `replacePattern` / `splitPattern` 便捷方法 |
 | `std_test/src/test_regexp.ff` | 新增测试用例 |
 
 ## 10 测试用例

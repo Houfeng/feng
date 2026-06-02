@@ -9,6 +9,7 @@ func main(args: string[]) {
   run_math_tests();
   run_platform_tests();
   run_string_tests();
+  run_regexp_tests();
   run_slice_tests();
   run_io_tests();
 
