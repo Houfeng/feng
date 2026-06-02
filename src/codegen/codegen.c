@@ -2780,7 +2780,8 @@ static bool cg_emit_capture_cell_type(CG *cg,
             "    %s__release_children,\n"
             "    true,\n"
             "    %zu,\n"
-            "    %s__managed_fields\n"
+            "    %s__managed_fields,\n"
+            "    NULL\n"
             "};\n\n",
             db.data,
             sb.data,
@@ -2797,6 +2798,7 @@ static bool cg_emit_capture_cell_type(CG *cg,
             "    NULL,\n"
             "    false,\n"
             "    0,\n"
+            "    NULL,\n"
             "    NULL\n"
             "};\n\n",
             db.data,
@@ -8592,7 +8594,8 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             "    %s__release_children,\n"
             "    true,\n"
             "    1,\n"
-            "    %s__managed_fields\n"
+            "    %s__managed_fields,\n"
+            "    NULL\n"
             "};\n\n",
             s->c_closure_desc_name,
             s->feng_name,
@@ -8905,6 +8908,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     } else {
         buf_append_cstr(td, "    .managed_fields = NULL,\n");
     }
+    buf_append_cstr(td, "    .equal_fn = NULL,\n");
     buf_append_cstr(td, "};\n\n");
     free(subject_release_name);
 
@@ -10629,7 +10633,8 @@ static bool cg_emit_lambda_closure_type(CG *cg,
         "    %s__release_children,\n"
         "    true,\n"
         "    %zu,\n"
-        "    %s__managed_fields\n"
+        "    %s__managed_fields,\n"
+        "    NULL\n"
         "};\n\n",
         closure_desc_name,
         closure_struct_name,
@@ -26447,6 +26452,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     } else {
         buf_append_cstr(td, "    .managed_fields = NULL,\n");
     }
+    buf_append_cstr(td, "    .equal_fn = NULL,\n");
     buf_append_cstr(td, "};\n\n");
 }
 
@@ -26615,6 +26621,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     } else {
         buf_append_cstr(td, "    .managed_fields = NULL,\n");
     }
+    buf_append_cstr(td, "    .equal_fn = NULL,\n");
     buf_append_cstr(td, "};\n\n");
 
     /* Default-zero factory: per docs/feng-type.md §5/§7 every non-cyclic
