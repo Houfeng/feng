@@ -1,213 +1,419 @@
-# std.text RuneView 与 GraphemeView 实现方案
+# std.text 字符串操作实现方案
 
 ## 1 背景
 
-`std/src/text/RuneView.ff` 和 `std/src/text/Grapheme.ff` 当前仅有骨架（type 定义 + `length()` 占位返回 0）。`third_party/libunistring/` 已集成 UTF-8 rune/grapheme 子集，编译为 `libfeng_std_unistring.a`，通过 `std/extlib/` 在用户程序链接时自动引入。
+### 1.1 RuneView 与 GraphemeView（已交付）
 
-目标：实现 `RuneView` 和 `GraphemeView` 的 `length()` 和 `at(index)` 方法。
+`std/src/text/Rune.ff` 和 `std/src/text/Grapheme.ff` 提供 `RuneView` 和 `GraphemeView` 视图类型，
+分别实现了 `length()` 和 `at(index)` 方法。通过 `@cdecl` 调用 `third_party/libunistring/` 的 UTF-8
+rune/grapheme 子集，配合 `feng_pointer_move`/`feng_pointer_diff` 等 runtime 指针基础设施完成。
 
-## 2 可用的 libunistring API
+### 1.2 string 搜索与变换方法（本次目标）
 
-头文件位于 `third_party/libunistring/include/`：
+为 `string` 类型（字节级）增加搜索和变换方法：`indexOf`、`lastIndexOf`、`contains`、
+`startsWith`、`endsWith`、`replace`、`trim`、`trimStart`、`trimEnd`。
 
-**feng_u8_rune.h**：
-- `size_t u8_mbsnlen(const uint8_t *s, size_t n)` — n 字节中的 rune 数量
-- `const uint8_t *u8_next(ucs4_t *puc, const uint8_t *s)` — 读取下一个 rune，返回下一位置（到达末尾返回 NULL）
+核心约束：
+- `string` 在用户层语义不可变，所有变换方法返回新 string
+- UTF-8 是自同步编码，字节级搜索对合法 UTF-8 子串完全正确
+- 优先使用 Feng + 已有 C ABI 实现，仅在必要时扩展通用 runtime 能力
 
-**feng_u8_grapheme.h**：
-- `const uint8_t *u8_grapheme_next(const uint8_t *s, const uint8_t *end)` — 下一个 grapheme 边界（`s == end` 时返回 NULL）
+## 2 可用基础设施
 
-## 3 核心约束
+### 2.1 Runtime 指针函数（已有）
 
-- `&string` 零拷贝获取 string 内部 data 的 `char*` 裸指针
-- `@cdecl("feng_std_unistring", ...)` 可直接调用 libunistring 函数
-- 但 Feng 当前仅有 `feng_pointer_is_null` 和 `feng_pointer_equal`，缺少指针算术
-- libunistring 的迭代 API 需要计算 `end = data + length` 指针偏移，以及 `next - cursor` 字节距离
+- `feng_pointer_is_null(ptr)` — 指针判空
+- `feng_pointer_equal(a, b)` — 指针比较
+- `feng_pointer_move(ptr, offset)` — 指针偏移
+- `feng_pointer_diff(a, b)` — 指针距离
 
-## 4 方案：新增两个通用 runtime 指针函数
+### 2.2 Runtime 字符串函数（已有）
 
-在 `src/runtime/feng_runtime_contract.c` 中新增：
+- `feng_string_utf8_length(value)` — UTF-8 字节长度
+- `feng_string_slice(value, start, length)` — 字节级截取，返回新 string
+- `feng_string_concat(left, right)` — 拼接，返回新 string（`+` 运算符底层调用）
+
+### 2.3 libunistring（已有，via @cdecl）
+
+- `u8_next(puc, s)` — 正向读取下一个 rune，输出 code point
+- `u8_prev(puc, s, start)` — 反向读取上一个 rune，输出 code point
+- `u8_mbsnlen(s, n)` — rune 计数
+- `u8_grapheme_next(s, end)` / `u8_grapheme_prev(s, start)` — grapheme 遍历
+
+### 2.4 Feng 层已有 string 方法
+
+- `length()` — 字节长度
+- `at(index)` — 单字节子串
+- `clone()` / `clone(start, end)` — 字节区间拷贝
+- `==` / `!=` — 全串字节比较
+
+## 3 新增 runtime 函数
+
+新增 1 个通用 runtime 函数，用于字节区间比较，避免搜索操作中的中间分配：
 
 ```c
-/* 将指针移动 offset 字节，返回新位置。 */
-void *feng_pointer_move(void *ptr, int64_t offset) {
-    return (char *)ptr + offset;
-}
+/* 比较两个 FengString 的字节子区间是否相等。
+ * 区间均为右开 [start, end)。当两个区间长度不等时返回 false。 */
+bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,
+                             FengString *b, int64_t b_start, int64_t b_end) {
+    size_t a_len, b_len, a_total, b_total, range_len;
 
-/* 返回两个指针之间的字节距离（a - b）。 */
-int64_t feng_pointer_diff(void *a, void *b) {
-    return (int64_t)((char *)a - (char *)b);
+    a_total = feng_string_length(a);
+    b_total = feng_string_length(b);
+
+    if (a_start < 0 || a_end < a_start || (size_t)a_end > a_total) {
+        feng_panic("feng_string_range_equal: a range [%" PRId64 ", %" PRId64 ") "
+                   "out of bounds (length=%zu)", a_start, a_end, a_total);
+    }
+    if (b_start < 0 || b_end < b_start || (size_t)b_end > b_total) {
+        feng_panic("feng_string_range_equal: b range [%" PRId64 ", %" PRId64 ") "
+                   "out of bounds (length=%zu)", b_start, b_end, b_total);
+    }
+
+    a_len = (size_t)(a_end - a_start);
+    b_len = (size_t)(b_end - b_start);
+    if (a_len != b_len) {
+        return false;
+    }
+
+    range_len = a_len;
+    if (range_len == 0U) {
+        return true;
+    }
+
+    return memcmp(feng_string_data(a) + a_start,
+                  feng_string_data(b) + b_start,
+                  range_len) == 0;
 }
 ```
 
-这两个是通用的 C 互操作基础设施，与 rune/grapheme 无关：
-- `feng_pointer_move` — 指针偏移，用于计算 end 指针或前进 cursor
-- `feng_pointer_diff` — 指针距离，用于将指针位置转换回字节偏移量
+设计要点：
+- 是 `feng_string_equal`（全串比较）的区间版本，属于 string 类型的通用能力扩展
+- 零中间分配，直接 `memcmp` 比较底层字节
+- 边界检查对齐已有 `feng_string_slice` 的防御风格
+
+## 4 方法签名与语义
+
+所有方法通过 `fit string` 扩展到 `string` 类型上，定义在 `std/src/text/String.ff` 中。
+
+### 4.1 搜索方法
+
+| 方法 | 签名 | 返回值 |
+|------|------|--------|
+| `indexOf` | `func indexOf(target: string): long` | 首次出现的字节偏移，未找到返回 `-1` |
+| `indexOf` | `func indexOf(target: string, from: long): long` | 从 `from` 开始首次出现的字节偏移 |
+| `lastIndexOf` | `func lastIndexOf(target: string): long` | 最后一次出现的字节偏移 |
+| `contains` | `func contains(target: string): bool` | 是否包含子串 |
+| `startsWith` | `func startsWith(prefix: string): bool` | 前缀匹配 |
+| `endsWith` | `func endsWith(suffix: string): bool` | 后缀匹配 |
+
+### 4.2 变换方法
+
+| 方法 | 签名 | 返回值 |
+|------|------|--------|
+| `replace` | `func replace(old: string, replacement: string): string` | 替换所有出现，返回新 string |
+| `trim` | `func trim(): string` | 去除首尾 Unicode 空白，返回新 string |
+| `trimStart` | `func trimStart(): string` | 去除首部 Unicode 空白 |
+| `trimEnd` | `func trimEnd(): string` | 去除尾部 Unicode 空白 |
 
 ## 5 Feng 侧实现
 
-### 5.1 RuneView.ff
+### 5.1 搜索方法
+
+搜索方法全部基于 `feng_string_range_equal` 实现，零中间分配。
 
 ```feng
-open module std.text;
-
-@cdecl("feng_std_unistring", "u8_mbsnlen")
-extern func u8_mbsnlen(s: string*, n: long): long;
-
-@cdecl("feng_std_unistring", "u8_next")
-extern func u8_next(puc: u32*, s: string*): string*;
-
 @runtime
-extern func feng_pointer_move(ptr: string*, offset: long): string*;
-
-@runtime
-extern func feng_pointer_diff(a: string*, b: string*): long;
+extern func feng_string_range_equal(
+  a: string, a_start: long, a_end: long,
+  b: string, b_start: long, b_end: long
+): bool;
 
 open fit string {
-  open func runes(): RuneView {
-    return RuneView(self);
+
+  /** 返回 target 首次出现的字节偏移，未找到返回 -1。 */
+  open func indexOf(target: string): long {
+    return self.indexOf(target, (long)0);
   }
+
+  /** 从 from 字节偏移开始，返回 target 首次出现的字节偏移，未找到返回 -1。 */
+  open func indexOf(target: string, from: long): long {
+    let tlen = target.length();
+    if tlen == (long)0 {
+      return from;
+    }
+    let slen = self.length();
+    if from < (long)0 {
+      throw "String indexOf from out of bounds";
+    }
+    if from + tlen > slen {
+      return (long)-1;
+    }
+    let limit = slen - tlen;
+    var i = from;
+    while i <= limit {
+      if feng_string_range_equal(self, i, i + tlen, target, (long)0, tlen) {
+        return i;
+      }
+      i += (long)1;
+    }
+    return (long)-1;
+  }
+
+  /** 返回 target 最后一次出现的字节偏移，未找到返回 -1。 */
+  open func lastIndexOf(target: string): long {
+    let tlen = target.length();
+    if tlen == (long)0 {
+      return self.length();
+    }
+    let slen = self.length();
+    if tlen > slen {
+      return (long)-1;
+    }
+    var i = slen - tlen;
+    while i >= (long)0 {
+      if feng_string_range_equal(self, i, i + tlen, target, (long)0, tlen) {
+        return i;
+      }
+      i -= (long)1;
+    }
+    return (long)-1;
+  }
+
+  /** 返回是否包含子串 target。 */
+  open func contains(target: string): bool {
+    return self.indexOf(target) >= (long)0;
+  }
+
+  /** 返回是否以 prefix 开头。 */
+  open func startsWith(prefix: string): bool {
+    let plen = prefix.length();
+    if plen == (long)0 {
+      return true;
+    }
+    if plen > self.length() {
+      return false;
+    }
+    return feng_string_range_equal(self, (long)0, plen, prefix, (long)0, plen);
+  }
+
+  /** 返回是否以 suffix 结尾。 */
+  open func endsWith(suffix: string): bool {
+    let slen = suffix.length();
+    if slen == (long)0 {
+      return true;
+    }
+    let len = self.length();
+    if slen > len {
+      return false;
+    }
+    return feng_string_range_equal(self, len - slen, len, suffix, (long)0, slen);
+  }
+
+}
+```
+
+### 5.2 replace
+
+基于 `indexOf` 定位 + `clone` 截取 + `+` 拼接构建结果。
+
+```feng
+open fit string {
+
+  /** 替换所有 old 出现为 replacement，返回新 string。 */
+  open func replace(old: string, replacement: string): string {
+    let olen = old.length();
+    if olen == (long)0 {
+      return self.clone();
+    }
+    let slen = self.length();
+    var result = "";
+    var pos: long = 0;
+    var found = self.indexOf(old, pos);
+    while found >= (long)0 {
+      if found > pos {
+        result = result + self.clone(pos, found);
+      }
+      result = result + replacement;
+      pos = found + olen;
+      found = self.indexOf(old, pos);
+    }
+    if pos == (long)0 {
+      return self.clone();
+    }
+    if pos < slen {
+      result = result + self.clone(pos, slen);
+    }
+    return result;
+  }
+
+}
+```
+
+### 5.3 trim 系列
+
+使用 `u8_next`（正向）和 `u8_prev`（反向）遍历 rune 边界获取 code point，
+对 code point 检查 Unicode 空白集合（25 个确定码位），找到首/尾非空白边界后
+一次 `clone` 截取。
+
+#### Unicode 空白码位表
+
+```
+U+0009 HT      U+000A LF      U+000B VT      U+000C FF      U+000D CR
+U+0020 Space   U+0085 NEL     U+00A0 NBSP    U+1680 Ogham
+U+2000–U+200A（11 个排版空格）
+U+2028 行分隔   U+2029 段分隔   U+202F 窄NBSP  U+205F 中数学空格
+U+3000 全角空格
+```
+
+#### 实现
+
+`u8_prev` 需在 `std/src/text/Rune.ff` 中补充 `@cdecl` 声明（libunistring 已提供）。
+
+```feng
+/** 检查 Unicode code point 是否为空白字符。 */
+func isUnicodeWhitespace(cp: u32): bool {
+  if cp <= (u32)0x0020 {
+    return cp == (u32)0x0009 || cp == (u32)0x000A || cp == (u32)0x000B
+        || cp == (u32)0x000C || cp == (u32)0x000D || cp == (u32)0x0020;
+  }
+  if cp == (u32)0x0085 || cp == (u32)0x00A0 {
+    return true;
+  }
+  if cp == (u32)0x1680 {
+    return true;
+  }
+  if cp >= (u32)0x2000 && cp <= (u32)0x200A {
+    return true;
+  }
+  if cp == (u32)0x2028 || cp == (u32)0x2029 {
+    return true;
+  }
+  if cp == (u32)0x202F || cp == (u32)0x205F || cp == (u32)0x3000 {
+    return true;
+  }
+  return false;
 }
 
-open type RuneView {
-  seal let text: string;
+open fit string {
 
-  open func RuneView(text: string) {
-    self.text = text;
-  }
-
-  /** Returns the number of runes (Unicode scalar values) in this string. */
-  open func length(): long {
-    return u8_mbsnlen(&self.text, self.text.length());
-  }
-
-  /** Returns the substring of the rune at the given logical index. */
-  open func at(index: long): string {
-    if index < 0 {
-      throw "RuneView index out of bounds";
+  /** 去除首部 Unicode 空白字符，返回新 string。 */
+  open func trimStart(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
     }
-    let data: string* = &self.text;
+    let data: string* = &self;
+    let end: string* = feng_pointer_move(data, len);
     var cursor: string* = data;
     var uc: u32 = 0;
-    var i: long = 0;
-    while i < index {
-      cursor = u8_next(&uc, cursor);
-      if feng_pointer_is_null(cursor) {
-        throw "RuneView index out of bounds";
-      }
-      i += 1;
-    }
-    let next: string* = u8_next(&uc, cursor);
-    if feng_pointer_is_null(next) {
-      throw "RuneView index out of bounds";
-    }
-    let start = feng_pointer_diff(cursor, data);
-    let end = feng_pointer_diff(next, data);
-    return self.text.clone(start, end);
-  }
-}
-```
-
-### 5.2 Grapheme.ff
-
-```feng
-open module std.text;
-
-@cdecl("feng_std_unistring", "u8_grapheme_next")
-extern func u8_grapheme_next(s: string*, end: string*): string*;
-
-@runtime
-extern func feng_pointer_move(ptr: string*, offset: long): string*;
-
-@runtime
-extern func feng_pointer_diff(a: string*, b: string*): long;
-
-@runtime
-extern func feng_pointer_is_null(ptr: string*): bool;
-
-@runtime
-extern func feng_pointer_equal(a: string*, b: string*): bool;
-
-open fit string {
-  open func graphemes(): GraphemeView {
-    return GraphemeView(self);
-  }
-}
-
-open type GraphemeView {
-  seal let text: string;
-
-  open func GraphemeView(text: string) {
-    self.text = text;
-  }
-
-  /** Returns the number of grapheme clusters in this string. */
-  open func length(): long {
-    let data: string* = &self.text;
-    let end: string* = feng_pointer_move(data, self.text.length());
-    var cursor: string* = data;
-    var count: long = 0;
     while !feng_pointer_equal(cursor, end) {
-      cursor = u8_grapheme_next(cursor, end);
-      if feng_pointer_is_null(cursor) {
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
         break;
       }
-      count += 1;
+      if !isUnicodeWhitespace(uc) {
+        break;
+      }
+      cursor = next;
     }
-    return count;
+    let start = feng_pointer_diff(cursor, data);
+    if start == len {
+      return "";
+    }
+    return self.clone(start, len);
   }
 
-  /** Returns the substring of the grapheme cluster at the given logical index. */
-  open func at(index: long): string {
-    if index < 0 {
-      throw "GraphemeView index out of bounds";
+  /** 去除尾部 Unicode 空白字符，返回新 string。 */
+  open func trimEnd(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
     }
-    let data: string* = &self.text;
-    let end: string* = feng_pointer_move(data, self.text.length());
-    var cursor: string* = data;
-    var i: long = 0;
-    while i < index {
-      cursor = u8_grapheme_next(cursor, end);
-      if feng_pointer_is_null(cursor) {
-        throw "GraphemeView index out of bounds";
+    let data: string* = &self;
+    var cursor: string* = feng_pointer_move(data, len);
+    var uc: u32 = 0;
+    while !feng_pointer_equal(cursor, data) {
+      let prev: string* = u8_prev(&uc, cursor, data);
+      if feng_pointer_is_null(prev) {
+        break;
       }
-      i += 1;
+      if !isUnicodeWhitespace(uc) {
+        break;
+      }
+      cursor = prev;
     }
-    if feng_pointer_equal(cursor, end) {
-      throw "GraphemeView index out of bounds";
+    let trimmed = feng_pointer_diff(cursor, data);
+    if trimmed == (long)0 {
+      return "";
     }
-    let next: string* = u8_grapheme_next(cursor, end);
-    let start = feng_pointer_diff(cursor, data);
-    let cluster_end: long = 0;
-    if feng_pointer_is_null(next) {
-      cluster_end = self.text.length();
-    } else {
-      cluster_end = feng_pointer_diff(next, data);
-    }
-    return self.text.clone(start, cluster_end);
+    return self.clone((long)0, trimmed);
   }
+
+  /** 去除首尾 Unicode 空白字符，返回新 string。 */
+  open func trim(): string {
+    return self.trimStart().trimEnd();
+  }
+
 }
 ```
 
-## 6 变更文件
+## 6 性能分析
+
+| 方法 | 时间复杂度 | 堆分配次数 |
+|------|-----------|-----------|
+| `indexOf` / `lastIndexOf` | O(n·m) 比较 | **0**（`feng_string_range_equal` 零分配） |
+| `contains` | 同 indexOf | **0** |
+| `startsWith` / `endsWith` | O(m) | **0** |
+| `replace` | O(n·m) 搜索 + O(k) 拼接 | **O(k)**，k = 匹配次数 |
+| `trimStart` / `trimEnd` | O(w) 扫描 + 1 次 clone | **1** |
+| `trim` | trimStart + trimEnd | **2** |
+
+## 7 变更文件
 
 | 文件 | 操作 |
 |------|------|
-| `src/runtime/feng_runtime_contract.c` | 新增 `feng_pointer_move` 和 `feng_pointer_diff` |
-| `std/src/text/RuneView.ff` | 重写 |
-| `std/src/text/Grapheme.ff` | 重写 |
-| `std_test/src/test_string.ff` | 追加 rune/grapheme 测试 |
+| `src/runtime/feng_runtime_contract.c` | 新增 `feng_string_range_equal` |
+| `src/runtime/feng_runtime_contract.inc` | 注册 `feng_string_range_equal` |
+| `std/src/text/Rune.ff` | 补充 `u8_prev` 的 `@cdecl` 声明 |
+| `std/src/text/String.ff` | 新增 `feng_string_range_equal` 声明 + `isUnicodeWhitespace` + 10 个方法 |
+| `std_test/src/test_string.ff` | 追加测试用例 |
 
-## 7 测试用例
+## 8 测试用例
 
-- `"hello".runes().length() == 5`
-- `"你好".runes().length() == 2`
-- `"你好".runes().at(1) == "好"`
-- `"abc".graphemes().length() == 3`
-- ZWJ emoji（如 `"👨‍👩‍👧‍👦"`）grapheme 长度为 1
-- `at(index)` 越界抛出异常
+### 8.1 indexOf / lastIndexOf
+- `"hello world".indexOf("world") == 6`
+- `"hello world".indexOf("xyz") == -1`
+- `"hello".indexOf("") == 0`
+- `"aabaa".indexOf("a", 2) == 3`
+- `"aabaa".lastIndexOf("a") == 4`
+- `"你好世界".indexOf("世界") == 6`（字节偏移）
 
-## 8 关联
+### 8.2 contains / startsWith / endsWith
+- `"hello world".contains("world") == true`
+- `"hello world".contains("xyz") == false`
+- `"hello".startsWith("hel") == true`
+- `"hello".startsWith("world") == false`
+- `"hello".endsWith("llo") == true`
+- `"hello".endsWith("hel") == false`
+- `"".startsWith("") == true`
+
+### 8.3 replace
+- `"hello world".replace("world", "feng") == "hello feng"`
+- `"aaa".replace("a", "bb") == "bbbbbb"`
+- `"hello".replace("xyz", "abc") == "hello"`
+- `"hello".replace("", "x") == "hello"`（空 old 不替换）
+
+### 8.4 trim
+- `" hello ".trim() == "hello"`
+- `"  hello".trimStart() == "hello"`
+- `"hello  ".trimEnd() == "hello"`
+- `"hello".trim() == "hello"`（无空白不变）
+- `"   ".trim() == ""`（全空白）
+- `"\t\n hello \r\n".trim() == "hello"`（混合 ASCII 空白）
+- 含 Unicode 空白（全角空格 U+3000 等）的 trim 测试
+
+## 9 关联
 
 - [feng-extlib-draft.md](./feng-extlib-draft.md) — libunistring 选型与 vendoring 约定
 - `third_party/libunistring/README.md` — 可用 API 清单
