@@ -24850,6 +24850,21 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
+    /* Emit full struct bodies for non-empty tuple types into headers.
+     * These come after spec_forward so that tuple fields referencing spec
+     * value types find them complete. Zero-field tuples were already
+     * emitted in cg_emit_user_type_forward above. */
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        const UserType *t = &cg->user_types[i];
+        if (!cg_user_type_is_tuple(t) || t->field_count == 0U) continue;
+        buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
+        for (size_t fi = 0; fi < t->field_count; fi++) {
+            buf_append_cstr(&cg->headers, "    ");
+            cg_emit_c_type(&cg->headers, t->fields[fi].type);
+            buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
+        }
+        buf_append_cstr(&cg->headers, "};\n");
+    }
     for (size_t i = 0; i < cg->user_type_count; i++) {
         bool imported_owner = cg_program_origin(cg, cg->user_types[i].owner_program) ==
                               FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
@@ -26049,17 +26064,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
     Buf equal_fn_name;
 
-    buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
-    if (t->field_count == 0U) {
-        buf_append_cstr(td, "    unsigned char _unit;\n");
-    } else {
-        for (size_t i = 0; i < t->field_count; i++) {
-            buf_append_cstr(td, "    ");
-            cg_emit_c_type(td, t->fields[i].type);
-            buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
-        }
-    }
-    buf_append_cstr(td, "};\n\n");
+    /* Struct body already emitted in cg_emit_user_type_forward (headers). */
 
     buf_init(&equal_fn_name);
     buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
@@ -26290,8 +26295,22 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
 }
 
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
-    buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
     if (cg_user_type_is_tuple(t)) {
+        if (t->field_count == 0U) {
+            /* Zero-field tuples (e.g. None()) have no type dependencies and
+             * may be embedded by value in union spec value structs emitted
+             * later in the same headers section. Emit the full definition
+             * here so the type is complete when needed. */
+            buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
+            buf_append_cstr(&cg->headers, "    unsigned char _unit;\n");
+            buf_append_cstr(&cg->headers, "};\n");
+        } else {
+            /* Non-empty tuples may reference spec value types in their
+             * fields, so only forward-declare here. The full body is
+             * emitted after spec forwards (see cg_emit_tuple_type_body). */
+            buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
+        }
+
         const char *descriptor_type = cg_tuple_aggregate_top_level_slot_count(t) > 0U
                                           ? "FengAggregateDescriptor"
                                           : "FengTrivialDescriptor";
@@ -26306,6 +26325,7 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
                        t->c_tuple_box_desc_name);
         return;
     }
+    buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
     if (t->is_abi_type && t->c_abi_layout_name != NULL) {
         buf_append_fmt(&cg->headers, "struct %s;\n", t->c_abi_layout_name);
     }

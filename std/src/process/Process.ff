@@ -6,35 +6,23 @@ import std.collections;
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
-@cdecl("libc")
-extern func fork(): int;
-
-@cdecl("libc")
-extern func waitpid(pid: int, status: int*, options: int): int;
-
-@cdecl("libc", "kill")
-extern func posix_kill(pid: int, sig: int): int;
-
 @cdecl("libc", "_exit")
 extern func posix_exit(status: int): void;
-
-@cdecl("libc")
-extern func system(command: byte*): int;
 
 @cdecl("libc")
 extern func getpid(): int;
 
 @cdecl("libc")
-extern func pipe(pipefd: int*): int;
+extern func popen(command: byte*, mode: byte*): long;
 
 @cdecl("libc")
-extern func dup2(oldfd: int, newfd: int): int;
+extern func fread(ptr: byte*, size: long, nmemb: long, stream: long): long;
 
 @cdecl("libc")
-extern func close(fd: int): int;
+extern func pclose(stream: long): int;
 
-@cdecl("libc")
-extern func read(fd: int, buf: byte*, count: long): long;
+@cdecl("libc", "kill")
+extern func posix_kill(pid: int, sig: int): int;
 
 seal func emptyBytes(): byte[] {
   let items: byte[!] = byte[: (long)0];
@@ -70,7 +58,7 @@ seal func shellEscape(arg: byte[]): byte[] {
 open type Process {
 
   /**
-   * Spawns a new process and waits for it to finish.
+   * Spawns a new process.
    */
   open static func spawn(path: string, args: string...): Process {
     let process = Process(path, args);
@@ -117,38 +105,19 @@ open type Process {
 
   seal func run(): void {
     let cmdBytes = self.buildCommand();
+    let mode: byte[!] = byte[: (long)2];
+    mode[0] = (byte)114;
+    mode[1] = (byte)0;
 
-    let pipeFds: int[!] = int[: 2];
-    let pipeRc = pipe(&pipeFds);
-    if pipeRc != 0 {
-      throw "process/pipe-failed";
+    let fp = popen(&cmdBytes, &mode);
+    if fp == (long)0 {
+      throw "process/spawn-failed";
     }
-    let pipeReadFd = pipeFds[0];
-    let pipeWriteFd = pipeFds[1];
-
-    let childPid = fork();
-    if childPid < 0 {
-      close(pipeReadFd);
-      close(pipeWriteFd);
-      throw "process/fork-failed";
-    }
-
-    if childPid == 0 {
-      close(pipeReadFd);
-      dup2(pipeWriteFd, 1);
-      close(pipeWriteFd);
-      let rc = system(&cmdBytes);
-      let code = (rc >> 8) & 255;
-      posix_exit(code);
-    }
-
-    close(pipeWriteFd);
-    self.pid = childPid;
 
     let outputBuf = List<byte>();
     let chunk: byte[!] = byte[: (long)4096];
     while true {
-      let n = read(pipeReadFd, &chunk, (long)4096);
+      let n = fread(&chunk, (long)1, (long)4096, fp);
       if n <= (long)0 {
         break;
       }
@@ -156,12 +125,10 @@ open type Process {
         outputBuf.add(chunk[j]);
       }
     }
-    close(pipeReadFd);
     self.stdoutData = outputBuf.entries();
 
-    let statusBuf: int[!] = int[: 1];
-    waitpid(self.pid, &statusBuf, 0);
-    self.exitStatus = (statusBuf[0] >> 8) & 255;
+    let rawStatus = pclose(fp);
+    self.exitStatus = (rawStatus >> 8) & 255;
     self.finished = true;
   }
 
@@ -204,7 +171,7 @@ open type Process {
    * Sends SIGTERM to the process.
    */
   open func kill(): void {
-    if !self.finished {
+    if !self.finished && self.pid > 0 {
       posix_kill(self.pid, 15);
     }
   }
@@ -213,7 +180,7 @@ open type Process {
    * Sends the specified signal to the process.
    */
   open func kill(signal: int): void {
-    if !self.finished {
+    if !self.finished && self.pid > 0 {
       posix_kill(self.pid, signal);
     }
   }
