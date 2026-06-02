@@ -1,7 +1,7 @@
 /* System-header symbol list shared by the codegen extern-declaration pass.
  *
- * Generated C always includes <stdlib.h>, <math.h>, <string.h>, <stddef.h>,
- * <stdint.h> and <stdbool.h>.  Any C symbol that already has a prototype in
+ * Generated C always includes <stdlib.h>, <math.h>, <string.h>,
+ * <stddef.h>, <stdint.h> and <stdbool.h>.  Any C symbol that already has a prototype in
  * one of these headers must NOT be re-declared by the codegen, because the
  * Feng type mapping may produce a signature that conflicts with the
  * authoritative system-header declaration.

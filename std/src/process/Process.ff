@@ -6,20 +6,26 @@ import std.collections;
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
+@runtime
+extern func feng_pointer_is_null(ptr: CStream*): bool;
+
 @cdecl("libc", "_exit")
 extern func posix_exit(status: int): void;
 
 @cdecl("libc")
 extern func getpid(): int;
 
-@cdecl("libc")
-extern func popen(command: byte*, mode: byte*): long;
+@abi
+seal type CStream {}
 
 @cdecl("libc")
-extern func fread(ptr: byte*, size: long, nmemb: long, stream: long): long;
+extern func popen(command: byte*, mode: byte*): CStream*;
 
 @cdecl("libc")
-extern func pclose(stream: long): int;
+extern func fread(ptr: byte*, size: long, nmemb: long, stream: CStream*): long;
+
+@cdecl("libc")
+extern func pclose(stream: CStream*): int;
 
 @cdecl("libc", "kill")
 extern func posix_kill(pid: int, sig: int): int;
@@ -110,7 +116,7 @@ open type Process {
     mode[1] = (byte)0;
 
     let fp = popen(&cmdBytes, &mode);
-    if fp == (long)0 {
+    if feng_pointer_is_null(fp) {
       throw "process/spawn-failed";
     }
 

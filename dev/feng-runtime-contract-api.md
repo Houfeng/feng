@@ -6,13 +6,15 @@
 - 允许列表的唯一权威来源是 `src/runtime/feng_runtime_contract.inc`；本文是解释性索引，不是第二份白名单定义。
 - 若 future 变更新增、删除或重命名 runtime contract API，必须先修改 `src/runtime/feng_runtime_contract.inc`，再同步更新本文。
 
-当前 contract API 共 5 个：
+当前 contract API 共 7 个：
 
 1. `feng_string_utf8_length`
 2. `feng_string_from_utf8_bytes`
 3. `feng_array_length_i64`
 4. `feng_array_slice`
 5. `feng_expression_equal`
+6. `feng_pointer_is_null`
+7. `feng_pointer_equal`
 
 ## 2. API 清单
 
@@ -73,6 +75,24 @@
 - 语义说明：helper 按 `type_kind` 与当前值模型分派，实现基础数值 / `bool` / `enum` / `string` 的值语义，以及数组 / 对象 / 指针 / `spec` / callable 的引用身份语义。
 - 主要使用点：标准库 `std/src/collections/Array.ff` 用它实现 `T[!].indexOf(value)`。
 - 边界说明：这是标准库显式调用的 runtime helper，不改变普通 `==` 运算符的 analyzer / codegen 规则。
+
+### 2.6 `feng_pointer_is_null`
+
+- C 符号：`bool feng_pointer_is_null(void *ptr)`
+- Feng 声明形态：`extern func feng_pointer_is_null(ptr: T*): bool;`（其中 `T` 为任意 `@abi seal` 类型）
+- 用途：检查一个 C 侧不透明指针是否为 NULL。Feng 没有空指针字面量，用户代码通过此函数检测分配失败或 C API 返回的 NULL。
+- 语义说明：当 `ptr == NULL` 时返回 `true`，否则返回 `false`。
+- 主要使用点：标准库 `std/src/process/Process.ff` 用它检测 `popen` 返回的文件流指针是否为 NULL。
+- 边界说明：仅适用于不透明 C 指针类型，不适用于 Feng 托管对象指针。
+
+### 2.7 `feng_pointer_equal`
+
+- C 符号：`bool feng_pointer_equal(void *left, void *right)`
+- Feng 声明形态：`extern func feng_pointer_equal(left: T*, right: T*): bool;`（其中 `T` 为任意 `@abi seal` 类型）
+- 用途：比较两个 C 侧不透明指针是否相等（地址相等性）。
+- 语义说明：当 `left == right`（指针地址相同）时返回 `true`，否则返回 `false`。
+- 主要使用点：用户代码需要比较两个 C 侧指针是否指向同一对象时使用。
+- 边界说明：仅做地址比较，不比较指向的内容。仅适用于不透明 C 指针类型，不适用于 Feng 托管对象指针。
 
 ## 3. 维护规则
 

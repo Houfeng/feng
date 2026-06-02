@@ -27,6 +27,13 @@ FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengGenericParamDescri
 FENG_RUNTIME_CONTRACT(int64_t, feng_alloc, (int64_t size))
 FENG_RUNTIME_CONTRACT(void, feng_free, (int64_t ptr))
 
+/* Pointer helpers for opaque C-side pointers.  Feng has no null-pointer
+ * literal, so user code calls feng_pointer_is_null to detect a failed
+ * allocation or a NULL return from a C API.  feng_pointer_equal compares
+ * two C-side pointers for address equality. */
+FENG_RUNTIME_CONTRACT(bool, feng_pointer_is_null, (void *ptr))
+FENG_RUNTIME_CONTRACT(bool, feng_pointer_equal, (void *left, void *right))
+
 /* Test-only helper for compiler/runtime regressions around bare-T return. */
 FENG_RUNTIME_CONTRACT(void, __test_value_identity, (const FengGenericParamDescriptor *type, const void *value, void *out))
 

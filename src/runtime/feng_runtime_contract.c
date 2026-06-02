@@ -141,6 +141,16 @@ void feng_free(int64_t ptr) {
     free((void *)(intptr_t)ptr);
 }
 
+/* Returns true when the given C-side pointer is NULL. */
+bool feng_pointer_is_null(void *ptr) {
+    return ptr == NULL;
+}
+
+/* Returns true when two C-side pointers have the same address. */
+bool feng_pointer_equal(void *left, void *right) {
+    return left == right;
+}
+
 /* Test-only runtime contract used to exercise bare-T return lowering with a
  * real descriptor-aware out carrier. */
 void __test_value_identity(const FengGenericParamDescriptor *type,
