@@ -850,7 +850,10 @@ static void test_extern_c_symbol_name_codegen(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "extern double fabs(double);") != NULL);
+    /* fabs is a system-header symbol — its extern declaration is suppressed
+     * because the generated C always includes <math.h>. */
+    /* ASSERT(strstr(out.c_source, "extern double fabs(double);") != NULL); */
+    ASSERT(strstr(out.c_source, "extern double fabs(double);") == NULL);
     ASSERT(strstr(out.c_source, "fabs(") != NULL);
     ASSERT(strstr(out.c_source, "extern double abs_value(double);") == NULL);
     compile_generated_c_or_die(out.c_source);
