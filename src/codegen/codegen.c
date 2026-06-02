@@ -693,6 +693,8 @@ typedef struct UserSpec {
     char   *c_closure_struct_name;         /* callable-form only */
     char   *c_closure_desc_name;           /* callable-form only */
     char   *c_abi_fn_ptr_typedef_name;     /* callable-form @abi function-pointer surface */
+    char   *c_default_callable_noop_name;  /* callable-form noop invoke (default-zero) */
+    char   *c_default_callable_new_name;   /* callable-form factory  (default-zero) */
     UserSpecMember *members;
     size_t          member_count;
     bool            members_registered;
@@ -5912,6 +5914,14 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         Buf pb; buf_init(&pb);
         buf_append_fmt(&pb, "FengAbiFnPtr__%s__%s", owner_mangle, symbol.data);
         s->c_abi_fn_ptr_typedef_name = pb.data;
+
+        Buf nb; buf_init(&nb);
+        buf_append_fmt(&nb, "FengCallableDefault__%s__%s__noop", owner_mangle, symbol.data);
+        s->c_default_callable_noop_name = nb.data;
+
+        Buf fb; buf_init(&fb);
+        buf_append_fmt(&fb, "FengCallableDefault__%s__%s__new", owner_mangle, symbol.data);
+        s->c_default_callable_new_name = fb.data;
     }
 
     free(owner_mangle);
@@ -5932,7 +5942,8 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
             return false;
         }
     } else if (!(s->feng_name && s->c_witness_struct_name && s->c_closure_struct_name &&
-                 s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name)) {
+                 s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name &&
+                 s->c_default_callable_noop_name && s->c_default_callable_new_name)) {
         return false;
     }
 
@@ -7645,6 +7656,14 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
         Buf pb; buf_init(&pb);
         buf_append_fmt(&pb, "FengAbiFnPtr__%s__%s", cg->module_mangle, san);
         s->c_abi_fn_ptr_typedef_name = pb.data;
+
+        Buf nb; buf_init(&nb);
+        buf_append_fmt(&nb, "FengCallableDefault__%s__%s__noop", cg->module_mangle, san);
+        s->c_default_callable_noop_name = nb.data;
+
+        Buf fb; buf_init(&fb);
+        buf_append_fmt(&fb, "FengCallableDefault__%s__%s__new", cg->module_mangle, san);
+        s->c_default_callable_new_name = fb.data;
     }
 
     free(san);
@@ -7661,7 +7680,8 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
             && s->c_aggregate_default_name && s->c_aggregate_init_fn_name;
     }
     return s->c_witness_struct_name && s->c_closure_struct_name &&
-           s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name;
+           s->c_closure_desc_name && s->c_abi_fn_ptr_typedef_name &&
+           s->c_default_callable_noop_name && s->c_default_callable_new_name;
 }
 
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
@@ -8560,6 +8580,55 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             s->c_closure_struct_name,
             s->c_closure_desc_name,
             s->c_closure_desc_name);
+
+        /* Noop invoke — used by the default-zero callable value. */
+        buf_append_cstr(td, "static ");
+        cg_emit_c_type(td, s->callable_return_type);
+        buf_append_fmt(td, " %s(void *_closure", s->c_default_callable_noop_name);
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            buf_append_cstr(td, ", ");
+            cg_emit_c_type(td, s->callable_param_types[i]);
+            buf_append_fmt(td, " _p%zu", i);
+        }
+        buf_append_cstr(td, ") {\n    (void)_closure;\n");
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            buf_append_fmt(td, "    (void)_p%zu;\n", i);
+        }
+        if (s->callable_return_type->kind == CG_TYPE_VOID) {
+            buf_append_cstr(td, "}\n\n");
+        } else {
+            char *ret_expr = NULL;
+            if (!cg_default_value_expr(cg, s->callable_return_type,
+                                       &s->decl->token, &ret_expr)) {
+                free(ret_expr);
+                return;
+            }
+            buf_append_fmt(td, "    return %s;\n}\n\n", ret_expr);
+            free(ret_expr);
+        }
+
+        /* Forward declare so other default-zero factories can reference it. */
+        buf_append_fmt(&cg->headers,
+            "struct %s *%s(void);\n",
+            s->c_closure_struct_name,
+            s->c_default_callable_new_name);
+
+        /* Default-zero factory — allocates a callable with the noop invoke. */
+        buf_append_fmt(td,
+            "struct %s *%s(void) {\n"
+            "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n"
+            "    _o->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+            "    _o->_self = NULL;\n"
+            "    _o->invoke = %s;\n"
+            "    return _o;\n"
+            "}\n\n",
+            s->c_closure_struct_name,
+            s->c_default_callable_new_name,
+            s->c_closure_struct_name,
+            s->c_closure_struct_name,
+            s->c_closure_desc_name,
+            s->c_default_callable_noop_name);
+
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
@@ -16892,6 +16961,18 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "0.0"); break;
         case CG_TYPE_POINTER:
             buf_append_cstr(&b, "NULL"); break;
+        case CG_TYPE_CALLABLE:
+            if (type->user_spec != NULL &&
+                type->user_spec->c_default_callable_new_name != NULL) {
+                buf_append_fmt(&b, "(struct %s *)%s()",
+                               type->user_spec->c_closure_struct_name,
+                               type->user_spec->c_default_callable_new_name);
+            } else {
+                buf_free(&b);
+                return cg_fail(cg, blame ? *blame : (FengToken){0},
+                    "codegen: cannot produce default value for unresolved callable type");
+            }
+            break;
         case CG_TYPE_GENERIC_PARAM:
             buf_append_cstr(&b, "NULL"); break;
         case CG_TYPE_STRING:
@@ -26576,6 +26657,16 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     free(elem_cty);
                     break;
                 }
+                case CG_TYPE_CALLABLE:
+                    if (ft->user_spec != NULL &&
+                        ft->user_spec->c_default_callable_new_name != NULL) {
+                        buf_append_fmt(td,
+                            "    _o->%s = (struct %s *)%s();\n",
+                            t->fields[i].c_name,
+                            ft->user_spec->c_closure_struct_name,
+                            ft->user_spec->c_default_callable_new_name);
+                    }
+                    break;
                 case CG_TYPE_OBJECT:
                     if (ft->user) {
                         if (cg_user_type_is_tuple(ft->user)) {
@@ -28218,6 +28309,8 @@ static void cg_dispose(CG *cg) {
         free(us->c_closure_struct_name);
         free(us->c_closure_desc_name);
         free(us->c_abi_fn_ptr_typedef_name);
+        free(us->c_default_callable_noop_name);
+        free(us->c_default_callable_new_name);
         for (size_t j = 0; j < us->generic_type_arg_count; ++j) {
             cg_type_ref_free(us->generic_type_args[j]);
         }
