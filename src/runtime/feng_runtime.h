@@ -415,6 +415,11 @@ FengString *feng_string_concat(const FengString *left, const FengString *right);
 
 size_t      feng_string_length(const FengString *s);
 const char *feng_string_data(const FengString *s);
+bool        feng_string_equal(const FengString *left, const FengString *right);
+
+/* --- Spec subject equality --------------------------------------------- */
+
+bool feng_spec_subject_equal(void *left, void *right);
 
 /* --- Array ------------------------------------------------------------- */
 

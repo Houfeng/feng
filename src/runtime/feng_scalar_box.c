@@ -1,5 +1,16 @@
 #include "runtime/feng_runtime.h"
 
+#include <string.h>
+
+static bool feng_scalar_box_equal(const void *left, const void *right) {
+    const FengScalarBox *lb = (const FengScalarBox *)left;
+    const FengScalarBox *rb = (const FengScalarBox *)right;
+    if (lb == rb) return true;
+    if (lb == NULL || rb == NULL) return false;
+    if (lb->kind != rb->kind) return false;
+    return memcmp(&lb->payload, &rb->payload, sizeof(lb->payload)) == 0;
+}
+
 const FengTypeDescriptor feng_scalar_box_descriptor = {
     .name = "feng.<internal>.scalar_box",
     .size = sizeof(FengScalarBox),
@@ -8,6 +19,7 @@ const FengTypeDescriptor feng_scalar_box_descriptor = {
     .is_potentially_cyclic = false,
     .managed_field_count = 0,
     .managed_fields = NULL,
+    .equal_fn = feng_scalar_box_equal,
 };
 
 #define FENG_SCALAR_EXCEPTION_DESCRIPTOR(symbol, runtime_name) \

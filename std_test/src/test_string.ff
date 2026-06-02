@@ -32,6 +32,7 @@ func string_clone_full() {
   let cloned = text.clone();
 
   check(cloned.length() == (long)5, "string/clone-full-length");
+  check(cloned == "hello", "string/clone-full-eq");
   writeLine("__STRING_CLONE_FULL__=" + cloned);
 }
 
@@ -40,6 +41,7 @@ func string_clone_range() {
   let cloned = text.clone((long)6, (long)11);
 
   check(cloned.length() == (long)5, "string/clone-range-length");
+  check(cloned == "world", "string/clone-range-eq");
   writeLine("__STRING_CLONE_RANGE__=" + cloned);
 }
 
@@ -48,6 +50,7 @@ func string_clone_empty() {
   let cloned = text.clone((long)0, (long)0);
 
   check(cloned.length() == (long)0, "string/clone-empty-length");
+  check(cloned == "", "string/clone-empty-eq");
   writeLine("__STRING_CLONE_EMPTY__=" + cloned);
 }
 
@@ -56,6 +59,7 @@ func string_clone_utf8() {
   let cloned = text.clone();
 
   check(cloned.length() == (long)12, "string/clone-utf8-length");
+  check(cloned == "你好世界", "string/clone-utf8-eq");
   writeLine("__STRING_CLONE_UTF8__=" + cloned);
 }
 
@@ -64,7 +68,22 @@ func string_clone_utf8_range() {
   let cloned = text.clone((long)6, (long)12);
 
   check(cloned.length() == (long)6, "string/clone-utf8-range-length");
+  check(cloned == "世界", "string/clone-utf8-range-eq");
   writeLine("__STRING_CLONE_UTF8_RANGE__=" + cloned);
+}
+
+func string_equality() {
+  let a = "hello";
+  let b = "hello";
+  let c = a.clone();
+  let d = "world";
+
+  check(a == b, "string/eq-same-literal");
+  check(a == c, "string/eq-cloned");
+  check(a != d, "string/ne-different");
+  check(!(a == d), "string/not-eq-different");
+  check("" == "", "string/eq-empty");
+  writeLine("__STRING_EQUALITY__=ok");
 }
 
 open func run_string_tests() {
@@ -76,4 +95,5 @@ open func run_string_tests() {
   string_clone_empty();
   string_clone_utf8();
   string_clone_utf8_range();
+  string_equality();
 }

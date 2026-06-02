@@ -253,6 +253,11 @@ FengString *feng_string_concat(const FengString *left, const FengString *right) 
     return result;
 }
 
+bool feng_string_equal(const FengString *left, const FengString *right) {
+    if (left == right) return true;
+    return feng_string_descriptor.equal_fn((const void *)left, (const void *)right);
+}
+
 size_t feng_string_length(const FengString *s) {
     return s != NULL ? ((const struct FengString *)s)->length : 0U;
 }

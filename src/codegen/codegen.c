@@ -10190,13 +10190,14 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         cg_materialize_to_local(cg, &lr, "_t");
         cg_materialize_to_local(cg, &rr, "_t");
-        const char *cop = (eq_site->op == FENG_SPEC_EQUALITY_OP_EQ) ? "==" : "!=";
         Buf b; buf_init(&b);
-        /* Cast guards against -Wparentheses-equality when the result lands
-         * directly inside `if (...)`: the explicit (bool) cast prevents
-         * clang from treating the `==` as a stray double-paren. */
-        buf_append_fmt(&b, "(bool)(%s.subject %s %s.subject)",
-                       lr.c_expr, cop, rr.c_expr);
+        if (eq_site->op == FENG_SPEC_EQUALITY_OP_EQ) {
+            buf_append_fmt(&b, "feng_spec_subject_equal(%s.subject, %s.subject)",
+                           lr.c_expr, rr.c_expr);
+        } else {
+            buf_append_fmt(&b, "!feng_spec_subject_equal(%s.subject, %s.subject)",
+                           lr.c_expr, rr.c_expr);
+        }
         out->c_expr = b.data;
         out->type = cgtype_new(CG_TYPE_BOOL);
         er_free(&lr); er_free(&rr);
@@ -10215,7 +10216,55 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
 
-    /* Equality on strings is not auto-defined here in 1A; require numerics. */
+    /* String equality: pointer-first fast-path, then byte comparison. */
+    if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
+        lr.type->kind == CG_TYPE_STRING && rr.type->kind == CG_TYPE_STRING) {
+        Buf b; buf_init(&b);
+        if (e->as.binary.op == FENG_TOKEN_EQ) {
+            buf_append_fmt(&b, "feng_string_equal(%s, %s)", lr.c_expr, rr.c_expr);
+        } else {
+            buf_append_fmt(&b, "!feng_string_equal(%s, %s)", lr.c_expr, rr.c_expr);
+        }
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
+    /* Object/Array equality: reference identity (pointer comparison). */
+    if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
+        (lr.type->kind == CG_TYPE_OBJECT || lr.type->kind == CG_TYPE_ARRAY) &&
+        lr.type->kind == rr.type->kind &&
+        !cg_type_is_tuple_user(lr.type)) {
+        const char *cop2 = (e->as.binary.op == FENG_TOKEN_EQ) ? "==" : "!=";
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(bool)((void *)%s %s (void *)%s)", lr.c_expr, cop2, rr.c_expr);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
+    /* Tuple equality: value semantics via generated aggregate equal_fn. */
+    if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
+        cg_type_is_tuple_user(lr.type) && cg_type_is_tuple_user(rr.type)) {
+        const char *desc_name = lr.type->user->c_aggregate_desc_name;
+        if (desc_name == NULL) {
+            er_free(&lr); er_free(&rr);
+            return cg_fail(cg, e->token, "codegen: tuple type has no aggregate descriptor for equality");
+        }
+        Buf b; buf_init(&b);
+        if (e->as.binary.op == FENG_TOKEN_EQ) {
+            buf_append_fmt(&b, "(&%s)->equal_fn(&%s, &%s)", desc_name, lr.c_expr, rr.c_expr);
+        } else {
+            buf_append_fmt(&b, "!(&%s)->equal_fn(&%s, &%s)", desc_name, lr.c_expr, rr.c_expr);
+        }
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_BOOL);
+        er_free(&lr); er_free(&rr);
+        return out->c_expr && out->type;
+    }
+
     const char *cop = cg_binop_c(e->as.binary.op);
     if (!cop) {
         er_free(&lr); er_free(&rr);
