@@ -1,0 +1,140 @@
+open module std.text;
+
+/**
+ * Extends `string` with read-only slicing operations.
+ */
+open fit string {
+	/**
+	 * Returns a read-only view over a contiguous byte range of this string.
+	 * @param start - zero-based byte offset of the first byte in the view
+	 * @param end - zero-based exclusive end byte offset of the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long, end: long): StringSpan {
+		return StringSpan(self, start, end);
+	}
+
+	/**
+	 * Returns a read-only view over a contiguous byte range of this string.
+	 * @param start - zero-based byte offset of the first byte in the view
+	 * @return view over the specified range
+	 */
+	open func slice(start: long): StringSpan {
+		return self.slice(start, self.length());
+	}
+}
+
+/**
+ * A StringSpan is a read-only view over a contiguous byte sub range of a string.
+ */
+open type StringSpan {
+	seal let origin: string;
+	seal let start: long;
+	seal let end: long;
+
+	/**
+	 * Creates a span covering the right-open byte range `[start, end)`.
+	 * @param origin - source string shared by this view
+	 * @param start - zero-based inclusive start byte offset
+	 * @param end - zero-based exclusive end byte offset
+	 * @throws IllegalArgumentException if `start` or `end` are out of bounds
+	 */
+	open func StringSpan(origin: string, start: long, end: long) {
+		if start < (long)0 {
+			throw "StringSpan start out of bounds";
+		}
+		if end < start {
+			throw "StringSpan end out of bounds";
+		}
+		if end > origin.length() {
+			throw "StringSpan end out of bounds";
+		}
+		self.origin = origin;
+		self.start = start;
+		self.end = end;
+	}
+
+	/**
+	 * Returns the number of bytes covered by this span.
+	 * @return byte count inside the view
+	 */
+	open func length(): long {
+		return self.end - self.start;
+	}
+
+	/**
+	 * Returns a length-1 substring at the span-relative position `index`.
+	 * @param index - zero-based byte index relative to the span start
+	 * @return single-byte substring at the specified position
+	 */
+	open func at(index: long): string {
+		if index < (long)0 {
+			throw "StringSpan index out of bounds";
+		}
+		if index >= self.length() {
+			throw "StringSpan index out of bounds";
+		}
+		return feng_string_slice(self.origin, self.start + index, (long)1);
+	}
+
+	/**
+	 * Returns a read-only sub view relative to this span.
+	 * @param start - zero-based start byte offset relative to this span
+	 * @param end - zero-based exclusive end byte offset relative to this span
+	 * @return view over the specified range
+	 */
+	open func slice(start: long, end: long): StringSpan {
+		if start < (long)0 {
+			throw "StringSpan slice start out of bounds";
+		}
+		if end < start {
+			throw "StringSpan slice end out of bounds";
+		}
+		if end > self.length() {
+			throw "StringSpan slice end out of bounds";
+		}
+		return StringSpan(self.origin, self.start + start, self.start + end);
+	}
+
+	/**
+	 * Returns a read-only sub view relative to this span.
+	 * @param start - zero-based start byte offset relative to this span
+	 * @return view over the specified range
+	 */
+	open func slice(start: long): StringSpan {
+		return self.slice(start, self.length());
+	}
+
+	/**
+	 * Returns a read-only new view relative to this span.
+	 * @return view over the specified range
+	 */
+	open func slice(): StringSpan {
+		return self.slice(0, self.length());
+	}
+
+	/**
+	 * Returns a length-1 substring at the span-relative position `index`.
+	 * @param index - zero-based byte index relative to the span start
+	 * @return single-byte substring at the specified position
+	 */
+	open func get(index: long): string {
+		return self.at(index);
+	}
+
+	/**
+	 * Returns a dense string copy of this span.
+	 * @return copied string containing all bytes in this span
+	 */
+	open func toString(): string {
+		return feng_string_slice(self.origin, self.start, self.length());
+	}
+
+	/**
+	 * Returns a dense byte array copy of this span.
+	 * @return copied byte array containing all bytes in this span
+	 */
+	open func toBytes(): byte[] {
+		return feng_string_slice_bytes(self.origin, self.start, self.length());
+	}
+}

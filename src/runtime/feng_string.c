@@ -4,6 +4,7 @@
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -144,6 +145,85 @@ FengArray *feng_string_to_utf8_bytes(FengString *value) {
     }
 
     memcpy(data, source->data, length);
+    return result;
+}
+
+/* Copies the byte range [start, start+length) into a fresh +1 string. */
+FengString *feng_string_slice(FengString *value, int64_t start, int64_t length) {
+    const struct FengString *src = (const struct FengString *)value;
+    size_t slice_start;
+    size_t slice_length;
+    FengString *result;
+
+    if (src == NULL) {
+        feng_panic("feng_string_slice: string must not be NULL");
+    }
+    if (start < 0) {
+        feng_panic("feng_string_slice: start must be non-negative, got %" PRId64, start);
+    }
+    if (length < 0) {
+        feng_panic("feng_string_slice: length must be non-negative, got %" PRId64, length);
+    }
+
+    slice_start = (size_t)start;
+    slice_length = (size_t)length;
+
+    if (slice_start > src->length ||
+        slice_length > src->length - slice_start) {
+        feng_panic("feng_string_slice: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
+                   start, length, src->length);
+    }
+
+    if (slice_length == 0U) {
+        return feng_string_default();
+    }
+
+    result = feng_string_allocate(slice_length, 1U);
+    memcpy(((struct FengString *)result)->data,
+           src->data + slice_start,
+           slice_length);
+    return result;
+}
+
+/* Copies the byte range [start, start+length) into a fresh +1 byte array. */
+FengArray *feng_string_slice_bytes(FengString *value, int64_t start, int64_t length) {
+    const struct FengString *src = (const struct FengString *)value;
+    size_t slice_start;
+    size_t slice_length;
+    FengArray *result;
+    unsigned char *data;
+
+    if (src == NULL) {
+        feng_panic("feng_string_slice_bytes: string must not be NULL");
+    }
+    if (start < 0) {
+        feng_panic("feng_string_slice_bytes: start must be non-negative, got %" PRId64, start);
+    }
+    if (length < 0) {
+        feng_panic("feng_string_slice_bytes: length must be non-negative, got %" PRId64, length);
+    }
+
+    slice_start = (size_t)start;
+    slice_length = (size_t)length;
+
+    if (slice_start > src->length ||
+        slice_length > src->length - slice_start) {
+        feng_panic("feng_string_slice_bytes: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
+                   start, length, src->length);
+    }
+
+    result = feng_array_new_kinded(FENG_VALUE_TRIVIAL,
+                                   NULL,
+                                   NULL,
+                                   sizeof(uint8_t),
+                                   slice_length);
+
+    if (slice_length == 0U) {
+        return result;
+    }
+
+    data = (unsigned char *)feng_array_data(result);
+    memcpy(data, src->data + slice_start, slice_length);
     return result;
 }
 

@@ -8,6 +8,12 @@ extern func feng_string_utf8_length(value: string): long;
 @runtime
 extern func feng_string_from_utf8_bytes(value: byte[], length: long): string;
 
+@runtime
+extern func feng_string_slice(value: string, start: long, length: long): string;
+
+@runtime
+extern func feng_string_slice_bytes(value: string, start: long, length: long): byte[];
+
 /**
  * Extends `string` with standard UTF-8 operations.
  */

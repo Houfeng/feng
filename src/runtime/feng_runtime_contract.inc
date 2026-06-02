@@ -17,6 +17,8 @@
 FENG_RUNTIME_CONTRACT(int64_t, feng_string_utf8_length, (FengString *value))
 FENG_RUNTIME_CONTRACT(FengString *, feng_string_from_utf8_bytes, (FengArray *value, int64_t length))
 FENG_RUNTIME_CONTRACT(FengArray *, feng_string_to_utf8_bytes, (FengString *value))
+FENG_RUNTIME_CONTRACT(FengString *, feng_string_slice, (FengString *value, int64_t start, int64_t length))
+FENG_RUNTIME_CONTRACT(FengArray *, feng_string_slice_bytes, (FengString *value, int64_t start, int64_t length))
 FENG_RUNTIME_CONTRACT(int64_t, feng_array_length_i64, (const FengGenericParamDescriptor *type, const FengArray *value))
 FENG_RUNTIME_CONTRACT(FengArray *, feng_array_slice, (const FengGenericParamDescriptor *type, const FengArray *value, int64_t start, int64_t length))
 FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengGenericParamDescriptor *type, const void *left, const void *right))
