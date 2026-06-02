@@ -21,6 +21,12 @@ FENG_RUNTIME_CONTRACT(int64_t, feng_array_length_i64, (const FengGenericParamDes
 FENG_RUNTIME_CONTRACT(FengArray *, feng_array_slice, (const FengGenericParamDescriptor *type, const FengArray *value, int64_t start, int64_t length))
 FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengGenericParamDescriptor *type, const void *left, const void *right))
 
+/* Raw memory allocation — thin wrappers around libc malloc/free that keep
+ * the Feng-side int64_t representation while avoiding C type conflicts with
+ * system-header prototypes. */
+FENG_RUNTIME_CONTRACT(int64_t, feng_raw_alloc, (int64_t size))
+FENG_RUNTIME_CONTRACT(void, feng_raw_free, (int64_t ptr))
+
 /* Test-only helper for compiler/runtime regressions around bare-T return. */
 FENG_RUNTIME_CONTRACT(void, __test_value_identity, (const FengGenericParamDescriptor *type, const void *value, void *out))
 

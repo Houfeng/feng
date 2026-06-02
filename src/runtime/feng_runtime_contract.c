@@ -3,6 +3,7 @@
 
 #include <inttypes.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Shared helper for bare-T return contracts. Copies the source value into the
@@ -128,6 +129,16 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
                                slice_start,
                                slice_length);
     return result;
+}
+
+/* Thin wrappers around libc malloc/free that bridge Feng's int64_t
+ * pointer representation to the system-header pointer/size_t types. */
+int64_t feng_raw_alloc(int64_t size) {
+    return (int64_t)(intptr_t)malloc((size_t)size);
+}
+
+void feng_raw_free(int64_t ptr) {
+    free((void *)(intptr_t)ptr);
 }
 
 /* Test-only runtime contract used to exercise bare-T return lowering with a
