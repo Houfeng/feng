@@ -3,10 +3,10 @@ open module std.thread;
 open spec ThreadFn(): void;
 
 @runtime
-extern func feng_raw_alloc(size: long): long;
+extern func feng_alloc(size: long): long;
 
 @runtime
-extern func feng_raw_free(ptr: long): void;
+extern func feng_free(ptr: long): void;
 
 @cdecl("feng_std_uv", "uv_thread_create")
 extern func uv_thread_create(tid: long*, entry: ThreadAbiEntry*, arg: long): int;
@@ -38,8 +38,8 @@ seal func ensureSpawnInit(): void {
   if spawnLock != (long)0 {
     return;
   }
-  spawnLock = feng_raw_alloc((long)64);
-  spawnCond = feng_raw_alloc((long)48);
+  spawnLock = feng_alloc((long)64);
+  spawnCond = feng_alloc((long)48);
   uv_mutex_init(spawnLock);
   uv_cond_init(spawnCond);
 }

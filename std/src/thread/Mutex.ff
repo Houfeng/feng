@@ -26,13 +26,13 @@ open type Mutex {
    * Creates a new mutex.
    */
   open func Mutex() {
-    self.handle = feng_raw_alloc((long)64);
+    self.handle = feng_alloc((long)64);
     if self.handle == (long)0 {
       throw "mutex/alloc-failed";
     }
     let result = uv_mutex_init(self.handle);
     if result != 0 {
-      feng_raw_free(self.handle);
+      feng_free(self.handle);
       throw "mutex/init-failed";
     }
   }
@@ -64,7 +64,7 @@ open type Mutex {
    */
   open func destroy(): void {
     uv_mutex_destroy(self.handle);
-    feng_raw_free(self.handle);
+    feng_free(self.handle);
   }
 
 }
