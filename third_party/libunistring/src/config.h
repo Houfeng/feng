@@ -1389,7 +1389,7 @@
 #define HAVE_WORKING_O_DIRECTORY 1
 
 /* Define to 1 if O_NOATIME works, 0 otherwise. */
-#define HAVE_WORKING_O_NOATIME 1
+#define HAVE_WORKING_O_NOATIME 0
 
 /* Define to 1 if O_NOFOLLOW works, 0 otherwise. */
 #define HAVE_WORKING_O_NOFOLLOW 1

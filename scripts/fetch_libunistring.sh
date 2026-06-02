@@ -22,6 +22,7 @@ mkdir -p "${PUBLIC_INCLUDE_DIR}/unistring"
 mkdir -p "${INTERNAL_SRC_DIR}/unistr"
 mkdir -p "${INTERNAL_SRC_DIR}/unigbrk"
 mkdir -p "${INTERNAL_SRC_DIR}/unictype"
+mkdir -p "${INTERNAL_SRC_DIR}/unicase"
 mkdir -p "${INTERNAL_SRC_DIR}/unistring"
 mkdir -p "${TARGET_DIR}/src"
 
@@ -52,12 +53,13 @@ cd "${EXTRACTED_SRC}"
 env PATH="${PATH}" HOME="${HOME}" LC_ALL=C LANG=C CC=cc \
        ./configure --disable-shared --disable-rpath --without-libiconv-prefix > /dev/null
 
-# 本仓库当前只保留 UTF-8 rune / grapheme 统计与遍历所需的最小子集。
+# 本仓库保留 UTF-8 rune / grapheme / unicase 所需的最小子集。
 GENERATED_HEADERS=(
        unitypes.h
        unistr.h
        unigbrk.h
        unictype.h
+       unicase.h
 )
 
 env PATH="${PATH}" HOME="${HOME}" LC_ALL=C LANG=C CC=cc make -C "lib" \
@@ -68,7 +70,7 @@ env PATH="${PATH}" HOME="${HOME}" LC_ALL=C LANG=C CC=cc make -C "lib" \
 # ------------------------------------------------------------------------------
 # 🚚 [4/4] 提取 rune / grapheme 最小公开头与源码闭包
 # ------------------------------------------------------------------------------
-echo "🚚 正在导出 rune / grapheme 最小闭包到 third_party..."
+echo "🚚 正在导出 rune / grapheme / unicase 最小闭包到 third_party..."
 
 # 1. 公开头：只暴露 rune / grapheme 所需接口
 cp "lib/unitypes.h" "${PUBLIC_INCLUDE_DIR}/"
@@ -89,6 +91,26 @@ extern "C" {
 size_t u8_mbsnlen(const uint8_t *s, size_t n);
 const uint8_t *u8_next(ucs4_t *puc, const uint8_t *s);
 const uint8_t *u8_prev(ucs4_t *puc, const uint8_t *s, const uint8_t *start);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+
+cat << 'EOF' > "${PUBLIC_INCLUDE_DIR}/feng_u8_case.h"
+#ifndef FENG_U8_CASE_H
+#define FENG_U8_CASE_H
+
+#include "unitypes.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+ucs4_t uc_tolower(ucs4_t uc);
+ucs4_t uc_toupper(ucs4_t uc);
 
 #ifdef __cplusplus
 }
@@ -123,18 +145,20 @@ EOF
 cat << 'EOF' > "${TARGET_DIR}/README.md"
 # libunistring minimal subset
 
-This directory vendors only the UTF-8 rune and grapheme subset needed by Feng.
+This directory vendors the UTF-8 rune, grapheme, and case-mapping subset needed by Feng.
 
 Public headers:
 - include/unitypes.h
 - include/feng_u8_rune.h
 - include/feng_u8_grapheme.h
+- include/feng_u8_case.h
 
 Supported operations:
 - UTF-8 rune count: u8_mbsnlen
 - UTF-8 rune traversal: u8_next, u8_prev
 - UTF-8 grapheme traversal: u8_grapheme_next, u8_grapheme_prev
 - UTF-8 grapheme boundary map: u8_grapheme_breaks
+- Unicode code point case mapping: uc_tolower, uc_toupper
 
 Build:
 - `make` builds the static library and stages it into `../../std/lib` by default.
@@ -150,6 +174,7 @@ cp "lib/unitypes.h" "${INTERNAL_SRC_DIR}/"
 cp "lib/unistr.h" "${INTERNAL_SRC_DIR}/"
 cp "lib/unigbrk.h" "${INTERNAL_SRC_DIR}/"
 cp "lib/unictype.h" "${INTERNAL_SRC_DIR}/"
+cp "lib/unicase.h" "${INTERNAL_SRC_DIR}/"
 cp "lib/unistring-notinline.h" "${INTERNAL_SRC_DIR}/"
 
 cp "lib/unistring/cdefs.h" "${INTERNAL_SRC_DIR}/unistring/"
@@ -164,6 +189,7 @@ UNISTR_SOURCES=(
        u8-strmbtouc.c
        u8-next.c
        u8-prev.c
+       u8-uctomb-aux.c
 )
 
 for source in "${UNISTR_SOURCES[@]}"; do
@@ -197,6 +223,32 @@ for file in "${UNICTYPE_FILES[@]}"; do
        cp "lib/unictype/${file}" "${INTERNAL_SRC_DIR}/unictype/"
 done
 
+UNICASE_FILES=(
+       simple-mapping.h
+       tolower.h
+       toupper.h
+       tolower.c
+       toupper.c
+)
+
+for file in "${UNICASE_FILES[@]}"; do
+       cp "lib/unicase/${file}" "${INTERNAL_SRC_DIR}/unicase/"
+done
+
+# attribute.h is needed by u8-uctomb-aux.c for the FALLTHROUGH macro
+cp "lib/attribute.h" "${INTERNAL_SRC_DIR}/"
+
+# uninorm.h stub: unicase.h includes it for uninorm_t type used by full case
+# mapping functions (u8_tolower etc.) which we don't compile. Only uc_tolower/
+# uc_toupper (code-point level) are needed. Provide a minimal typedef stub.
+cat << 'EOF' > "${INTERNAL_SRC_DIR}/uninorm.h"
+#ifndef _UNINORM_H
+#define _UNINORM_H
+/* Minimal stub: only the typedef needed by unicase.h declarations. */
+typedef const void *uninorm_t;
+#endif
+EOF
+
 # 3. 极简构建脚本：仅编译 rune / grapheme 最小子集
 cat << 'EOF' > "${TARGET_DIR}/Makefile"
 CC ?= cc
@@ -215,12 +267,15 @@ SRCS = src/lib/unistr/u8-mbtouc-aux.c \
                       src/lib/unistr/u8-strmbtouc.c \
                       src/lib/unistr/u8-next.c \
                       src/lib/unistr/u8-prev.c \
+                      src/lib/unistr/u8-uctomb-aux.c \
                       src/lib/unigbrk/u8-grapheme-breaks.c \
                       src/lib/unigbrk/u8-grapheme-next.c \
                       src/lib/unigbrk/u8-grapheme-prev.c \
                       src/lib/unigbrk/uc-gbrk-prop.c \
                       src/lib/unictype/pr_extended_pictographic.c \
-                      src/lib/unictype/incb_of.c
+                      src/lib/unictype/incb_of.c \
+                      src/lib/unicase/tolower.c \
+                      src/lib/unicase/toupper.c
 
 OBJS = $(SRCS:.c=.o)
 
@@ -252,6 +307,6 @@ rm -rf "${TMP_ROOT}"
 
 echo "========================================================"
 echo "🎉 提取完美收工！"
-echo "👉 已导出 UTF-8 rune / grapheme 最小头文件与源码闭包"
+echo "👉 已导出 UTF-8 rune / grapheme / unicase 最小头文件与源码闭包"
 echo "👉 可执行: ${PROJECT_ROOT}/scripts/build_libunistring.sh"
 echo "========================================================"

@@ -413,7 +413,160 @@ open fit string {
 - `"\t\n hello \r\n".trim() == "hello"`（混合 ASCII 空白）
 - 含 Unicode 空白（全角空格 U+3000 等）的 trim 测试
 
-## 9 关联
+## 9 扩展方法（第二批）
+
+### 9.1 新增可用基础设施
+
+通过扩展 libunistring vendor，增加 unicase 模块：
+
+- `uc_tolower(ucs4_t)` — 码位级小写映射（via @cdecl）
+- `uc_toupper(ucs4_t)` — 码位级大写映射（via @cdecl）
+
+已有 runtime 函数复用：
+
+- `feng_string_to_utf8_bytes(value)` — 返回 UTF-8 字节数组（已在 runtime 中，新增 String.ff 声明）
+
+### 9.2 方法签名与语义
+
+| 方法 | 签名 | 返回值 |
+|------|------|--------|
+| `isEmpty` | `func isEmpty(): bool` | 是否为空串 |
+| `repeat` | `func repeat(count: long): string` | 重复 count 次 |
+| `toBytes` | `func toBytes(): byte[]` | UTF-8 字节数组 |
+| `split` | `func split(separator: string): string[]` | 按分隔符拆分 |
+| `join` | `static func join(separator: string, parts: string[]): string` | 数组用分隔符拼接 |
+| `toUpperCase` | `func toUpperCase(): string` | Unicode 大写转换 |
+| `toLowerCase` | `func toLowerCase(): string` | Unicode 小写转换 |
+| `padStart` | `func padStart(targetLength: long, pad: string): string` | 左填充至目标长度 |
+| `padEnd` | `func padEnd(targetLength: long, pad: string): string` | 右填充至目标长度 |
+
+### 9.3 实现方案
+
+#### isEmpty / repeat / toBytes
+
+纯 Feng 实现，无新 C 依赖。
+
+```feng
+open func isEmpty(): bool {
+  return self.length() == (long)0;
+}
+
+open func repeat(count: long): string {
+  // 循环拼接
+}
+
+open func toBytes(): byte[] {
+  return feng_string_to_utf8_bytes(self);
+}
+```
+
+#### split / join
+
+`split` 使用 `List<string>` 收集片段 + `entries()` 返回 `string[]`。
+`join` 遍历 `string[]` 用 `+` 拼接。
+
+```feng
+open func split(separator: string): string[] {
+  // indexOf 定位 + clone 截取 + List<string> 收集
+}
+
+open static func join(separator: string, parts: string[]): string {
+  // 遍历 parts 用 separator 拼接
+}
+```
+
+#### toUpperCase / toLowerCase
+
+声明 `@cdecl("feng_std_unistring", "uc_tolower")` / `uc_toupper`。
+遍历码位 → 映射 → 纯 Feng UTF-8 编码 → `List<byte>` → `string.fromUtf8Bytes`。
+
+```feng
+@cdecl("feng_std_unistring", "uc_toupper")
+extern func uc_toupper(uc: u32): u32;
+
+@cdecl("feng_std_unistring", "uc_tolower")
+extern func uc_tolower(uc: u32): u32;
+
+open func toUpperCase(): string {
+  // u8_next 遍历 → uc_toupper 映射 → UTF-8 编码到 List<byte> → fromUtf8Bytes
+}
+```
+
+#### padStart / padEnd
+
+计算所需填充字节数，用 `repeat` + `clone` 截取到精确长度后拼接。
+
+### 9.4 性能分析
+
+| 方法 | 时间复杂度 | 堆分配 |
+|------|-----------|--------|
+| `isEmpty` | O(1) | **0** |
+| `repeat` | O(n·count) | **O(count)** 拼接 |
+| `toBytes` | O(n) | **1** |
+| `split` | O(n·m) 搜索 | **O(k)** k=片段数 |
+| `join` | O(total) | **O(k)** 拼接 |
+| `toUpperCase`/`toLowerCase` | O(n) 遍历 | **1**（List + fromUtf8Bytes） |
+| `padStart`/`padEnd` | O(targetLength) | **O(1)**~**O(2)** |
+
+### 9.5 测试用例
+
+#### split
+- `"a,b,c".split(",")` → `["a","b","c"]`
+- `"hello".split(",")` → `["hello"]`
+- `",,".split(",")` → `["","",""]`
+- `"".split(",")` → `[""]`
+- `"a".split("")` → `["a"]`（空分隔符返回原串数组）
+
+#### toUpperCase / toLowerCase
+- `"hello".toUpperCase() == "HELLO"`
+- `"HELLO".toLowerCase() == "hello"`
+- `"Hello World".toUpperCase() == "HELLO WORLD"`
+- `"café".toUpperCase() == "CAFÉ"`
+- `"CAFÉ".toLowerCase() == "café"`
+- `"你好".toUpperCase() == "你好"`（非拉丁字符不变）
+- `"".toUpperCase() == ""`
+
+#### repeat
+- `"ab".repeat(3) == "ababab"`
+- `"x".repeat(0) == ""`
+- `"".repeat(5) == ""`
+- `"hi".repeat(1) == "hi"`
+
+#### isEmpty
+- `"".isEmpty() == true`
+- `"a".isEmpty() == false`
+- `" ".isEmpty() == false`
+
+#### join
+- `string.join(",", ["a","b","c"]) == "a,b,c"`
+- `string.join(",", []) == ""`
+- `string.join("", ["a","b"]) == "ab"`
+- `string.join("--", ["x"]) == "x"`
+
+#### toBytes
+- `"hello".toBytes().length() == 5`
+- `"你好".toBytes().length() == 6`
+- `"".toBytes().length() == 0`
+
+#### padStart / padEnd
+- `"hi".padStart((long)5, "0") == "000hi"`
+- `"hello".padStart((long)3, "0") == "hello"`（已够长不变）
+- `"hi".padEnd((long)5, "0") == "hi000"`
+- `"hello".padEnd((long)3, "0") == "hello"`
+- `"hi".padStart((long)5, "ab") == "abahi"`（多字符填充）
+- `"hi".padEnd((long)5, "ab") == "hiaba"`
+
+### 9.6 变更文件
+
+| 文件 | 操作 |
+|------|------|
+| `scripts/fetch_libunistring.sh` | 增加 unicase 模块同步 |
+| `third_party/libunistring/Makefile` | 新增 unicase 源文件 |
+| `third_party/libunistring/include/feng_u8_case.h` | 新增公开头 |
+| `std/src/text/String.ff` | 新增 9 个方法 + @cdecl 声明 |
+| `std_test/src/test_string.ff` | 追加测试用例 |
+
+## 10 关联
 
 - [feng-extlib-draft.md](./feng-extlib-draft.md) — libunistring 选型与 vendoring 约定
 - `third_party/libunistring/README.md` — 可用 API 清单

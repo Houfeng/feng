@@ -14,12 +14,15 @@ SRCS = src/lib/unistr/u8-mbtouc-aux.c \
                       src/lib/unistr/u8-strmbtouc.c \
                       src/lib/unistr/u8-next.c \
                       src/lib/unistr/u8-prev.c \
+                      src/lib/unistr/u8-uctomb-aux.c \
                       src/lib/unigbrk/u8-grapheme-breaks.c \
                       src/lib/unigbrk/u8-grapheme-next.c \
                       src/lib/unigbrk/u8-grapheme-prev.c \
                       src/lib/unigbrk/uc-gbrk-prop.c \
                       src/lib/unictype/pr_extended_pictographic.c \
-                      src/lib/unictype/incb_of.c
+                      src/lib/unictype/incb_of.c \
+                      src/lib/unicase/tolower.c \
+                      src/lib/unicase/toupper.c
 
 OBJS = $(SRCS:.c=.o)
 

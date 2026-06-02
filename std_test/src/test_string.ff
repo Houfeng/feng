@@ -2,6 +2,7 @@ module std_test;
 
 import std.io;
 import std.text;
+import std.collections;
 
 func string_from_utf8_bytes_ascii() {
   let bytes: byte[] = [(byte)104, (byte)101, (byte)108, (byte)108, (byte)111];
@@ -246,6 +247,112 @@ func string_trimEnd() {
   writeLine("__STRING_TRIM_END__=ok");
 }
 
+func string_isEmpty() {
+  check("".isEmpty() == true, "string/isEmpty-empty");
+  check("a".isEmpty() == false, "string/isEmpty-non-empty");
+  check(" ".isEmpty() == false, "string/isEmpty-space");
+  writeLine("__STRING_IS_EMPTY__=ok");
+}
+
+func string_toBytes() {
+  check("hello".toBytes().length() == (long)5, "string/toBytes-ascii");
+  check("你好".toBytes().length() == (long)6, "string/toBytes-utf8");
+  check("".toBytes().length() == (long)0, "string/toBytes-empty");
+  writeLine("__STRING_TO_BYTES__=ok");
+}
+
+func string_repeat() {
+  check("ab".repeat((long)3) == "ababab", "string/repeat-3");
+  check("x".repeat((long)0) == "", "string/repeat-0");
+  check("".repeat((long)5) == "", "string/repeat-empty");
+  check("hi".repeat((long)1) == "hi", "string/repeat-1");
+  check("你".repeat((long)2) == "你你", "string/repeat-utf8");
+  writeLine("__STRING_REPEAT__=ok");
+}
+
+func string_split() {
+  let r1 = "a,b,c".split(",");
+  check(r1.length() == (long)3, "string/split-count");
+  check(r1[0] == "a", "string/split-first");
+  check(r1[1] == "b", "string/split-mid");
+  check(r1[2] == "c", "string/split-last");
+
+  let r2 = "hello".split(",");
+  check(r2.length() == (long)1, "string/split-no-match");
+  check(r2[0] == "hello", "string/split-no-match-val");
+
+  let r3 = ",,".split(",");
+  check(r3.length() == (long)3, "string/split-empty-parts-count");
+  check(r3[0] == "", "string/split-empty-first");
+  check(r3[1] == "", "string/split-empty-mid");
+  check(r3[2] == "", "string/split-empty-last");
+
+  let r4 = "".split(",");
+  check(r4.length() == (long)1, "string/split-empty-str");
+  check(r4[0] == "", "string/split-empty-str-val");
+
+  let r5 = "a".split("");
+  check(r5.length() == (long)1, "string/split-empty-sep");
+  check(r5[0] == "a", "string/split-empty-sep-val");
+
+  let r6 = "你好,世界".split(",");
+  check(r6.length() == (long)2, "string/split-utf8-count");
+  check(r6[0] == "你好", "string/split-utf8-first");
+  check(r6[1] == "世界", "string/split-utf8-last");
+
+  writeLine("__STRING_SPLIT__=ok");
+}
+
+func string_join() {
+  let empty: string[] = [];
+  check(string.join(",", empty) == "", "string/join-empty");
+  check(string.join(",", ["a", "b", "c"]) == "a,b,c", "string/join-three");
+  check(string.join("", ["a", "b"]) == "ab", "string/join-no-sep");
+  check(string.join("--", ["x"]) == "x", "string/join-single");
+  check(string.join(",", ["", ""]) == ",", "string/join-empty-parts");
+  writeLine("__STRING_JOIN__=ok");
+}
+
+func string_toUpperCase() {
+  check("hello".toUpperCase() == "HELLO", "string/toUpperCase-ascii");
+  check("Hello World".toUpperCase() == "HELLO WORLD", "string/toUpperCase-mixed");
+  check("HELLO".toUpperCase() == "HELLO", "string/toUpperCase-already");
+  check("".toUpperCase() == "", "string/toUpperCase-empty");
+  check("123!@#".toUpperCase() == "123!@#", "string/toUpperCase-non-alpha");
+  check("你好".toUpperCase() == "你好", "string/toUpperCase-cjk");
+  check("café".toUpperCase() == "CAFÉ", "string/toUpperCase-latin-ext");
+  writeLine("__STRING_TO_UPPER_CASE__=ok");
+}
+
+func string_toLowerCase() {
+  check("HELLO".toLowerCase() == "hello", "string/toLowerCase-ascii");
+  check("Hello World".toLowerCase() == "hello world", "string/toLowerCase-mixed");
+  check("hello".toLowerCase() == "hello", "string/toLowerCase-already");
+  check("".toLowerCase() == "", "string/toLowerCase-empty");
+  check("123!@#".toLowerCase() == "123!@#", "string/toLowerCase-non-alpha");
+  check("你好".toLowerCase() == "你好", "string/toLowerCase-cjk");
+  check("CAFÉ".toLowerCase() == "café", "string/toLowerCase-latin-ext");
+  writeLine("__STRING_TO_LOWER_CASE__=ok");
+}
+
+func string_padStart() {
+  check("hi".padStart((long)5, "0") == "000hi", "string/padStart-basic");
+  check("hello".padStart((long)3, "0") == "hello", "string/padStart-no-pad");
+  check("hi".padStart((long)5, "ab") == "abahi", "string/padStart-multi-char");
+  check("".padStart((long)3, "x") == "xxx", "string/padStart-empty-str");
+  check("hi".padStart((long)2, "0") == "hi", "string/padStart-exact");
+  writeLine("__STRING_PAD_START__=ok");
+}
+
+func string_padEnd() {
+  check("hi".padEnd((long)5, "0") == "hi000", "string/padEnd-basic");
+  check("hello".padEnd((long)3, "0") == "hello", "string/padEnd-no-pad");
+  check("hi".padEnd((long)5, "ab") == "hiaba", "string/padEnd-multi-char");
+  check("".padEnd((long)3, "x") == "xxx", "string/padEnd-empty-str");
+  check("hi".padEnd((long)2, "0") == "hi", "string/padEnd-exact");
+  writeLine("__STRING_PAD_END__=ok");
+}
+
 open func run_string_tests() {
   string_from_utf8_bytes_ascii();
   string_from_utf8_bytes_utf8();
@@ -275,4 +382,13 @@ open func run_string_tests() {
   string_trim();
   string_trimStart();
   string_trimEnd();
+  string_isEmpty();
+  string_toBytes();
+  string_repeat();
+  string_split();
+  string_join();
+  string_toUpperCase();
+  string_toLowerCase();
+  string_padStart();
+  string_padEnd();
 }

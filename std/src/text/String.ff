@@ -2,8 +2,17 @@ open module std.text;
 
 import std.collections;
 
+@cdecl("feng_std_unistring", "uc_toupper")
+extern func uc_toupper(uc: u32): u32;
+
+@cdecl("feng_std_unistring", "uc_tolower")
+extern func uc_tolower(uc: u32): u32;
+
 @runtime
 extern func feng_string_utf8_length(value: string): long;
+
+@runtime
+extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 @runtime
 extern func feng_string_from_utf8_bytes(value: byte[], length: long): string;
@@ -330,6 +339,229 @@ open fit string {
    */
   open func trim(): string {
     return self.trimStart().trimEnd();
+  }
+
+}
+
+/**
+ * Encodes a Unicode code point into UTF-8 bytes and appends to a byte list.
+ */
+func encodeUtf8(cp: u32, output: List<byte>) {
+  if cp < (u32)0x80 {
+    output.add((byte)cp);
+  } else if cp < (u32)0x800 {
+    output.add((byte)((u32)0xC0 | (cp >> (u32)6)));
+    output.add((byte)((u32)0x80 | (cp & (u32)0x3F)));
+  } else if cp < (u32)0x10000 {
+    output.add((byte)((u32)0xE0 | (cp >> (u32)12)));
+    output.add((byte)((u32)0x80 | ((cp >> (u32)6) & (u32)0x3F)));
+    output.add((byte)((u32)0x80 | (cp & (u32)0x3F)));
+  } else {
+    output.add((byte)((u32)0xF0 | (cp >> (u32)18)));
+    output.add((byte)((u32)0x80 | ((cp >> (u32)12) & (u32)0x3F)));
+    output.add((byte)((u32)0x80 | ((cp >> (u32)6) & (u32)0x3F)));
+    output.add((byte)((u32)0x80 | (cp & (u32)0x3F)));
+  }
+}
+
+/**
+ * Extends `string` with utility and case conversion operations.
+ */
+open fit string {
+
+  /**
+   * Returns whether this string is empty (has zero bytes).
+   * @return true if length is 0
+   */
+  open func isEmpty(): bool {
+    return self.length() == (long)0;
+  }
+
+  /**
+   * Returns the UTF-8 byte array of this string.
+   * @return byte array copy of the string's UTF-8 content
+   */
+  open func toBytes(): byte[] {
+    return feng_string_to_utf8_bytes(self);
+  }
+
+  /**
+   * Returns a new string that repeats this string `count` times.
+   * @param count - number of repetitions (must be >= 0)
+   * @return repeated string
+   */
+  open func repeat(count: long): string {
+    if count < (long)0 {
+      throw "String repeat count must be non-negative";
+    }
+    if count == (long)0 || self.length() == (long)0 {
+      return "";
+    }
+    var result = "";
+    var i: long = 0;
+    while i < count {
+      result = result + self;
+      i += (long)1;
+    }
+    return result;
+  }
+
+  /**
+   * Splits this string by the given separator, returning an array of substrings.
+   * @param separator - delimiter string; if empty, returns array with original string
+   * @return array of substrings
+   */
+  open func split(separator: string): string[] {
+    let parts = List<string>();
+    let sepLen = separator.length();
+    if sepLen == (long)0 {
+      parts.add(self.clone());
+      return parts.entries();
+    }
+    let slen = self.length();
+    var pos: long = 0;
+    var found = self.indexOf(separator, pos);
+    while found >= (long)0 {
+      if found > pos {
+        parts.add(self.clone(pos, found));
+      } else {
+        parts.add("");
+      }
+      pos = found + sepLen;
+      found = self.indexOf(separator, pos);
+    }
+    if pos <= slen {
+      if pos < slen {
+        parts.add(self.clone(pos, slen));
+      } else {
+        parts.add("");
+      }
+    }
+    return parts.entries();
+  }
+
+  /**
+   * Joins an array of strings with a separator.
+   * @param separator - string inserted between elements
+   * @param parts - array of strings to join
+   * @return joined string
+   */
+  open static func join(separator: string, parts: string[]): string {
+    let len = parts.length();
+    if len == (long)0 {
+      return "";
+    }
+    var result = parts[0];
+    var i: long = 1;
+    while i < len {
+      result = result + separator + parts[i];
+      i += (long)1;
+    }
+    return result;
+  }
+
+  /**
+   * Returns a new string with all Unicode characters converted to uppercase.
+   * @return uppercase string
+   */
+  open func toUpperCase(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
+    }
+    let data: string* = &self;
+    let end: string* = feng_pointer_move(data, len);
+    var cursor: string* = data;
+    let output = List<byte>();
+    var uc: u32 = 0;
+    while !feng_pointer_equal(cursor, end) {
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+      let mapped = uc_toupper(uc);
+      encodeUtf8(mapped, output);
+      cursor = next;
+    }
+    return string.fromUtf8Bytes(output.entries());
+  }
+
+  /**
+   * Returns a new string with all Unicode characters converted to lowercase.
+   * @return lowercase string
+   */
+  open func toLowerCase(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
+    }
+    let data: string* = &self;
+    let end: string* = feng_pointer_move(data, len);
+    var cursor: string* = data;
+    let output = List<byte>();
+    var uc: u32 = 0;
+    while !feng_pointer_equal(cursor, end) {
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+      let mapped = uc_tolower(uc);
+      encodeUtf8(mapped, output);
+      cursor = next;
+    }
+    return string.fromUtf8Bytes(output.entries());
+  }
+
+  /**
+   * Pads the start of this string to reach `targetLength` bytes using `pad`.
+   * If the string is already at or longer than targetLength, returns a clone.
+   * @param targetLength - desired minimum byte length
+   * @param pad - string used for padding (repeated/truncated as needed)
+   * @return padded string
+   */
+  open func padStart(targetLength: long, pad: string): string {
+    let len = self.length();
+    if len >= targetLength {
+      return self.clone();
+    }
+    let padLen = pad.length();
+    if padLen == (long)0 {
+      return self.clone();
+    }
+    let needed = targetLength - len;
+    let fullRepeats = needed / padLen;
+    let remainder = needed - fullRepeats * padLen;
+    var padding = pad.repeat(fullRepeats);
+    if remainder > (long)0 {
+      padding = padding + pad.clone((long)0, remainder);
+    }
+    return padding + self;
+  }
+
+  /**
+   * Pads the end of this string to reach `targetLength` bytes using `pad`.
+   * If the string is already at or longer than targetLength, returns a clone.
+   * @param targetLength - desired minimum byte length
+   * @param pad - string used for padding (repeated/truncated as needed)
+   * @return padded string
+   */
+  open func padEnd(targetLength: long, pad: string): string {
+    let len = self.length();
+    if len >= targetLength {
+      return self.clone();
+    }
+    let padLen = pad.length();
+    if padLen == (long)0 {
+      return self.clone();
+    }
+    let needed = targetLength - len;
+    let fullRepeats = needed / padLen;
+    let remainder = needed - fullRepeats * padLen;
+    var padding = pad.repeat(fullRepeats);
+    if remainder > (long)0 {
+      padding = padding + pad.clone((long)0, remainder);
+    }
+    return self + padding;
   }
 
 }
