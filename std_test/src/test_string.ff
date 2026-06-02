@@ -72,6 +72,31 @@ func string_clone_utf8_range() {
   writeLine("__STRING_CLONE_UTF8_RANGE__=" + cloned);
 }
 
+func string_at_ascii() {
+  let text = "hello";
+  let ch = text.at(1);
+
+  check(ch == "e", "string/at-ascii");
+  check(ch.length() == (long)1, "string/at-ascii-length");
+  writeLine("__STRING_AT_ASCII__=" + ch);
+}
+
+func string_at_first_last() {
+  let text = "abc";
+
+  check(text.at(0) == "a", "string/at-first");
+  check(text.at(2) == "c", "string/at-last");
+  writeLine("__STRING_AT_FIRST_LAST__=ok");
+}
+
+func string_at_utf8_byte() {
+  let text = "你好";
+  let b = text.at(0);
+
+  check(b.length() == (long)1, "string/at-utf8-byte-length");
+  writeLine("__STRING_AT_UTF8_BYTE__=ok");
+}
+
 func string_equality() {
   let a = "hello";
   let b = "hello";
@@ -95,5 +120,8 @@ open func run_string_tests() {
   string_clone_empty();
   string_clone_utf8();
   string_clone_utf8_range();
+  string_at_ascii();
+  string_at_first_last();
+  string_at_utf8_byte();
   string_equality();
 }

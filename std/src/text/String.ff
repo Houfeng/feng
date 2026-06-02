@@ -36,6 +36,22 @@ open fit string {
   }
 
   /**
+   * Returns a single-byte substring at the specified byte offset.
+   * For character-level access, use `runes()` or `graphemes()` views.
+   * @param index - zero-based byte offset
+   * @return length-1 substring containing the byte at `index`
+   */
+  open func at(index: long): string {
+    if index < (long)0 {
+      throw "String index out of bounds";
+    }
+    if index >= self.length() {
+      throw "String index out of bounds";
+    }
+    return feng_string_slice(self, index, (long)1);
+  }
+
+  /**
    * Returns a dense copy of this string.
    * @return new string containing all bytes of this string
    */
