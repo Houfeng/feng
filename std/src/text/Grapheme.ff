@@ -1,12 +1,16 @@
 open module std.text;
 
+@cdecl("feng_std_unistring", "u8_grapheme_next")
+extern func u8_grapheme_next(s: string*, end: string*): string*;
+
+
 /**
- * Extends `string` with standard length-related operations.
+ * Extends `string` with a grapheme-level view.
  */
 open fit string {
 
   /**
-   * Returns a view of this string as a sequence of graphemes.
+   * Returns a view of this string as a sequence of grapheme clusters.
    * @return grapheme view of this string
    */
   open func graphemes(): GraphemeView {
@@ -16,15 +20,65 @@ open fit string {
 }
 
 /**
- * A view of a string as a sequence of graphemes.
+ * A read-only view of a string as a sequence of grapheme clusters.
  */
 open type GraphemeView {
   seal let text: string;
+
   open func GraphemeView(text: string) {
     self.text = text;
   }
+
+  /**
+   * Returns the number of grapheme clusters in this string.
+   * @return grapheme cluster count
+   */
   open func length(): long {
-    return 0;
+    let data: string* = &self.text;
+    let end: string* = feng_pointer_move(data, self.text.length());
+    var cursor: string* = data;
+    var count: long = 0;
+    while !feng_pointer_equal(cursor, end) {
+      cursor = u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(cursor) {
+        break;
+      }
+      count += (long)1;
+    }
+    return count;
+  }
+
+  /**
+   * Returns the substring of the grapheme cluster at the given logical index.
+   * @param index - zero-based grapheme index
+   * @return substring containing the single grapheme cluster
+   */
+  open func at(index: long): string {
+    if index < (long)0 {
+      throw "GraphemeView index out of bounds";
+    }
+    let data: string* = &self.text;
+    let end: string* = feng_pointer_move(data, self.text.length());
+    var cursor: string* = data;
+    var i: long = 0;
+    while i < index {
+      cursor = u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(cursor) {
+        throw "GraphemeView index out of bounds";
+      }
+      i += (long)1;
+    }
+    if feng_pointer_equal(cursor, end) {
+      throw "GraphemeView index out of bounds";
+    }
+    let next: string* = u8_grapheme_next(cursor, end);
+    let start = feng_pointer_diff(cursor, data);
+    var cluster_end: long = 0;
+    if feng_pointer_is_null(next) {
+      cluster_end = self.text.length();
+    } else {
+      cluster_end = feng_pointer_diff(next, data);
+    }
+    return self.text.clone(start, cluster_end);
   }
 }
-

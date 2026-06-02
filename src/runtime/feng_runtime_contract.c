@@ -151,6 +151,16 @@ bool feng_pointer_equal(void *left, void *right) {
     return left == right;
 }
 
+/* Returns a pointer advanced by `offset` bytes from `ptr`. */
+void *feng_pointer_move(void *ptr, int64_t offset) {
+    return (char *)ptr + offset;
+}
+
+/* Returns the signed byte distance between two pointers (a - b). */
+int64_t feng_pointer_diff(void *a, void *b) {
+    return (int64_t)((char *)a - (char *)b);
+}
+
 /* Test-only runtime contract used to exercise bare-T return lowering with a
  * real descriptor-aware out carrier. */
 void __test_value_identity(const FengGenericParamDescriptor *type,

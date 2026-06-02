@@ -35,6 +35,8 @@ FENG_RUNTIME_CONTRACT(void, feng_free, (int64_t ptr))
  * two C-side pointers for address equality. */
 FENG_RUNTIME_CONTRACT(bool, feng_pointer_is_null, (void *ptr))
 FENG_RUNTIME_CONTRACT(bool, feng_pointer_equal, (void *left, void *right))
+FENG_RUNTIME_CONTRACT(void *, feng_pointer_move, (void *ptr, int64_t offset))
+FENG_RUNTIME_CONTRACT(int64_t, feng_pointer_diff, (void *a, void *b))
 
 /* Test-only helper for compiler/runtime regressions around bare-T return. */
 FENG_RUNTIME_CONTRACT(void, __test_value_identity, (const FengGenericParamDescriptor *type, const void *value, void *out))

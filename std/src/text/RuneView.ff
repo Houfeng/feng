@@ -1,12 +1,19 @@
 open module std.text;
 
+@cdecl("feng_std_unistring", "u8_mbsnlen")
+extern func u8_mbsnlen(s: string*, n: long): long;
+
+@cdecl("feng_std_unistring", "u8_next")
+extern func u8_next(puc: u32*, s: string*): string*;
+
+
 /**
- * Extends `string` with standard length-related operations.
+ * Extends `string` with a rune-level view.
  */
 open fit string {
 
   /**
-   * Returns a view of this string as a sequence of runes.
+   * Returns a view of this string as a sequence of runes (Unicode scalar values).
    * @return rune view of this string
    */
   open func runes(): RuneView {
@@ -16,14 +23,49 @@ open fit string {
 }
 
 /**
- * A view of a string as a sequence of runes.
+ * A read-only view of a string as a sequence of runes (Unicode scalar values).
  */
 open type RuneView {
   seal let text: string;
+
   open func RuneView(text: string) {
     self.text = text;
   }
+
+  /**
+   * Returns the number of runes in this string.
+   * @return rune count
+   */
   open func length(): long {
-    return 0;
+    return u8_mbsnlen(&self.text, self.text.length());
+  }
+
+  /**
+   * Returns the substring of the rune at the given logical index.
+   * @param index - zero-based rune index
+   * @return substring containing the single rune
+   */
+  open func at(index: long): string {
+    if index < (long)0 {
+      throw "RuneView index out of bounds";
+    }
+    let data: string* = &self.text;
+    var cursor: string* = data;
+    var uc: u32 = 0;
+    var i: long = 0;
+    while i < index {
+      cursor = u8_next(&uc, cursor);
+      if feng_pointer_is_null(cursor) {
+        throw "RuneView index out of bounds";
+      }
+      i += (long)1;
+    }
+    let next: string* = u8_next(&uc, cursor);
+    if feng_pointer_is_null(next) {
+      throw "RuneView index out of bounds";
+    }
+    let start = feng_pointer_diff(cursor, data);
+    let end = feng_pointer_diff(next, data);
+    return self.text.clone(start, end);
   }
 }

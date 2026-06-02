@@ -14,6 +14,18 @@ extern func feng_string_slice(value: string, start: long, length: long): string;
 @runtime
 extern func feng_string_slice_bytes(value: string, start: long, length: long): byte[];
 
+@runtime
+extern func feng_pointer_is_null(ptr: string*): bool;
+
+@runtime
+extern func feng_pointer_equal(a: string*, b: string*): bool;
+
+@runtime
+extern func feng_pointer_move(ptr: string*, offset: long): string*;
+
+@runtime
+extern func feng_pointer_diff(a: string*, b: string*): long;
+
 /**
  * Extends `string` with standard UTF-8 operations.
  */

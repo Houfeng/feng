@@ -97,6 +97,52 @@ func string_at_utf8_byte() {
   writeLine("__STRING_AT_UTF8_BYTE__=ok");
 }
 
+func string_rune_length_ascii() {
+  let text = "hello";
+  check(text.runes().length() == (long)5, "string/rune-length-ascii");
+  writeLine("__STRING_RUNE_LENGTH_ASCII__=ok");
+}
+
+func string_rune_length_utf8() {
+  let text = "你好世界";
+  check(text.runes().length() == (long)4, "string/rune-length-utf8");
+  writeLine("__STRING_RUNE_LENGTH_UTF8__=ok");
+}
+
+func string_rune_at() {
+  let text = "你好世界";
+  check(text.runes().at(0) == "你", "string/rune-at-first");
+  check(text.runes().at(1) == "好", "string/rune-at-second");
+  check(text.runes().at(3) == "界", "string/rune-at-last");
+  writeLine("__STRING_RUNE_AT__=ok");
+}
+
+func string_grapheme_length_ascii() {
+  let text = "abc";
+  check(text.graphemes().length() == (long)3, "string/grapheme-length-ascii");
+  writeLine("__STRING_GRAPHEME_LENGTH_ASCII__=ok");
+}
+
+func string_grapheme_length_utf8() {
+  let text = "你好";
+  check(text.graphemes().length() == (long)2, "string/grapheme-length-utf8");
+  writeLine("__STRING_GRAPHEME_LENGTH_UTF8__=ok");
+}
+
+func string_grapheme_length_emoji() {
+  let family = "👨‍👩‍👧‍👦";
+  check(family.graphemes().length() == (long)1, "string/grapheme-length-emoji");
+  check(family.runes().length() == (long)7, "string/grapheme-emoji-rune-count");
+  writeLine("__STRING_GRAPHEME_LENGTH_EMOJI__=ok");
+}
+
+func string_grapheme_at() {
+  let text = "你好世界";
+  check(text.graphemes().at(0) == "你", "string/grapheme-at-first");
+  check(text.graphemes().at(3) == "界", "string/grapheme-at-last");
+  writeLine("__STRING_GRAPHEME_AT__=ok");
+}
+
 func string_equality() {
   let a = "hello";
   let b = "hello";
@@ -123,5 +169,12 @@ open func run_string_tests() {
   string_at_ascii();
   string_at_first_last();
   string_at_utf8_byte();
+  string_rune_length_ascii();
+  string_rune_length_utf8();
+  string_rune_at();
+  string_grapheme_length_ascii();
+  string_grapheme_length_utf8();
+  string_grapheme_length_emoji();
+  string_grapheme_at();
   string_equality();
 }
