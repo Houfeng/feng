@@ -21766,8 +21766,14 @@ static bool cg_emit_function(CG *cg,
     Scope *fn_scope = NULL;
     bool ok = false;
 
-    if (!cg_register_free_fn(cg, decl)) return false;
-    FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
+    const FreeFn *pre_registered = cg_find_free_fn_by_decl(cg, decl);
+    FreeFn *fn;
+    if (pre_registered != NULL) {
+        fn = (FreeFn *)pre_registered;
+    } else {
+        if (!cg_register_free_fn(cg, decl)) return false;
+        fn = &cg->free_fns[cg->free_fn_count - 1];
+    }
     bool exports_public_symbol = target == FENG_COMPILE_TARGET_LIB &&
                                  decl->visibility == FENG_VISIBILITY_PUBLIC;
     bool needs_static = cg_free_fn_has_abi_wrapper(fn) ? true : !exports_public_symbol;
@@ -21777,8 +21783,10 @@ static bool cg_emit_function(CG *cg,
 
     if (is_main && !cg_check_main_signature(cg, fn)) return false;
 
-    cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
-    cg_emit_free_fn_abi_proto(&cg->fn_protos, fn, abi_wrapper_needs_static);
+    if (pre_registered == NULL) {
+        cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
+        cg_emit_free_fn_abi_proto(&cg->fn_protos, fn, abi_wrapper_needs_static);
+    }
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
@@ -24567,6 +24575,43 @@ static bool cg_pass_emit_enum_decls(CG *cg, const FengProgram *prog) {
     return true;
 }
 
+/* Pass 3.9: pre-register all free functions, externs, and generic functions
+ * so that cross-file references within the same module are resolved
+ * before any function body is emitted in Pass 4. */
+static bool cg_pass_pre_register_functions(CG *cg,
+                                           const FengProgram *prog,
+                                           FengCompileTarget target) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    if (!cg_emit_module_header(cg, prog)) return false;
+    cg->cur_program = prog;
+    for (size_t i = 0; i < prog->declaration_count; i++) {
+        const FengDecl *d = prog->declarations[i];
+        if (d->kind != FENG_DECL_FUNCTION) continue;
+
+        if (d->is_extern) {
+            const FengCallableSignature *sig = &d->as.function_decl;
+            if (cg_find_extern(cg, sig->name.data, sig->name.length)) continue;
+            if (!cg_emit_extern_decl(cg, d)) { cg->cur_program = NULL; return false; }
+        } else if (d->as.function_decl.type_param_count > 0) {
+            if (!cg_find_generic_fn_by_decl(cg, d)) {
+                if (!cg_register_generic_fn(cg, d)) { cg->cur_program = NULL; return false; }
+            }
+        } else {
+            if (!cg_register_free_fn(cg, d)) { cg->cur_program = NULL; return false; }
+            FreeFn *fn = &cg->free_fns[cg->free_fn_count - 1];
+            bool exports_public = target == FENG_COMPILE_TARGET_LIB &&
+                                  d->visibility == FENG_VISIBILITY_PUBLIC;
+            bool needs_static = cg_free_fn_has_abi_wrapper(fn) ? true : !exports_public;
+            cg_emit_free_fn_proto(&cg->fn_protos, fn, needs_static);
+            cg_emit_free_fn_abi_proto(&cg->fn_protos, fn, !exports_public);
+        }
+    }
+    cg->cur_program = NULL;
+    return true;
+}
+
 static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                FengCompileTarget target) {
     if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
@@ -24731,7 +24776,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
             }
             case FENG_DECL_FUNCTION:
                 if (d->is_extern) {
-                    if (!cg_emit_extern_decl(cg, d)) return false;
+                    /* Fully handled by cg_pass_pre_register_functions. */
+                    break;
                 } else if (d->as.function_decl.type_param_count > 0) {
                     /* G6: generic function — emit with the generic ABI. */
                     if (!cg_emit_generic_function(cg, d, target)) return false;
@@ -24981,6 +25027,16 @@ static bool cg_emit_all_programs(CG *cg,
             }
         }
         cg->cur_program = NULL;
+    }
+    /* Pass 3.9: pre-register all free functions, externs, and generic
+     * functions so that cross-file references within the same module are
+     * resolved before any function body is emitted. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_pre_register_functions(cg, programs[p], target)) {
+            if (!cg->failed) cg_fail(cg, programs[p]->module_token,
+                "codegen: internal: function pre-registration failed without diagnostic");
+            return false;
+        }
     }
     /* Pass 4: per-program decl emission (externs / functions / methods /
      * finalizers / fit method bodies). */

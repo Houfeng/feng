@@ -20,24 +20,6 @@ extern func uv_thread_self(): long;
 @cdecl("feng_std_uv", "uv_thread_getcpu")
 extern func uv_thread_getcpu(): int;
 
-@cdecl("feng_std_uv", "uv_mutex_init")
-extern func uv_mutex_init(handle: long): int;
-
-@cdecl("feng_std_uv", "uv_mutex_lock")
-extern func uv_mutex_lock(handle: long): void;
-
-@cdecl("feng_std_uv", "uv_mutex_unlock")
-extern func uv_mutex_unlock(handle: long): void;
-
-@cdecl("feng_std_uv", "uv_cond_init")
-extern func uv_cond_init(handle: long): int;
-
-@cdecl("feng_std_uv", "uv_cond_signal")
-extern func uv_cond_signal(handle: long): void;
-
-@cdecl("feng_std_uv", "uv_cond_wait")
-extern func uv_cond_wait(cond: long, mutex: long): void;
-
 @cdecl("libc")
 extern func usleep(usec: u32): int;
 
