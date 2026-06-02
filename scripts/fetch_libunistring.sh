@@ -161,7 +161,7 @@ Supported operations:
 - Unicode code point case mapping: uc_tolower, uc_toupper
 
 Build:
-- `make` builds the static library and stages it into `../../std/lib` by default.
+- `make` builds the static library and stages it into `../../std/extlib/<os>-<arch>` by default.
 - `make OUTPUT_DIR=<path>` overrides the staging directory.
 - `make install` is an alias of the staging step.
 - default staged library name: `libfeng_std_unistring.a`
@@ -257,7 +257,9 @@ CFLAGS ?= -O2 -Wall -Wextra
 CPPFLAGS ?= -I./src -I./src/lib
 
 TARGET ?= libfeng_std_unistring.a
-OUTPUT_DIR ?= ../../std/lib
+HOST_OS :=   $(shell sh -c 'os=$$(uname -s); if [ "$$os" = Darwin ]; then printf macos; elif [ "$$os" = Linux ]; then printf linux; else printf %s "$$os" | tr "[:upper:]" "[:lower:]"; fi')
+HOST_ARCH := $(if $(filter x86_64 amd64,$(shell uname -m)),x64,$(if $(filter arm64 aarch64,$(shell uname -m)),arm64,$(shell uname -m)))
+OUTPUT_DIR ?= ../../std/extlib/$(HOST_OS)-$(HOST_ARCH)
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 
