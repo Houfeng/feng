@@ -161,6 +161,39 @@ int64_t feng_pointer_diff(void *a, void *b) {
     return (int64_t)((char *)a - (char *)b);
 }
 
+/* Compares the byte sub-ranges [a_start, a_end) and [b_start, b_end) of two
+ * Feng strings for equality without any intermediate allocation. */
+bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,
+                             FengString *b, int64_t b_start, int64_t b_end) {
+    size_t a_total = feng_string_length(a);
+    size_t b_total = feng_string_length(b);
+    size_t a_len, b_len, range_len;
+
+    if (a_start < 0 || a_end < a_start || (size_t)a_end > a_total) {
+        feng_panic("feng_string_range_equal: a range [%" PRId64 ", %" PRId64 ") "
+                   "out of bounds (length=%zu)", a_start, a_end, a_total);
+    }
+    if (b_start < 0 || b_end < b_start || (size_t)b_end > b_total) {
+        feng_panic("feng_string_range_equal: b range [%" PRId64 ", %" PRId64 ") "
+                   "out of bounds (length=%zu)", b_start, b_end, b_total);
+    }
+
+    a_len = (size_t)(a_end - a_start);
+    b_len = (size_t)(b_end - b_start);
+    if (a_len != b_len) {
+        return false;
+    }
+
+    range_len = a_len;
+    if (range_len == 0U) {
+        return true;
+    }
+
+    return memcmp(feng_string_data(a) + a_start,
+                  feng_string_data(b) + b_start,
+                  range_len) == 0;
+}
+
 /* Test-only runtime contract used to exercise bare-T return lowering with a
  * real descriptor-aware out carrier. */
 void __test_value_identity(const FengGenericParamDescriptor *type,

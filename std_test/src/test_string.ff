@@ -157,6 +157,95 @@ func string_equality() {
   writeLine("__STRING_EQUALITY__=ok");
 }
 
+func string_indexOf() {
+  check("hello world".indexOf("world") == (long)6, "string/indexOf-found");
+  check("hello world".indexOf("xyz") == (long)-1, "string/indexOf-not-found");
+  check("hello".indexOf("") == (long)0, "string/indexOf-empty-target");
+  check("".indexOf("a") == (long)-1, "string/indexOf-empty-self");
+  check("hello".indexOf("hello") == (long)0, "string/indexOf-full-match");
+  check("aabaa".indexOf("a", (long)2) == (long)3, "string/indexOf-from");
+  check("aabaa".indexOf("a", (long)4) == (long)4, "string/indexOf-from-last");
+  check("aabaa".indexOf("a", (long)5) == (long)-1, "string/indexOf-from-past");
+  check("你好世界".indexOf("世界") == (long)6, "string/indexOf-utf8");
+  writeLine("__STRING_INDEX_OF__=ok");
+}
+
+func string_lastIndexOf() {
+  check("aabaa".lastIndexOf("a") == (long)4, "string/lastIndexOf-last");
+  check("aabaa".lastIndexOf("b") == (long)2, "string/lastIndexOf-mid");
+  check("hello".lastIndexOf("xyz") == (long)-1, "string/lastIndexOf-not-found");
+  check("hello".lastIndexOf("") == (long)5, "string/lastIndexOf-empty");
+  check("你好你好".lastIndexOf("你好") == (long)6, "string/lastIndexOf-utf8");
+  writeLine("__STRING_LAST_INDEX_OF__=ok");
+}
+
+func string_contains() {
+  check("hello world".contains("world") == true, "string/contains-found");
+  check("hello world".contains("xyz") == false, "string/contains-not-found");
+  check("hello".contains("") == true, "string/contains-empty");
+  check("".contains("") == true, "string/contains-both-empty");
+  writeLine("__STRING_CONTAINS__=ok");
+}
+
+func string_startsWith() {
+  check("hello".startsWith("hel") == true, "string/startsWith-true");
+  check("hello".startsWith("world") == false, "string/startsWith-false");
+  check("hello".startsWith("") == true, "string/startsWith-empty");
+  check("hello".startsWith("hello") == true, "string/startsWith-full");
+  check("hello".startsWith("hello!") == false, "string/startsWith-longer");
+  check("".startsWith("") == true, "string/startsWith-both-empty");
+  check("你好世界".startsWith("你好") == true, "string/startsWith-utf8");
+  writeLine("__STRING_STARTS_WITH__=ok");
+}
+
+func string_endsWith() {
+  check("hello".endsWith("llo") == true, "string/endsWith-true");
+  check("hello".endsWith("hel") == false, "string/endsWith-false");
+  check("hello".endsWith("") == true, "string/endsWith-empty");
+  check("hello".endsWith("hello") == true, "string/endsWith-full");
+  check("hello".endsWith("!hello") == false, "string/endsWith-longer");
+  check("你好世界".endsWith("世界") == true, "string/endsWith-utf8");
+  writeLine("__STRING_ENDS_WITH__=ok");
+}
+
+func string_replace() {
+  check("hello world".replace("world", "feng") == "hello feng", "string/replace-simple");
+  check("aaa".replace("a", "bb") == "bbbbbb", "string/replace-all");
+  check("hello".replace("xyz", "abc") == "hello", "string/replace-no-match");
+  check("hello".replace("", "x") == "hello", "string/replace-empty-old");
+  check("abcabc".replace("abc", "") == "", "string/replace-to-empty");
+  check("hello".replace("l", "r") == "herro", "string/replace-multi");
+  check("你好世界".replace("世界", "feng") == "你好feng", "string/replace-utf8");
+  writeLine("__STRING_REPLACE__=ok");
+}
+
+func string_trim() {
+  check(" hello ".trim() == "hello", "string/trim-spaces");
+  check("hello".trim() == "hello", "string/trim-no-ws");
+  check("   ".trim() == "", "string/trim-all-ws");
+  check("".trim() == "", "string/trim-empty");
+  check("\t\n hello \r\n".trim() == "hello", "string/trim-mixed-ascii-ws");
+  writeLine("__STRING_TRIM__=ok");
+}
+
+func string_trimStart() {
+  check("  hello".trimStart() == "hello", "string/trimStart-spaces");
+  check("hello  ".trimStart() == "hello  ", "string/trimStart-trailing");
+  check("hello".trimStart() == "hello", "string/trimStart-no-ws");
+  check("   ".trimStart() == "", "string/trimStart-all-ws");
+  check("\t\nhello".trimStart() == "hello", "string/trimStart-mixed");
+  writeLine("__STRING_TRIM_START__=ok");
+}
+
+func string_trimEnd() {
+  check("hello  ".trimEnd() == "hello", "string/trimEnd-spaces");
+  check("  hello".trimEnd() == "  hello", "string/trimEnd-leading");
+  check("hello".trimEnd() == "hello", "string/trimEnd-no-ws");
+  check("   ".trimEnd() == "", "string/trimEnd-all-ws");
+  check("hello\t\n".trimEnd() == "hello", "string/trimEnd-mixed");
+  writeLine("__STRING_TRIM_END__=ok");
+}
+
 open func run_string_tests() {
   string_from_utf8_bytes_ascii();
   string_from_utf8_bytes_utf8();
@@ -177,4 +266,13 @@ open func run_string_tests() {
   string_grapheme_length_emoji();
   string_grapheme_at();
   string_equality();
+  string_indexOf();
+  string_lastIndexOf();
+  string_contains();
+  string_startsWith();
+  string_endsWith();
+  string_replace();
+  string_trim();
+  string_trimStart();
+  string_trimEnd();
 }

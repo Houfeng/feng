@@ -6,6 +6,9 @@ extern func u8_mbsnlen(s: string*, n: long): long;
 @cdecl("feng_std_unistring", "u8_next")
 extern func u8_next(puc: u32*, s: string*): string*;
 
+@cdecl("feng_std_unistring", "u8_prev")
+extern func u8_prev(puc: u32*, s: string*, start: string*): string*;
+
 
 /**
  * Extends `string` with a rune-level view.

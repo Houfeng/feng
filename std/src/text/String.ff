@@ -91,3 +91,245 @@ open fit string {
   }
 
 }
+
+@runtime
+extern func feng_string_range_equal(
+  a: string, a_start: long, a_end: long,
+  b: string, b_start: long, b_end: long
+): bool;
+
+/**
+ * Checks whether a Unicode code point is a whitespace character.
+ */
+func isUnicodeWhitespace(cp: u32): bool {
+  if cp <= (u32)0x0020 {
+    return cp == (u32)0x0009 || cp == (u32)0x000A || cp == (u32)0x000B
+        || cp == (u32)0x000C || cp == (u32)0x000D || cp == (u32)0x0020;
+  }
+  if cp == (u32)0x0085 || cp == (u32)0x00A0 {
+    return true;
+  }
+  if cp == (u32)0x1680 {
+    return true;
+  }
+  if cp >= (u32)0x2000 && cp <= (u32)0x200A {
+    return true;
+  }
+  if cp == (u32)0x2028 || cp == (u32)0x2029 {
+    return true;
+  }
+  if cp == (u32)0x202F || cp == (u32)0x205F || cp == (u32)0x3000 {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Extends `string` with search and transform operations.
+ */
+open fit string {
+
+  /**
+   * Returns the byte offset of the first occurrence of `target`, or -1 if not found.
+   * @param target - substring to search for
+   * @return byte offset or -1
+   */
+  open func indexOf(target: string): long {
+    return self.indexOf(target, (long)0);
+  }
+
+  /**
+   * Returns the byte offset of the first occurrence of `target` starting from `from`, or -1 if not found.
+   * @param target - substring to search for
+   * @param from - byte offset to start searching from
+   * @return byte offset or -1
+   */
+  open func indexOf(target: string, from: long): long {
+    let tlen = target.length();
+    if tlen == (long)0 {
+      return from;
+    }
+    let slen = self.length();
+    if from < (long)0 {
+      throw "String indexOf from out of bounds";
+    }
+    if from + tlen > slen {
+      return (long)-1;
+    }
+    let limit = slen - tlen;
+    var i = from;
+    while i <= limit {
+      if feng_string_range_equal(self, i, i + tlen, target, (long)0, tlen) {
+        return i;
+      }
+      i += (long)1;
+    }
+    return (long)-1;
+  }
+
+  /**
+   * Returns the byte offset of the last occurrence of `target`, or -1 if not found.
+   * @param target - substring to search for
+   * @return byte offset or -1
+   */
+  open func lastIndexOf(target: string): long {
+    let tlen = target.length();
+    if tlen == (long)0 {
+      return self.length();
+    }
+    let slen = self.length();
+    if tlen > slen {
+      return (long)-1;
+    }
+    var i = slen - tlen;
+    while i >= (long)0 {
+      if feng_string_range_equal(self, i, i + tlen, target, (long)0, tlen) {
+        return i;
+      }
+      i -= (long)1;
+    }
+    return (long)-1;
+  }
+
+  /**
+   * Returns whether this string contains `target` as a substring.
+   * @param target - substring to search for
+   * @return true if found
+   */
+  open func contains(target: string): bool {
+    return self.indexOf(target) >= (long)0;
+  }
+
+  /**
+   * Returns whether this string starts with `prefix`.
+   * @param prefix - prefix to check
+   * @return true if this string starts with prefix
+   */
+  open func startsWith(prefix: string): bool {
+    let plen = prefix.length();
+    if plen == (long)0 {
+      return true;
+    }
+    if plen > self.length() {
+      return false;
+    }
+    return feng_string_range_equal(self, (long)0, plen, prefix, (long)0, plen);
+  }
+
+  /**
+   * Returns whether this string ends with `suffix`.
+   * @param suffix - suffix to check
+   * @return true if this string ends with suffix
+   */
+  open func endsWith(suffix: string): bool {
+    let slen = suffix.length();
+    if slen == (long)0 {
+      return true;
+    }
+    let len = self.length();
+    if slen > len {
+      return false;
+    }
+    return feng_string_range_equal(self, len - slen, len, suffix, (long)0, slen);
+  }
+
+  /**
+   * Replaces all occurrences of `old` with `replacement`, returns a new string.
+   * @param old - substring to find
+   * @param replacement - substring to substitute
+   * @return new string with all occurrences replaced
+   */
+  open func replace(old: string, replacement: string): string {
+    let olen = old.length();
+    if olen == (long)0 {
+      return self.clone();
+    }
+    let slen = self.length();
+    var result = "";
+    var pos: long = 0;
+    var found = self.indexOf(old, pos);
+    while found >= (long)0 {
+      if found > pos {
+        result = result + self.clone(pos, found);
+      }
+      result = result + replacement;
+      pos = found + olen;
+      found = self.indexOf(old, pos);
+    }
+    if pos == (long)0 {
+      return self.clone();
+    }
+    if pos < slen {
+      result = result + self.clone(pos, slen);
+    }
+    return result;
+  }
+
+  /**
+   * Removes leading Unicode whitespace characters, returns a new string.
+   * @return trimmed string
+   */
+  open func trimStart(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
+    }
+    let data: string* = &self;
+    let end: string* = feng_pointer_move(data, len);
+    var cursor: string* = data;
+    var uc: u32 = 0;
+    while !feng_pointer_equal(cursor, end) {
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+      if !isUnicodeWhitespace(uc) {
+        break;
+      }
+      cursor = next;
+    }
+    let start = feng_pointer_diff(cursor, data);
+    if start == len {
+      return "";
+    }
+    return self.clone(start, len);
+  }
+
+  /**
+   * Removes trailing Unicode whitespace characters, returns a new string.
+   * @return trimmed string
+   */
+  open func trimEnd(): string {
+    let len = self.length();
+    if len == (long)0 {
+      return "";
+    }
+    let data: string* = &self;
+    var cursor: string* = feng_pointer_move(data, len);
+    var uc: u32 = 0;
+    while !feng_pointer_equal(cursor, data) {
+      let prev: string* = u8_prev(&uc, cursor, data);
+      if feng_pointer_is_null(prev) {
+        break;
+      }
+      if !isUnicodeWhitespace(uc) {
+        break;
+      }
+      cursor = prev;
+    }
+    let trimmed = feng_pointer_diff(cursor, data);
+    if trimmed == (long)0 {
+      return "";
+    }
+    return self.clone((long)0, trimmed);
+  }
+
+  /**
+   * Removes leading and trailing Unicode whitespace characters, returns a new string.
+   * @return trimmed string
+   */
+  open func trim(): string {
+    return self.trimStart().trimEnd();
+  }
+
+}
