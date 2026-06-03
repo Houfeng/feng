@@ -24892,8 +24892,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 for (size_t ci = 0; ci < ut->constructor_count; ci++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          ut->constructors[ci].member->visibility ==
-                                              FENG_VISIBILITY_PUBLIC);
+                                          ut->constructors[ci].member->visibility !=
+                                              FENG_VISIBILITY_PRIVATE);
                     if (!cg_emit_user_method(cg,
                                              ut,
                                              &ut->constructors[ci],
@@ -24904,8 +24904,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 for (size_t mi = 0; mi < ut->method_count; mi++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          ut->methods[mi].member->visibility ==
-                                              FENG_VISIBILITY_PUBLIC);
+                                          ut->methods[mi].member->visibility !=
+                                              FENG_VISIBILITY_PRIVATE);
                     if (!cg_emit_user_method(cg,
                                              ut,
                                              &ut->methods[mi],
@@ -24916,8 +24916,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 for (size_t mi = 0; mi < ut->static_method_count; mi++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          ut->static_methods[mi].member->visibility ==
-                                              FENG_VISIBILITY_PUBLIC);
+                                          ut->static_methods[mi].member->visibility !=
+                                              FENG_VISIBILITY_PRIVATE);
                     if (ut->static_methods[mi].member->as.callable.type_param_count > 0U) {
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,

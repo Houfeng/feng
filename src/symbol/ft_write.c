@@ -642,13 +642,18 @@ static uint32_t writer_find_decl_id(const WriterContext *ctx, const FengSymbolDe
 }
 
 static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbolDeclView *decl) {
-    return profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE ||
-           (decl != NULL &&
-            (decl->visibility == FENG_VISIBILITY_PUBLIC ||
-             (decl->kind == FENG_SYMBOL_DECL_KIND_FUNCTION &&
-              decl->is_extern &&
-              decl->calling_convention != FENG_ANNOTATION_NONE) ||
-             decl->kind == FENG_SYMBOL_DECL_KIND_FIELD));
+    if (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE) return true;
+    if (decl == NULL) return false;
+    if (decl->visibility == FENG_VISIBILITY_PUBLIC) return true;
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_FUNCTION &&
+        decl->is_extern &&
+        decl->calling_convention != FENG_ANNOTATION_NONE) return true;
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_FIELD) return true;
+    /* Type members (constructors/methods) default to PUBLIC when not seal. */
+    if ((decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+         decl->kind == FENG_SYMBOL_DECL_KIND_METHOD) &&
+        decl->visibility != FENG_VISIBILITY_PRIVATE) return true;
+    return false;
 }
 
 static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
@@ -687,7 +692,11 @@ static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
 static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     uint16_t flags = 0U;
 
-    if (decl->visibility == FENG_VISIBILITY_PUBLIC) {
+    if (decl->visibility == FENG_VISIBILITY_PUBLIC ||
+        ((decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+          decl->kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+          decl->kind == FENG_SYMBOL_DECL_KIND_FIELD) &&
+         decl->visibility != FENG_VISIBILITY_PRIVATE)) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_PUBLIC;
     }
     if (decl->mutability == FENG_MUTABILITY_VAR) {

@@ -9168,7 +9168,7 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
     ASSERT(strstr(output, expected_definition) != NULL ||
             (expected_definition_alt != NULL && strstr(output, expected_definition_alt) != NULL));
     ASSERT(strstr(output, "\"id\":5,\"result\":[") != NULL);
-    ASSERT(strstr(output, "\"label\":\"name\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
 
     free(output);
     free(expected_definition_alt);
