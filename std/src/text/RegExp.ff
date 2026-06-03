@@ -12,8 +12,8 @@ seal type Pcre2MatchData {}
 
 @cdecl("feng_std_pcre2", "pcre2_compile_8")
 extern func pcre2_compile(
-  pattern: byte *, length: long, options: u32,
-  errorCode: int *, errorOffset: long *,
+  pattern: byte*, length: long, options: u32,
+  errorCode: int*, errorOffset: long*,
   cContext: long
 ): long;
 
@@ -23,41 +23,41 @@ extern func pcre2_code_free(code: long): void;
 @cdecl("feng_std_pcre2", "pcre2_match_data_create_from_pattern_8")
 extern func pcre2_match_data_create_from_pattern(
   code: long, gContext: long
-): Pcre2MatchData *;
+): Pcre2MatchData*;
 
 @cdecl("feng_std_pcre2", "pcre2_match_data_free_8")
-extern func pcre2_match_data_free(match_data: Pcre2MatchData * ): void;
+extern func pcre2_match_data_free(match_data: Pcre2MatchData*): void;
 
 @cdecl("feng_std_pcre2", "pcre2_match_8")
 extern func pcre2_match(
-  code: long, subject: byte *, length: long, startOffset: long,
-  options: u32, match_data: Pcre2MatchData *, mContext: long
+  code: long, subject: byte*, length: long, startOffset: long,
+  options: u32, match_data: Pcre2MatchData*, mContext: long
 ): int;
 
 @cdecl("feng_std_pcre2", "pcre2_get_ovector_pointer_8")
-extern func pcre2_get_ovector_pointer(match_data: Pcre2MatchData * ): long *;
+extern func pcre2_get_ovector_pointer(match_data: Pcre2MatchData*): long*;
 
 @cdecl("feng_std_pcre2", "pcre2_get_ovector_count_8")
-extern func pcre2_get_ovector_count(match_data: Pcre2MatchData * ): u32;
+extern func pcre2_get_ovector_count(match_data: Pcre2MatchData*): u32;
 
 @cdecl("feng_std_pcre2", "pcre2_get_error_message_8")
-extern func pcre2_get_error_message(errorcode: int, buffer: byte *, buffer_size: long): int;
+extern func pcre2_get_error_message(errorcode: int, buffer: byte*, buffer_size: long): int;
 
 @cdecl("feng_std_pcre2", "pcre2_substitute_8")
 extern func pcre2_substitute(
-  code: long, subject: byte *, length: long, startoffset: long,
+  code: long, subject: byte*, length: long, startoffset: long,
   options: u32, match_data: long, mcontext: long,
-  replacement: byte *, rlength: long,
-  outputbuffer: byte *, outlengthptr: long *
+  replacement: byte*, rlength: long,
+  outputbuffer: byte*, outlengthptr: long*
 ): int;
 
 /* ---------- Runtime pointer primitives ---------- */
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: long * ): T;
+extern func feng_pointer_get_scalar<T>(ptr: long*): T;
 
 @runtime
-extern func feng_pointer_move(ptr: long *, offset: long): long *;
+extern func feng_pointer_move(ptr: long*, offset: long): long*;
 
 /* ---------- Constants ---------- */
 
@@ -92,13 +92,13 @@ open type Match {
 
 /* ---------- ovector helpers ---------- */
 
-seal func ovectorStart(ovector: long *, index: u32): long {
+seal func ovectorStart(ovector: long*, index: u32): long {
   return feng_pointer_get_scalar<long>(
     feng_pointer_move(ovector, (long)index * (long)16)
   );
 }
 
-seal func ovectorEnd(ovector: long *, index: u32): long {
+seal func ovectorEnd(ovector: long*, index: u32): long {
   return feng_pointer_get_scalar<long>(
     feng_pointer_move(ovector, (long)index * (long)16 + (long)8)
   );
@@ -106,7 +106,7 @@ seal func ovectorEnd(ovector: long *, index: u32): long {
 
 /* ---------- buildMatch ---------- */
 
-seal func buildMatch(subject: string, md: Pcre2MatchData * ): Match {
+seal func buildMatch(subject: string, md: Pcre2MatchData*): Match {
   let ovector = pcre2_get_ovector_pointer(md);
   let ovCount = pcre2_get_ovector_count(md);
   let groupArr: string[!] = string[:(long)ovCount];
