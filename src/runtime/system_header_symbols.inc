@@ -59,6 +59,8 @@ FENG_SYSTEM_HEADER_SYMBOL(bsearch)
 
 /* <stdlib.h> — environment */
 FENG_SYSTEM_HEADER_SYMBOL(getenv)
+FENG_SYSTEM_HEADER_SYMBOL(setenv)
+FENG_SYSTEM_HEADER_SYMBOL(unsetenv)
 FENG_SYSTEM_HEADER_SYMBOL(system)
 
 /* <string.h> */
