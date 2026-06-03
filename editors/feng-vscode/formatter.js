@@ -28,7 +28,7 @@ const KEYWORDS = new Set([
 
 const CONTROL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'catch', 'return', 'throw']);
 const PREFIX_CONTEXT_KEYWORDS = new Set(['if', 'while', 'return', 'throw']);
-const PREFIX_OPERATORS = new Set(['!', '-', '*', '+']);
+const PREFIX_OPERATORS = new Set(['!', '-', '*', '+', '&']);
 const THREE_CHAR_OPERATORS = new Set(['<<=', '>>=']);
 const MULTI_CHAR_OPERATORS = new Set([
     '->', '&&', '||', '==', '!=', '<=', '>=',
@@ -710,12 +710,20 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             /* Suppress space:
              *  - after generic open <
              *  - suffix delimiter after generic close >
-             *  - any token immediately after a postfix pointer * (T* , T* ) etc.)
              *  - the postfix pointer * itself (no space between type and *)
+             *  - tokens that attach tightly after a postfix pointer *:
+             *    , ; ) ] > * [   — e.g. T*, T*) T*[] T** T*>
+             *    but NOT before = { or other operators (those keep their space)
              */
+            const tightAfterPostfixPointer = lastEmittedWasPostfixPointer && (
+                token.value === ',' || token.value === ';' ||
+                token.value === ')' || token.value === ']' ||
+                token.value === '>' || token.value === '*' ||
+                token.value === '['
+            );
             const suppressSpace = lastEmittedWasGenericOpen ||
                 (lastEmittedWasGenericClose && (token.value === '(' || token.value === '[')) ||
-                lastEmittedWasPostfixPointer ||
+                tightAfterPostfixPointer ||
                 isPostfixPtr;
 
             if (!suppressSpace && needsSpaceBetween(previousEmittedToken,

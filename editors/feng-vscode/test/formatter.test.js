@@ -35,6 +35,24 @@ runCase(
 );
 
 runCase(
+    'postfix pointer with assignment keeps space before =',
+    'func main():void {\nlet data:string* = null;\nvar ptr:Node* = null;\n}\n',
+    'func main(): void {\n    let data: string* = null;\n    var ptr: Node* = null;\n}\n'
+);
+
+runCase(
+    'postfix pointer keeps space before opening brace',
+    'func main():void {\nlet p:Point*{\n};\n}\n',
+    'func main(): void {\n    let p: Point* {\n    };\n}\n'
+);
+
+runCase(
+    'unary address-of stays attached while binary & keeps spaces',
+    'func main():void {\nlet p=&foo;\nlet m=a&b;\n}\n',
+    'func main(): void {\n    let p = &foo;\n    let m = a & b;\n}\n'
+);
+
+runCase(
     'postfix pointer chained T** keeps both stars attached',
     'extern func g(ptr:long**):long**;\n',
     'extern func g(ptr: long**): long**;\n'
