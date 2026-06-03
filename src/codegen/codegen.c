@@ -7096,6 +7096,24 @@ static const ExternFn *cg_find_extern(const CG *cg, const char *name, size_t len
     return NULL;
 }
 
+/* Returns the C symbol name for an extern function entry. When @cdecl
+ * provides an explicit alias it is stored in c_name; otherwise the Feng
+ * name is used as the C symbol directly. */
+static const char *cg_extern_c_symbol(const ExternFn *ef) {
+    return ef->c_name != NULL ? ef->c_name : ef->name;
+}
+
+/* Returns true when an earlier entry in the externs array already declared
+ * the same C symbol.  Used to emit exactly one C prototype per C name. */
+static bool cg_c_name_already_declared(const CG *cg, const ExternFn *ef) {
+    const char *c_name = cg_extern_c_symbol(ef);
+    for (size_t i = 0; i < cg->extern_count; i++) {
+        if (&cg->externs[i] == ef) return false;
+        if (strcmp(c_name, cg_extern_c_symbol(&cg->externs[i])) == 0) return true;
+    }
+    return false;
+}
+
 static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
     Buf *h = &cg->headers;
 
@@ -7113,7 +7131,13 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
     /* System-header externs are already declared by the always-included
      * headers (<stdlib.h>, <math.h>, <string.h>, …). Emitting a second
      * prototype with Feng-mapped types would conflict. */
-    if (cg_is_system_header_symbol(ef->c_name != NULL ? ef->c_name : ef->name)) {
+    if (cg_is_system_header_symbol(cg_extern_c_symbol(ef))) {
+        return true;
+    }
+
+    /* C-name dedup: when multiple Feng externs map to the same C symbol
+     * (e.g. via @cdecl alias), emit only the first declaration. */
+    if (cg_c_name_already_declared(cg, ef)) {
         return true;
     }
 
@@ -7126,7 +7150,7 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
             buf_append_fmt(h, " %s", callconv_macro);
         }
     }
-    buf_append_fmt(h, " %s(", ef->c_name != NULL ? ef->c_name : ef->name);
+    buf_append_fmt(h, " %s(", cg_extern_c_symbol(ef));
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
     } else {
