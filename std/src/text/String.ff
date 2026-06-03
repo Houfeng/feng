@@ -123,7 +123,7 @@ extern func feng_string_range_equal(
 func isUnicodeWhitespace(cp: u32): bool {
   if cp <= (u32)0x0020 {
     return cp == (u32)0x0009 || cp == (u32)0x000A || cp == (u32)0x000B
-        || cp == (u32)0x000C || cp == (u32)0x000D || cp == (u32)0x0020;
+    || cp == (u32)0x000C || cp == (u32)0x000D || cp == (u32)0x0020;
   }
   if cp == (u32)0x0085 || cp == (u32)0x00A0 {
     return true;

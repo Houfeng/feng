@@ -31,7 +31,7 @@ extern func pclose(stream: CStream*): int;
 extern func posix_kill(pid: int, sig: int): int;
 
 seal func emptyBytes(): byte[] {
-  let items: byte[!] = byte[: (long)0];
+  let items: byte[!] = byte[:(long)0];
   return (byte[])items;
 }
 
@@ -111,7 +111,7 @@ open type Process {
 
   seal func run(): void {
     let cmdBytes = self.buildCommand();
-    let mode: byte[!] = byte[: (long)2];
+    let mode: byte[!] = byte[:(long)2];
     mode[0] = (byte)114;
     mode[1] = (byte)0;
 
@@ -121,7 +121,7 @@ open type Process {
     }
 
     let outputBuf = List<byte>();
-    let chunk: byte[!] = byte[: (long)4096];
+    let chunk: byte[!] = byte[:(long)4096];
     while true {
       let n = fread(&chunk, (long)1, (long)4096, fp);
       if n <= (long)0 {

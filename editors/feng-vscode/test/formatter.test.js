@@ -95,6 +95,12 @@ runCase(
     'func main(a: int): void {\n    let n = (a) - 1;\n}\n'
 );
 
+runCase(
+    'keeps generic type close attached before parameter list close',
+    'extern func encodeUtf8(cp:u32,output:List<byte> ):void;\n',
+    'extern func encodeUtf8(cp: u32, output: List<byte>): void;\n'
+);
+
 runManifestCase(
     'formats manifest sections comments and aligned values',
     '#package\n [package] \nname:"examples"\nversion:  "0.1.0"\nout:"build/"\n\n# deps\n[dependencies]\ndemo:"0.1.0"\nbase.core:"1.2.3"\n',

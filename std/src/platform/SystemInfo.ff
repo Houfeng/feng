@@ -4,7 +4,7 @@ import std.text;
 import std.collections;
 
 @cdecl("feng_std_uv", "uv_os_gethostname")
-extern func uv_os_gethostname(name: byte *, size: long * ): int;
+extern func uv_os_gethostname(name: byte*, size: long*): int;
 
 @cdecl("feng_std_uv", "uv_os_getpid")
 extern func uv_os_getpid(): long;
@@ -26,7 +26,7 @@ open type SystemInfo {
     let nameBytes: byte[!] = byte[:(long)256];
     let nameSize: long[!] = long[:(long)1];
     nameSize[0] = (long)256;
-    let rc = uv_os_gethostname( & nameBytes, & nameSize);
+    let rc = uv_os_gethostname(&nameBytes, &nameSize);
     if rc != 0 {
       throw "platform/system-info/hostname";
     }

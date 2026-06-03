@@ -839,7 +839,7 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
                 token.value === '['
             );
             const suppressSpace = lastEmittedWasGenericOpen ||
-                (lastEmittedWasGenericClose && (token.value === '(' || token.value === '[')) ||
+                (lastEmittedWasGenericClose && (token.value === '(' || token.value === '[' || token.value === ')')) ||
                 tightAfterPostfixPointer ||
                 lastEmittedWasCastPrefixOperator ||
                 tightAfterCastClose ||

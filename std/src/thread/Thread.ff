@@ -73,7 +73,7 @@ open type Thread {
     uv_mutex_lock(spawnLock);
     spawnFn = fn;
     spawnReady = false;
-    let tidBuf: long[!] = long[: (long)1];
+    let tidBuf: long[!] = long[:(long)1];
     let result = uv_thread_create(&tidBuf, &threadTrampoline, (long)0);
     if result != 0 {
       uv_mutex_unlock(spawnLock);
@@ -107,7 +107,7 @@ open type Thread {
     if self.joined {
       return;
     }
-    let tidBuf: long[!] = long[: (long)1];
+    let tidBuf: long[!] = long[:(long)1];
     tidBuf[0] = self.handle;
     let result = uv_thread_join(&tidBuf);
     if result != 0 {
