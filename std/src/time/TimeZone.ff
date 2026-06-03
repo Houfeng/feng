@@ -1,7 +1,137 @@
 open module std.time;
 
+import std.text;
+
+// libc time functions
+@cdecl("libc")
+extern func time(tloc: i64*): i64;
+
+@cdecl("libc")
+extern func localtime_r(timep: i64*, result: long*): long*;
+
+@cdecl("libc")
+extern func setenv(name: string*, value: string*, overwrite: int): int;
+
+@cdecl("libc")
+extern func unsetenv(name: string*): int;
+
+@cdecl("libc")
+extern func tzset(): void;
+
+@cdecl("libc")
+extern func readlink(path: string*, buf: byte*, bufsiz: long): long;
+
+// Runtime pointer primitives
+@runtime
+extern func feng_pointer_move(ptr: long*, offset: long): long*;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+
+// struct tm layout on 64-bit macOS/Linux:
+// 9 x int32 fields (36 bytes) + 4 bytes padding + long tm_gmtoff + char* tm_zone = 56 bytes
+seal let TM_BUF_LONGS: long = (long)8;
+seal let TM_GMTOFF_OFFSET: long = (long)40;
+
+/**
+ * 从 struct tm 缓冲区中读取 tm_gmtoff 字段（UTC 偏移秒数）
+ */
+seal func readGmtOffset(tmBuf: long[!]): i32 {
+  let gmtoffPtr = feng_pointer_move(&tmBuf, TM_GMTOFF_OFFSET);
+  let gmtoff: long = feng_pointer_get_scalar<long>(gmtoffPtr);
+  return (i32)gmtoff;
+}
+
+/**
+ * 获取当前本地时间的 struct tm 信息并填入缓冲区
+ */
+seal func fillLocalTm(tmBuf: long[!]) {
+  let t: i64[!] = i64[:(long)1];
+  t[0] = time(&t);
+  let rc = localtime_r(&t, &tmBuf);
+}
+
+/**
+ * 通过读取 /etc/localtime 符号链接获取当前系统 IANA 时区标识符
+ * 截取 "zoneinfo/" 之后的部分作为 IANA ID
+ */
+seal func readSystemZoneId(): string {
+  let path = "/etc/localtime";
+  let buf: byte[!] = byte[:(long)256];
+  let len = readlink(&path, &buf, (long)256);
+  if len <= (long)0 {
+    throw "time/timezone/readlink-failed";
+  }
+  // "zoneinfo/" = [122, 111, 110, 101, 105, 110, 102, 111, 47], length = 9
+  let markerLen: long = (long)9;
+  var found: long = (long) - 1;
+  var i: long = (long)0;
+  while i <= len - markerLen {
+    if buf[i] == (byte)122 && buf[i + (long)1] == (byte)111
+    && buf[i + (long)2] == (byte)110 && buf[i + (long)3] == (byte)101
+    && buf[i + (long)4] == (byte)105 && buf[i + (long)5] == (byte)110
+    && buf[i + (long)6] == (byte)102 && buf[i + (long)7] == (byte)111
+    && buf[i + (long)8] == (byte)47 {
+      found = i + markerLen;
+      break;
+    }
+    i += (long)1;
+  }
+  if found < (long)0 {
+    throw "time/timezone/invalid-symlink";
+  }
+  let idLen = len - found;
+  let idBytes: byte[!] = byte[:idLen];
+  for var k: long = (long)0; k < idLen; k += (long)1 {
+    idBytes[k] = buf[found + k];
+  }
+  return string.fromUtf8Bytes((byte[])idBytes);
+}
+
+/**
+ * 时区信息查询工具
+ * 提供当前系统时区偏移量和时区标识符的查询能力
+ */
 open type TimeZone {
-  static func getZoneOffset(zoneId: string): i32 {}
-  static func currentZoneId(): string {}
-  static func currentOffset(): i32 {}
+
+  seal func TimeZone() {}
+
+  /**
+   * 获取指定时区标识符对应的 UTC 偏移秒数
+   * 通过临时设置 TZ 环境变量并调用 localtime_r 获取偏移信息
+   * @param zoneId IANA 时区标识符（如 "Asia/Shanghai", "America/New_York"）
+   * @return UTC 偏移秒数（东区为正，西区为负）
+   */
+  static func getZoneOffset(zoneId: string): i32 {
+    let tzName = "TZ";
+    let rc1 = setenv(&tzName, &zoneId, 1);
+    if rc1 != 0 {
+      throw "time/timezone/setenv-failed";
+    }
+    tzset();
+    let tmBuf: long[!] = long[:TM_BUF_LONGS];
+    fillLocalTm(tmBuf);
+    let offset = readGmtOffset(tmBuf);
+    let rc2 = unsetenv(&tzName);
+    tzset();
+    return offset;
+  }
+
+  /**
+   * 获取当前系统 IANA 时区标识符（如 "Asia/Shanghai", "America/New_York"）
+   * @return IANA 时区标识符字符串
+   */
+  static func currentZoneId(): string {
+    return readSystemZoneId();
+  }
+
+  /**
+   * 获取当前系统时区相对于 UTC 的偏移秒数
+   * @return UTC 偏移秒数（东区为正，西区为负）
+   */
+  static func currentOffset(): i32 {
+    let tmBuf: long[!] = long[:TM_BUF_LONGS];
+    fillLocalTm(tmBuf);
+    return readGmtOffset(tmBuf);
+  }
 }
