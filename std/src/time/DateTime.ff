@@ -1,0 +1,840 @@
+open module std.time;
+
+import std.text;
+import std.numeric;
+
+// External binding: get current time (seconds + microseconds since 1970)
+@cdecl("feng_std_uv", "uv_gettimeofday")
+extern func uv_gettimeofday(tv: i64*): i32;
+
+/**
+ * Left-pads an integer with zeros to the specified width.
+ */
+seal func padZero(value: i32, width: i32): string {
+  let s = value.toString();
+  return s.padStart((long)width, "0");
+}
+
+/**
+ * Returns whether the given year is a leap year.
+ */
+seal func isLeapYearValue(y: i32): bool {
+  if y % 4 != 0 {
+    return false;
+  }
+  if y % 100 != 0 {
+    return true;
+  }
+  if y % 400 != 0 {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Returns the number of days in the given month (1-12) for the given year.
+ */
+seal func daysInMonthValue(year: i32, month: i32): i32 {
+  if month == 2 {
+    if isLeapYearValue(year) {
+      return 29;
+    }
+    return 28;
+  }
+  if month == 4 || month == 6 || month == 9 || month == 11 {
+    return 30;
+  }
+  return 31;
+}
+
+/**
+ * Converts seconds since 1970-01-01 00:00:00 to date/time components.
+ * out[0]=year, out[1]=month, out[2]=day, out[3]=hour, out[4]=minute, out[5]=second
+ */
+seal func secondsToComponents(totalSeconds: i64, out: i32[!]) {
+  let secPerDay: i64 = (i64)86400;
+  var days: i64 = totalSeconds / secPerDay;
+  var timeOfDay: i64 = totalSeconds - days * secPerDay;
+  if timeOfDay < (i64)0 {
+    timeOfDay = timeOfDay + secPerDay;
+    days = days - (i64)1;
+  }
+
+  let hour = (i32)(timeOfDay / (i64)3600);
+  let minuteSec = timeOfDay - (i64)hour * (i64)3600;
+  let minute = (i32)(minuteSec / (i64)60);
+  let second = (i32)(minuteSec - (i64)minute * (i64)60);
+
+  // Civil from days (Howard Hinnant algorithm)
+  let z = days + (i64)719468;
+  let era: i64 = if z >= (i64)0 {
+    z / (i64)146097;
+  } else {
+    (z - (i64)146096) / (i64)146097;
+  };
+  let doe: i64 = z - era * (i64)146097;
+  let yoe: i64 = (doe - doe / (i64)1460 + doe / (i64)36524 - doe / (i64)146096) / (i64)365;
+  let y: i64 = yoe + era * (i64)400;
+  let doy: i64 = doe - ((i64)365 * yoe + yoe / (i64)4 - yoe / (i64)100);
+  let mp: i64 = ((i64)5 * doy + (i64)2) / (i64)153;
+  let day: i64 = doy - ((i64)153 * mp + (i64)2) / (i64)5 + (i64)1;
+  let month: i64 = if mp < (i64)10 {
+    mp + (i64)3;
+  } else {
+    mp - (i64)9;
+  };
+  let year: i64 = if month <= (i64)2 {
+    y + (i64)1;
+  } else {
+    y;
+  };
+
+  out[0] = (i32)year;
+  out[1] = (i32)month;
+  out[2] = (i32)day;
+  out[3] = hour;
+  out[4] = minute;
+  out[5] = second;
+}
+
+/**
+ * Converts date/time components to seconds since 1970-01-01 00:00:00 UTC.
+ */
+seal func componentsToSeconds(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32): i64 {
+  var y: i64 = (i64)year;
+  let m: i64 = (i64)month;
+  let d: i64 = (i64)day;
+
+  if m <= (i64)2 {
+    y = y - (i64)1;
+  }
+  let era: i64 = if y >= (i64)0 {
+    y / (i64)400;
+  } else {
+    (y - (i64)399) / (i64)400;
+  };
+  let yoe: i64 = y - era * (i64)400;
+  let mp: i64 = if m > (i64)2 {
+    m - (i64)3;
+  } else {
+    m + (i64)9;
+  };
+  let doy: i64 = ((i64)153 * mp + (i64)2) / (i64)5 + d - (i64)1;
+  let doe: i64 = yoe * (i64)365 + yoe / (i64)4 - yoe / (i64)100 + doy;
+  let totalDays: i64 = era * (i64)146097 + doe - (i64)719468;
+
+  return totalDays * (i64)86400 + (i64)hour * (i64)3600 + (i64)minute * (i64)60 + (i64)second;
+}
+
+/**
+ * 日期时间对象（不含时区信息）
+ * 不可变对象，辅助方法计算后返回新的 DateTime 对象
+ */
+open type DateTime {
+
+  // 均为分量（不是从1970-01-01 00:00:00 000000000 开始）--------------------------
+  let year: i32; // 自然年，非偏移年
+  let month: i32; // 1-12
+  let day: i32; // 1-31
+  let hour: i32; // 0-23
+  let minute: i32; // 0-59
+  let second: i32; // 0-59
+  let millisecond: i32; // 0-999
+  let microsecond: i32; // 0-999
+  let nanosecond: i32; // 0-999
+
+  // 构造方法 -------------------------------------------------------------------
+
+  /**
+   * 构造一个 DateTime 对象
+   * 从1970-01-01 00:00:00 000000000 开始的毫秒数
+   * @param milliseconds 毫秒时间戳
+   */
+  func DateTime(milliseconds: i64) {
+    let seconds: i64 = if milliseconds >= (i64)0 {
+      milliseconds / (i64)1000;
+    } else {
+      (milliseconds - (i64)999) / (i64)1000;
+    };
+    var remainingMs: i32 = (i32)(milliseconds - seconds * (i64)1000);
+
+    let components: i32[!] = i32[: (long)6];
+    secondsToComponents(seconds, components);
+
+    self.year = components[0];
+    self.month = components[1];
+    self.day = components[2];
+    self.hour = components[3];
+    self.minute = components[4];
+    self.second = components[5];
+    self.millisecond = remainingMs;
+    self.microsecond = 0;
+    self.nanosecond = 0;
+  }
+
+  /**
+   * 构造一个 DateTime 对象
+   * 使用当前时间（UTC）
+   */
+  func DateTime() {
+    let tv: i64[!] = i64[: (long)2];
+    let rc = uv_gettimeofday(&tv);
+    if rc != 0 {
+      throw "time/datetime/gettimeofday";
+    }
+    let seconds: i64 = tv[0];
+    let microseconds: i32 = (i32)tv[1];
+
+    let components: i32[!] = i32[: (long)6];
+    secondsToComponents(seconds, components);
+
+    self.year = components[0];
+    self.month = components[1];
+    self.day = components[2];
+    self.hour = components[3];
+    self.minute = components[4];
+    self.second = components[5];
+    self.millisecond = microseconds / 1000;
+    self.microsecond = microseconds % 1000;
+    self.nanosecond = 0;
+  }
+
+  // 静态工厂方法 ----------------------------------------------------------------
+
+  /**
+   * 从各分量创建 DateTime 对象
+   * @param year 年
+   * @param month 月 (1-12)
+   * @param day 日 (1-31)
+   * @param hour 时 (0-23)
+   * @param minute 分 (0-59)
+   * @param second 秒 (0-59)
+   * @param millisecond 毫秒 (0-999)
+   * @param microsecond 微秒 (0-999)
+   * @param nanosecond 纳秒 (0-999)
+   */
+  open static func of(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32, millisecond: i32, microsecond: i32, nanosecond: i32): DateTime {
+    if month < 1 || month > 12 {
+      throw "time/datetime/invalid-month";
+    }
+    if day < 1 || day > daysInMonthValue(year, month) {
+      throw "time/datetime/invalid-day";
+    }
+    if hour < 0 || hour > 23 {
+      throw "time/datetime/invalid-hour";
+    }
+    if minute < 0 || minute > 59 {
+      throw "time/datetime/invalid-minute";
+    }
+    if second < 0 || second > 59 {
+      throw "time/datetime/invalid-second";
+    }
+    if millisecond < 0 || millisecond > 999 {
+      throw "time/datetime/invalid-millisecond";
+    }
+    if microsecond < 0 || microsecond > 999 {
+      throw "time/datetime/invalid-microsecond";
+    }
+    if nanosecond < 0 || nanosecond > 999 {
+      throw "time/datetime/invalid-nanosecond";
+    }
+    return DateTime {
+      year: year,
+      month: month,
+      day: day,
+      hour: hour,
+      minute: minute,
+      second: second,
+      millisecond: millisecond,
+      microsecond: microsecond,
+      nanosecond: nanosecond
+    };
+  }
+
+  /**
+   * 从日期分量创建 DateTime 对象（时间部分为 00:00:00.000000000）
+   * @param year 年
+   * @param month 月 (1-12)
+   * @param day 日 (1-31)
+   */
+  open static func of(year: i32, month: i32, day: i32): DateTime {
+    return DateTime.of(year, month, day, 0, 0, 0, 0, 0, 0);
+  }
+
+  /**
+   * 从日期和时间分量创建 DateTime 对象（亚秒部分为 0）
+   * @param year 年
+   * @param month 月 (1-12)
+   * @param day 日 (1-31)
+   * @param hour 时 (0-23)
+   * @param minute 分 (0-59)
+   * @param second 秒 (0-59)
+   */
+  open static func of(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32): DateTime {
+    return DateTime.of(year, month, day, hour, minute, second, 0, 0, 0);
+  }
+
+  /**
+   * 获取当前时间的 DateTime 对象（UTC）
+   */
+  open static func now(): DateTime {
+    return DateTime();
+  }
+
+  /**
+   * 从毫秒时间戳创建 DateTime 对象
+   * @param milliseconds 从1970-01-01 00:00:00 UTC 开始的毫秒数
+   */
+  open static func fromMilliseconds(milliseconds: i64): DateTime {
+    return DateTime(milliseconds);
+  }
+
+  /**
+   * 从秒时间戳创建 DateTime 对象
+   * @param seconds 从1970-01-01 00:00:00 UTC 开始的秒数
+   */
+  open static func fromSeconds(seconds: i64): DateTime {
+    return DateTime(seconds * (i64)1000);
+  }
+
+  // 转换方法 -------------------------------------------------------------------
+
+  /**
+   * 返回从 1970-01-01 00:00:00 UTC 开始的毫秒时间戳
+   * 亚毫秒部分（microsecond, nanosecond）被截断
+   */
+  open func toMilliseconds(): i64 {
+    let seconds = componentsToSeconds(self.year, self.month, self.day, self.hour, self.minute, self.second);
+    return seconds * (i64)1000 + (i64)self.millisecond;
+  }
+
+  /**
+   * 返回从 1970-01-01 00:00:00 UTC 开始的秒时间戳
+   * 亚秒部分（millisecond, microsecond, nanosecond）被截断
+   */
+  open func toSeconds(): i64 {
+    return componentsToSeconds(self.year, self.month, self.day, self.hour, self.minute, self.second);
+  }
+
+  // 查询方法 -------------------------------------------------------------------
+
+  /**
+   * 返回是否为闰年
+   */
+  open func isLeapYear(): bool {
+    return isLeapYearValue(self.year);
+  }
+
+  /**
+   * 返回当月天数
+   */
+  open func daysInMonth(): i32 {
+    return daysInMonthValue(self.year, self.month);
+  }
+
+  /**
+   * 返回当年天数（365 或 366）
+   */
+  open func daysInYear(): i32 {
+    if self.isLeapYear() {
+      return 366;
+    }
+    return 365;
+  }
+
+  /**
+   * 返回该日期是一年中的第几天 (1-366)
+   */
+  open func dayOfYear(): i32 {
+    var result: i32 = 0;
+    var m: i32 = 1;
+    while m < self.month {
+      result = result + daysInMonthValue(self.year, m);
+      m = m + 1;
+    }
+    return result + self.day;
+  }
+
+  /**
+   * 返回星期几 (1=周一, 2=周二, ..., 7=周日，ISO 8601)
+   */
+  open func dayOfWeek(): i32 {
+    let seconds = componentsToSeconds(self.year, self.month, self.day, 0, 0, 0);
+    var days: i64 = seconds / (i64)86400;
+    // 1970-01-01 is Thursday (4)
+    var dow: i64 = (days + (i64)3) % (i64)7;
+    if dow < (i64)0 {
+      dow = dow + (i64)7;
+    }
+    return (i32)dow + 1;
+  }
+
+  // 算术方法（返回新对象） -------------------------------------------------------
+
+  /**
+   * 加指定年数，返回新的 DateTime 对象
+   * 如果结果日期无效（如 2月29日在非闰年），自动调整为当月最后一天
+   * @param years 要加的年数（可为负数）
+   */
+  open func addYears(years: i32): DateTime {
+    let newYear = self.year + years;
+    var newDay = self.day;
+    let maxDay = daysInMonthValue(newYear, self.month);
+    if newDay > maxDay {
+      newDay = maxDay;
+    }
+    return DateTime {
+      year: newYear,
+      month: self.month,
+      day: newDay,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 加指定月数，返回新的 DateTime 对象
+   * 如果结果日期无效，自动调整为当月最后一天
+   * @param months 要加的月数（可为负数）
+   */
+  open func addMonths(months: i32): DateTime {
+    var totalMonths: i32 = (self.year * 12 + (self.month - 1)) + months;
+    var newYear: i32 = totalMonths / 12;
+    var newMonth: i32 = totalMonths % 12 + 1;
+    if newMonth <= 0 {
+      newMonth = newMonth + 12;
+      newYear = newYear - 1;
+    }
+    var newDay = self.day;
+    let maxDay = daysInMonthValue(newYear, newMonth);
+    if newDay > maxDay {
+      newDay = maxDay;
+    }
+    return DateTime {
+      year: newYear,
+      month: newMonth,
+      day: newDay,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 加指定天数，返回新的 DateTime 对象
+   * @param days 要加的天数（可为负数）
+   */
+  open func addDays(days: i64): DateTime {
+    let milliseconds = self.toMilliseconds() + days * (i64)86400000;
+    let result = DateTime(milliseconds);
+    return DateTime {
+      year: result.year,
+      month: result.month,
+      day: result.day,
+      hour: result.hour,
+      minute: result.minute,
+      second: result.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 加指定小时数，返回新的 DateTime 对象
+   * @param hours 要加的小时数（可为负数）
+   */
+  open func addHours(hours: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + hours * (i64)3600000000000;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  /**
+   * 加指定分钟数，返回新的 DateTime 对象
+   * @param minutes 要加的分钟数（可为负数）
+   */
+  open func addMinutes(minutes: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + minutes * (i64)60000000000;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  /**
+   * 加指定秒数，返回新的 DateTime 对象
+   * @param seconds 要加的秒数（可为负数）
+   */
+  open func addSeconds(seconds: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + seconds * (i64)1000000000;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  /**
+   * 加指定毫秒数，返回新的 DateTime 对象
+   * @param milliseconds 要加的毫秒数（可为负数）
+   */
+  open func addMilliseconds(milliseconds: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + milliseconds * (i64)1000000;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  /**
+   * 加指定微秒数，返回新的 DateTime 对象
+   * @param microseconds 要加的微秒数（可为负数）
+   */
+  open func addMicroseconds(microseconds: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + microseconds * (i64)1000;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  /**
+   * 加指定纳秒数，返回新的 DateTime 对象
+   * @param nanoseconds 要加的纳秒数（可为负数）
+   */
+  open func addNanoseconds(nanoseconds: i64): DateTime {
+    let totalNanoseconds: i64 = self.toMilliseconds() * (i64)1000000
+      + (i64)self.microsecond * (i64)1000 + (i64)self.nanosecond
+      + nanoseconds;
+    return DateTime.fromNanoseconds(totalNanoseconds);
+  }
+
+  // with 方法（替换单个分量） ---------------------------------------------------
+
+  /**
+   * 替换年份，返回新对象；日会自动调整
+   */
+  open func withYear(year: i32): DateTime {
+    var newDay = self.day;
+    let maxDay = daysInMonthValue(year, self.month);
+    if newDay > maxDay {
+      newDay = maxDay;
+    }
+    return DateTime {
+      year: year,
+      month: self.month,
+      day: newDay,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换月份，返回新对象；日会自动调整
+   */
+  open func withMonth(month: i32): DateTime {
+    if month < 1 || month > 12 {
+      throw "time/datetime/invalid-month";
+    }
+    var newDay = self.day;
+    let maxDay = daysInMonthValue(self.year, month);
+    if newDay > maxDay {
+      newDay = maxDay;
+    }
+    return DateTime {
+      year: self.year,
+      month: month,
+      day: newDay,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换日，返回新对象
+   */
+  open func withDay(day: i32): DateTime {
+    if day < 1 || day > daysInMonthValue(self.year, self.month) {
+      throw "time/datetime/invalid-day";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: day,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换小时，返回新对象
+   */
+  open func withHour(hour: i32): DateTime {
+    if hour < 0 || hour > 23 {
+      throw "time/datetime/invalid-hour";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换分钟，返回新对象
+   */
+  open func withMinute(minute: i32): DateTime {
+    if minute < 0 || minute > 59 {
+      throw "time/datetime/invalid-minute";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: self.hour,
+      minute: minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换秒，返回新对象
+   */
+  open func withSecond(second: i32): DateTime {
+    if second < 0 || second > 59 {
+      throw "time/datetime/invalid-second";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: self.hour,
+      minute: self.minute,
+      second: second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换毫秒，返回新对象
+   */
+  open func withMillisecond(millisecond: i32): DateTime {
+    if millisecond < 0 || millisecond > 999 {
+      throw "time/datetime/invalid-millisecond";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: millisecond,
+      microsecond: self.microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换微秒，返回新对象
+   */
+  open func withMicrosecond(microsecond: i32): DateTime {
+    if microsecond < 0 || microsecond > 999 {
+      throw "time/datetime/invalid-microsecond";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: microsecond,
+      nanosecond: self.nanosecond
+    };
+  }
+
+  /**
+   * 替换纳秒，返回新对象
+   */
+  open func withNanosecond(nanosecond: i32): DateTime {
+    if nanosecond < 0 || nanosecond > 999 {
+      throw "time/datetime/invalid-nanosecond";
+    }
+    return DateTime {
+      year: self.year,
+      month: self.month,
+      day: self.day,
+      hour: self.hour,
+      minute: self.minute,
+      second: self.second,
+      millisecond: self.millisecond,
+      microsecond: self.microsecond,
+      nanosecond: nanosecond
+    };
+  }
+
+  // 比较方法 -------------------------------------------------------------------
+
+  /**
+   * 比较两个 DateTime 对象，返回负数/零/正数
+   * 负数表示 self 早于 other，正数表示 self 晚于 other
+   */
+  open func compareTo(other: DateTime): i32 {
+    if self.year != other.year {
+      return self.year - other.year;
+    }
+    if self.month != other.month {
+      return self.month - other.month;
+    }
+    if self.day != other.day {
+      return self.day - other.day;
+    }
+    if self.hour != other.hour {
+      return self.hour - other.hour;
+    }
+    if self.minute != other.minute {
+      return self.minute - other.minute;
+    }
+    if self.second != other.second {
+      return self.second - other.second;
+    }
+    if self.millisecond != other.millisecond {
+      return self.millisecond - other.millisecond;
+    }
+    if self.microsecond != other.microsecond {
+      return self.microsecond - other.microsecond;
+    }
+    return self.nanosecond - other.nanosecond;
+  }
+
+  /**
+   * 判断是否早于另一个 DateTime
+   */
+  open func isBefore(other: DateTime): bool {
+    return self.compareTo(other) < 0;
+  }
+
+  /**
+   * 判断是否晚于另一个 DateTime
+   */
+  open func isAfter(other: DateTime): bool {
+    return self.compareTo(other) > 0;
+  }
+
+  /**
+   * 判断两个 DateTime 是否表示同一时刻
+   */
+  open func equals(other: DateTime): bool {
+    return self.compareTo(other) == 0;
+  }
+
+  // 格式化方法 -----------------------------------------------------------------
+
+  /**
+   * 返回 ISO 8601 格式的日期时间字符串
+   * 格式: yyyy-MM-ddTHH:mm:ss.mmmuuunnn
+   * 如果亚秒部分全为0，则不输出小数部分
+   * 如果微秒和纳秒为0，只输出毫秒部分
+   * 如果纳秒为0，输出到微秒
+   */
+  open func toString(): string {
+    var result = padZero(self.year, 4) + "-" + padZero(self.month, 2) + "-" + padZero(self.day, 2)
+      + "T" + padZero(self.hour, 2) + ":" + padZero(self.minute, 2) + ":" + padZero(self.second, 2);
+
+    if self.millisecond != 0 || self.microsecond != 0 || self.nanosecond != 0 {
+      result = result + "." + padZero(self.millisecond, 3);
+      if self.microsecond != 0 || self.nanosecond != 0 {
+        result = result + padZero(self.microsecond, 3);
+        if self.nanosecond != 0 {
+          result = result + padZero(self.nanosecond, 3);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 返回日期部分的字符串
+   * 格式: yyyy-MM-dd
+   */
+  open func toDateString(): string {
+    return padZero(self.year, 4) + "-" + padZero(self.month, 2) + "-" + padZero(self.day, 2);
+  }
+
+  /**
+   * 返回时间部分的字符串
+   * 格式: HH:mm:ss
+   */
+  open func toTimeString(): string {
+    return padZero(self.hour, 2) + ":" + padZero(self.minute, 2) + ":" + padZero(self.second, 2);
+  }
+
+  // 内部辅助 -------------------------------------------------------------------
+
+  /**
+   * 从纳秒时间戳还原 DateTime（内部使用）
+   */
+  seal static func fromNanoseconds(totalNanoseconds: i64): DateTime {
+    let nanosPerMillisecond: i64 = (i64)1000000;
+    var milliseconds: i64 = totalNanoseconds / nanosPerMillisecond;
+    var subMillisecond: i64 = totalNanoseconds - milliseconds * nanosPerMillisecond;
+    if subMillisecond < (i64)0 {
+      subMillisecond = subMillisecond + nanosPerMillisecond;
+      milliseconds = milliseconds - (i64)1;
+    }
+    let remainingMicrosecond: i32 = (i32)(subMillisecond / (i64)1000);
+    let remainingNanosecond: i32 = (i32)(subMillisecond - (i64)remainingMicrosecond * (i64)1000);
+
+    let seconds: i64 = if milliseconds >= (i64)0 {
+      milliseconds / (i64)1000;
+    } else {
+      (milliseconds - (i64)999) / (i64)1000;
+    };
+    let remainingMillisecond: i32 = (i32)(milliseconds - seconds * (i64)1000);
+
+    let components: i32[!] = i32[: (long)6];
+    secondsToComponents(seconds, components);
+
+    return DateTime {
+      year: components[0],
+      month: components[1],
+      day: components[2],
+      hour: components[3],
+      minute: components[4],
+      second: components[5],
+      millisecond: remainingMillisecond,
+      microsecond: remainingMicrosecond,
+      nanosecond: remainingNanosecond
+    };
+  }
+
+}
