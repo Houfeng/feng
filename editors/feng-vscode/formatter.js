@@ -37,6 +37,13 @@ const MULTI_CHAR_OPERATORS = new Set([
 const SINGLE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '=', '!', '<', '>', '&', '|', '^', '~']);
 const DELIMITERS = new Set(['(', ')', '[', ']', '{', '}']);
 const PUNCTUATION = new Set([',', ':', ';', '.']);
+const BUILTIN_TYPE_IDENTIFIERS = new Set([
+    'byte', 'short', 'int', 'long',
+    'i8', 'i16', 'i32', 'i64',
+    'u8', 'u16', 'u32', 'u64',
+    'float', 'double', 'bool', 'char', 'string',
+    'usize', 'isize'
+]);
 const OPEN_TO_CLOSE = {
     '(': ')',
     '[': ']',
@@ -384,6 +391,105 @@ function shouldSpaceBeforeOpenBrace(previousEmittedToken) {
         previousEmittedToken.value !== '.';
 }
 
+function isCastTypeIdentifier(token) {
+    if (token == null) {
+        return false;
+    }
+
+    if (token.type === 'keyword') {
+        return true;
+    }
+
+    if (token.type !== 'identifier') {
+        return false;
+    }
+
+    if (BUILTIN_TYPE_IDENTIFIERS.has(token.value)) {
+        return true;
+    }
+
+    return /^[A-Z]/.test(token.value);
+}
+
+function isCastTypeToken(token) {
+    if (isCastTypeIdentifier(token)) {
+        return true;
+    }
+
+    if (token == null) {
+        return false;
+    }
+
+    if (token.type === 'operator') {
+        return token.value === '*' || token.value === '&' || token.value === '<' || token.value === '>';
+    }
+
+    if (token.type === 'punctuation') {
+        return token.value === ',' || token.value === '.';
+    }
+
+    if (token.type === 'delimiter') {
+        return token.value === '[' || token.value === ']';
+    }
+
+    return false;
+}
+
+function findMatchingOpenParen(tokens, closeIndex) {
+    let depth = 0;
+
+    for (let index = closeIndex - 1; index >= 0; index -= 1) {
+        const token = tokens[index];
+
+        if (token.type !== 'delimiter') {
+            continue;
+        }
+
+        if (token.value === ')') {
+            depth += 1;
+            continue;
+        }
+
+        if (token.value !== '(') {
+            continue;
+        }
+
+        if (depth === 0) {
+            return index;
+        }
+
+        depth -= 1;
+    }
+
+    return -1;
+}
+
+function isLikelyCastClose(tokens, closeIndex) {
+    if (closeIndex < 0 || closeIndex >= tokens.length) {
+        return false;
+    }
+
+    const closeToken = tokens[closeIndex];
+
+    if (closeToken.type !== 'delimiter' || closeToken.value !== ')') {
+        return false;
+    }
+
+    const openIndex = findMatchingOpenParen(tokens, closeIndex);
+
+    if (openIndex < 0 || openIndex + 1 >= closeIndex) {
+        return false;
+    }
+
+    for (let index = openIndex + 1; index < closeIndex; index += 1) {
+        if (!isCastTypeToken(tokens[index])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 function needsSpaceBetween(previousEmittedToken,
                            previousSignificantToken,
                            tokenBeforePreviousSignificant,
@@ -670,6 +776,7 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     let lastEmittedWasGenericOpen = false;       /* just emitted a generic < */
     let lastEmittedWasGenericClose = false;      /* just emitted a generic > */
     let lastEmittedWasPostfixPointer = false;    /* just emitted a postfix pointer * */
+    let lastEmittedWasCastPrefixOperator = false;/* just emitted a cast-following prefix op */
 
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
@@ -681,6 +788,12 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             previousSignificantToken, tokenBeforePreviousSignificant,
             lastEmittedWasPostfixPointer
         );
+        const tightAfterCastClose = token.type === 'operator' &&
+            PREFIX_OPERATORS.has(token.value) &&
+            previousSignificantToken != null &&
+            previousSignificantToken.type === 'delimiter' &&
+            previousSignificantToken.value === ')' &&
+            isLikelyCastClose(tokens, index - 1);
 
         if (isGenericOpen) {
             result += token.value;
@@ -688,24 +801,28 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             lastEmittedWasGenericOpen = true;
             lastEmittedWasGenericClose = false;
             lastEmittedWasPostfixPointer = false;
+            lastEmittedWasCastPrefixOperator = false;
         } else if (isDoubleGenericClose) {
             result += token.value;
             genericDepth -= 2;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = true;
             lastEmittedWasPostfixPointer = false;
+            lastEmittedWasCastPrefixOperator = false;
         } else if (isGenericClose) {
             result += token.value;
             genericDepth -= 1;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = true;
             lastEmittedWasPostfixPointer = false;
+            lastEmittedWasCastPrefixOperator = false;
         } else if (genericDepth > 0 &&
                    token.type === 'punctuation' && token.value === ',') {
             result += token.value;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = false;
             lastEmittedWasPostfixPointer = false;
+            lastEmittedWasCastPrefixOperator = false;
         } else {
             /* Suppress space:
              *  - after generic open <
@@ -724,6 +841,8 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             const suppressSpace = lastEmittedWasGenericOpen ||
                 (lastEmittedWasGenericClose && (token.value === '(' || token.value === '[')) ||
                 tightAfterPostfixPointer ||
+                lastEmittedWasCastPrefixOperator ||
+                tightAfterCastClose ||
                 isPostfixPtr;
 
             if (!suppressSpace && needsSpaceBetween(previousEmittedToken,
@@ -736,6 +855,7 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = false;
             lastEmittedWasPostfixPointer = isPostfixPtr;
+            lastEmittedWasCastPrefixOperator = tightAfterCastClose;
         }
 
         previousEmittedToken = token;

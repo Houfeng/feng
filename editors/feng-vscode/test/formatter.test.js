@@ -83,6 +83,18 @@ runCase(
     'func run(): void {\n    var count: i32 = 1;\n    count += 2;\n    count -= 3;\n    count *= 4;\n    count /= 5;\n    var total: float = (float)7.8;\n    total %= (float)3.2;\n    var mask: i32 = 8;\n    mask &= 3;\n    mask |= 4;\n    mask ^= 1;\n    mask <<= 2;\n    mask >>= 1;\n}\n'
 );
 
+runCase(
+    'keeps unary minus attached after explicit cast',
+    'func main():void {\nlet n=(long)-1;\n}\n',
+    'func main(): void {\n    let n = (long)-1;\n}\n'
+);
+
+runCase(
+    'keeps binary minus spacing after parenthesized expression',
+    'func main(a:int):void {\nlet n=(a)-1;\n}\n',
+    'func main(a: int): void {\n    let n = (a) - 1;\n}\n'
+);
+
 runManifestCase(
     'formats manifest sections comments and aligned values',
     '#package\n [package] \nname:"examples"\nversion:  "0.1.0"\nout:"build/"\n\n# deps\n[dependencies]\ndemo:"0.1.0"\nbase.core:"1.2.3"\n',
