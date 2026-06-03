@@ -1,6 +1,7 @@
 open module std.numeric;
 
 import std.text;
+import std.collections;
 
 /**
  * Extends i32 with conversion operations.
