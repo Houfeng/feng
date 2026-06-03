@@ -1929,6 +1929,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
         if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
         if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wno-incompatible-pointer-types")) { ok = false; }
         if (ok && !argv_push(&av, include_flag)) { ok = false; }
         if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
         for (size_t i = 0; ok && i < bundle_lib_count; ++i) {
@@ -1993,6 +1994,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
             if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
             if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wno-incompatible-pointer-types")) { ok = false; }
             if (ok && !argv_push(&av, include_flag)) { ok = false; }
             if (ok && !argv_push(&av, "-c")) { ok = false; }
             if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
