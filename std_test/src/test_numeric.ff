@@ -87,6 +87,19 @@ func f32_parse_error_tests() {
 
 /* ---------- i8 ---------- */
 
+func i8_toString_tests() {
+  var v0: i8 = (i8)0;
+  check(v0.toString() == "0", "i8.toString/zero");
+  var v1: i8 = (i8)127;
+  check(v1.toString() == "127", "i8.toString/max");
+  var v2: i8 = (i8)-128;
+  check(v2.toString() == "-128", "i8.toString/min");
+  var v3: i8 = (i8)42;
+  check(v3.toString() == "42", "i8.toString/positive");
+  var v4: i8 = (i8)-1;
+  check(v4.toString() == "-1", "i8.toString/negative");
+}
+
 func i8_parse_tests() {
   check(i8.parse("0") == (i8)0, "i8.parse/zero");
   check(i8.parse("127") == (i8)127, "i8.parse/max");
@@ -116,6 +129,19 @@ func i8_parse_error_tests() {
 }
 
 /* ---------- i16 ---------- */
+
+func i16_toString_tests() {
+  var v0: i16 = (i16)0;
+  check(v0.toString() == "0", "i16.toString/zero");
+  var v1: i16 = (i16)32767;
+  check(v1.toString() == "32767", "i16.toString/max");
+  var v2: i16 = (i16)-32768;
+  check(v2.toString() == "-32768", "i16.toString/min");
+  var v3: i16 = (i16)1234;
+  check(v3.toString() == "1234", "i16.toString/positive");
+  var v4: i16 = (i16)-1;
+  check(v4.toString() == "-1", "i16.toString/negative");
+}
 
 func i16_parse_tests() {
   check(i16.parse("0") == (i16)0, "i16.parse/zero");
@@ -147,6 +173,17 @@ func i16_parse_error_tests() {
 
 /* ---------- i32 ---------- */
 
+func i32_toString_tests() {
+  var v0: i32 = 0;
+  check(v0.toString() == "0", "i32.toString/zero");
+  var v1: i32 = 2147483647;
+  check(v1.toString() == "2147483647", "i32.toString/max");
+  var v2: i32 = -1;
+  check(v2.toString() == "-1", "i32.toString/negative");
+  var v3: i32 = 12345;
+  check(v3.toString() == "12345", "i32.toString/positive");
+}
+
 func i32_parse_tests() {
   check(i32.parse("0") == 0, "i32.parse/zero");
   check(i32.parse("2147483647") == 2147483647, "i32.parse/max");
@@ -173,6 +210,17 @@ func i32_parse_error_tests() {
 
 /* ---------- i64 (long) ---------- */
 
+func i64_toString_tests() {
+  var v0: long = (long)0;
+  check(v0.toString() == "0", "i64.toString/zero");
+  var v1: long = (long)9223372036854775807;
+  check(v1.toString() == "9223372036854775807", "i64.toString/max");
+  var v2: long = (long)-1;
+  check(v2.toString() == "-1", "i64.toString/negative");
+  var v3: long = (long)123456789;
+  check(v3.toString() == "123456789", "i64.toString/positive");
+}
+
 func i64_parse_tests() {
   check(long.parse("0") == (long)0, "i64.parse/zero");
   check(long.parse("9223372036854775807") == (long)9223372036854775807, "i64.parse/max");
@@ -197,6 +245,17 @@ func i64_parse_error_tests() {
 }
 
 /* ---------- u8 (byte) ---------- */
+
+func u8_toString_tests() {
+  var v0: byte = (byte)0;
+  check(v0.toString() == "0", "u8.toString/zero");
+  var v1: byte = (byte)255;
+  check(v1.toString() == "255", "u8.toString/max");
+  var v2: byte = (byte)1;
+  check(v2.toString() == "1", "u8.toString/one");
+  var v3: byte = (byte)100;
+  check(v3.toString() == "100", "u8.toString/hundred");
+}
 
 func u8_parse_tests() {
   check(byte.parse("0") == (byte)0, "u8.parse/zero");
@@ -226,6 +285,17 @@ func u8_parse_error_tests() {
 
 /* ---------- u16 ---------- */
 
+func u16_toString_tests() {
+  var v0: u16 = (u16)0;
+  check(v0.toString() == "0", "u16.toString/zero");
+  var v1: u16 = (u16)65535;
+  check(v1.toString() == "65535", "u16.toString/max");
+  var v2: u16 = (u16)1;
+  check(v2.toString() == "1", "u16.toString/one");
+  var v3: u16 = (u16)12345;
+  check(v3.toString() == "12345", "u16.toString/typical");
+}
+
 func u16_parse_tests() {
   check(u16.parse("0") == (u16)0, "u16.parse/zero");
   check(u16.parse("65535") == (u16)65535, "u16.parse/max");
@@ -254,6 +324,17 @@ func u16_parse_error_tests() {
 
 /* ---------- u32 ---------- */
 
+func u32_toString_tests() {
+  var v0: u32 = (u32)0;
+  check(v0.toString() == "0", "u32.toString/zero");
+  var v1: u32 = (u32)4294967295;
+  check(v1.toString() == "4294967295", "u32.toString/max");
+  var v2: u32 = (u32)1;
+  check(v2.toString() == "1", "u32.toString/one");
+  var v3: u32 = (u32)123456;
+  check(v3.toString() == "123456", "u32.toString/typical");
+}
+
 func u32_parse_tests() {
   check(u32.parse("0") == (u32)0, "u32.parse/zero");
   check(u32.parse("4294967295") == (u32)4294967295, "u32.parse/max");
@@ -281,6 +362,17 @@ func u32_parse_error_tests() {
 }
 
 /* ---------- u64 ---------- */
+
+func u64_toString_tests() {
+  var v0: u64 = (u64)0;
+  check(v0.toString() == "0", "u64.toString/zero");
+  var v1: u64 = (u64)1;
+  check(v1.toString() == "1", "u64.toString/one");
+  var v2: u64 = (u64)9876543210;
+  check(v2.toString() == "9876543210", "u64.toString/typical");
+  var v3: u64 = u64.parse("18446744073709551615");
+  check(v3.toString() == "18446744073709551615", "u64.toString/max");
+}
 
 func u64_parse_tests() {
   check(u64.parse("0") == (u64)0, "u64.parse/zero");
@@ -315,20 +407,28 @@ open func run_numeric_tests() {
   f64_parse_error_tests();
   f32_parse_tests();
   f32_parse_error_tests();
+  i8_toString_tests();
   i8_parse_tests();
   i8_parse_error_tests();
+  i16_toString_tests();
   i16_parse_tests();
   i16_parse_error_tests();
+  i32_toString_tests();
   i32_parse_tests();
   i32_parse_error_tests();
+  i64_toString_tests();
   i64_parse_tests();
   i64_parse_error_tests();
+  u8_toString_tests();
   u8_parse_tests();
   u8_parse_error_tests();
+  u16_toString_tests();
   u16_parse_tests();
   u16_parse_error_tests();
+  u32_toString_tests();
   u32_parse_tests();
   u32_parse_error_tests();
+  u64_toString_tests();
   u64_parse_tests();
   u64_parse_error_tests();
 }

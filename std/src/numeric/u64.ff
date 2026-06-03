@@ -8,6 +8,28 @@ import std.collections;
  */
 open fit u64 {
   /**
+   * Returns the decimal string representation of this unsigned integer.
+   * @return decimal string
+   */
+  open func toString(): string {
+    if self == (u64)0 {
+      return "0";
+    }
+    var v: u64 = self;
+    let digits: byte[!] = byte[:(long)20];
+    var pos: i32 = 19;
+    while v > (u64)0 {
+      let digit: i32 = (i32)(v % (u64)10);
+      digits[pos] = (byte)(digit + 48);
+      v = v / (u64)10;
+      pos = pos - 1;
+    }
+    let start = (long)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (long)20);
+    return string.fromUtf8Bytes(result);
+  }
+
+  /**
    * Parses a decimal string into a u64 value.
    * Accepts an optional leading '+' sign followed by one or more digits.
    * @param text - decimal string to parse

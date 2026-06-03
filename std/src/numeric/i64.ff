@@ -8,6 +8,39 @@ import std.collections;
  */
 open fit i64 {
   /**
+   * Returns the decimal string representation of this integer.
+   * Uses negative accumulation to correctly handle the minimum value.
+   * @return decimal string
+   */
+  open func toString(): string {
+    if self == (long)0 {
+      return "0";
+    }
+    var v: long = self;
+    var negative = false;
+    if v > (long)0 {
+      v = -v;
+    } else {
+      negative = true;
+    }
+    let digits: byte[!] = byte[:(long)20];
+    var pos: i32 = 19;
+    while v < (long)0 {
+      let digit: i32 = (i32)(-(v % (long)10));
+      digits[pos] = (byte)(digit + 48);
+      v = v / (long)10;
+      pos = pos - 1;
+    }
+    if negative {
+      digits[pos] = (byte)45;
+      pos = pos - 1;
+    }
+    let start = (long)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (long)20);
+    return string.fromUtf8Bytes(result);
+  }
+
+  /**
    * Parses a decimal string into a long (i64) value.
    * Accepts an optional leading '+' or '-' sign followed by one or more digits.
    * Uses negative accumulation to correctly handle the full i64 range

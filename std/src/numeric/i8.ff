@@ -8,6 +8,36 @@ import std.collections;
  */
 open fit i8 {
   /**
+   * Returns the decimal string representation of this integer.
+   * @return decimal string
+   */
+  open func toString(): string {
+    if self == (i8)0 {
+      return "0";
+    }
+    var v: i32 = (i32)self;
+    var negative = false;
+    if v < 0 {
+      negative = true;
+      v = -v;
+    }
+    let digits: byte[!] = byte[:(long)4];
+    var pos: i32 = 3;
+    while v > 0 {
+      digits[pos] = (byte)((v % 10) + 48);
+      v = v / 10;
+      pos = pos - 1;
+    }
+    if negative {
+      digits[pos] = (byte)45;
+      pos = pos - 1;
+    }
+    let start = (long)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (long)4);
+    return string.fromUtf8Bytes(result);
+  }
+
+  /**
    * Parses a decimal string into an i8 value.
    * Accepts an optional leading '+' or '-' sign followed by one or more digits.
    * @param text - decimal string to parse

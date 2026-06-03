@@ -8,6 +8,27 @@ import std.collections;
  */
 open fit u32 {
   /**
+   * Returns the decimal string representation of this unsigned integer.
+   * @return decimal string
+   */
+  open func toString(): string {
+    if self == (u32)0 {
+      return "0";
+    }
+    var v: long = (long)self;
+    let digits: byte[!] = byte[:(long)10];
+    var pos: i32 = 9;
+    while v > (long)0 {
+      digits[pos] = (byte)((i32)(v % (long)10) + 48);
+      v = v / (long)10;
+      pos = pos - 1;
+    }
+    let start = (long)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (long)10);
+    return string.fromUtf8Bytes(result);
+  }
+
+  /**
    * Parses a decimal string into a u32 value.
    * Accepts an optional leading '+' sign followed by one or more digits.
    * @param text - decimal string to parse
