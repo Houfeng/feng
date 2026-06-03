@@ -24,6 +24,9 @@
       "include": "#fitDefinitions"
     },
     {
+      "include": "#enumDefinitions"
+    },
+    {
       "include": "#modulePaths"
     },
     {
@@ -203,6 +206,17 @@
             "3": {
               "name": "entity.name.type.feng"
             }
+          }
+        }
+      ]
+    },
+    "enumDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(enum)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.enum.feng" },
+            "3": { "name": "entity.name.type.enum.feng" }
           }
         }
       ]

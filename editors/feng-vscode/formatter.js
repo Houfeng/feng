@@ -509,12 +509,53 @@ function updateDelimiterStack(delimiterStack, tokens) {
     }
 }
 
-function isUppercaseIdentifier(token) {
-    return token != null &&
-        token.type === 'identifier' &&
-        token.value.length > 0 &&
-        token.value[0] >= 'A' &&
-        token.value[0] <= 'Z';
+/*
+ * Returns true when tokens[index] is a postfix pointer star (T*).
+ *
+ * Rules (all must hold):
+ *   1. tokens[index] is `*`.
+ *   2. The previous significant token is:
+ *      a. An identifier preceded by `:` or `(` — i.e. a type-annotation position, OR
+ *      b. Another `*` that was itself a postfix pointer star (chained T**).
+ *   3. The next token is NOT an identifier and NOT `(`.  When * is followed by a
+ *      letter or `(` it is a dereference / multiplication operator, not a pointer
+ *      type suffix.
+ */
+function isPostfixPointerStar(tokens, index, previousSignificantToken,
+                              tokenBeforePreviousSignificant, lastEmittedWasPostfixPointer) {
+    const token = tokens[index];
+    if (token == null || token.type !== 'operator' || token.value !== '*') {
+        return false;
+    }
+
+    /* Condition 2 */
+    if (previousSignificantToken == null) {
+        return false;
+    }
+    if (previousSignificantToken.type === 'identifier') {
+        /* Must be in a type-annotation context: `:` or `(` before the identifier */
+        if (tokenBeforePreviousSignificant == null) {
+            return false;
+        }
+        const ctx = tokenBeforePreviousSignificant.value;
+        if (ctx !== ':' && ctx !== '(') {
+            return false;
+        }
+    } else if (previousSignificantToken.type === 'operator' &&
+               previousSignificantToken.value === '*' &&
+               lastEmittedWasPostfixPointer) {
+        /* Chained pointer: previous * was already a postfix pointer star */
+    } else {
+        return false;
+    }
+
+    /* Condition 3: next token must not be an identifier or `(` */
+    const next = tokens[index + 1];
+    if (next != null && (next.type === 'identifier' || next.value === '(')) {
+        return false;
+    }
+
+    return true;
 }
 
 function tokenCanFollowExplicitGenericTarget(token) {
@@ -626,40 +667,56 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
     let tokenBeforePreviousSignificant = null;
     let lastLineSignificantToken = null;
     let genericDepth = 0;
-    let lastEmittedWasGenericOpen = false;   /* just emitted a generic < */
-    let lastEmittedWasGenericClose = false;  /* just emitted a generic > */
+    let lastEmittedWasGenericOpen = false;       /* just emitted a generic < */
+    let lastEmittedWasGenericClose = false;      /* just emitted a generic > */
+    let lastEmittedWasPostfixPointer = false;    /* just emitted a postfix pointer * */
 
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         const isGenericOpen = looksLikeExplicitGenericOpen(tokens, index, previousSignificantToken);
         const isDoubleGenericClose = token.type === 'operator' && token.value === '>>' && genericDepth >= 2;
         const isGenericClose = token.type === 'operator' && token.value === '>' && genericDepth > 0;
+        const isPostfixPtr = isPostfixPointerStar(
+            tokens, index,
+            previousSignificantToken, tokenBeforePreviousSignificant,
+            lastEmittedWasPostfixPointer
+        );
 
         if (isGenericOpen) {
             result += token.value;
             genericDepth += 1;
             lastEmittedWasGenericOpen = true;
             lastEmittedWasGenericClose = false;
+            lastEmittedWasPostfixPointer = false;
         } else if (isDoubleGenericClose) {
             result += token.value;
             genericDepth -= 2;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = true;
+            lastEmittedWasPostfixPointer = false;
         } else if (isGenericClose) {
             result += token.value;
             genericDepth -= 1;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = true;
+            lastEmittedWasPostfixPointer = false;
         } else if (genericDepth > 0 &&
                    token.type === 'punctuation' && token.value === ',') {
             result += token.value;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = false;
+            lastEmittedWasPostfixPointer = false;
         } else {
-            /* After generic open <: no space before first type arg.
-             * After generic close >: no space before attached suffix delimiters. */
+            /* Suppress space:
+             *  - after generic open <
+             *  - suffix delimiter after generic close >
+             *  - any token immediately after a postfix pointer * (T* , T* ) etc.)
+             *  - the postfix pointer * itself (no space between type and *)
+             */
             const suppressSpace = lastEmittedWasGenericOpen ||
-                (lastEmittedWasGenericClose && (token.value === '(' || token.value === '['));
+                (lastEmittedWasGenericClose && (token.value === '(' || token.value === '[')) ||
+                lastEmittedWasPostfixPointer ||
+                isPostfixPtr;
 
             if (!suppressSpace && needsSpaceBetween(previousEmittedToken,
                 previousSignificantToken,
@@ -670,6 +727,7 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
             result += token.value;
             lastEmittedWasGenericOpen = false;
             lastEmittedWasGenericClose = false;
+            lastEmittedWasPostfixPointer = isPostfixPtr;
         }
 
         previousEmittedToken = token;

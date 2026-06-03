@@ -24,8 +24,20 @@ runCase(
 
 runCase(
     'normalizes pointer and array parameter types',
-    'extern func map(cb:Handler,ptr:*Point,items:string[]):void;\n',
-    'extern func map(cb: Handler, ptr: *Point, items: string[]): void;\n'
+    'extern func map(cb:Handler,ptr:Point*,items:string[]):void;\n',
+    'extern func map(cb: Handler, ptr: Point*, items: string[]): void;\n'
+);
+
+runCase(
+    'postfix pointer type T* keeps * attached to type name',
+    'extern func f(a:string*,b:Node*,c:byte*):string*;\n',
+    'extern func f(a: string*, b: Node*, c: byte*): string*;\n'
+);
+
+runCase(
+    'postfix pointer chained T** keeps both stars attached',
+    'extern func g(ptr:long**):long**;\n',
+    'extern func g(ptr: long**): long**;\n'
 );
 
 runCase(
