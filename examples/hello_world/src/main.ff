@@ -2,6 +2,7 @@ module hello_world;
 
 import std.io;
 import std.text;
+import std.numeric;
 
 let TEST_NAME = "hello_world";
 

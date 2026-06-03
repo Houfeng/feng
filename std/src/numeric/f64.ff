@@ -6,6 +6,9 @@ import std.collections;
 @cdecl("libc")
 extern func strtod(text: string*, end: long*): f64;
 
+@cdecl("libc", "snprintf", 3)
+extern func snprintf_f64(buf: byte*, size: long, fmt: byte*, value: f64): i32;
+
 @runtime
 extern func feng_pointer_get_pointer(ptr: long*): long*;
 
@@ -16,6 +19,22 @@ extern func feng_pointer_get_scalar<T>(ptr: long*): T;
  * Extends f64 with conversion operations.
  */
 open fit f64 {
+  /**
+   * Returns the decimal string representation of this f64 value.
+   * Uses "%g" format which removes trailing zeros.
+   * @return decimal string
+   */
+  open func toString(): string {
+    let buf: byte[!] = byte[:(long)32];
+    let fmt: byte[!] = byte[:(long)3];
+    fmt[0] = (byte)37;  // '%'
+    fmt[1] = (byte)103; // 'g'
+    fmt[2] = (byte)0;   // '\0'
+    let len = snprintf_f64(&buf, (long)32, &fmt, self);
+    let result: byte[] = ((byte[])buf).clone((long)0, (long)len);
+    return string.fromUtf8Bytes(result);
+  }
+
   /**
    * Parses a decimal string into an f64 value.
    * Accepts an optional leading '+' or '-' sign, followed by digits
