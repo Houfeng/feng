@@ -21,7 +21,7 @@ open fit i32 {
       negative = true;
       v = -v;
     }
-    let digits: byte[!] = byte[: (long)11];
+    let digits: byte[!] = byte[:(long)11];
     var pos: i32 = 10;
     while v > 0 {
       digits[pos] = (byte)((v % 10) + 48);
@@ -36,4 +36,48 @@ open fit i32 {
     let result: byte[] = ((byte[])digits).clone(start, (long)11);
     return string.fromUtf8Bytes(result);
   }
+
+  /**
+   * Parses a decimal string into an i32 value.
+   * Accepts an optional leading '+' or '-' sign followed by one or more digits.
+   * @param text - decimal string to parse
+   * @return parsed i32 value
+   * @throws if text is empty, contains non-digit characters, or overflows i32 range
+   */
+  open static func parse(text: string): i32 {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid i32 string: empty";
+    }
+    var pos: long = 0;
+    var negative = false;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      negative = true;
+      pos = (long)1;
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid i32 string: no digits";
+    }
+    var result: long = 0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid i32 string: invalid character";
+      }
+      result = result * (long)10 + (long)(b - (byte)48);
+      pos = pos + (long)1;
+    }
+    if negative {
+      result = -result;
+    }
+    if result < (long)-2147483648 || result > (long)2147483647 {
+      throw "Invalid i32 string: overflow";
+    }
+    return (i32)result;
+  }
+
 }
