@@ -1,0 +1,41 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+@cdecl("libc")
+extern func strtod(text: string*, end: long*): f64;
+
+@runtime
+extern func feng_pointer_get_pointer(ptr: long*): long*;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+
+/**
+ * Extends f64 with conversion operations.
+ */
+open fit f64 {
+  /**
+   * Parses a decimal string into an f64 value.
+   * Accepts an optional leading '+' or '-' sign, followed by digits
+   * with an optional decimal point.
+   * @param text - decimal string to parse
+   * @return parsed f64 value
+   * @throws if text is empty or contains non-numeric characters
+   */
+  open static func parse(text: string): f64 {
+    let len = text.length();
+    if len == (long)0 {
+      throw "Invalid f64 string: empty";
+    }
+    var endRaw: long = 0;
+    let result = strtod(&text, &endRaw);
+    let endPos: long* = feng_pointer_get_pointer(&endRaw);
+    let endByte: byte = feng_pointer_get_scalar<byte>(endPos);
+    if endByte != (byte)0 {
+      throw "Invalid f64 string: invalid character";
+    }
+    return result;
+  }
+}

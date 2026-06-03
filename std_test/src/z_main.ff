@@ -12,6 +12,7 @@ func main(args: string[]) {
   run_regexp_tests();
   run_slice_tests();
   run_io_tests();
+  run_numeric_tests();
 
   replaceStdin("ABCDE\nFG");
   run_stdio_api_tests();

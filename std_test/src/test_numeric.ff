@@ -1,0 +1,334 @@
+module std_test;
+
+import std.numeric;
+
+/* ---------- f64 ---------- */
+
+func absValue64(value: f64): f64 {
+  if value < 0.0 {
+    return 0.0 - value;
+  }
+  return value;
+}
+
+func checkF64Eq(actual: f64, expected: f64, name: string) {
+  let delta = actual - expected;
+  check(absValue64(delta) <= 0.0000000001, name);
+}
+
+func f64_parse_tests() {
+  checkF64Eq(f64.parse("0"), 0.0, "f64.parse/zero");
+  checkF64Eq(f64.parse("0.0"), 0.0, "f64.parse/zero-dot");
+  checkF64Eq(f64.parse("123"), 123.0, "f64.parse/integer");
+  checkF64Eq(f64.parse("3.14"), 3.14, "f64.parse/decimal");
+  checkF64Eq(f64.parse("-2.5"), -2.5, "f64.parse/negative");
+  checkF64Eq(f64.parse("+1.5"), 1.5, "f64.parse/positive-sign");
+  checkF64Eq(f64.parse("999999.999"), 999999.999, "f64.parse/large");
+  checkF64Eq(f64.parse("0.001"), 0.001, "f64.parse/small");
+}
+
+func f64_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try f64.parse("") catch ex: string {
+    caught = true;
+    0.0;
+  };
+  check(caught, "f64.parse/empty-throws");
+
+  caught = false;
+  let r2 = try f64.parse("abc") catch ex: string {
+    caught = true;
+    0.0;
+  };
+  check(caught, "f64.parse/invalid-throws");
+}
+
+/* ---------- f32 ---------- */
+
+func absValue32(value: f32): f32 {
+  if value < (f32)0 {
+    return (f32)0 - value;
+  }
+  return value;
+}
+
+func checkF32Eq(actual: f32, expected: f32, name: string) {
+  let delta = actual - expected;
+  check(absValue32(delta) <= (f32)0.001, name);
+}
+
+func f32_parse_tests() {
+  checkF32Eq(f32.parse("0"), (f32)0, "f32.parse/zero");
+  checkF32Eq(f32.parse("3.14"), (f32)3.14, "f32.parse/decimal");
+  checkF32Eq(f32.parse("-2.5"), (f32)-2.5, "f32.parse/negative");
+  checkF32Eq(f32.parse("+1.5"), (f32)1.5, "f32.parse/positive-sign");
+  checkF32Eq(f32.parse("123"), (f32)123, "f32.parse/integer");
+}
+
+func f32_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try f32.parse("") catch ex: string {
+    caught = true;
+    (f32)0;
+  };
+  check(caught, "f32.parse/empty-throws");
+
+  caught = false;
+  let r2 = try f32.parse("abc") catch ex: string {
+    caught = true;
+    (f32)0;
+  };
+  check(caught, "f32.parse/invalid-throws");
+}
+
+/* ---------- i8 ---------- */
+
+func i8_parse_tests() {
+  check(i8.parse("0") == (i8)0, "i8.parse/zero");
+  check(i8.parse("127") == (i8)127, "i8.parse/max");
+  check(i8.parse("-128") == (i8)-128, "i8.parse/min");
+  check(i8.parse("+42") == (i8)42, "i8.parse/positive-sign");
+  check(i8.parse("-1") == (i8)-1, "i8.parse/negative");
+}
+
+func i8_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try i8.parse("") catch ex: string { caught = true; (i8)0; };
+  check(caught, "i8.parse/empty-throws");
+
+  caught = false;
+  let r2 = try i8.parse("128") catch ex: string { caught = true; (i8)0; };
+  check(caught, "i8.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try i8.parse("-129") catch ex: string { caught = true; (i8)0; };
+  check(caught, "i8.parse/underflow-throws");
+
+  caught = false;
+  let r4 = try i8.parse("abc") catch ex: string { caught = true; (i8)0; };
+  check(caught, "i8.parse/invalid-throws");
+}
+
+/* ---------- i16 ---------- */
+
+func i16_parse_tests() {
+  check(i16.parse("0") == (i16)0, "i16.parse/zero");
+  check(i16.parse("32767") == (i16)32767, "i16.parse/max");
+  check(i16.parse("-32768") == (i16)-32768, "i16.parse/min");
+  check(i16.parse("+100") == (i16)100, "i16.parse/positive-sign");
+  check(i16.parse("-1") == (i16)-1, "i16.parse/negative");
+}
+
+func i16_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try i16.parse("") catch ex: string { caught = true; (i16)0; };
+  check(caught, "i16.parse/empty-throws");
+
+  caught = false;
+  let r2 = try i16.parse("32768") catch ex: string { caught = true; (i16)0; };
+  check(caught, "i16.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try i16.parse("-32769") catch ex: string { caught = true; (i16)0; };
+  check(caught, "i16.parse/underflow-throws");
+
+  caught = false;
+  let r4 = try i16.parse("abc") catch ex: string { caught = true; (i16)0; };
+  check(caught, "i16.parse/invalid-throws");
+}
+
+/* ---------- i32 ---------- */
+
+func i32_parse_tests() {
+  check(i32.parse("0") == 0, "i32.parse/zero");
+  check(i32.parse("2147483647") == 2147483647, "i32.parse/max");
+  check(i32.parse("-2147483648") == -2147483648, "i32.parse/min");
+  check(i32.parse("+99") == 99, "i32.parse/positive-sign");
+  check(i32.parse("-1") == -1, "i32.parse/negative");
+}
+
+func i32_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try i32.parse("") catch ex: string { caught = true; (i32)0; };
+  check(caught, "i32.parse/empty-throws");
+
+  caught = false;
+  let r2 = try i32.parse("2147483648") catch ex: string { caught = true; (i32)0; };
+  check(caught, "i32.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try i32.parse("abc") catch ex: string { caught = true; (i32)0; };
+  check(caught, "i32.parse/invalid-throws");
+}
+
+/* ---------- i64 (long) ---------- */
+
+func i64_parse_tests() {
+  check(long.parse("0") == (long)0, "i64.parse/zero");
+  check(long.parse("9223372036854775807") == (long)9223372036854775807, "i64.parse/max");
+  check(long.parse("+100") == (long)100, "i64.parse/positive-sign");
+  check(long.parse("-1") == (long)-1, "i64.parse/negative");
+}
+
+func i64_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try long.parse("") catch ex: string { caught = true; (long)0; };
+  check(caught, "i64.parse/empty-throws");
+
+  caught = false;
+  let r2 = try long.parse("9223372036854775808") catch ex: string { caught = true; (long)0; };
+  check(caught, "i64.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try long.parse("abc") catch ex: string { caught = true; (long)0; };
+  check(caught, "i64.parse/invalid-throws");
+}
+
+/* ---------- u8 (byte) ---------- */
+
+func u8_parse_tests() {
+  check(byte.parse("0") == (byte)0, "u8.parse/zero");
+  check(byte.parse("255") == (byte)255, "u8.parse/max");
+  check(byte.parse("+42") == (byte)42, "u8.parse/positive-sign");
+}
+
+func u8_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try byte.parse("") catch ex: string { caught = true; (byte)0; };
+  check(caught, "u8.parse/empty-throws");
+
+  caught = false;
+  let r2 = try byte.parse("256") catch ex: string { caught = true; (byte)0; };
+  check(caught, "u8.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try byte.parse("-1") catch ex: string { caught = true; (byte)0; };
+  check(caught, "u8.parse/negative-throws");
+
+  caught = false;
+  let r4 = try byte.parse("abc") catch ex: string { caught = true; (byte)0; };
+  check(caught, "u8.parse/invalid-throws");
+}
+
+/* ---------- u16 ---------- */
+
+func u16_parse_tests() {
+  check(u16.parse("0") == (u16)0, "u16.parse/zero");
+  check(u16.parse("65535") == (u16)65535, "u16.parse/max");
+  check(u16.parse("+100") == (u16)100, "u16.parse/positive-sign");
+}
+
+func u16_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try u16.parse("") catch ex: string { caught = true; (u16)0; };
+  check(caught, "u16.parse/empty-throws");
+
+  caught = false;
+  let r2 = try u16.parse("65536") catch ex: string { caught = true; (u16)0; };
+  check(caught, "u16.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try u16.parse("-1") catch ex: string { caught = true; (u16)0; };
+  check(caught, "u16.parse/negative-throws");
+
+  caught = false;
+  let r4 = try u16.parse("abc") catch ex: string { caught = true; (u16)0; };
+  check(caught, "u16.parse/invalid-throws");
+}
+
+/* ---------- u32 ---------- */
+
+func u32_parse_tests() {
+  check(u32.parse("0") == (u32)0, "u32.parse/zero");
+  check(u32.parse("4294967295") == (u32)4294967295, "u32.parse/max");
+  check(u32.parse("+100") == (u32)100, "u32.parse/positive-sign");
+}
+
+func u32_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try u32.parse("") catch ex: string { caught = true; (u32)0; };
+  check(caught, "u32.parse/empty-throws");
+
+  caught = false;
+  let r2 = try u32.parse("4294967296") catch ex: string { caught = true; (u32)0; };
+  check(caught, "u32.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try u32.parse("-1") catch ex: string { caught = true; (u32)0; };
+  check(caught, "u32.parse/negative-throws");
+
+  caught = false;
+  let r4 = try u32.parse("abc") catch ex: string { caught = true; (u32)0; };
+  check(caught, "u32.parse/invalid-throws");
+}
+
+/* ---------- u64 ---------- */
+
+func u64_parse_tests() {
+  check(u64.parse("0") == (u64)0, "u64.parse/zero");
+  check(u64.parse("18446744073709551615") == (u64)18446744073709551615, "u64.parse/max");
+  check(u64.parse("+100") == (u64)100, "u64.parse/positive-sign");
+}
+
+func u64_parse_error_tests() {
+  var caught: bool = false;
+
+  caught = false;
+  let r1 = try u64.parse("") catch ex: string { caught = true; (u64)0; };
+  check(caught, "u64.parse/empty-throws");
+
+  caught = false;
+  let r2 = try u64.parse("18446744073709551616") catch ex: string { caught = true; (u64)0; };
+  check(caught, "u64.parse/overflow-throws");
+
+  caught = false;
+  let r3 = try u64.parse("-1") catch ex: string { caught = true; (u64)0; };
+  check(caught, "u64.parse/negative-throws");
+
+  caught = false;
+  let r4 = try u64.parse("abc") catch ex: string { caught = true; (u64)0; };
+  check(caught, "u64.parse/invalid-throws");
+}
+
+/* ---------- runner ---------- */
+
+open func run_numeric_tests() {
+  f64_parse_tests();
+  f64_parse_error_tests();
+  f32_parse_tests();
+  f32_parse_error_tests();
+  i8_parse_tests();
+  i8_parse_error_tests();
+  i16_parse_tests();
+  i16_parse_error_tests();
+  i32_parse_tests();
+  i32_parse_error_tests();
+  i64_parse_tests();
+  i64_parse_error_tests();
+  u8_parse_tests();
+  u8_parse_error_tests();
+  u16_parse_tests();
+  u16_parse_error_tests();
+  u32_parse_tests();
+  u32_parse_error_tests();
+  u64_parse_tests();
+  u64_parse_error_tests();
+}

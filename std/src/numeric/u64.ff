@@ -1,0 +1,50 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+/**
+ * Extends u64 with conversion operations.
+ */
+open fit u64 {
+  /**
+   * Parses a decimal string into a u64 value.
+   * Accepts an optional leading '+' sign followed by one or more digits.
+   * @param text - decimal string to parse
+   * @return parsed u64 value
+   * @throws if text is empty, contains non-digit characters, has a '-' sign, or overflows u64 range
+   */
+  open static func parse(text: string): u64 {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid u64 string: empty";
+    }
+    var pos: long = 0;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      throw "Invalid u64 string: negative not allowed";
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid u64 string: no digits";
+    }
+    let maxDiv10: u64 = (u64)1844674407370955161;
+    let maxMod10: u64 = (u64)5;
+    var result: u64 = (u64)0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid u64 string: invalid character";
+      }
+      let digit: u64 = (u64)(b - (byte)48);
+      if result > maxDiv10 || (result == maxDiv10 && digit > maxMod10) {
+        throw "Invalid u64 string: overflow";
+      }
+      result = result * (u64)10 + digit;
+      pos = pos + (long)1;
+    }
+    return result;
+  }
+}

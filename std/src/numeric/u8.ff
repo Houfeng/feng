@@ -1,0 +1,47 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+/**
+ * Extends u8 (byte) with conversion operations.
+ */
+open fit u8 {
+  /**
+   * Parses a decimal string into a byte (u8) value.
+   * Accepts an optional leading '+' sign followed by one or more digits.
+   * @param text - decimal string to parse
+   * @return parsed byte value
+   * @throws if text is empty, contains non-digit characters, has a '-' sign, or overflows u8 range
+   */
+  open static func parse(text: string): byte {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid u8 string: empty";
+    }
+    var pos: long = 0;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      throw "Invalid u8 string: negative not allowed";
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid u8 string: no digits";
+    }
+    var result: long = 0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid u8 string: invalid character";
+      }
+      result = result * (long)10 + (long)(b - (byte)48);
+      pos = pos + (long)1;
+    }
+    if result > (long)255 {
+      throw "Invalid u8 string: overflow";
+    }
+    return (byte)result;
+  }
+}

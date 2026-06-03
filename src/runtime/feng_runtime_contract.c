@@ -182,6 +182,18 @@ void feng_pointer_get_scalar(const FengGenericParamDescriptor *type,
     memcpy(result, ptr, feng_generic_trivial_descriptor(type)->size);
 }
 
+/* Reads a pointer value stored at the memory location pointed to by `ptr`.
+ * This is a generic "follow one level of indirection" operation for C interop
+ * with functions that use output pointer parameters (T**). */
+void *feng_pointer_get_pointer(void *ptr) {
+    if (ptr == NULL) {
+        feng_panic("feng_pointer_get_pointer: null pointer");
+    }
+    void *result;
+    memcpy(&result, ptr, sizeof(void *));
+    return result;
+}
+
 /* Compares the byte sub-ranges [a_start, a_end) and [b_start, b_end) of two
  * Feng strings for equality without any intermediate allocation. */
 bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,

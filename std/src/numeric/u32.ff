@@ -1,0 +1,47 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+/**
+ * Extends u32 with conversion operations.
+ */
+open fit u32 {
+  /**
+   * Parses a decimal string into a u32 value.
+   * Accepts an optional leading '+' sign followed by one or more digits.
+   * @param text - decimal string to parse
+   * @return parsed u32 value
+   * @throws if text is empty, contains non-digit characters, has a '-' sign, or overflows u32 range
+   */
+  open static func parse(text: string): u32 {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid u32 string: empty";
+    }
+    var pos: long = 0;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      throw "Invalid u32 string: negative not allowed";
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid u32 string: no digits";
+    }
+    var result: long = 0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid u32 string: invalid character";
+      }
+      result = result * (long)10 + (long)(b - (byte)48);
+      pos = pos + (long)1;
+    }
+    if result > (long)4294967295 {
+      throw "Invalid u32 string: overflow";
+    }
+    return (u32)result;
+  }
+}

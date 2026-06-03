@@ -39,6 +39,7 @@ FENG_RUNTIME_CONTRACT(bool, feng_pointer_equal, (void *left, void *right))
 FENG_RUNTIME_CONTRACT(void *, feng_pointer_move, (void *ptr, int64_t offset))
 FENG_RUNTIME_CONTRACT(int64_t, feng_pointer_diff, (void *a, void *b))
 FENG_RUNTIME_CONTRACT(void, feng_pointer_get_scalar, (const FengGenericParamDescriptor *type, void *ptr, void *result))
+FENG_RUNTIME_CONTRACT(void *, feng_pointer_get_pointer, (void *ptr))
 
 /* Test-only helper for compiler/runtime regressions around bare-T return. */
 FENG_RUNTIME_CONTRACT(void, __test_value_identity, (const FengGenericParamDescriptor *type, const void *value, void *out))

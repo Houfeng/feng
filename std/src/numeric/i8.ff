@@ -1,0 +1,52 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+/**
+ * Extends i8 with conversion operations.
+ */
+open fit i8 {
+  /**
+   * Parses a decimal string into an i8 value.
+   * Accepts an optional leading '+' or '-' sign followed by one or more digits.
+   * @param text - decimal string to parse
+   * @return parsed i8 value
+   * @throws if text is empty, contains non-digit characters, or overflows i8 range
+   */
+  open static func parse(text: string): i8 {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid i8 string: empty";
+    }
+    var pos: long = 0;
+    var negative = false;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      negative = true;
+      pos = (long)1;
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid i8 string: no digits";
+    }
+    var result: long = 0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid i8 string: invalid character";
+      }
+      result = result * (long)10 + (long)(b - (byte)48);
+      pos = pos + (long)1;
+    }
+    if negative {
+      result = -result;
+    }
+    if result < (long)-128 || result > (long)127 {
+      throw "Invalid i8 string: overflow";
+    }
+    return (i8)result;
+  }
+}

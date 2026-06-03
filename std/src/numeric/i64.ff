@@ -1,0 +1,59 @@
+open module std.numeric;
+
+import std.text;
+import std.collections;
+
+/**
+ * Extends i64 (long) with conversion operations.
+ */
+open fit i64 {
+  /**
+   * Parses a decimal string into a long (i64) value.
+   * Accepts an optional leading '+' or '-' sign followed by one or more digits.
+   * Uses negative accumulation to correctly handle the full i64 range
+   * including the minimum value -9223372036854775808.
+   * @param text - decimal string to parse
+   * @return parsed long value
+   * @throws if text is empty, contains non-digit characters, or overflows i64 range
+   */
+  open static func parse(text: string): long {
+    let bytes = text.toBytes();
+    let len = bytes.length();
+    if len == (long)0 {
+      throw "Invalid i64 string: empty";
+    }
+    var pos: long = 0;
+    var negative = false;
+    let first = bytes[(long)0];
+    if first == (byte)45 {
+      negative = true;
+      pos = (long)1;
+    } else if first == (byte)43 {
+      pos = (long)1;
+    }
+    if pos == len {
+      throw "Invalid i64 string: no digits";
+    }
+    let minDiv10: long = (long)-922337203685477580;
+    var result: long = 0;
+    while pos < len {
+      let b = bytes[pos];
+      if b < (byte)48 || b > (byte)57 {
+        throw "Invalid i64 string: invalid character";
+      }
+      let digit: long = (long)(b - (byte)48);
+      if result < minDiv10 || (result == minDiv10 && digit > (long)8) {
+        throw "Invalid i64 string: overflow";
+      }
+      result = result * (long)10 - digit;
+      pos = pos + (long)1;
+    }
+    if !negative {
+      if result < (long)-9223372036854775807 {
+        throw "Invalid i64 string: overflow";
+      }
+      result = -result;
+    }
+    return result;
+  }
+}

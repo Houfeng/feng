@@ -1,0 +1,7 @@
+open module std.time;
+
+open type TimeZone {
+  static func getZoneOffset(zoneId: string): i32 {}
+  static func currentZoneId(): string {}
+  static func currentOffset(): i32 {}
+}
