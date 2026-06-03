@@ -987,6 +987,7 @@ typedef struct ExternFn {
     CGType  *return_type;
     FengAnnotationKind calling_convention;
     bool     uses_runtime_contract;
+    size_t   fixed_param_count; /* >0: first N params are fixed, rest are C variadic */
 } ExternFn;
 
 typedef struct FreeFn {
@@ -6978,6 +6979,14 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
     ef->calling_convention = cg_find_calling_convention_kind(decl->annotations,
                                                              decl->annotation_count);
+    {
+        const FengAnnotation *callconv = cg_find_calling_convention_annotation(
+            decl->annotations, decl->annotation_count);
+        if (callconv != NULL && callconv->arg_count >= 3U &&
+            callconv->args[2]->kind == FENG_EXPR_INTEGER) {
+            ef->fixed_param_count = (size_t)callconv->args[2]->as.integer;
+        }
+    }
 
     if (ef->uses_runtime_contract && !cg_runtime_contract_contains_name(sig->name)) {
         return cg_fail(cg,
@@ -7153,6 +7162,13 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
     buf_append_fmt(h, " %s(", cg_extern_c_symbol(ef));
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
+    } else if (ef->fixed_param_count > 0) {
+        for (size_t i = 0; i < ef->fixed_param_count; i++) {
+            if (i) buf_append_cstr(h, ", ");
+            cg_emit_c_abi_surface_type(h, ef->param_types[i]);
+        }
+        if (ef->fixed_param_count > 0) buf_append_cstr(h, ", ");
+        buf_append_cstr(h, "...");
     } else {
         for (size_t i = 0; i < ef->param_count; i++) {
             if (i) buf_append_cstr(h, ", ");

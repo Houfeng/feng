@@ -2691,12 +2691,12 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
 
     if (decl->annotation_count != 1U || calling_convention_count != 1U ||
         calling_convention == NULL || calling_convention->arg_count < 1U ||
-        calling_convention->arg_count > 2U) {
+        calling_convention->arg_count > 3U) {
         return resolver_append_error(
             context,
             decl->as.function_decl.token,
             format_message(
-                "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a library argument and an optional C function name argument",
+                "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a library argument, an optional C function name, and an optional fixed parameter count",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
     }
@@ -2720,6 +2720,35 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
                 "extern function annotation '@%.*s' C function name argument must be a string literal or a visible let binding initialized directly with a string literal",
                 (int)calling_convention->name.length,
                 calling_convention->name.data));
+    }
+
+    if (calling_convention->arg_count == 3U) {
+        const FengExpr *fixed_arg = calling_convention->args[2];
+
+        if (fixed_arg->kind != FENG_EXPR_INTEGER) {
+            return resolver_append_error(
+                context,
+                calling_convention->token,
+                format_message(
+                    "extern function annotation '@%.*s' fixed parameter count must be an integer literal",
+                    (int)calling_convention->name.length,
+                    calling_convention->name.data));
+        }
+        {
+            int64_t n = fixed_arg->as.integer;
+
+            if (n < 0 || (size_t)n > decl->as.function_decl.param_count) {
+                return resolver_append_error(
+                    context,
+                    calling_convention->token,
+                    format_message(
+                        "extern function annotation '@%.*s' fixed parameter count %lld is out of range for function with %zu parameters",
+                        (int)calling_convention->name.length,
+                        calling_convention->name.data,
+                        (long long)n,
+                        decl->as.function_decl.param_count));
+            }
+        }
     }
 
     return true;
