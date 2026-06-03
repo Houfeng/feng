@@ -1345,33 +1345,22 @@ static bool enum_item_value_fits_ft_range(int64_t value) {
     return value >= (int64_t)INT32_MIN && value <= (int64_t)INT32_MAX;
 }
 
-static FengSymbolDeclView *build_enum_item_decl(BuildContext *ctx,
-                                                const char *path,
+static FengSymbolDeclView *build_enum_item_decl(const char *path,
                                                 FengVisibility visibility,
-                                                const FengDecl *enum_decl,
                                                 const FengEnumItem *item,
+                                                size_t ordinal,
                                                 FengSymbolError *out_error) {
-    const FengSemanticEnumItemInfo *item_info;
+    int64_t value = item->has_explicit_value ? item->explicit_value : (int64_t)ordinal;
     FengSymbolDeclView *decl;
 
-    item_info = feng_semantic_find_enum_item_info(ctx->analysis, enum_decl, item->name);
-    if (item_info == NULL) {
-        feng_symbol_internal_set_error(out_error,
-                                       path,
-                                       item->token,
-                                       "missing semantic enum info for item '%.*s'",
-                                       (int)item->name.length,
-                                       item->name.data != NULL ? item->name.data : "");
-        return NULL;
-    }
-    if (!enum_item_value_fits_ft_range(item_info->value)) {
+    if (!enum_item_value_fits_ft_range(value)) {
         feng_symbol_internal_set_error(out_error,
                                        path,
                                        item->token,
                                        "enum item '%.*s' value %lld is outside the .ft int32 range",
                                        (int)item->name.length,
                                        item->name.data != NULL ? item->name.data : "",
-                                       (long long)item_info->value);
+                                       (long long)value);
         return NULL;
     }
 
@@ -1385,8 +1374,8 @@ static FengSymbolDeclView *build_enum_item_decl(BuildContext *ctx,
     if (decl == NULL) {
         return NULL;
     }
-    decl->enum_item_ordinal = item_info->ordinal;
-    decl->enum_item_value = item_info->value;
+    decl->enum_item_ordinal = ordinal;
+    decl->enum_item_value = value;
     decl->has_enum_item_value = true;
     return decl;
 }
@@ -1395,22 +1384,8 @@ static FengSymbolDeclView *build_enum_decl(BuildContext *ctx,
                                            const char *path,
                                            const FengDecl *source_decl,
                                            FengSymbolError *out_error) {
-    const FengSemanticEnumInfo *enum_info;
     FengSymbolDeclView *decl;
     size_t index;
-
-    enum_info = feng_semantic_lookup_enum_info(ctx->analysis, source_decl);
-    if (enum_info == NULL) {
-        feng_symbol_internal_set_error(out_error,
-                                       path,
-                                       source_decl->token,
-                                       "missing semantic enum info for '%.*s' during symbol export",
-                                       (int)source_decl->as.enum_decl.name.length,
-                                       source_decl->as.enum_decl.name.data != NULL
-                                           ? source_decl->as.enum_decl.name.data
-                                           : "");
-        return NULL;
-    }
 
     decl = new_decl_from_slice(FENG_SYMBOL_DECL_KIND_ENUM,
                                source_decl->visibility,
@@ -1438,11 +1413,10 @@ static FengSymbolDeclView *build_enum_decl(BuildContext *ctx,
     }
 
     for (index = 0U; index < source_decl->as.enum_decl.item_count; ++index) {
-        FengSymbolDeclView *item_decl = build_enum_item_decl(ctx,
-                                                             path,
+        FengSymbolDeclView *item_decl = build_enum_item_decl(path,
                                                              source_decl->visibility,
-                                                             source_decl,
                                                              &source_decl->as.enum_decl.items[index],
+                                                             index,
                                                              out_error);
         if (item_decl == NULL ||
             !append_member_decl(decl,

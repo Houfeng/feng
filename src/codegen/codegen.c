@@ -1220,6 +1220,11 @@ typedef struct CG {
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
     const struct UserFit *current_user_fit;
+
+    /* On-demand imported-enum emission tracking (pointer-identity dedup). */
+    const FengDecl **emitted_enum_decls;
+    size_t           emitted_enum_decl_count;
+    size_t           emitted_enum_decl_capacity;
 } CG;
 
 /* Forward decls. */
@@ -3656,7 +3661,6 @@ static bool cg_emit_imported_binding_expr(CG *cg,
                                           ExprResult *out);
 
 static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
-    const FengSemanticEnumInfo *enum_info;
     char *typedef_name;
     char *descriptor_name;
     char *module_dot_name;
@@ -3665,17 +3669,6 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
 
     if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_ENUM) {
         return true;
-    }
-
-    enum_info = cg->analysis != NULL
-                    ? feng_semantic_lookup_enum_info(cg->analysis, decl)
-                    : NULL;
-    if (enum_info == NULL) {
-        return cg_fail(cg,
-                       decl->token,
-                       "codegen: missing semantic enum info for '%.*s'",
-                       (int)decl->as.enum_decl.name.length,
-                       decl->as.enum_decl.name.data);
     }
 
     typedef_name = cg_enum_typedef_name(cg, decl);
@@ -3706,24 +3699,11 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
                    typedef_name);
     for (item_index = 0U; item_index < decl->as.enum_decl.item_count; ++item_index) {
         const FengEnumItem *item = &decl->as.enum_decl.items[item_index];
-        const FengSemanticEnumItemInfo *item_info =
-            feng_semantic_find_enum_item_info(cg->analysis, decl, item->name);
-        char *item_c_name;
+        int64_t value = item->has_explicit_value
+                            ? item->explicit_value
+                            : (int64_t)item_index;
+        char *item_c_name = cg_enum_item_c_name(cg, decl, item->name);
 
-        if (item_info == NULL) {
-            free(typedef_name);
-            free(descriptor_name);
-            free(module_dot_name);
-            return cg_fail(cg,
-                           item->token,
-                           "codegen: missing enum item info for '%.*s.%.*s'",
-                           (int)decl->as.enum_decl.name.length,
-                           decl->as.enum_decl.name.data,
-                           (int)item->name.length,
-                           item->name.data);
-        }
-
-        item_c_name = cg_enum_item_c_name(cg, decl, item->name);
         if (item_c_name == NULL) {
             free(typedef_name);
             free(descriptor_name);
@@ -3735,7 +3715,7 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
                        "static const %s %s = ((int32_t)%" PRId64 ");\n",
                        typedef_name,
                        item_c_name,
-                       item_info->value);
+                       value);
         free(item_c_name);
     }
     buf_append_cstr(&cg->type_defs, "\n");
@@ -3744,6 +3724,42 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     free(descriptor_name);
     free(module_dot_name);
     return true;
+}
+
+/* Ensure an imported enum's typedef + constants have been emitted exactly once.
+ * No-op for local enums (already emitted by cg_pass_emit_enum_decls). */
+static bool cg_ensure_enum_emitted(CG *cg, const FengDecl *decl) {
+    const FengProgram *owner;
+    size_t i;
+
+    if (decl == NULL || decl->kind != FENG_DECL_ENUM) return true;
+
+    owner = cg_find_decl_owner_program(cg, decl);
+    if (owner == NULL) return true;
+    if (cg_program_origin(cg, owner) != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+
+    for (i = 0U; i < cg->emitted_enum_decl_count; ++i) {
+        if (cg->emitted_enum_decls[i] == decl) return true;
+    }
+
+    if (cg->emitted_enum_decl_count >= cg->emitted_enum_decl_capacity) {
+        size_t new_cap = cg->emitted_enum_decl_capacity == 0U
+                             ? 8U
+                             : cg->emitted_enum_decl_capacity * 2U;
+        const FengDecl **tmp = realloc(cg->emitted_enum_decls,
+                                       new_cap * sizeof(*tmp));
+        if (tmp == NULL) {
+            return cg_fail(cg, decl->token,
+                           "codegen: out of memory tracking emitted enum");
+        }
+        cg->emitted_enum_decls = tmp;
+        cg->emitted_enum_decl_capacity = new_cap;
+    }
+    cg->emitted_enum_decls[cg->emitted_enum_decl_count++] = decl;
+
+    return cg_emit_enum_decl(cg, decl);
 }
 
 static const FengDecl *cg_find_public_enum_decl_in_module(const FengSemanticModule *module,
@@ -14283,14 +14299,21 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
 
     enum_decl = cg_resolve_type_target_enum_decl(cg, e->as.member.object);
     if (enum_decl != NULL) {
-        const FengSemanticEnumItemInfo *item_info =
-            cg->analysis != NULL
-                ? feng_semantic_find_enum_item_info(cg->analysis, enum_decl, e->as.member.member)
-                : NULL;
+        bool found = false;
+        size_t ei;
         char *item_c_name;
         Buf b;
 
-        if (item_info == NULL) {
+        if (!cg_ensure_enum_emitted(cg, enum_decl)) return false;
+
+        for (ei = 0U; ei < enum_decl->as.enum_decl.item_count; ++ei) {
+            if (cg_slice_equals(enum_decl->as.enum_decl.items[ei].name,
+                                e->as.member.member)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
             return cg_fail(cg,
                            e->token,
                            "codegen: enum '%.*s' has no item '%.*s'",
@@ -17045,19 +17068,20 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
         case CG_TYPE_I8: case CG_TYPE_I16: case CG_TYPE_I32: case CG_TYPE_I64:
         case CG_TYPE_U8: case CG_TYPE_U16: case CG_TYPE_U32: case CG_TYPE_U64:
             if (type->enum_decl != NULL) {
-                const FengSemanticEnumInfo *enum_info =
-                    cg->analysis != NULL
-                        ? feng_semantic_lookup_enum_info(cg->analysis, type->enum_decl)
-                        : NULL;
                 char *item_c_name;
 
-                if (enum_info == NULL) {
+                if (!cg_ensure_enum_emitted(cg, type->enum_decl)) {
+                    buf_free(&b);
+                    return false;
+                }
+                if (type->enum_decl->as.enum_decl.item_count == 0U) {
                     buf_free(&b);
                     return cg_fail(cg,
                                    blame ? *blame : (FengToken){0},
-                                   "codegen: missing semantic enum info for default value");
+                                   "codegen: enum has no items for default value");
                 }
-                item_c_name = cg_enum_item_c_name(cg, type->enum_decl, enum_info->first_item->name);
+                item_c_name = cg_enum_item_c_name(cg, type->enum_decl,
+                                                   type->enum_decl->as.enum_decl.items[0].name);
                 if (item_c_name == NULL) {
                     buf_free(&b);
                     return cg_fail(cg,
@@ -24755,6 +24779,9 @@ static bool cg_pass_emit_imported_function_decls(CG *cg, const FengProgram *prog
 static bool cg_pass_emit_module_binding_ensure_inits(CG *cg, const FengProgram *prog);
 
 static bool cg_pass_emit_enum_decls(CG *cg, const FengProgram *prog) {
+    if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
     for (size_t i = 0; i < prog->declaration_count; i++) {
