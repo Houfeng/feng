@@ -577,11 +577,6 @@ open fit string {
 }
 
 /**
- * The result of a string byte iterator step: (hasValue, byteString).
- */
-open type StringByteIteratorResult(bool, string);
-
-/**
  * An iterator cursor that yields individual bytes of a string as single-byte substrings.
  */
 open type StringByteIterator {
@@ -600,7 +595,7 @@ open type StringByteIterator {
    * @return (true, byte-string) if available, (false, _) otherwise
    */
   @iterator
-  open func next(): StringByteIteratorResult {
+  open func next(): IteratorResult<string> {
     if self.offset >= self.len {
       return (false, "");
     }

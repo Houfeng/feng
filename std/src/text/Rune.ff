@@ -1,5 +1,7 @@
 open module std.text;
 
+import std.collections;
+
 @cdecl("feng_std_unistring", "u8_mbsnlen")
 extern func u8_mbsnlen(s: string*, n: long): long;
 
@@ -83,11 +85,6 @@ open type RuneView {
 }
 
 /**
- * The result of a rune iterator step: (hasValue, runeString).
- */
-open type RuneIteratorResult(bool, string);
-
-/**
  * An iterator cursor that yields individual runes as substring slices.
  */
 open type RuneIterator {
@@ -106,7 +103,7 @@ open type RuneIterator {
    * @return (true, rune) if available, (false, _) otherwise
    */
   @iterator
-  open func next(): RuneIteratorResult {
+  open func next(): IteratorResult<string> {
     if self.offset >= self.len {
       return (false, "");
     }

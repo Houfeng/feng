@@ -122,12 +122,6 @@ open type List<T> {
 }
 
 /**
- * The result of a list iterator step: (hasValue, value).
- * @param <T> - the element type
- */
-open type ListIteratorResult<T>(bool, T);
-
-/**
  * An iterator cursor over a List<T>.
  * @param <T> - the element type
  */
@@ -149,7 +143,7 @@ open type ListIterator<T> {
    * @return (true, value) if an element is available, (false, _) otherwise
    */
   @iterator
-  open func next(): ListIteratorResult<T> {
+  open func next(): IteratorResult<T> {
     if self.index >= self.size {
       return (false, self.missing);
     }

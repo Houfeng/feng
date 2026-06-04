@@ -3070,7 +3070,11 @@ static bool cg_slice_equals(FengSlice a, FengSlice b) {
  * so any name the user wrote is by construction visible. We only need to
  * pick the *correct* candidate when multiple modules expose a same-simple-named
  * type, which is the exact bug this guards against. */
-static bool cg_program_can_see(const FengProgram *consumer,
+static FengSemanticModuleOrigin cg_program_origin(const CG *cg,
+                                                  const FengProgram *prog);
+
+static bool cg_program_can_see(const CG *cg,
+                               const FengProgram *consumer,
                                const FengProgram *provider) {
     if (!consumer || !provider) return true;       /* not yet pinned */
     if (consumer == provider) return true;
@@ -3078,6 +3082,13 @@ static bool cg_program_can_see(const FengProgram *consumer,
                                  consumer->module_segment_count,
                                  provider->module_segments,
                                  provider->module_segment_count)) {
+        return true;
+    }
+    /* Synthesized programs from imported packages carry no use-declarations;
+     * their type refs were validated during the original compilation. */
+    if (cg != NULL &&
+        cg_program_origin(cg, consumer) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
         return true;
     }
     for (size_t i = 0; i < consumer->use_count; i++) {
@@ -3125,7 +3136,7 @@ static bool cg_decl_visible_from_program(const CG *cg,
     }
 
     return visibility == FENG_VISIBILITY_PUBLIC &&
-           cg_program_can_see(cg->cur_program, owner_program);
+           cg_program_can_see(cg, cg->cur_program, owner_program);
 }
 
 static const FengSemanticModule *cg_find_semantic_module_by_segments(const CG *cg,
@@ -3877,7 +3888,7 @@ static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t 
             return ut;                 /* own-program wins outright */
         }
         if (!cg->cur_program ||
-            cg_program_can_see(cg->cur_program, ut->owner_program)) {
+            cg_program_can_see(cg, cg->cur_program, ut->owner_program)) {
             if (!visible) visible = ut;
         }
     }
@@ -3899,7 +3910,7 @@ static const UserSpec *cg_find_user_spec(const CG *cg, const char *name, size_t 
             return us;
         }
         if (!cg->cur_program ||
-            cg_program_can_see(cg->cur_program, us->owner_program)) {
+            cg_program_can_see(cg, cg->cur_program, us->owner_program)) {
             if (!visible) visible = us;
         }
     }
@@ -23064,7 +23075,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
             continue;
         }
         if (cg->cur_program != NULL && fit->owner_program != NULL &&
-            !cg_program_can_see(cg->cur_program, fit->owner_program)) {
+            !cg_program_can_see(cg, cg->cur_program, fit->owner_program)) {
             continue;
         }
         for (size_t method_index = 0; method_index < fit->method_count; ++method_index) {

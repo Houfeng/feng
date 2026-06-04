@@ -1,0 +1,3 @@
+open module std.collections;
+
+open type IteratorResult<T>(bool, T);
