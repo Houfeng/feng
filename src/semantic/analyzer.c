@@ -21854,6 +21854,31 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                                                   programs,
                                                                   program_count);
         }
+
+        /* Transitively inject modules referenced by imported-package type
+         * signatures.  Repeat until no new modules are discovered. */
+        if (ok) {
+            size_t prev_module_count = 0U;
+
+            while (prev_module_count < analysis->module_count) {
+                prev_module_count = analysis->module_count;
+                for (size_t mi = 0U; mi < analysis->module_count && ok; ++mi) {
+                    if (analysis->modules[mi].origin !=
+                        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                        continue;
+                    }
+                    for (size_t pi = 0U; pi < analysis->modules[mi].program_count && ok; ++pi) {
+                        const FengProgram *ext_prog = analysis->modules[mi].programs[pi];
+
+                        for (size_t di = 0U; di < ext_prog->declaration_count && ok; ++di) {
+                            ok = inject_external_modules_from_decl(
+                                analysis, imported_query, ext_prog,
+                                ext_prog->declarations[di]);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /* Phase S1a: spec satisfaction relation sidecar must be available
