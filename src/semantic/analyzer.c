@@ -21856,13 +21856,16 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         }
 
         /* Transitively inject modules referenced by imported-package type
-         * signatures.  Repeat until no new modules are discovered. */
+         * signatures.  Each module is scanned exactly once via a cursor;
+         * newly discovered modules are appended and picked up in the next
+         * iteration of the outer loop. */
         if (ok) {
-            size_t prev_module_count = 0U;
+            size_t scan_from = 0U;
 
-            while (prev_module_count < analysis->module_count) {
-                prev_module_count = analysis->module_count;
-                for (size_t mi = 0U; mi < analysis->module_count && ok; ++mi) {
+            while (scan_from < analysis->module_count && ok) {
+                size_t scan_end = analysis->module_count;
+
+                for (size_t mi = scan_from; mi < scan_end && ok; ++mi) {
                     if (analysis->modules[mi].origin !=
                         FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                         continue;
@@ -21877,6 +21880,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                         }
                     }
                 }
+                scan_from = scan_end;
             }
         }
     }
