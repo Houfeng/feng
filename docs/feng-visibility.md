@@ -59,7 +59,7 @@ open type User {
 
   // 默认 open，外部可调用
   func User(name: string) {
-    this.name = name;
+    self.name = name;
   }
 
   // 显式 seal，外部不可调用
@@ -96,8 +96,8 @@ open type CacheEntry {
   var value: string;
 
   func CacheEntry(key: string, value: string) {
-    this.key = key;
-    this.value = value;
+    self.key = key;
+    self.value = value;
   }
 }
 ```
@@ -128,7 +128,7 @@ open type Writer {
   var path: string;
 
   func Writer(path: string) {
-    this.path = path;
+    self.path = path;
   }
 
   func write(data: string) {
@@ -152,13 +152,13 @@ open type Session {
   seal var token: string;
 
   func Session(id: string, token: string) {
-    this.id = id;
-    this.token = token;
+    self.id = id;
+    self.token = token;
   }
 
   // 外部可调用
   func isValid(): bool {
-    return this.checkToken();
+    return self.checkToken();
   }
 
   // 外部不可调用
@@ -182,7 +182,7 @@ open type Connection {
 
   // 外部不可直接调用构造函数
   seal func Connection(host: string) {
-    this.host = host;
+    self.host = host;
   }
 
   // 外部通过此方法获取实例
@@ -216,7 +216,7 @@ open type User {
   var name: string;
 
   func User(name: string) {
-    this.name = name;
+    self.name = name;
   }
 }
 ```
