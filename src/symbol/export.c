@@ -635,7 +635,19 @@ typedef struct BuildContext {
     size_t type_param_count;
 } BuildContext;
 
-/* Check whether a module has a public type, spec, or enum with the given name. */
+/* Check whether a declaration is a type-like kind (type, enum, or spec) with
+ * the given name. */
+static bool decl_is_type_named(const FengDecl *decl, FengSlice name) {
+    return (decl->kind == FENG_DECL_TYPE &&
+            feng_symbol_internal_slice_equals(decl->as.type_decl.name, name)) ||
+           (decl->kind == FENG_DECL_ENUM &&
+            feng_symbol_internal_slice_equals(decl->as.enum_decl.name, name)) ||
+           (decl->kind == FENG_DECL_SPEC &&
+            feng_symbol_internal_slice_equals(decl->as.spec_decl.name, name));
+}
+
+/* Check whether a module has a public type, spec, or enum with the given name.
+ * Used to find the source module of a cross-module type reference. */
 static bool module_has_public_type(const FengSemanticModule *module, FengSlice name) {
     size_t prog_index;
 
@@ -647,17 +659,8 @@ static bool module_has_public_type(const FengSemanticModule *module, FengSlice n
         size_t decl_index;
 
         for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
-            const FengDecl *decl = prog->declarations[decl_index];
-
-            if (decl->visibility != FENG_VISIBILITY_PUBLIC) {
-                continue;
-            }
-            if ((decl->kind == FENG_DECL_TYPE &&
-                 feng_symbol_internal_slice_equals(decl->as.type_decl.name, name)) ||
-                (decl->kind == FENG_DECL_ENUM &&
-                 feng_symbol_internal_slice_equals(decl->as.enum_decl.name, name)) ||
-                (decl->kind == FENG_DECL_SPEC &&
-                 feng_symbol_internal_slice_equals(decl->as.spec_decl.name, name))) {
+            if (prog->declarations[decl_index]->visibility == FENG_VISIBILITY_PUBLIC &&
+                decl_is_type_named(prog->declarations[decl_index], name)) {
                 return true;
             }
         }
@@ -666,7 +669,9 @@ static bool module_has_public_type(const FengSemanticModule *module, FengSlice n
 }
 
 /* Check whether the current module (being exported) defines a type with
- * the given name.  Used to skip expansion for module-local types. */
+ * the given name, regardless of visibility.  Module-local types (including
+ * non-public ones) do not need path expansion because they belong to the
+ * same module being exported. */
 static bool current_module_has_type(const BuildContext *ctx, FengSlice name) {
     size_t prog_index;
 
@@ -678,14 +683,7 @@ static bool current_module_has_type(const BuildContext *ctx, FengSlice name) {
         size_t decl_index;
 
         for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
-            const FengDecl *decl = prog->declarations[decl_index];
-
-            if ((decl->kind == FENG_DECL_TYPE &&
-                 feng_symbol_internal_slice_equals(decl->as.type_decl.name, name)) ||
-                (decl->kind == FENG_DECL_ENUM &&
-                 feng_symbol_internal_slice_equals(decl->as.enum_decl.name, name)) ||
-                (decl->kind == FENG_DECL_SPEC &&
-                 feng_symbol_internal_slice_equals(decl->as.spec_decl.name, name))) {
+            if (decl_is_type_named(prog->declarations[decl_index], name)) {
                 return true;
             }
         }
@@ -738,13 +736,52 @@ static const FengSemanticModule *find_analysis_module(
     return NULL;
 }
 
+/* Build a fully-qualified segment array by appending type_name after
+ * prefix_segments[0..prefix_count-1].  Returns a newly allocated char **
+ * array with (prefix_count + 1) entries, or NULL on allocation failure. */
+static char **build_qualified_segments(const FengSlice *prefix_segments,
+                                       size_t prefix_count,
+                                       FengSlice type_name,
+                                       size_t *out_count) {
+    size_t total = prefix_count + 1U;
+    char **result = (char **)calloc(total, sizeof(*result));
+    size_t seg;
+
+    *out_count = 0U;
+    if (result == NULL) {
+        return NULL;
+    }
+    for (seg = 0U; seg < prefix_count; ++seg) {
+        result[seg] = feng_symbol_internal_dup_slice(prefix_segments[seg]);
+        if (result[seg] == NULL) {
+            while (seg > 0U) free(result[--seg]);
+            free(result);
+            return NULL;
+        }
+    }
+    result[prefix_count] = feng_symbol_internal_dup_slice(type_name);
+    if (result[prefix_count] == NULL) {
+        for (seg = 0U; seg < prefix_count; ++seg) free(result[seg]);
+        free(result);
+        return NULL;
+    }
+    *out_count = total;
+    return result;
+}
+
 /* Try to expand a 1-segment or 2-segment (alias-prefixed) type reference
  * to its fully-qualified module path.  Returns a newly allocated char **
- * segment array and sets *out_count, or NULL if no expansion is needed. */
+ * segment array and sets *out_count, or NULL if no expansion is needed.
+ *
+ * When a 1-segment name cannot be resolved and is not a builtin or
+ * module-local type, an export error is reported through out_error. */
 static char **resolve_type_ref_segments(const BuildContext *ctx,
                                         const FengSlice *segments,
                                         size_t segment_count,
-                                        size_t *out_count) {
+                                        size_t *out_count,
+                                        const char *path,
+                                        FengToken token,
+                                        FengSymbolError *out_error) {
     *out_count = 0U;
     if (ctx == NULL || ctx->current_program == NULL || ctx->analysis == NULL) {
         return NULL;
@@ -767,30 +804,20 @@ static char **resolve_type_ref_segments(const BuildContext *ctx,
                 ctx->analysis, use_decl->segments, use_decl->segment_count);
 
             if (target != NULL && module_has_public_type(target, name)) {
-                size_t total = target->segment_count + 1U;
-                char **result = (char **)calloc(total, sizeof(*result));
-                size_t seg;
-
-                if (result == NULL) {
-                    return NULL;
-                }
-                for (seg = 0U; seg < target->segment_count; ++seg) {
-                    result[seg] = feng_symbol_internal_dup_slice(target->segments[seg]);
-                    if (result[seg] == NULL) {
-                        while (seg > 0U) free(result[--seg]);
-                        free(result);
-                        return NULL;
-                    }
-                }
-                result[target->segment_count] = feng_symbol_internal_dup_slice(name);
-                if (result[target->segment_count] == NULL) {
-                    for (seg = 0U; seg < target->segment_count; ++seg) free(result[seg]);
-                    free(result);
-                    return NULL;
-                }
-                *out_count = total;
-                return result;
+                return build_qualified_segments(target->segments,
+                                               target->segment_count,
+                                               name, out_count);
             }
+        }
+
+        /* A 1-segment name that is neither builtin, module-local, nor found
+         * in any imported module cannot be exported correctly. */
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "cannot resolve type '%.*s' to a fully-qualified path during export",
+                     (int)name.length, (const char *)name.data);
+            feng_symbol_internal_set_error(out_error, path, token, msg);
         }
         return NULL;
     }
@@ -805,29 +832,9 @@ static char **resolve_type_ref_segments(const BuildContext *ctx,
             FengSlice effective = use_effective_alias(use_decl);
 
             if (feng_symbol_internal_slice_equals(effective, alias)) {
-                size_t total = use_decl->segment_count + 1U;
-                char **result = (char **)calloc(total, sizeof(*result));
-                size_t seg;
-
-                if (result == NULL) {
-                    return NULL;
-                }
-                for (seg = 0U; seg < use_decl->segment_count; ++seg) {
-                    result[seg] = feng_symbol_internal_dup_slice(use_decl->segments[seg]);
-                    if (result[seg] == NULL) {
-                        while (seg > 0U) free(result[--seg]);
-                        free(result);
-                        return NULL;
-                    }
-                }
-                result[use_decl->segment_count] = feng_symbol_internal_dup_slice(name);
-                if (result[use_decl->segment_count] == NULL) {
-                    for (seg = 0U; seg < use_decl->segment_count; ++seg) free(result[seg]);
-                    free(result);
-                    return NULL;
-                }
-                *out_count = total;
-                return result;
+                return build_qualified_segments(use_decl->segments,
+                                               use_decl->segment_count,
+                                               name, out_count);
             }
         }
         return NULL;
@@ -874,7 +881,8 @@ static FengSymbolTypeView *build_type_from_type_ref(const BuildContext *ctx,
             resolved = resolve_type_ref_segments(ctx,
                                                   type_ref->as.named.segments,
                                                   type_ref->as.named.segment_count,
-                                                  &resolved_count);
+                                                  &resolved_count,
+                                                  path, token, out_error);
 
             type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED, path, token, out_error);
             if (type == NULL) {
@@ -1037,7 +1045,8 @@ static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
                 resolved = resolve_type_ref_segments(ctx,
                                                       type_ref->as.named.segments,
                                                       type_ref->as.named.segment_count,
-                                                      &resolved_count);
+                                                      &resolved_count,
+                                                      path, token, out_error);
 
                 type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC, path, token, out_error);
                 if (type == NULL) {
@@ -1124,7 +1133,8 @@ static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
                 resolved = resolve_type_ref_segments(ctx,
                                                       type_ref->as.named.segments,
                                                       type_ref->as.named.segment_count,
-                                                      &resolved_count);
+                                                      &resolved_count,
+                                                      path, token, out_error);
 
                 type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED, path, token, out_error);
                 if (type == NULL) {
