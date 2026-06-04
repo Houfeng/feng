@@ -71,4 +71,54 @@ open type RuneView {
     let end = feng_pointer_diff(next, data);
     return self.text.clone(start, end);
   }
+
+  /**
+   * Returns an iterator over the runes of this view.
+   * @return rune iterator cursor
+   */
+  @iterable
+  open func iter(): RuneIterator {
+    return RuneIterator(self.text);
+  }
+}
+
+/**
+ * The result of a rune iterator step: (hasValue, runeString).
+ */
+open type RuneIteratorResult(bool, string);
+
+/**
+ * An iterator cursor that yields individual runes as substring slices.
+ */
+open type RuneIterator {
+  seal let text: string;
+  seal let len: long;
+  seal var offset: long;
+
+  open func RuneIterator(text: string) {
+    self.text = text;
+    self.len = text.length();
+    self.offset = 0;
+  }
+
+  /**
+   * Advances to the next rune and returns it, or signals completion.
+   * @return (true, rune) if available, (false, _) otherwise
+   */
+  @iterator
+  open func next(): RuneIteratorResult {
+    if self.offset >= self.len {
+      return (false, "");
+    }
+    let data: string* = &self.text;
+    let cursor: string* = feng_pointer_move(data, self.offset);
+    var uc: u32 = 0;
+    let after: string* = u8_next(&uc, cursor);
+    if feng_pointer_is_null(after) {
+      return (false, "");
+    }
+    let start = self.offset;
+    self.offset = feng_pointer_diff(after, data);
+    return (true, self.text.clone(start, self.offset));
+  }
 }

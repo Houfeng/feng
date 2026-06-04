@@ -147,6 +147,9 @@ std-tests: cli runtime
 	grep -q '^__STRING_CLONE_UTF8__=你好世界$$' ./std_test/build/std_test.stdout
 	grep -q '^__STRING_CLONE_UTF8_RANGE__=世界$$' ./std_test/build/std_test.stdout
 	grep -q '^__STRING_EQUALITY__=ok$$' ./std_test/build/std_test.stdout
+	grep -q '^__LIST_FOR_IN__=abc$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_BYTE_FOR_IN__=a\.b\.c\.$$' ./std_test/build/std_test.stdout
+	grep -q '^__STRING_RUNE_FOR_IN__=A中B$$' ./std_test/build/std_test.stdout
 
 smoke: cli runtime
 	./scripts/run_smoke.sh

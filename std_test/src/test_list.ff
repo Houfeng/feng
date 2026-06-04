@@ -1,5 +1,6 @@
 module std_test;
 
+import std.io;
 import std.collections;
 
 type RefBox {
@@ -103,6 +104,56 @@ func list_reference_semantics() {
   check(l.get(0).value == 99, "list/reference-semantics");
 }
 
+func list_for_in_basic() {
+  let l = List<i32>();
+  l.add(10);
+  l.add(20);
+  l.add(30);
+  var sum: i32 = 0;
+  for let v in l {
+    sum = sum + v;
+  }
+  check(sum == 60, "list/for-in-basic");
+}
+
+func list_for_in_empty() {
+  let l = List<i32>();
+  var count: i32 = 0;
+  for let v in l {
+    count = count + v;
+  }
+  check(count == 0, "list/for-in-empty");
+}
+
+func list_for_in_nested() {
+  let a = List<i32>();
+  a.add(1);
+  a.add(2);
+  let b = List<i32>();
+  b.add(10);
+  b.add(20);
+  var sum: i32 = 0;
+  for let x in a {
+    for let y in b {
+      sum = sum + x * y;
+    }
+  }
+  check(sum == 90, "list/for-in-nested");
+}
+
+func list_for_in_string() {
+  let l = List<string>();
+  l.add("a");
+  l.add("b");
+  l.add("c");
+  var result = "";
+  for let s in l {
+    result = result + s;
+  }
+  check(result == "abc", "list/for-in-string");
+  writeLine("__LIST_FOR_IN__=" + result);
+}
+
 open func run_list_tests() {
   list_add_get();
   list_size();
@@ -113,4 +164,8 @@ open func run_list_tests() {
   list_entities_order();
   list_entities_count();
   list_reference_semantics();
+  list_for_in_basic();
+  list_for_in_empty();
+  list_for_in_nested();
+  list_for_in_string();
 }

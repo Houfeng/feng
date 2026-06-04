@@ -353,6 +353,29 @@ func string_padEnd() {
   writeLine("__STRING_PAD_END__=ok");
 }
 
+func string_byte_for_in() {
+  let text = "abc";
+  var result = "";
+  for let ch in text {
+    result = result + ch + ".";
+  }
+  check(result == "a.b.c.", "string/byte-for-in");
+  writeLine("__STRING_BYTE_FOR_IN__=" + result);
+}
+
+func string_rune_for_in() {
+  let text = "A中B";
+  var result = "";
+  var count: i32 = 0;
+  for let r in text.runes() {
+    result = result + r;
+    count = count + 1;
+  }
+  check(count == 3, "string/rune-for-in-count");
+  check(result == "A中B", "string/rune-for-in-content");
+  writeLine("__STRING_RUNE_FOR_IN__=" + result);
+}
+
 open func run_string_tests() {
   string_from_utf8_bytes_ascii();
   string_from_utf8_bytes_utf8();
@@ -391,4 +414,6 @@ open func run_string_tests() {
   string_toLowerCase();
   string_padStart();
   string_padEnd();
+  string_byte_for_in();
+  string_rune_for_in();
 }

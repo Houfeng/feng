@@ -110,4 +110,51 @@ open type List<T> {
     }
     return (T[])result;
   }
+
+  /**
+   * Returns all elements as an immutable array suitable for for/in iteration.
+   * @return immutable array of all elements
+   */
+  @iterable
+  open func iter(): ListIterator<T> {
+    return ListIterator<T>(self.items, self.count, self.missing);
+  }
+}
+
+/**
+ * The result of a list iterator step: (hasValue, value).
+ * @param <T> - the element type
+ */
+open type ListIteratorResult<T>(bool, T);
+
+/**
+ * An iterator cursor over a List<T>.
+ * @param <T> - the element type
+ */
+open type ListIterator<T> {
+  seal let items: T[!];
+  seal let size: i32;
+  seal let missing: T;
+  seal var index: i32;
+
+  open func ListIterator(items: T[!], size: i32, missing: T) {
+    self.items = items;
+    self.size = size;
+    self.missing = missing;
+    self.index = 0;
+  }
+
+  /**
+   * Advances the iterator and returns the next element, or signals completion.
+   * @return (true, value) if an element is available, (false, _) otherwise
+   */
+  @iterator
+  open func next(): ListIteratorResult<T> {
+    if self.index >= self.size {
+      return (false, self.missing);
+    }
+    let value = self.items[self.index];
+    self.index = self.index + 1;
+    return (true, value);
+  }
 }

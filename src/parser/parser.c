@@ -1899,14 +1899,26 @@ static FengDecl *parse_spec_declaration(Parser *parser,
 static FengTypeMember *parse_fit_method_member(Parser *parser) {
     FengToken doc_token = parser_current_token(parser);
     FengSlice doc_comment = doc_comment_from_token(&doc_token);
-    FengVisibility visibility = parse_visibility(parser);
-    bool is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
-    FengToken member_start = parser_current_token(parser);
+    FengAnnotation *member_annotations = NULL;
+    size_t member_annotation_count = 0U;
+    FengVisibility visibility;
+    bool is_static;
+    FengToken member_start;
     FengCallableSignature callable;
     FengSlice name;
     FengTypeMember *member;
 
+    member_annotations = parse_annotations(parser, &member_annotation_count);
+    if (parser->error.message != NULL) {
+        return NULL;
+    }
+
+    visibility = parse_visibility(parser);
+    is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
+    member_start = parser_current_token(parser);
+
     if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) {
+        free_annotations(member_annotations, member_annotation_count);
         (void)parser_error_current(
             parser,
             is_static
@@ -1916,6 +1928,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     }
 
     if (!parser_match(parser, FENG_TOKEN_KW_FUNC)) {
+        free_annotations(member_annotations, member_annotation_count);
         (void)parser_error_current(
             parser,
             is_static
@@ -1925,6 +1938,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     }
 
     if (!parser_expect_identifier_like(parser, &name, false, "expected a method name after 'func'")) {
+        free_annotations(member_annotations, member_annotation_count);
         return NULL;
     }
     callable = parse_callable_signature(
@@ -1934,6 +1948,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
         true,
         "fit block methods must provide a body '{...}'");
     if (parser->error.message != NULL) {
+        free_annotations(member_annotations, member_annotation_count);
         return NULL;
     }
     member = new_type_member(parser,
@@ -1941,6 +1956,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
                              callable.token,
                              doc_comment);
     if (member == NULL) {
+        free_annotations(member_annotations, member_annotation_count);
         free_parameters(callable.params, callable.param_count);
         free_type_ref(callable.return_type);
         free_block(callable.body);
@@ -1949,6 +1965,8 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     member->visibility = visibility;
     member->is_static = is_static;
     member->as.callable = callable;
+    member->annotations = member_annotations;
+    member->annotation_count = member_annotation_count;
     return member;
 }
 

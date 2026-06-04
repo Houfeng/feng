@@ -575,3 +575,54 @@ open fit string {
   }
 
 }
+
+/**
+ * The result of a string byte iterator step: (hasValue, byteString).
+ */
+open type StringByteIteratorResult(bool, string);
+
+/**
+ * An iterator cursor that yields individual bytes of a string as single-byte substrings.
+ */
+open type StringByteIterator {
+  seal let text: string;
+  seal let len: long;
+  seal var offset: long;
+
+  open func StringByteIterator(text: string) {
+    self.text = text;
+    self.len = text.length();
+    self.offset = 0;
+  }
+
+  /**
+   * Advances to the next byte and returns it as a single-byte substring.
+   * @return (true, byte-string) if available, (false, _) otherwise
+   */
+  @iterator
+  open func next(): StringByteIteratorResult {
+    if self.offset >= self.len {
+      return (false, "");
+    }
+    let ch = self.text.at(self.offset);
+    self.offset += (long)1;
+    return (true, ch);
+  }
+}
+
+/**
+ * Extends `string` with byte-level iteration via for/in.
+ */
+open fit string {
+
+  /**
+   * Returns an iterator over the bytes of this string as single-byte substrings.
+   * For character-level iteration, use `runes()` which returns a RuneView with @iterable.
+   * @return byte iterator cursor
+   */
+  @iterable
+  open func iter(): StringByteIterator {
+    return StringByteIterator(self);
+  }
+
+}

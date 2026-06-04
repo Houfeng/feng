@@ -7552,6 +7552,36 @@ static const FengTypeMember *find_iterator_method(const FengDecl *type_decl) {
     return NULL;
 }
 
+/* Visitor callback for finding @iterable method in fit blocks. */
+static bool fit_iterable_visitor(const FengTypeMember *member,
+                                 const FengSemanticModule *fit_module,
+                                 const FengDecl *fit_decl,
+                                 void *userdata) {
+    (void)fit_module;
+    (void)fit_decl;
+    if (annotations_contain_kind(member->annotations, member->annotation_count,
+                                 FENG_ANNOTATION_ITERABLE)) {
+        *(const FengTypeMember **)userdata = member;
+        return false;
+    }
+    return true;
+}
+
+/* Visitor callback for finding @iterator method in fit blocks. */
+static bool fit_iterator_visitor(const FengTypeMember *member,
+                                 const FengSemanticModule *fit_module,
+                                 const FengDecl *fit_decl,
+                                 void *userdata) {
+    (void)fit_module;
+    (void)fit_decl;
+    if (annotations_contain_kind(member->annotations, member->annotation_count,
+                                 FENG_ANNOTATION_ITERATOR)) {
+        *(const FengTypeMember **)userdata = member;
+        return false;
+    }
+    return true;
+}
+
 /* Validate @iterable/@iterator annotation constraints on a type declaration.
  * Called after all members have been resolved so return types are available. */
 static bool validate_iterator_annotations(ResolveContext *context, const FengDecl *type_decl) {
@@ -18091,44 +18121,172 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                             iter_decl = iter_type.type_decl;
                         }
 
-                        if (iter_decl != NULL && iter_decl->kind == FENG_DECL_TYPE) {
-                            const FengTypeMember *iterable_m = find_iterable_method(iter_decl);
-                            const FengTypeMember *iterator_m = find_iterator_method(iter_decl);
+                        {
+                            const FengTypeMember *iterable_m = NULL;
+                            const FengTypeMember *iterator_m = NULL;
+
+                            /* Search type decl members first. */
+                            if (iter_decl != NULL && iter_decl->kind == FENG_DECL_TYPE) {
+                                iterable_m = find_iterable_method(iter_decl);
+                                iterator_m = find_iterator_method(iter_decl);
+                            }
+
+                            /* If not found on type decl, search fit blocks. */
+                            if (iterable_m == NULL && iterator_m == NULL) {
+                                FengSlice empty_name = {NULL, 0U};
+                                const FengTypeMember *fit_result = NULL;
+
+                                (void)visit_visible_fit_methods_for_owner_type(
+                                    context, iter_decl, iter_type, empty_name,
+                                    false, false, fit_iterable_visitor, &fit_result);
+                                if (fit_result != NULL) {
+                                    iterable_m = fit_result;
+                                } else {
+                                    (void)visit_visible_fit_methods_for_owner_type(
+                                        context, iter_decl, iter_type, empty_name,
+                                        false, false, fit_iterator_visitor, &fit_result);
+                                    if (fit_result != NULL) {
+                                        iterator_m = fit_result;
+                                    }
+                                }
+                            }
 
                             if (iterable_m != NULL) {
                                 /* Container with @iterable: resolve cursor type. */
-                                const FengDecl *cursor_decl = resolve_type_ref_decl(
-                                    context, iterable_m->as.callable.return_type);
+                                const FengTypeRef *cursor_type_ref =
+                                    iterable_m->as.callable.return_type;
+                                const FengDecl *cursor_decl = NULL;
                                 const FengTypeMember *cursor_iter_m = NULL;
 
+                                /* Substitute container type params in the cursor type ref. */
+                                if (iter_decl != NULL &&
+                                    iter_decl->kind == FENG_DECL_TYPE &&
+                                    iter_decl->as.type_decl.type_param_count > 0U &&
+                                    iter_type_ref != NULL &&
+                                    iter_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                    iter_type_ref->as.named.type_arg_count ==
+                                        iter_decl->as.type_decl.type_param_count) {
+                                    FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                        cursor_type_ref,
+                                        iter_decl->as.type_decl.type_params,
+                                        iter_decl->as.type_decl.type_param_count,
+                                        iter_type_ref->as.named.type_args);
+                                    if (subst != NULL &&
+                                        resolver_track_synthetic_type_ref(context, subst)) {
+                                        cursor_type_ref = subst;
+                                    }
+                                }
+
+                                cursor_decl = resolve_type_ref_decl(context, cursor_type_ref);
                                 if (cursor_decl != NULL) {
                                     cursor_iter_m = find_iterator_method(cursor_decl);
                                 }
                                 if (cursor_iter_m != NULL) {
-                                    const FengDecl *ret_tuple_decl = resolve_type_ref_decl(
-                                        context, cursor_iter_m->as.callable.return_type);
+                                    const FengTypeRef *result_type_ref =
+                                        cursor_iter_m->as.callable.return_type;
+
+                                    /* Substitute cursor type params in the result type ref. */
+                                    if (cursor_decl->kind == FENG_DECL_TYPE &&
+                                        cursor_decl->as.type_decl.type_param_count > 0U &&
+                                        cursor_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                        cursor_type_ref->as.named.type_arg_count ==
+                                            cursor_decl->as.type_decl.type_param_count) {
+                                        FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                            result_type_ref,
+                                            cursor_decl->as.type_decl.type_params,
+                                            cursor_decl->as.type_decl.type_param_count,
+                                            cursor_type_ref->as.named.type_args);
+                                        if (subst != NULL &&
+                                            resolver_track_synthetic_type_ref(context, subst)) {
+                                            result_type_ref = subst;
+                                        }
+                                    }
+
+                                    const FengDecl *ret_tuple_decl =
+                                        resolve_type_ref_decl(context, result_type_ref);
                                     const FengTypeMember *second_field =
                                         tuple_field_member_at(ret_tuple_decl, 1U);
 
                                     if (second_field != NULL && second_field->as.field.type != NULL) {
-                                        element_type_ref = second_field->as.field.type;
+                                        const FengTypeRef *elem_ref = second_field->as.field.type;
+
+                                        /* Substitute result tuple type params in element type. */
+                                        if (ret_tuple_decl != NULL &&
+                                            ret_tuple_decl->kind == FENG_DECL_TYPE &&
+                                            ret_tuple_decl->as.type_decl.type_param_count > 0U &&
+                                            result_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                            result_type_ref->as.named.type_arg_count ==
+                                                ret_tuple_decl->as.type_decl.type_param_count) {
+                                            FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                                elem_ref,
+                                                ret_tuple_decl->as.type_decl.type_params,
+                                                ret_tuple_decl->as.type_decl.type_param_count,
+                                                result_type_ref->as.named.type_args);
+                                            if (subst != NULL &&
+                                                resolver_track_synthetic_type_ref(context, subst)) {
+                                                elem_ref = subst;
+                                            }
+                                        }
+
+                                        element_type_ref = elem_ref;
                                         mutable_stmt->as.for_stmt.iter_iterable_method = iterable_m;
                                         mutable_stmt->as.for_stmt.iter_iterator_method = cursor_iter_m;
                                         mutable_stmt->as.for_stmt.iter_cursor_type_decl = cursor_decl;
-                                        mutable_stmt->as.for_stmt.iter_cursor_type_ref =
-                                            iterable_m->as.callable.return_type;
+                                        mutable_stmt->as.for_stmt.iter_cursor_type_ref = cursor_type_ref;
                                         iter_protocol_resolved = true;
                                     }
                                 }
                             } else if (iterator_m != NULL) {
                                 /* Self-cursor: type itself has @iterator. */
-                                const FengDecl *ret_tuple_decl = resolve_type_ref_decl(
-                                    context, iterator_m->as.callable.return_type);
+                                const FengTypeRef *result_type_ref =
+                                    iterator_m->as.callable.return_type;
+
+                                /* Substitute self-cursor type params in the result type ref. */
+                                if (iter_decl != NULL &&
+                                    iter_decl->kind == FENG_DECL_TYPE &&
+                                    iter_decl->as.type_decl.type_param_count > 0U &&
+                                    iter_type_ref != NULL &&
+                                    iter_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                    iter_type_ref->as.named.type_arg_count ==
+                                        iter_decl->as.type_decl.type_param_count) {
+                                    FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                        result_type_ref,
+                                        iter_decl->as.type_decl.type_params,
+                                        iter_decl->as.type_decl.type_param_count,
+                                        iter_type_ref->as.named.type_args);
+                                    if (subst != NULL &&
+                                        resolver_track_synthetic_type_ref(context, subst)) {
+                                        result_type_ref = subst;
+                                    }
+                                }
+
+                                const FengDecl *ret_tuple_decl =
+                                    resolve_type_ref_decl(context, result_type_ref);
                                 const FengTypeMember *second_field =
                                     tuple_field_member_at(ret_tuple_decl, 1U);
 
                                 if (second_field != NULL && second_field->as.field.type != NULL) {
-                                    element_type_ref = second_field->as.field.type;
+                                    const FengTypeRef *elem_ref = second_field->as.field.type;
+
+                                    /* Substitute result tuple type params in element type. */
+                                    if (ret_tuple_decl != NULL &&
+                                        ret_tuple_decl->kind == FENG_DECL_TYPE &&
+                                        ret_tuple_decl->as.type_decl.type_param_count > 0U &&
+                                        result_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                        result_type_ref->as.named.type_arg_count ==
+                                            ret_tuple_decl->as.type_decl.type_param_count) {
+                                        FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                            elem_ref,
+                                            ret_tuple_decl->as.type_decl.type_params,
+                                            ret_tuple_decl->as.type_decl.type_param_count,
+                                            result_type_ref->as.named.type_args);
+                                        if (subst != NULL &&
+                                            resolver_track_synthetic_type_ref(context, subst)) {
+                                            elem_ref = subst;
+                                        }
+                                    }
+
+                                    element_type_ref = elem_ref;
                                     mutable_stmt->as.for_stmt.iter_iterable_method = NULL;
                                     mutable_stmt->as.for_stmt.iter_iterator_method = iterator_m;
                                     mutable_stmt->as.for_stmt.iter_cursor_type_decl = iter_decl;

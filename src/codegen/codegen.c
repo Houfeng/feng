@@ -3913,6 +3913,20 @@ static const UserType *cg_find_user_type_by_decl(const CG *cg, const FengDecl *d
     return NULL;
 }
 
+static const UserType *cg_find_open_generic_instance(const CG *cg,
+                                                     const UserType *concrete) {
+    if (!concrete->is_generic_instance || !concrete->generic_origin_decl) return NULL;
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        const UserType *candidate = &cg->user_types[i];
+        if (candidate == concrete) continue;
+        if (candidate->generic_origin_decl == concrete->generic_origin_decl &&
+            candidate->generic_context_type_param_count > 0U) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
 static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *decl) {
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         if (cg->user_specs[i].decl == decl) return &cg->user_specs[i];
@@ -5503,7 +5517,15 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
         return false;
     }
 
-    CGTypeParamScope empty_scope = {0};
+    /* When the instance being registered is an open (context-aware) instance,
+     * cascaded generic references in members must also be registered with the
+     * same context scope so lookups in Pass 2 find them. For concrete instances
+     * (has_open_type_arg == false), an empty scope is correct. */
+    CGTypeParamScope member_scope = {0};
+    if (has_open_type_arg) {
+        member_scope.first = decl->as.type_decl.type_params;
+        member_scope.first_count = decl->as.type_decl.type_param_count;
+    }
     for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -5512,7 +5534,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                                                       decl->as.type_decl.type_param_count,
                                                       type_args);
             if (!sub) return false;
-            bool ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+            bool ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
             cg_type_ref_free(sub);
             if (!ok) return false;
         } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
@@ -5525,7 +5547,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                                                           type_args);
                 bool ok;
                 if (!sub) return false;
-                ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+                ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
                 cg_type_ref_free(sub);
                 if (!ok) return false;
             }
@@ -5536,7 +5558,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                                                           type_args);
                 bool ok;
                 if (!sub) return false;
-                ok = cg_collect_generic_instances_from_type_ref(cg, sub, empty_scope);
+                ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
                 cg_type_ref_free(sub);
                 if (!ok) return false;
             }
@@ -19065,6 +19087,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
     for (size_t i = 0; i < stmt->as.if_stmt.clause_count; i++) {
         const FengIfClause *c = &stmt->as.if_stmt.clauses[i];
         ExprResult cond;
+        Scope *branch_scope;
         if (!cg_emit_expr(cg, c->condition, &cond)) return false;
         if (cond.type->kind != CG_TYPE_BOOL) {
             er_free(&cond);
@@ -19073,12 +19096,32 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
         buf_append_fmt(cg->cur_body, "    %sif (%s) {\n",
                        i == 0 ? "" : "else ", cond.c_expr);
         er_free(&cond);
-        if (!cg_emit_block(cg, c->block)) return false;
+        branch_scope = scope_push(cg->cur_scope);
+        if (!branch_scope) return cg_fail(cg, c->token, "codegen: out of memory");
+        cg->cur_scope = branch_scope;
+        if (!cg_emit_block(cg, c->block)) {
+            cg->cur_scope = branch_scope->parent;
+            scope_pop_free(branch_scope);
+            return false;
+        }
+        cg_release_scope(cg, branch_scope);
+        cg->cur_scope = branch_scope->parent;
+        scope_pop_free(branch_scope);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
     if (stmt->as.if_stmt.else_block) {
+        Scope *else_scope = scope_push(cg->cur_scope);
+        if (!else_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+        cg->cur_scope = else_scope;
         buf_append_cstr(cg->cur_body, "    else {\n");
-        if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) return false;
+        if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) {
+            cg->cur_scope = else_scope->parent;
+            scope_pop_free(else_scope);
+            return false;
+        }
+        cg_release_scope(cg, else_scope);
+        cg->cur_scope = else_scope->parent;
+        scope_pop_free(else_scope);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
     return true;
@@ -19709,42 +19752,37 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         return false;
     }
 
-    /* Determine the cursor UserType and its @iterator UserMethod. */
-    const UserType *cursor_ut = cg_find_user_type_by_decl(cg, cursor_type_decl);
-    if (!cursor_ut) {
-        er_free(&src);
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token,
-            "codegen: iterator cursor type not found");
-    }
-    const UserMethod *iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
-    if (!iter_um) {
-        er_free(&src);
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token,
-            "codegen: @iterator method not found on cursor type");
-    }
-
-    /* Determine the cursor variable name. If we have @iterable, call it to
-     * create the cursor; otherwise use the source expression directly. */
+    /* Determine the cursor UserType, its @iterator UserMethod, and cursor var.
+     * For generic types, cursor_ut must come from the resolved return type of
+     * @iterable (not a decl lookup which finds the wrong instance). */
+    const UserType *cursor_ut = NULL;
+    const UserMethod *iter_um = NULL;
     char *cursor_var = NULL;
+
     if (iterable_method != NULL) {
-        /* Find @iterable method on the source type. */
+        /* Find @iterable method on the source type (UserType or BuiltinFit). */
+        const UserMethod *iterable_um = NULL;
         const UserType *src_ut = src.type != NULL && src.type->user != NULL
             ? src.type->user : NULL;
-        if (!src_ut) {
-            er_free(&src);
-            cg_release_scope(cg, outer_scope);
-            cg->cur_scope = outer_scope->parent;
-            scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token,
-                "codegen: @iterable source type not found");
+        if (src_ut != NULL) {
+            iterable_um = cg_user_type_method_by_member(src_ut, iterable_method);
         }
-        const UserMethod *iterable_um = cg_user_type_method_by_member(src_ut, iterable_method);
+        if (!iterable_um) {
+            /* Search builtin fits (e.g. fit string { @iterable ... }). */
+            for (size_t fi = 0; fi < cg->builtin_fit_count; fi++) {
+                iterable_um = cg_builtin_fit_method_by_member(
+                    &cg->builtin_fits[fi], iterable_method);
+                if (iterable_um) break;
+            }
+        }
+        if (!iterable_um) {
+            /* Search user fits (e.g. fit SomeType { @iterable ... }). */
+            for (size_t fi = 0; fi < cg->user_fit_count; fi++) {
+                iterable_um = cg_user_fit_method_by_member(
+                    &cg->user_fits[fi], iterable_method);
+                if (iterable_um) break;
+            }
+        }
         if (!iterable_um) {
             er_free(&src);
             cg_release_scope(cg, outer_scope);
@@ -19752,6 +19790,29 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
                 "codegen: @iterable method not found on source type");
+        }
+        /* Get cursor_ut from the resolved return type of @iterable. */
+        cursor_ut = iterable_um->return_type != NULL
+            ? iterable_um->return_type->user : NULL;
+        if (!cursor_ut) {
+            cursor_ut = cg_find_user_type_by_decl(cg, cursor_type_decl);
+        }
+        if (!cursor_ut) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: iterator cursor type not found");
+        }
+        iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
+        if (!iter_um) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: @iterator method not found on cursor type");
         }
 
         /* Materialize receiver if it owns a ref. */
@@ -19797,6 +19858,27 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         }
     } else {
         /* Self-cursor: the source expression itself is the cursor. */
+        cursor_ut = src.type != NULL ? src.type->user : NULL;
+        if (!cursor_ut) {
+            cursor_ut = cg_find_user_type_by_decl(cg, cursor_type_decl);
+        }
+        if (!cursor_ut) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: iterator cursor type not found");
+        }
+        iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
+        if (!iter_um) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: @iterator method not found on cursor type");
+        }
         if (cgtype_is_managed(src.type) && src.owns_ref) {
             cursor_var = cg_materialize_to_local(cg, &src, "_cursor");
         } else if (cgtype_is_managed(src.type)) {
@@ -19821,15 +19903,16 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         }
     }
 
-    /* Determine tuple result type for @iterator return. */
-    CGType *result_type = NULL;
-    if (!cg_resolve_type(cg, iterator_method->as.callable.return_type,
-                         &stmt->token, &result_type)) {
+    /* Get the result type from iter_um's resolved return type.
+     * Since iter_um comes from the correct cursor instance, its return_type
+     * is already resolved with concrete type args (e.g. ListIteratorResult<string>). */
+    CGType *result_type = cgtype_clone(iter_um->return_type);
+    if (!result_type) {
         free(cursor_var);
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return false;
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
     }
 
     /* Get the tuple UserType for the result to access field names. */
@@ -19896,13 +19979,14 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     /* Check termination: if (!result.item1) break; */
     buf_append_fmt(cg->cur_body, "        if (!%s.%s) { ",
                    result_var, bool_field->c_name);
-    /* Release the result tuple before breaking if it's aggregate. */
+    /* Release the result tuple and pop its cleanup node before breaking. */
     if (cgtype_is_aggregate(result_type)) {
         const char *desc = cg_aggregate_desc_name(result_type);
         if (desc) {
             buf_append_fmt(cg->cur_body,
                 "feng_aggregate_release(&%s, &%s); ", result_var, desc);
         }
+        buf_append_cstr(cg->cur_body, "feng_cleanup_pop(); ");
     }
     buf_append_cstr(cg->cur_body, "break; }\n");
 
@@ -25375,12 +25459,23 @@ static bool cg_emit_all_programs(CG *cg,
     /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
      * every shell, regardless of owning program). cur_program is pinned to
      * each type's owning program so cg_resolve_type's visibility filter
-     * picks the right same-simple-named candidate. */
+     * picks the right same-simple-named candidate.
+     * Open (context-aware) generic instances carry unresolved type params;
+     * set ambient_type_param context so cg_resolve_type finds the matching
+     * open instances during member registration. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         cg->cur_program = cg->user_types[i].instantiation_program != NULL
             ? cg->user_types[i].instantiation_program
             : cg->user_types[i].owner_program;
+        size_t saved_ambient_count = cg->ambient_type_param_count;
+        char **saved_ambient_names = cg->ambient_type_param_names;
+        if (cg->user_types[i].generic_context_type_param_count > 0U) {
+            cg->ambient_type_param_count = cg->user_types[i].generic_context_type_param_count;
+            cg->ambient_type_param_names = cg->user_types[i].generic_context_type_param_names;
+        }
         bool ok = cg_register_user_type_members(cg, &cg->user_types[i], target);
+        cg->ambient_type_param_count = saved_ambient_count;
+        cg->ambient_type_param_names = saved_ambient_names;
         cg->cur_program = NULL;
         if (!ok) {
             if (!cg->failed) cg_fail(cg, cg->user_types[i].decl->token,
@@ -25454,11 +25549,36 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_type_count; i++) {
         const UserType *t = &cg->user_types[i];
         if (!cg_user_type_is_tuple(t) || t->field_count == 0U) continue;
+        const UserType *tup_open = t->is_generic_instance
+            ? cg_find_open_generic_instance(cg, t) : NULL;
         buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
         for (size_t fi = 0; fi < t->field_count; fi++) {
             buf_append_cstr(&cg->headers, "    ");
             cg_emit_c_type(&cg->headers, t->fields[fi].type);
             buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
+            if (tup_open != NULL && fi < tup_open->field_count &&
+                tup_open->fields[fi].type != NULL &&
+                tup_open->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
+                bool needs_pad = false;
+                switch (t->fields[fi].type->kind) {
+                    case CG_TYPE_BOOL:
+                    case CG_TYPE_I8:  case CG_TYPE_U8:
+                    case CG_TYPE_I16: case CG_TYPE_U16:
+                    case CG_TYPE_I32: case CG_TYPE_U32:
+                    case CG_TYPE_F32:
+                        needs_pad = true;
+                        break;
+                    default:
+                        break;
+                }
+                if (needs_pad) {
+                    buf_append_fmt(&cg->headers,
+                        "    char _pad_%s[sizeof(void *) - sizeof(",
+                        t->fields[fi].c_name);
+                    cg_emit_c_type(&cg->headers, t->fields[fi].type);
+                    buf_append_cstr(&cg->headers, ")];\n");
+                }
+            }
         }
         buf_append_cstr(&cg->headers, "};\n");
     }
@@ -25474,12 +25594,37 @@ static bool cg_emit_all_programs(CG *cg,
             UserType *t = &cg->user_types[i];
             if (!cg_user_type_is_tuple(t)) {
                 Buf *td = &cg->type_defs;
+                const UserType *imp_open = t->is_generic_instance
+                    ? cg_find_open_generic_instance(cg, t) : NULL;
                 buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
                 buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
                 for (size_t fi = 0; fi < t->field_count; fi++) {
                     buf_append_cstr(td, "    ");
                     cg_emit_c_type(td, t->fields[fi].type);
                     buf_append_fmt(td, " %s;\n", t->fields[fi].c_name);
+                    if (imp_open != NULL && fi < imp_open->field_count &&
+                        imp_open->fields[fi].type != NULL &&
+                        imp_open->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
+                        bool needs_pad = false;
+                        switch (t->fields[fi].type->kind) {
+                            case CG_TYPE_BOOL:
+                            case CG_TYPE_I8:  case CG_TYPE_U8:
+                            case CG_TYPE_I16: case CG_TYPE_U16:
+                            case CG_TYPE_I32: case CG_TYPE_U32:
+                            case CG_TYPE_F32:
+                                needs_pad = true;
+                                break;
+                            default:
+                                break;
+                        }
+                        if (needs_pad) {
+                            buf_append_fmt(td,
+                                "    char _pad_%s[sizeof(void *) - sizeof(",
+                                t->fields[fi].c_name);
+                            cg_emit_c_type(td, t->fields[fi].type);
+                            buf_append_cstr(td, ")];\n");
+                        }
+                    }
                 }
                 buf_append_cstr(td, "};\n\n");
             }
@@ -26911,13 +27056,14 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         buf_free(&value_base);
     }
     buf_append_fmt(td,
-        "const FengTypeDescriptor %s = {\n"
+        "%sconst FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s.__tuple_box\",\n"
         "    .size = sizeof(struct %s),\n"
         "    .finalizer = NULL,\n"
         "    .release_children = %s,\n"
         "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
+        t->is_generic_instance ? "__attribute__((weak)) " : "",
         t->c_tuple_box_desc_name,
         cg->module_dot_name,
         t->feng_name,
@@ -26984,10 +27130,34 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     }
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
+    const UserType *open_inst = t->is_generic_instance
+        ? cg_find_open_generic_instance(cg, t) : NULL;
     for (size_t i = 0; i < t->field_count; i++) {
         buf_append_cstr(td, "    ");
         cg_emit_c_type(td, t->fields[i].type);
         buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+        if (open_inst != NULL && i < open_inst->field_count &&
+            open_inst->fields[i].type != NULL &&
+            open_inst->fields[i].type->kind == CG_TYPE_GENERIC_PARAM) {
+            bool needs_pad = false;
+            switch (t->fields[i].type->kind) {
+                case CG_TYPE_BOOL:
+                case CG_TYPE_I8:  case CG_TYPE_U8:
+                case CG_TYPE_I16: case CG_TYPE_U16:
+                case CG_TYPE_I32: case CG_TYPE_U32:
+                case CG_TYPE_F32:
+                    needs_pad = true;
+                    break;
+                default:
+                    break;
+            }
+            if (needs_pad) {
+                buf_append_fmt(td, "    char _pad_%s[sizeof(void *) - sizeof(",
+                               t->fields[i].c_name);
+                cg_emit_c_type(td, t->fields[i].type);
+                buf_append_cstr(td, ")];\n");
+            }
+        }
     }
     buf_append_cstr(td, "};\n\n");
     if (!cg_emit_user_type_abi_surface(cg, t)) {
@@ -27080,13 +27250,14 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     bool is_cyclic = feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl);
 
     buf_append_fmt(td,
-        "const FengTypeDescriptor %s = {\n"
+        "%sconst FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s\",\n"
         "    .size = sizeof(struct %s),\n"
         "    .finalizer = %s,\n"
         "    .release_children = %s,\n"
         "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
+        t->is_generic_instance ? "__attribute__((weak)) " : "",
         t->c_desc_name,
         cg->module_dot_name, t->feng_name,
         t->c_struct_name,
@@ -27119,11 +27290,13 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
          * (including this same type's own field defaults) can reference it
          * regardless of source order. */
         buf_append_fmt(&cg->headers,
-            "struct %s *%s(void);\n",
+            "%sstruct %s *%s(void);\n",
+            t->is_generic_instance ? "__attribute__((weak)) " : "",
             t->c_struct_name, t->c_default_zero_name);
         buf_append_fmt(td,
-            "struct %s *%s(void) {\n"
+            "%sstruct %s *%s(void) {\n"
             "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n",
+            t->is_generic_instance ? "__attribute__((weak)) " : "",
             t->c_struct_name, t->c_default_zero_name,
             t->c_struct_name, t->c_struct_name, t->c_desc_name);
         for (size_t i = 0; i < t->field_count; i++) {
@@ -27917,6 +28090,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     }
 
     char *ret_tmp = NULL;
+    const UserType *ret_open_tuple = NULL;
     if (method_tp_count == 0U && m->return_type->kind != CG_TYPE_VOID) {
         ret_tmp = cg_fresh_temp(cg, "_ret");
         if (!ret_tmp) goto cleanup;
@@ -27924,6 +28098,15 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (!ret_cty) { free(ret_tmp); ret_tmp = NULL; goto cleanup; }
         buf_append_fmt(body, "    %s %s;\n", ret_cty, ret_tmp);
         free(ret_cty);
+        if (m->return_type->user != NULL &&
+            m->return_type->user->is_generic_instance &&
+            cg_user_type_is_tuple(m->return_type->user)) {
+            ret_open_tuple = cg_find_open_generic_instance(cg, m->return_type->user);
+        }
+        if (ret_open_tuple != NULL) {
+            buf_append_fmt(body, "    struct %s _erased_buf;\n",
+                           ret_open_tuple->c_struct_name);
+        }
     }
 
     buf_append_fmt(body, "    %s(", shared_name);
@@ -27972,12 +28155,26 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_cstr(body, "_out");
     } else if (ret_tmp) {
         if (call_has_arg) buf_append_cstr(body, ", ");
-        buf_append_fmt(body, "&%s", ret_tmp);
+        if (ret_open_tuple != NULL) {
+            buf_append_cstr(body, "&_erased_buf");
+        } else {
+            buf_append_fmt(body, "&%s", ret_tmp);
+        }
     }
     buf_append_cstr(body, ");\n");
     if (method_tp_count > 0U) {
         buf_append_cstr(body, "    return;\n");
     } else if (ret_tmp) {
+        if (ret_open_tuple != NULL) {
+            const UserType *ret_ut = m->return_type->user;
+            for (size_t fi = 0; fi < ret_ut->field_count; fi++) {
+                buf_append_fmt(body,
+                    "    memcpy(&%s.%s, &_erased_buf.%s, sizeof(%s.%s));\n",
+                    ret_tmp, ret_ut->fields[fi].c_name,
+                    ret_ut->fields[fi].c_name,
+                    ret_tmp, ret_ut->fields[fi].c_name);
+            }
+        }
         buf_append_fmt(body, "    return %s;\n", ret_tmp);
     } else {
         buf_append_cstr(body, "    return;\n");
