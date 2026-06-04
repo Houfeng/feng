@@ -769,12 +769,20 @@ static char **build_qualified_segments(const FengSlice *prefix_segments,
     return result;
 }
 
-/* Try to expand a 1-segment or 2-segment (alias-prefixed) type reference
- * to its fully-qualified module path.  Returns a newly allocated char **
- * segment array and sets *out_count, or NULL if no expansion is needed.
+/* Expand a type *usage* to its fully-qualified module path.
  *
- * When a 1-segment name cannot be resolved and is not a builtin or
- * module-local type, an export error is reported through out_error. */
+ * .ft distinguishes type definitions from type usages:
+ *   - Definitions (SYMS name_str): short name, scoped by owning module.
+ *   - Usages (TYPS string_ref):   always fully-qualified, self-describing.
+ *
+ * This function handles 1-segment and 2-segment (alias-prefixed) names.
+ * Builtins are skipped (return NULL).  All other names — including types
+ * defined in the current module — are expanded to full paths.
+ *
+ * Returns a newly allocated char ** segment array and sets *out_count,
+ * or NULL when no expansion is needed (builtins) or on error.
+ * When a 1-segment name cannot be resolved, an export error is reported
+ * through out_error. */
 static char **resolve_type_ref_segments(const BuildContext *ctx,
                                         const FengSlice *segments,
                                         size_t segment_count,
@@ -791,10 +799,15 @@ static char **resolve_type_ref_segments(const BuildContext *ctx,
         FengSlice name = segments[0];
         size_t use_index;
 
-        /* Skip builtins and module-local types. */
-        if (canonical_builtin_name(name) != NULL ||
-            current_module_has_type(ctx, name)) {
+        if (canonical_builtin_name(name) != NULL) {
             return NULL;
+        }
+
+        /* Module-local type: qualify with the current module's path. */
+        if (current_module_has_type(ctx, name) && ctx->module != NULL) {
+            return build_qualified_segments(ctx->module->segments,
+                                           ctx->module->segment_count,
+                                           name, out_count);
         }
 
         /* Search imported modules for a matching public type. */

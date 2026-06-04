@@ -109,9 +109,11 @@ typedef struct FengSymbolFtSectionEntry {
     uint32_t reserved;
 } FengSymbolFtSectionEntry;
 
-/* SYMS record: 28 bytes.  type_ref for callable kinds points to a
- * CALLABLE/SPEC_OBJECT/SPEC_CALLABLE TYPS node; for binding/field it
- * points to the value TYPS node; 0 otherwise. */
+/* SYMS record: 28 bytes.  name_str is the short declaration name (e.g.
+ * "List"), scoped by the owning module — this is a type *definition*.
+ * type_ref for callable kinds points to a CALLABLE/SPEC_OBJECT/
+ * SPEC_CALLABLE TYPS node; for binding/field it points to the value
+ * TYPS node; 0 otherwise. */
 typedef struct FengSymbolFtSymRecord {
     uint32_t id;        /* 1-based symbol id */
     uint32_t owner_id;  /* parent symbol id, 0 for module root */
@@ -123,10 +125,15 @@ typedef struct FengSymbolFtSymRecord {
     uint32_t doc_ref;   /* DOC record id, 0 if none */
 } FengSymbolFtSymRecord;
 
-/* TYPS record: 24 bytes.
+/* TYPS record: 24 bytes.  All type references (NAMED, NAMED_GENERIC,
+ * etc.) represent type *usages* and store fully-qualified dot-joined
+ * names (e.g. "std.collections.List"), even for types defined in the
+ * same module.  This keeps every type reference self-describing and
+ * independent of module context.
+ *
  * Field usage by kind:
  *   BUILTIN:       string_ref=type-name, others=0
- *   NAMED:         string_ref=dot-joined-name, sym_ref=decl-sym-id (0 if unknown), others=0
+ *   NAMED:         string_ref=fully-qualified-dot-joined-name, sym_ref=decl-sym-id (0 if unknown), others=0
  *   ARRAY:         string_ref=mutability-bitmap(u32,bit-i=layer-i-writable),
  *                  elem_start=element-TYPS.id, elem_count=rank, sym_ref/reserved1=0
  *   C_POINTER:     elem_start=inner-TYPS.id, others=0
@@ -134,7 +141,7 @@ typedef struct FengSymbolFtSymRecord {
  *   SPEC_OBJECT:   sym_ref=spec-sym-id, others=0
  *   SPEC_CALLABLE: sym_ref=spec-sym-id, elem_start=TSEQ-start, elem_count=param_count+1
  *   SPEC_UNION:    sym_ref=spec-sym-id, elem_start=TSEQ-start, elem_count=member-count
- *   NAMED_GENERIC: string_ref=base-name, sym_ref=decl-sym-id,
+ *   NAMED_GENERIC: string_ref=fully-qualified-base-name, sym_ref=decl-sym-id,
  *                  elem_start=TSEQ-start, elem_count=type-arg-count
  *   TYPE_PARAM_REF:string_ref=param-name, sym_ref=type-param-sym-id, others=0 */
 typedef struct FengSymbolFtTypeRecord {
