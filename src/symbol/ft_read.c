@@ -1117,6 +1117,14 @@ static bool parse_attrs(ReadContext *ctx,
             decl->is_static = true;
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_ITERABLE_METHOD) {
+            decl->is_iterable = true;
+            continue;
+        }
+        if (kind == FENG_SYMBOL_ATTR_ITERATOR_METHOD) {
+            decl->is_iterator = true;
+            continue;
+        }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {
             continue;
         }

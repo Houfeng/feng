@@ -1,0 +1,35 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+type CounterResult(bool, i32);
+
+type Counter {
+    var current: i32;
+    let limit: i32;
+
+    @iterator
+    func next(): CounterResult {
+        if self.current >= self.limit {
+            return (false, 0);
+        }
+        let value = self.current;
+        self.current = self.current + 1;
+        return (true, value);
+    }
+}
+
+func main(args: string[]) {
+    let c = Counter { current: 0, limit: 3 };
+    for let i in c {
+        if i == 0 {
+            puts(&"zero");
+        } else if i == 1 {
+            puts(&"one");
+        } else if i == 2 {
+            puts(&"two");
+        }
+    }
+    puts(&"done");
+}

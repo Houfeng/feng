@@ -225,6 +225,9 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     FengExpr *symbol_expr = NULL;
     const char *annotation_name;
     size_t arg_count;
+    size_t total_count = 0U;
+    bool has_calling_conv = false;
+    bool has_iter_annotation = false;
 
     if (out_annotations == NULL || out_count == NULL) {
         return false;
@@ -232,47 +235,87 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     *out_annotations = NULL;
     *out_count = 0U;
 
-    if (symbol_decl == NULL || symbol_decl->calling_convention == FENG_ANNOTATION_NONE) {
+    if (symbol_decl == NULL) {
         return true;
     }
 
-    annotation_name = annotation_name_for_calling_convention(symbol_decl->calling_convention);
-    if (annotation_name == NULL || symbol_decl->abi_library == NULL ||
-        symbol_decl->abi_library[0] == '\0') {
+    has_calling_conv = symbol_decl->calling_convention != FENG_ANNOTATION_NONE;
+    has_iter_annotation = symbol_decl->is_iterable || symbol_decl->is_iterator;
+
+    if (!has_calling_conv && !has_iter_annotation) {
+        return true;
+    }
+
+    /* Count total annotations needed. */
+    if (has_calling_conv) {
+        total_count++;
+    }
+    if (has_iter_annotation) {
+        total_count++;
+    }
+
+    annotations = (FengAnnotation *)calloc(total_count, sizeof(*annotations));
+    if (annotations == NULL) {
         return false;
     }
 
-    arg_count = symbol_decl->abi_symbol != NULL && symbol_decl->abi_symbol[0] != '\0'
-        ? 2U
-        : 1U;
-    annotations = (FengAnnotation *)calloc(1U, sizeof(*annotations));
-    args = (FengExpr **)calloc(arg_count, sizeof(*args));
-    arg_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_library);
-    if (arg_count > 1U) {
-        symbol_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_symbol);
-    }
-    if (annotations == NULL || args == NULL || arg_expr == NULL ||
-        (arg_count > 1U && symbol_expr == NULL)) {
-        free_synthetic_annotation_expr(symbol_expr);
-        free_synthetic_annotation_expr(arg_expr);
-        free(args);
-        free(annotations);
-        return false;
+    /* Synthesize calling-convention annotation. */
+    if (has_calling_conv) {
+        annotation_name = annotation_name_for_calling_convention(symbol_decl->calling_convention);
+        if (annotation_name == NULL || symbol_decl->abi_library == NULL ||
+            symbol_decl->abi_library[0] == '\0') {
+            free(annotations);
+            return false;
+        }
+
+        arg_count = symbol_decl->abi_symbol != NULL && symbol_decl->abi_symbol[0] != '\0'
+            ? 2U
+            : 1U;
+        args = (FengExpr **)calloc(arg_count, sizeof(*args));
+        arg_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_library);
+        if (arg_count > 1U) {
+            symbol_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_symbol);
+        }
+        if (args == NULL || arg_expr == NULL ||
+            (arg_count > 1U && symbol_expr == NULL)) {
+            free_synthetic_annotation_expr(symbol_expr);
+            free_synthetic_annotation_expr(arg_expr);
+            free(args);
+            free(annotations);
+            return false;
+        }
+
+        annotations[0].token = symbol_decl->token;
+        annotations[0].name.data = annotation_name;
+        annotations[0].name.length = strlen(annotation_name);
+        annotations[0].builtin_kind = symbol_decl->calling_convention;
+        annotations[0].args = args;
+        annotations[0].args[0] = arg_expr;
+        if (arg_count > 1U) {
+            annotations[0].args[1] = symbol_expr;
+        }
+        annotations[0].arg_count = arg_count;
     }
 
-    annotations[0].token = symbol_decl->token;
-    annotations[0].name.data = annotation_name;
-    annotations[0].name.length = strlen(annotation_name);
-    annotations[0].builtin_kind = symbol_decl->calling_convention;
-    annotations[0].args = args;
-    annotations[0].args[0] = arg_expr;
-    if (arg_count > 1U) {
-        annotations[0].args[1] = symbol_expr;
+    /* Synthesize @iterable or @iterator annotation. */
+    if (has_iter_annotation) {
+        size_t idx = has_calling_conv ? 1U : 0U;
+        annotations[idx].token = symbol_decl->token;
+        if (symbol_decl->is_iterable) {
+            annotations[idx].name.data = "iterable";
+            annotations[idx].name.length = 8U;
+            annotations[idx].builtin_kind = FENG_ANNOTATION_ITERABLE;
+        } else {
+            annotations[idx].name.data = "iterator";
+            annotations[idx].name.length = 8U;
+            annotations[idx].builtin_kind = FENG_ANNOTATION_ITERATOR;
+        }
+        annotations[idx].args = NULL;
+        annotations[idx].arg_count = 0U;
     }
-    annotations[0].arg_count = arg_count;
 
     *out_annotations = annotations;
-    *out_count = 1U;
+    *out_count = total_count;
     return true;
 }
 

@@ -1448,6 +1448,8 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
     const FengAnnotation *callconv = find_calling_convention_annotation(annotations, annotation_count);
 
     decl->abi_annotated = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
+    decl->is_iterable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERABLE);
+    decl->is_iterator = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERATOR);
     if (callconv != NULL) {
         decl->calling_convention = callconv->builtin_kind;
         if (allow_library && callconv->arg_count > 0U) {

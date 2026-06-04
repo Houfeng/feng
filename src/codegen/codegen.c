@@ -19685,7 +19685,337 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/* Emit for/in loop using the iterator protocol (@iterable/@iterator). */
+static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
+    int id = cg->label_counter++;
+    char cont_label[64];
+    snprintf(cont_label, sizeof cont_label, "_cont_%d", id);
+
+    const FengTypeMember *iterable_method = stmt->as.for_stmt.iter_iterable_method;
+    const FengTypeMember *iterator_method = stmt->as.for_stmt.iter_iterator_method;
+    const FengDecl *cursor_type_decl = stmt->as.for_stmt.iter_cursor_type_decl;
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+
+    Scope *outer_scope = scope_push(cg->cur_scope);
+    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    cg->cur_scope = outer_scope;
+
+    /* Emit the iteration source expression. */
+    ExprResult src;
+    if (!cg_emit_expr(cg, stmt->as.for_stmt.iter_expr, &src)) {
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+
+    /* Determine the cursor UserType and its @iterator UserMethod. */
+    const UserType *cursor_ut = cg_find_user_type_by_decl(cg, cursor_type_decl);
+    if (!cursor_ut) {
+        er_free(&src);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: iterator cursor type not found");
+    }
+    const UserMethod *iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
+    if (!iter_um) {
+        er_free(&src);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: @iterator method not found on cursor type");
+    }
+
+    /* Determine the cursor variable name. If we have @iterable, call it to
+     * create the cursor; otherwise use the source expression directly. */
+    char *cursor_var = NULL;
+    if (iterable_method != NULL) {
+        /* Find @iterable method on the source type. */
+        const UserType *src_ut = src.type != NULL && src.type->user != NULL
+            ? src.type->user : NULL;
+        if (!src_ut) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: @iterable source type not found");
+        }
+        const UserMethod *iterable_um = cg_user_type_method_by_member(src_ut, iterable_method);
+        if (!iterable_um) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token,
+                "codegen: @iterable method not found on source type");
+        }
+
+        /* Materialize receiver if it owns a ref. */
+        if (cgtype_is_managed(src.type) && src.owns_ref) {
+            cg_materialize_to_local(cg, &src, "_isrc");
+        }
+
+        /* Call @iterable: cursor = src.iterable_method() */
+        cursor_var = cg_fresh_temp(cg, "_cursor");
+        if (!cursor_var) {
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+        char *cursor_cty = cg_ctype_dup(iterable_um->return_type);
+        if (!cursor_cty) {
+            free(cursor_var);
+            er_free(&src);
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+
+        /* The @iterable method returns the cursor type (managed pointer). */
+        CGType *cursor_cgtype = cgtype_clone(iterable_um->return_type);
+        buf_append_fmt(cg->cur_body, "    %s %s = %s(%s);\n",
+                       cursor_cty, cursor_var, iterable_um->c_name, src.c_expr);
+        free(cursor_cty);
+        er_free(&src);
+
+        /* Register cursor in scope for cleanup. */
+        if (cgtype_is_managed(cursor_cgtype)) {
+            scope_add(cg->cur_scope, cursor_var, cursor_var, cursor_cgtype, false);
+            cg_emit_cleanup_push_for_managed_local(cg, cursor_var);
+        } else if (cgtype_is_aggregate(cursor_cgtype)) {
+            scope_add(cg->cur_scope, cursor_var, cursor_var, cursor_cgtype, false);
+            cg_emit_cleanup_push_for_aggregate_local(cg, cursor_var, cursor_cgtype);
+        } else {
+            cgtype_free(cursor_cgtype);
+        }
+    } else {
+        /* Self-cursor: the source expression itself is the cursor. */
+        if (cgtype_is_managed(src.type) && src.owns_ref) {
+            cursor_var = cg_materialize_to_local(cg, &src, "_cursor");
+        } else if (cgtype_is_managed(src.type)) {
+            cursor_var = cg_fresh_temp(cg, "_cursor");
+            if (cursor_var) {
+                buf_append_fmt(cg->cur_body,
+                    "    struct %s *%s = %s; feng_retain(%s);\n",
+                    cursor_ut->c_struct_name, cursor_var, src.c_expr, cursor_var);
+                scope_add(cg->cur_scope, cursor_var, cursor_var,
+                          cgtype_clone(src.type), false);
+                cg_emit_cleanup_push_for_managed_local(cg, cursor_var);
+            }
+            er_free(&src);
+        } else {
+            cursor_var = cg_materialize_to_local(cg, &src, "_cursor");
+        }
+        if (!cursor_var) {
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return cg_fail(cg, stmt->token, "codegen: out of memory");
+        }
+    }
+
+    /* Determine tuple result type for @iterator return. */
+    CGType *result_type = NULL;
+    if (!cg_resolve_type(cg, iterator_method->as.callable.return_type,
+                         &stmt->token, &result_type)) {
+        free(cursor_var);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+
+    /* Get the tuple UserType for the result to access field names. */
+    const UserType *result_ut = result_type->user;
+    if (!result_ut || result_ut->field_count < 2U) {
+        cgtype_free(result_type);
+        free(cursor_var);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: @iterator return type must be a 2-field tuple");
+    }
+
+    const UserField *bool_field = &result_ut->fields[0];
+    const UserField *elem_field = &result_ut->fields[1];
+    CGType *element_type = cgtype_clone(elem_field->type);
+    char *result_cty = cg_ctype_dup(result_type);
+
+    if (!element_type || !result_cty) {
+        free(result_cty);
+        cgtype_free(element_type);
+        cgtype_free(result_type);
+        free(cursor_var);
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+
+    /* Begin the loop. */
+    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+
+    /* Body scope: loop scope, hosts per-iteration bindings. */
+    cg->loop_depth++;
+    Scope *body_scope = scope_push(cg->cur_scope);
+    if (!body_scope) {
+        free(result_cty); cgtype_free(element_type); cgtype_free(result_type);
+        free(cursor_var);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    body_scope->is_loop = true;
+    body_scope->try_depth_at_entry = cg->try_depth;
+    char *cont_label_owned = strdup(cont_label);
+    body_scope->continue_label = cont_label_owned;
+    cg->cur_scope = body_scope;
+
+    /* Call @iterator: result = cursor.next() */
+    char *result_var = cg_fresh_temp(cg, "_ir");
+    buf_append_fmt(cg->cur_body, "        %s %s = %s(%s);\n",
+                   result_cty, result_var, iter_um->c_name, cursor_var);
+
+    /* Register result tuple for aggregate cleanup if needed. */
+    if (cgtype_is_aggregate(result_type)) {
+        scope_add(cg->cur_scope, result_var, result_var,
+                  cgtype_clone(result_type), false);
+        cg_emit_cleanup_push_for_aggregate_local(cg, result_var, result_type);
+    }
+
+    /* Check termination: if (!result.item1) break; */
+    buf_append_fmt(cg->cur_body, "        if (!%s.%s) { ",
+                   result_var, bool_field->c_name);
+    /* Release the result tuple before breaking if it's aggregate. */
+    if (cgtype_is_aggregate(result_type)) {
+        const char *desc = cg_aggregate_desc_name(result_type);
+        if (desc) {
+            buf_append_fmt(cg->cur_body,
+                "feng_aggregate_release(&%s, &%s); ", result_var, desc);
+        }
+    }
+    buf_append_cstr(cg->cur_body, "break; }\n");
+
+    /* Bind loop variable: let it = result.item2 */
+    const FengBinding *ib = &stmt->as.for_stmt.iter_binding;
+    char *iter_cname = cg_local_cname(cg, ib->name.data, ib->name.length);
+    if (!iter_cname) {
+        free(result_var); free(result_cty);
+        cgtype_free(element_type); cgtype_free(result_type);
+        free(cont_label_owned);
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(cursor_var);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+
+    char *elem_cty = cg_ctype_dup(element_type);
+    if (cgtype_is_managed(element_type)) {
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = %s.%s; feng_retain(%s);\n",
+            elem_cty, iter_cname, result_var, elem_field->c_name, iter_cname);
+    } else if (cgtype_is_aggregate(element_type)) {
+        const char *desc = cg_aggregate_desc_name(element_type);
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = %s.%s;",
+            elem_cty, iter_cname, result_var, elem_field->c_name);
+        if (desc) {
+            buf_append_fmt(cg->cur_body,
+                " feng_aggregate_retain(&%s, &%s);", iter_cname, desc);
+        }
+        buf_append_cstr(cg->cur_body, "\n");
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = %s.%s;\n",
+            elem_cty, iter_cname, result_var, elem_field->c_name);
+    }
+    free(elem_cty);
+
+    /* Register loop var in body scope. */
+    if (!scope_add(cg->cur_scope, "_unused_internal_name__", iter_cname,
+                   cgtype_clone(element_type), false)) {
+        free(iter_cname); free(result_var); free(result_cty);
+        free(cont_label_owned);
+        cgtype_free(element_type); cgtype_free(result_type);
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(cursor_var);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token, "codegen: out of memory");
+    }
+    Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
+    free(added->name);
+    added->name = strndup(ib->name.data, ib->name.length);
+    if (cgtype_is_managed(element_type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, iter_cname);
+    } else if (cgtype_is_aggregate(element_type)) {
+        cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname, element_type);
+    }
+    free(iter_cname);
+
+    /* Emit loop body. */
+    if (!cg_emit_block(cg, stmt->as.for_stmt.body)) {
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(cont_label_owned);
+        free(result_var); free(result_cty);
+        cgtype_free(element_type); cgtype_free(result_type);
+        free(cursor_var);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return false;
+    }
+
+    cg_release_scope(cg, body_scope);
+    body_scope->continue_label = NULL;
+    cg->cur_scope = body_scope->parent;
+    scope_pop_free(body_scope);
+    free(cont_label_owned);
+    cg->loop_depth--;
+
+    /* Continue label and loop end. */
+    buf_append_fmt(cg->cur_body, "        %s: ;\n", cont_label);
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    free(result_var); free(result_cty);
+    cgtype_free(element_type); cgtype_free(result_type);
+    free(cursor_var);
+
+    cg_release_scope(cg, outer_scope);
+    cg->cur_scope = outer_scope->parent;
+    scope_pop_free(outer_scope);
+    buf_append_cstr(cg->cur_body, "    }\n");
+    return true;
+}
+
 static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
+    /* Dispatch to iterator protocol path if semantic resolved @iterator. */
+    if (stmt->as.for_stmt.iter_iterator_method != NULL) {
+        return cg_emit_for_in_iterator(cg, stmt);
+    }
+
     int id = cg->label_counter++;
     char cont_label[64];
     snprintf(cont_label, sizeof cont_label, "_cont_%d", id);

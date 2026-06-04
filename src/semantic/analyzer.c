@@ -7516,6 +7516,230 @@ static size_t count_declared_constructors(const FengDecl *type_decl) {
     return count;
 }
 
+/* Find the @iterable method on a type decl. Returns NULL if not found. */
+static const FengTypeMember *find_iterable_method(const FengDecl *type_decl) {
+    size_t member_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            annotations_contain_kind(member->annotations, member->annotation_count,
+                                     FENG_ANNOTATION_ITERABLE)) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* Find the @iterator method on a type decl. Returns NULL if not found. */
+static const FengTypeMember *find_iterator_method(const FengDecl *type_decl) {
+    size_t member_index;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            annotations_contain_kind(member->annotations, member->annotation_count,
+                                     FENG_ANNOTATION_ITERATOR)) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* Validate @iterable/@iterator annotation constraints on a type declaration.
+ * Called after all members have been resolved so return types are available. */
+static bool validate_iterator_annotations(ResolveContext *context, const FengDecl *type_decl) {
+    size_t member_index;
+    const FengTypeMember *iterable_method = NULL;
+    const FengTypeMember *iterator_method = NULL;
+    size_t iterable_count = 0U;
+    size_t iterator_count = 0U;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+        bool has_iterable = annotations_contain_kind(
+            member->annotations, member->annotation_count, FENG_ANNOTATION_ITERABLE);
+        bool has_iterator = annotations_contain_kind(
+            member->annotations, member->annotation_count, FENG_ANNOTATION_ITERATOR);
+
+        if (!has_iterable && !has_iterator) {
+            continue;
+        }
+
+        /* @iterable/@iterator must be on methods only. */
+        if (member->kind != FENG_TYPE_MEMBER_METHOD) {
+            FengAnnotationKind ann_kind = has_iterable
+                ? FENG_ANNOTATION_ITERABLE : FENG_ANNOTATION_ITERATOR;
+            const FengAnnotation *ann = find_annotation_of_kind(
+                member->annotations, member->annotation_count, ann_kind);
+            return resolver_append_error(
+                context,
+                ann != NULL ? ann->token : member->token,
+                format_message(
+                    "@%s can only be applied to methods",
+                    has_iterable ? "iterable" : "iterator")) &&
+                   false;
+        }
+
+        if (has_iterable) {
+            iterable_count++;
+            iterable_method = member;
+        }
+        if (has_iterator) {
+            iterator_count++;
+            iterator_method = member;
+        }
+    }
+
+    if (iterable_count == 0U && iterator_count == 0U) {
+        return true;
+    }
+
+    /* Multiple @iterable methods. */
+    if (iterable_count > 1U) {
+        return resolver_append_error(
+            context,
+            iterable_method->token,
+            format_message(
+                "type '%.*s' has multiple @iterable methods",
+                (int)decl_typeish_name(type_decl).length,
+                decl_typeish_name(type_decl).data)) &&
+               false;
+    }
+
+    /* Multiple @iterator methods. */
+    if (iterator_count > 1U) {
+        return resolver_append_error(
+            context,
+            iterator_method->token,
+            format_message(
+                "type '%.*s' has multiple @iterator methods",
+                (int)decl_typeish_name(type_decl).length,
+                decl_typeish_name(type_decl).data)) &&
+               false;
+    }
+
+    /* Same type has both @iterable and @iterator. */
+    if (iterable_count > 0U && iterator_count > 0U) {
+        return resolver_append_error(
+            context,
+            iterator_method->token,
+            format_message(
+                "type '%.*s' cannot have both @iterable and @iterator",
+                (int)decl_typeish_name(type_decl).length,
+                decl_typeish_name(type_decl).data)) &&
+               false;
+    }
+
+    /* Validate @iterable method constraints. */
+    if (iterable_method != NULL) {
+        const FengDecl *return_type_decl;
+
+        /* Must take no parameters (implicit self only). */
+        if (iterable_method->as.callable.param_count > 0U) {
+            return resolver_append_error(
+                context,
+                iterable_method->token,
+                format_message("@iterable method must take no parameters")) &&
+                   false;
+        }
+
+        /* Return type must have exactly one @iterator method. */
+        return_type_decl = resolve_type_ref_decl(context,
+                                                  iterable_method->as.callable.return_type);
+        if (return_type_decl == NULL || find_iterator_method(return_type_decl) == NULL) {
+            return resolver_append_error(
+                context,
+                iterable_method->token,
+                format_message(
+                    "return type of @iterable method has no @iterator method")) &&
+                   false;
+        }
+    }
+
+    /* Validate @iterator method constraints. */
+    if (iterator_method != NULL) {
+        const FengDecl *return_type_decl;
+        const FengTypeMember *first_field;
+
+        /* Must take no parameters (implicit self only). */
+        if (iterator_method->as.callable.param_count > 0U) {
+            return resolver_append_error(
+                context,
+                iterator_method->token,
+                format_message("@iterator method must take no parameters")) &&
+                   false;
+        }
+
+        /* Return type must be a named tuple of (bool, E). */
+        return_type_decl = resolve_type_ref_decl(context,
+                                                  iterator_method->as.callable.return_type);
+        if (!decl_is_tuple_type(return_type_decl)) {
+            return resolver_append_error(
+                context,
+                iterator_method->token,
+                format_message(
+                    "@iterator method must return a named tuple type of the form (bool, E)")) &&
+                   false;
+        }
+
+        /* Tuple must have exactly 2 field members. */
+        {
+            size_t field_count = 0U;
+            size_t mi;
+            for (mi = 0U; mi < return_type_decl->as.type_decl.member_count; ++mi) {
+                if (return_type_decl->as.type_decl.members[mi]->kind == FENG_TYPE_MEMBER_FIELD) {
+                    field_count++;
+                }
+            }
+            if (field_count != 2U) {
+                return resolver_append_error(
+                    context,
+                    iterator_method->token,
+                    format_message(
+                        "@iterator method must return a named tuple type of the form (bool, E)")) &&
+                       false;
+            }
+        }
+
+        /* First field must be bool. */
+        first_field = tuple_field_member_at(return_type_decl, 0U);
+        if (first_field == NULL || first_field->as.field.type == NULL ||
+            first_field->as.field.type->kind != FENG_TYPE_REF_NAMED ||
+            first_field->as.field.type->as.named.segment_count != 1U) {
+            return resolver_append_error(
+                context,
+                iterator_method->token,
+                format_message(
+                    "@iterator method must return a named tuple type of the form (bool, E)")) &&
+                   false;
+        }
+        {
+            FengSlice first_seg = first_field->as.field.type->as.named.segments[0];
+            if (first_seg.length != 4U || memcmp(first_seg.data, "bool", 4U) != 0) {
+                return resolver_append_error(
+                    context,
+                    iterator_method->token,
+                    format_message(
+                        "@iterator method must return a named tuple type of the form (bool, E)")) &&
+                       false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool validate_type_finalizer_constraints(ResolveContext *context, const FengDecl *type_decl) {
     size_t member_index;
     const FengTypeMember *first_finalizer = NULL;
@@ -17843,6 +18067,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (stmt->as.for_stmt.is_for_in) {
                 InferredExprType iter_type;
                 const FengTypeRef *element_type_ref = NULL;
+                bool iter_protocol_resolved = false;
 
                 ok = resolve_expr(context, stmt->as.for_stmt.iter_expr, allow_self);
                 if (ok) {
@@ -17852,15 +18077,77 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                         iter_type.type_ref->kind == FENG_TYPE_REF_ARRAY) {
                         element_type_ref = iter_type.type_ref->as.inner;
                     } else {
-                        char *type_name = format_inferred_expr_type_name(iter_type);
+                        /* Try iterator protocol: resolve type decl and scan
+                         * for @iterable / @iterator annotations. */
+                        FengStmt *mutable_stmt = (FengStmt *)stmt;
+                        const FengDecl *iter_decl = NULL;
+                        const FengTypeRef *iter_type_ref = NULL;
 
-                        ok = resolver_append_error(
-                            context,
-                            stmt->as.for_stmt.iter_expr->token,
-                            format_message(
-                                "for/in sequence must be an array 'T[]', got '%s'",
-                                type_name != NULL ? type_name : "<unknown>"));
-                        free(type_name);
+                        if (iter_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                            iter_type.type_ref != NULL) {
+                            iter_decl = resolve_type_ref_decl(context, iter_type.type_ref);
+                            iter_type_ref = iter_type.type_ref;
+                        } else if (iter_type.kind == FENG_INFERRED_EXPR_TYPE_DECL) {
+                            iter_decl = iter_type.type_decl;
+                        }
+
+                        if (iter_decl != NULL && iter_decl->kind == FENG_DECL_TYPE) {
+                            const FengTypeMember *iterable_m = find_iterable_method(iter_decl);
+                            const FengTypeMember *iterator_m = find_iterator_method(iter_decl);
+
+                            if (iterable_m != NULL) {
+                                /* Container with @iterable: resolve cursor type. */
+                                const FengDecl *cursor_decl = resolve_type_ref_decl(
+                                    context, iterable_m->as.callable.return_type);
+                                const FengTypeMember *cursor_iter_m = NULL;
+
+                                if (cursor_decl != NULL) {
+                                    cursor_iter_m = find_iterator_method(cursor_decl);
+                                }
+                                if (cursor_iter_m != NULL) {
+                                    const FengDecl *ret_tuple_decl = resolve_type_ref_decl(
+                                        context, cursor_iter_m->as.callable.return_type);
+                                    const FengTypeMember *second_field =
+                                        tuple_field_member_at(ret_tuple_decl, 1U);
+
+                                    if (second_field != NULL && second_field->as.field.type != NULL) {
+                                        element_type_ref = second_field->as.field.type;
+                                        mutable_stmt->as.for_stmt.iter_iterable_method = iterable_m;
+                                        mutable_stmt->as.for_stmt.iter_iterator_method = cursor_iter_m;
+                                        mutable_stmt->as.for_stmt.iter_cursor_type_decl = cursor_decl;
+                                        mutable_stmt->as.for_stmt.iter_cursor_type_ref =
+                                            iterable_m->as.callable.return_type;
+                                        iter_protocol_resolved = true;
+                                    }
+                                }
+                            } else if (iterator_m != NULL) {
+                                /* Self-cursor: type itself has @iterator. */
+                                const FengDecl *ret_tuple_decl = resolve_type_ref_decl(
+                                    context, iterator_m->as.callable.return_type);
+                                const FengTypeMember *second_field =
+                                    tuple_field_member_at(ret_tuple_decl, 1U);
+
+                                if (second_field != NULL && second_field->as.field.type != NULL) {
+                                    element_type_ref = second_field->as.field.type;
+                                    mutable_stmt->as.for_stmt.iter_iterable_method = NULL;
+                                    mutable_stmt->as.for_stmt.iter_iterator_method = iterator_m;
+                                    mutable_stmt->as.for_stmt.iter_cursor_type_decl = iter_decl;
+                                    mutable_stmt->as.for_stmt.iter_cursor_type_ref = iter_type_ref;
+                                    iter_protocol_resolved = true;
+                                }
+                            }
+                        }
+
+                        if (!iter_protocol_resolved) {
+                            char *type_name = format_inferred_expr_type_name(iter_type);
+                            ok = resolver_append_error(
+                                context,
+                                stmt->as.for_stmt.iter_expr->token,
+                                format_message(
+                                    "type '%s' is not iterable (no @iterable or @iterator method found)",
+                                    type_name != NULL ? type_name : "<unknown>"));
+                            free(type_name);
+                        }
                     }
                 }
                 if (ok && element_type_ref != NULL) {
@@ -20299,6 +20586,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 ok = false;
             }
             if (ok && !validate_type_finalizer_constraints(context, decl)) {
+                ok = false;
+            }
+            if (ok && !validate_iterator_annotations(context, decl)) {
                 ok = false;
             }
             if (ok) {

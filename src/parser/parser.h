@@ -347,6 +347,12 @@ struct FengStmt {
             /* for/in form (when is_for_in == true). */
             FengBinding iter_binding; /* name + mutability + type (NULL until inferred) */
             FengExpr *iter_expr;
+            /* Iterator protocol metadata (filled by semantic when iter_expr
+             * type implements @iterable/@iterator; NULL for array for/in). */
+            const FengTypeMember *iter_iterable_method;
+            const FengTypeMember *iter_iterator_method;
+            const FengDecl *iter_cursor_type_decl;
+            const FengTypeRef *iter_cursor_type_ref;
         } for_stmt;
         FengExpr *return_value;
         FengExpr *throw_value;

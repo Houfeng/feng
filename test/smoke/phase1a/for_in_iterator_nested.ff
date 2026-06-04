@@ -1,0 +1,47 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+type IterResult(bool, i32);
+
+type RangeCursor {
+    var current: i32;
+    let end: i32;
+
+    @iterator
+    func next(): IterResult {
+        if self.current >= self.end {
+            return (false, 0);
+        }
+        let value = self.current;
+        self.current = self.current + 1;
+        return (true, value);
+    }
+}
+
+type Range {
+    let start: i32;
+    let end: i32;
+
+    @iterable
+    func iter(): RangeCursor {
+        return RangeCursor { current: self.start, end: self.end };
+    }
+}
+
+func main(args: string[]) {
+    let r = Range { start: 0, end: 3 };
+    for let i in r {
+        for let j in r {
+            if i == 0 && j == 0 {
+                puts(&"0,0");
+            } else if i == 1 && j == 1 {
+                puts(&"1,1");
+            } else if i == 2 && j == 2 {
+                puts(&"2,2");
+            }
+        }
+    }
+    puts(&"done");
+}

@@ -10679,7 +10679,7 @@ static void test_for_in_loop_non_array_rejected(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
-    ASSERT(strstr(errors[0].message, "for/in sequence must be an array") != NULL);
+    ASSERT(strstr(errors[0].message, "is not iterable (no @iterable or @iterator method found)") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -14473,6 +14473,198 @@ static void test_tuple_fit_spec_coercion_semantics(void) {
     assert_single_source_semantic_ok("tuple_fit_spec_coercion.f", source);
 }
 
+/* --- Iterator protocol semantic error tests --- */
+
+static void test_iterator_multiple_iterable_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next(): Result { return (false, 0); }\n"
+        "}\n"
+        "type Container {\n"
+        "    @iterable\n"
+        "    func iter1(): Cursor { return Cursor {}; }\n"
+        "    @iterable\n"
+        "    func iter2(): Cursor { return Cursor {}; }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_multiple_iterable.f", source,
+        "has multiple @iterable methods");
+}
+
+static void test_iterator_multiple_iterator_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next1(): Result { return (false, 0); }\n"
+        "    @iterator\n"
+        "    func next2(): Result { return (false, 0); }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_multiple_iterator.f", source,
+        "has multiple @iterator methods");
+}
+
+static void test_iterator_both_annotations_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next(): Result { return (false, 0); }\n"
+        "}\n"
+        "type Thing {\n"
+        "    @iterable\n"
+        "    func iter(): Cursor { return Cursor {}; }\n"
+        "    @iterator\n"
+        "    func next(): Result { return (false, 0); }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_both_annotations.f", source,
+        "cannot have both @iterable and @iterator");
+}
+
+static void test_iterator_iterable_with_params_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next(): Result { return (false, 0); }\n"
+        "}\n"
+        "type Container {\n"
+        "    @iterable\n"
+        "    func iter(n: i32): Cursor { return Cursor {}; }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_iterable_with_params.f", source,
+        "@iterable method must take no parameters");
+}
+
+static void test_iterator_iterator_with_params_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next(n: i32): Result { return (false, 0); }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_iterator_with_params.f", source,
+        "@iterator method must take no parameters");
+}
+
+static void test_iterator_iterable_return_no_iterator_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Plain {\n"
+        "    let value: i32;\n"
+        "}\n"
+        "type Container {\n"
+        "    @iterable\n"
+        "    func iter(): Plain { return Plain { value: 0 }; }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_iterable_return_no_iterator.f", source,
+        "return type of @iterable method has no @iterator method");
+}
+
+static void test_iterator_return_not_tuple_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Cursor {\n"
+        "    @iterator\n"
+        "    func next(): i32 { return 0; }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_return_not_tuple.f", source,
+        "@iterator method must return a named tuple type of the form (bool, E)");
+}
+
+static void test_iterator_for_in_not_iterable_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Plain {\n"
+        "    let value: i32;\n"
+        "}\n"
+        "func print(value: i32) {}\n"
+        "func run(): void {\n"
+        "    let p = Plain { value: 1 };\n"
+        "    for let x in p {\n"
+        "        print(x);\n"
+        "    }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "iter_for_in_not_iterable.f", source,
+        "is not iterable (no @iterable or @iterator method found)");
+}
+
+static void test_iterator_basic_iterable_ok(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Cursor {\n"
+        "    var pos: i32;\n"
+        "    @iterator\n"
+        "    func next(): Result {\n"
+        "        if self.pos >= 3 { return (false, 0); }\n"
+        "        let v = self.pos;\n"
+        "        self.pos = self.pos + 1;\n"
+        "        return (true, v);\n"
+        "    }\n"
+        "}\n"
+        "type Container {\n"
+        "    @iterable\n"
+        "    func iter(): Cursor { return Cursor { pos: 0 }; }\n"
+        "}\n"
+        "func use(n: i32) {}\n"
+        "func run(): void {\n"
+        "    let c = Container {};\n"
+        "    for let x in c {\n"
+        "        use(x);\n"
+        "    }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("iter_basic_iterable_ok.f", source);
+}
+
+static void test_iterator_self_cursor_ok(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Result(bool, i32);\n"
+        "type Counter {\n"
+        "    var pos: i32;\n"
+        "    @iterator\n"
+        "    func next(): Result {\n"
+        "        if self.pos >= 3 { return (false, 0); }\n"
+        "        let v = self.pos;\n"
+        "        self.pos = self.pos + 1;\n"
+        "        return (true, v);\n"
+        "    }\n"
+        "}\n"
+        "func use(n: i32) {}\n"
+        "func run(): void {\n"
+        "    let c = Counter { pos: 0 };\n"
+        "    for let x in c {\n"
+        "        use(x);\n"
+        "    }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("iter_self_cursor_ok.f", source);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -14995,6 +15187,16 @@ int main(void) {
     test_variadic_overload_conflict_rejected();
     test_variadic_single_fixed_and_variadic_overload_conflict_rejected();
     test_variadic_spec_satisfaction_mismatch_rejected();
+    test_iterator_multiple_iterable_rejected();
+    test_iterator_multiple_iterator_rejected();
+    test_iterator_both_annotations_rejected();
+    test_iterator_iterable_with_params_rejected();
+    test_iterator_iterator_with_params_rejected();
+    test_iterator_iterable_return_no_iterator_rejected();
+    test_iterator_return_not_tuple_rejected();
+    test_iterator_for_in_not_iterable_rejected();
+    test_iterator_basic_iterable_ok();
+    test_iterator_self_cursor_ok();
 
     puts("semantic tests passed");
     return 0;

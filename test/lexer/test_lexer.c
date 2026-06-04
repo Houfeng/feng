@@ -45,7 +45,7 @@ static void test_keyword_and_annotation_counts(void) {
 
     ASSERT(feng_keyword_count() == 28U);
     ASSERT(feng_reserved_word_count() == 5U);
-    ASSERT(feng_builtin_annotation_count() == 5U);
+    ASSERT(feng_builtin_annotation_count() == 7U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));
@@ -91,6 +91,10 @@ static void test_keyword_and_annotation_counts(void) {
     ASSERT(annotation_kind == FENG_ANNOTATION_RUNTIME);
     ASSERT(!feng_lookup_builtin_annotation("bounded", 7U, &annotation_kind));
     ASSERT(!feng_lookup_builtin_annotation("union", 5U, &annotation_kind));
+    ASSERT(feng_lookup_builtin_annotation("iterable", 8U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_ITERABLE);
+    ASSERT(feng_lookup_builtin_annotation("iterator", 8U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_ITERATOR);
 }
 
 static void test_reserved_words_rejected(void) {

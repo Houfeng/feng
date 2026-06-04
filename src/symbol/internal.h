@@ -20,7 +20,9 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_ABI_LIBRARY = 3,
     FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE = 4,
     FENG_SYMBOL_ATTR_STATIC_MEMBER = 5,
-    FENG_SYMBOL_ATTR_ABI_SYMBOL = 6
+    FENG_SYMBOL_ATTR_ABI_SYMBOL = 6,
+    FENG_SYMBOL_ATTR_ITERABLE_METHOD = 7,
+    FENG_SYMBOL_ATTR_ITERATOR_METHOD = 8
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -70,6 +72,8 @@ struct FengSymbolDeclView {
     bool bounded_decl;
     bool is_static;
     bool has_doc;
+    bool is_iterable;
+    bool is_iterator;
     FengAnnotationKind calling_convention;
     char *abi_library;
     char *abi_symbol;
