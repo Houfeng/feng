@@ -25553,13 +25553,10 @@ static bool cg_emit_all_programs(CG *cg,
             ? cg_find_open_generic_instance(cg, t) : NULL;
         buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
         for (size_t fi = 0; fi < t->field_count; fi++) {
-            buf_append_cstr(&cg->headers, "    ");
-            cg_emit_c_type(&cg->headers, t->fields[fi].type);
-            buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
+            bool needs_pad = false;
             if (tup_open != NULL && fi < tup_open->field_count &&
                 tup_open->fields[fi].type != NULL &&
                 tup_open->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
-                bool needs_pad = false;
                 switch (t->fields[fi].type->kind) {
                     case CG_TYPE_BOOL:
                     case CG_TYPE_I8:  case CG_TYPE_U8:
@@ -25571,13 +25568,20 @@ static bool cg_emit_all_programs(CG *cg,
                     default:
                         break;
                 }
-                if (needs_pad) {
-                    buf_append_fmt(&cg->headers,
-                        "    char _pad_%s[sizeof(void *) - sizeof(",
-                        t->fields[fi].c_name);
-                    cg_emit_c_type(&cg->headers, t->fields[fi].type);
-                    buf_append_cstr(&cg->headers, ")];\n");
-                }
+            }
+            if (needs_pad) {
+                buf_append_cstr(&cg->headers, "    _Alignas(sizeof(void *)) ");
+            } else {
+                buf_append_cstr(&cg->headers, "    ");
+            }
+            cg_emit_c_type(&cg->headers, t->fields[fi].type);
+            buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
+            if (needs_pad) {
+                buf_append_fmt(&cg->headers,
+                    "    char _pad_%s[sizeof(void *) - sizeof(",
+                    t->fields[fi].c_name);
+                cg_emit_c_type(&cg->headers, t->fields[fi].type);
+                buf_append_cstr(&cg->headers, ")];\n");
             }
         }
         buf_append_cstr(&cg->headers, "};\n");
@@ -25599,13 +25603,10 @@ static bool cg_emit_all_programs(CG *cg,
                 buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
                 buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
                 for (size_t fi = 0; fi < t->field_count; fi++) {
-                    buf_append_cstr(td, "    ");
-                    cg_emit_c_type(td, t->fields[fi].type);
-                    buf_append_fmt(td, " %s;\n", t->fields[fi].c_name);
+                    bool needs_pad = false;
                     if (imp_open != NULL && fi < imp_open->field_count &&
                         imp_open->fields[fi].type != NULL &&
                         imp_open->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
-                        bool needs_pad = false;
                         switch (t->fields[fi].type->kind) {
                             case CG_TYPE_BOOL:
                             case CG_TYPE_I8:  case CG_TYPE_U8:
@@ -25617,13 +25618,20 @@ static bool cg_emit_all_programs(CG *cg,
                             default:
                                 break;
                         }
-                        if (needs_pad) {
-                            buf_append_fmt(td,
-                                "    char _pad_%s[sizeof(void *) - sizeof(",
-                                t->fields[fi].c_name);
-                            cg_emit_c_type(td, t->fields[fi].type);
-                            buf_append_cstr(td, ")];\n");
-                        }
+                    }
+                    if (needs_pad) {
+                        buf_append_cstr(td, "    _Alignas(sizeof(void *)) ");
+                    } else {
+                        buf_append_cstr(td, "    ");
+                    }
+                    cg_emit_c_type(td, t->fields[fi].type);
+                    buf_append_fmt(td, " %s;\n", t->fields[fi].c_name);
+                    if (needs_pad) {
+                        buf_append_fmt(td,
+                            "    char _pad_%s[sizeof(void *) - sizeof(",
+                            t->fields[fi].c_name);
+                        cg_emit_c_type(td, t->fields[fi].type);
+                        buf_append_cstr(td, ")];\n");
                     }
                 }
                 buf_append_cstr(td, "};\n\n");
@@ -27133,13 +27141,10 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     const UserType *open_inst = t->is_generic_instance
         ? cg_find_open_generic_instance(cg, t) : NULL;
     for (size_t i = 0; i < t->field_count; i++) {
-        buf_append_cstr(td, "    ");
-        cg_emit_c_type(td, t->fields[i].type);
-        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+        bool needs_pad = false;
         if (open_inst != NULL && i < open_inst->field_count &&
             open_inst->fields[i].type != NULL &&
             open_inst->fields[i].type->kind == CG_TYPE_GENERIC_PARAM) {
-            bool needs_pad = false;
             switch (t->fields[i].type->kind) {
                 case CG_TYPE_BOOL:
                 case CG_TYPE_I8:  case CG_TYPE_U8:
@@ -27151,12 +27156,19 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                 default:
                     break;
             }
-            if (needs_pad) {
-                buf_append_fmt(td, "    char _pad_%s[sizeof(void *) - sizeof(",
-                               t->fields[i].c_name);
-                cg_emit_c_type(td, t->fields[i].type);
-                buf_append_cstr(td, ")];\n");
-            }
+        }
+        if (needs_pad) {
+            buf_append_cstr(td, "    _Alignas(sizeof(void *)) ");
+        } else {
+            buf_append_cstr(td, "    ");
+        }
+        cg_emit_c_type(td, t->fields[i].type);
+        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+        if (needs_pad) {
+            buf_append_fmt(td, "    char _pad_%s[sizeof(void *) - sizeof(",
+                           t->fields[i].c_name);
+            cg_emit_c_type(td, t->fields[i].type);
+            buf_append_cstr(td, ")];\n");
         }
     }
     buf_append_cstr(td, "};\n\n");
