@@ -1920,6 +1920,13 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
         if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
+#if defined(__linux__)
+        /* Per-function/data sections let --gc-sections discard unused
+         * runtime symbols at link time.  macOS clang already uses
+         * subsections-via-symbols by default so this is Linux-only. */
+        if (ok && opts->release && !argv_push(&av, "-ffunction-sections")) { ok = false; }
+        if (ok && opts->release && !argv_push(&av, "-fdata-sections")) { ok = false; }
+#endif
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
@@ -1967,6 +1974,14 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             }
             ok = argv_push(&av, flag);
             free(flag);
+        }
+        if (ok && opts->release) {
+#if defined(__APPLE__)
+            if (!argv_push(&av, "-Wl,-dead_strip")) { ok = false; }
+#elif defined(__linux__)
+            if (!argv_push(&av, "-Wl,--gc-sections")) { ok = false; }
+#endif
+            if (ok && !argv_push(&av, "-Wl,-x")) { ok = false; }
         }
         if (ok && !argv_push(&av, "-o")) { ok = false; }
         if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
