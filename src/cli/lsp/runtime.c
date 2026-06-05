@@ -4466,7 +4466,8 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                                                      const FengLspAnalysisSession *session,
                                                      const FengProgram *program,
                                                      const FengDecl *owner_decl,
-                                                     FengSlice owner_builtin_name) {
+                                                     FengSlice owner_builtin_name,
+                                                     bool static_only) {
     size_t module_index;
     size_t program_index;
     size_t decl_index;
@@ -4506,10 +4507,12 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                     continue;
                 }
                 for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
-                    if (!append_member_completion_item(json,
-                                                       first,
-                                                       decl->as.fit_decl.members[member_index],
-                                                       NULL)) {
+                    const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+
+                    if (static_only && !member->is_static) {
+                        continue;
+                    }
+                    if (!append_member_completion_item(json, first, member, NULL)) {
                         return false;
                     }
                 }
@@ -4545,10 +4548,12 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                     continue;
                 }
                 for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
-                    if (!append_member_completion_item(json,
-                                                       first,
-                                                       decl->as.fit_decl.members[member_index],
-                                                       NULL)) {
+                    const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+
+                    if (static_only && !member->is_static) {
+                        continue;
+                    }
+                    if (!append_member_completion_item(json, first, member, NULL)) {
                         return false;
                     }
                 }
@@ -10221,7 +10226,8 @@ static bool append_owner_member_completion_items(FengLspString *json,
                                                  bool *first,
                                                  const FengLspAnalysisSession *session,
                                                  const FengProgram *program,
-                                                 const FengDecl *owner_decl) {
+                                                 const FengDecl *owner_decl,
+                                                 bool static_only) {
     size_t index;
 
     if (owner_decl == NULL) {
@@ -10238,6 +10244,10 @@ static bool append_owner_member_completion_items(FengLspString *json,
                 if (!type_member_visible_from_program(session, program, owner_decl, member)) {
                     continue;
                 }
+                if (static_only && !member->is_static &&
+                    member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                    continue;
+                }
                 if (!append_member_completion_item(json, first, member, owner_str)) {
                     free(owner_str);
                     return false;
@@ -10249,6 +10259,9 @@ static bool append_owner_member_completion_items(FengLspString *json,
                 const FengTypeMember *member = owner_decl->as.spec_decl.as.object.members[index];
 
                 if (!type_member_visible_from_program(session, program, owner_decl, member)) {
+                    continue;
+                }
+                if (static_only && !member->is_static) {
                     continue;
                 }
                 if (!append_member_completion_item(json, first, member, owner_str)) {
@@ -11231,6 +11244,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
         const FengDecl *owner_decl = NULL;
         FengSlice owner_builtin_name = {0};
         bool alias_handled = false;
+        bool is_static = completion_context.is_static_access;
 
         if (completion_context.literal_builtin_name.length > 0U) {
             owner_builtin_name = completion_context.literal_builtin_name;
@@ -11257,10 +11271,16 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                                   completion_context.object,
                                                                   &locals,
                                                                   &owner_builtin_name);
+                if (!is_static && owner_decl != NULL &&
+                    find_local(&locals, completion_context.object) == NULL &&
+                    resolve_type_name(session, program, completion_context.object) != NULL) {
+                    is_static = true;
+                }
             }
         }
         if (!alias_handled) {
-            if (!append_owner_member_completion_items(json, &first, session, program, owner_decl)) {
+            if (!append_owner_member_completion_items(json, &first, session, program, owner_decl,
+                                                     is_static)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -11269,7 +11289,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           session,
                                                           program,
                                                           owner_decl,
-                                                          owner_builtin_name)) {
+                                                          owner_builtin_name,
+                                                          is_static)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -11278,10 +11299,15 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
         const FengSemanticModule *alias_module = NULL;
         const FengDecl *owner_decl = NULL;
         FengSlice owner_builtin_name = {0};
+        bool is_static = false;
 
         if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
             find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
             alias_module = find_alias_module(session, program, expr->as.member.object->as.identifier);
+            if (alias_module == NULL &&
+                resolve_type_name(session, program, expr->as.member.object->as.identifier) != NULL) {
+                is_static = true;
+            }
         }
         if (alias_module != NULL) {
             if (!append_semantic_module_completion_items(json, &first, alias_module, true, NULL, -1)) {
@@ -11293,7 +11319,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                              program,
                                                              expr->as.member.object,
                                                              &locals);
-            if (!append_owner_member_completion_items(json, &first, session, program, owner_decl)) {
+            if (!append_owner_member_completion_items(json, &first, session, program, owner_decl,
+                                                     is_static)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -11307,7 +11334,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           session,
                                                           program,
                                                           owner_decl,
-                                                          owner_builtin_name)) {
+                                                          owner_builtin_name,
+                                                          is_static)) {
                 local_list_dispose(&locals);
                 return false;
             }
@@ -11446,12 +11474,33 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     if (expr != NULL && expr->kind == FENG_EXPR_MEMBER) {
         const FengSymbolImportedModule *alias_module = NULL;
         const FengSymbolDeclView *owner_decl = NULL;
+        bool is_static = false;
 
         if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
             find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
             alias_module = find_symbol_alias_module(context->provider,
                                                     context->program,
                                                     expr->as.member.object->as.identifier);
+            if (alias_module == NULL) {
+                const FengSymbolDeclView *vdecl = resolve_symbol_value_name(context->provider,
+                                                                             context->current_module,
+                                                                             context->program,
+                                                                             expr->as.member.object->as.identifier);
+
+                if (vdecl != NULL) {
+                    FengSymbolDeclKind vkind = feng_symbol_decl_kind(vdecl);
+
+                    if (vkind == FENG_SYMBOL_DECL_KIND_TYPE || vkind == FENG_SYMBOL_DECL_KIND_ENUM ||
+                        vkind == FENG_SYMBOL_DECL_KIND_SPEC) {
+                        is_static = true;
+                    }
+                } else if (resolve_symbol_type_name(context->provider,
+                                                     context->current_module,
+                                                     context->program,
+                                                     expr->as.member.object->as.identifier) != NULL) {
+                    is_static = true;
+                }
+            }
         }
         if (alias_module != NULL) {
             for (index = 0U; index < feng_symbol_module_public_decl_count(alias_module); ++index) {
@@ -11478,6 +11527,10 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                     const FengSymbolDeclView *member = feng_symbol_decl_member_at(owner_decl, index);
 
                     if (!symbol_decl_is_instance_member(member)) {
+                        continue;
+                    }
+                    if (is_static && !feng_symbol_decl_is_static(member) &&
+                        feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
                         continue;
                     }
                     if (!symbol_member_visible_from_module(context->current_module,
