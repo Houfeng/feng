@@ -4418,6 +4418,23 @@ static const char *builtin_name_for_single_segment_type_ref(const FengTypeRef *t
     return NULL;
 }
 
+/* Returns the canonical builtin name if `name` is a builtin type identifier. */
+static const char *builtin_name_for_identifier(FengSlice name) {
+    if (slice_equals_cstr(name, "string")) { return "string"; }
+    if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) { return "i32"; }
+    if (slice_equals_cstr(name, "long") || slice_equals_cstr(name, "i64")) { return "i64"; }
+    if (slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "u8")) { return "u8"; }
+    if (slice_equals_cstr(name, "float") || slice_equals_cstr(name, "f32")) { return "f32"; }
+    if (slice_equals_cstr(name, "double") || slice_equals_cstr(name, "f64")) { return "f64"; }
+    if (slice_equals_cstr(name, "bool")) { return "bool"; }
+    if (slice_equals_cstr(name, "i8")) { return "i8"; }
+    if (slice_equals_cstr(name, "i16")) { return "i16"; }
+    if (slice_equals_cstr(name, "u16")) { return "u16"; }
+    if (slice_equals_cstr(name, "u32")) { return "u32"; }
+    if (slice_equals_cstr(name, "u64")) { return "u64"; }
+    return NULL;
+}
+
 static bool builtin_name_matches_type_ref(const FengTypeRef *type_ref, FengSlice builtin_name) {
     const char *canonical = builtin_name_for_single_segment_type_ref(type_ref);
 
@@ -5144,6 +5161,14 @@ static FengSlice resolve_symbol_builtin_name_from_expr(
                 if (name != NULL) {
                     return slice_from_cstr(name);
                 }
+            }
+        }
+        /* Bare builtin type identifiers: string., i32., etc. */
+        if (local == NULL) {
+            const char *builtin = builtin_name_for_identifier(expr->as.identifier);
+
+            if (builtin != NULL) {
+                return slice_from_cstr(builtin);
             }
         }
         return empty;
@@ -12135,6 +12160,14 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                                                                                expr->as.member.object,
                                                                                &locals);
 
+                /* When the object is a bare builtin type identifier (not a local),
+                 * this is a static access: string., i32., etc. */
+                if (builtin_name.length > 0U &&
+                    expr->as.member.object != NULL &&
+                    expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
+                    find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
+                    filter = FENG_LSP_MEMBER_FILTER_STATIC;
+                }
                 if (builtin_name.length > 0U) {
                     size_t mod_count = feng_symbol_provider_module_count(context->provider);
                     size_t mod_idx;
@@ -14212,8 +14245,6 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
             } else if (!upsert_document(runtime, uri, text)) {
                 /* upsert_document already logged the OOM; document not tracked but server continues */
                 fprintf(errors, "lsp: textDocument/didOpen: document not tracked: '%s'\n", uri);
-            } else {
-                ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
             }
             free(uri);
             free(text);
