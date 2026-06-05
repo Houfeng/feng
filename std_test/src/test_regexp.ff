@@ -178,7 +178,153 @@ func regexp_test_string_methods() {
   writeLine("__REGEXP_STRING_METHODS__=ok");
 }
 
-/* ---------- 10.10 Edge cases ---------- */
+/* ---------- 10.10 Multiline flag ---------- */
+
+func regexp_test_multiline() {
+  let re = RegExp("^hello", RegExpFlag.Multiline);
+  check(re.test("world\nhello") == true, "regexp/multiline-test");
+  check(re.isMatch("world\nhello") == false, "regexp/multiline-isMatch-false");
+  let r = re.find("first\nhello there");
+  check(r.length() == (long)1, "regexp/multiline-find-found");
+  check(r[0].text == "hello", "regexp/multiline-find-text");
+  check(r[0].start == (long)6, "regexp/multiline-find-start");
+  re.destroy();
+
+  writeLine("__REGEXP_MULTILINE__=ok");
+}
+
+/* ---------- 10.11 DotAll flag ---------- */
+
+func regexp_test_dotall() {
+  let re1 = RegExp("a.b");
+  check(re1.test("a\nb") == false, "regexp/dotall-off");
+  re1.destroy();
+
+  let re2 = RegExp("a.b", RegExpFlag.DotAll);
+  check(re2.test("a\nb") == true, "regexp/dotall-on");
+  check(re2.isMatch("a\nb") == true, "regexp/dotall-isMatch");
+  re2.destroy();
+
+  writeLine("__REGEXP_DOTALL__=ok");
+}
+
+/* ---------- 10.12 findAll match positions ---------- */
+
+func regexp_test_findAll_positions() {
+  let re = RegExp("\\d+");
+  let r = re.findAll("a1b22c333");
+  check(r.length() == (long)3, "regexp/findAll-pos-count");
+  check(r[0].start == (long)1, "regexp/findAll-pos-0-start");
+  check(r[0].end == (long)2, "regexp/findAll-pos-0-end");
+  check(r[1].start == (long)3, "regexp/findAll-pos-1-start");
+  check(r[1].end == (long)5, "regexp/findAll-pos-1-end");
+  check(r[2].start == (long)6, "regexp/findAll-pos-2-start");
+  check(r[2].end == (long)9, "regexp/findAll-pos-2-end");
+  re.destroy();
+
+  writeLine("__REGEXP_FINDALL_POS__=ok");
+}
+
+/* ---------- 10.13 findAll with groups ---------- */
+
+func regexp_test_findAll_groups() {
+  let re = RegExp("(\\w+)=(\\w+)");
+  let r = re.findAll("a=1 b=2");
+  check(r.length() == (long)2, "regexp/findAll-groups-count");
+  check(r[0].groups[1] == "a", "regexp/findAll-groups-0-1");
+  check(r[0].groups[2] == "1", "regexp/findAll-groups-0-2");
+  check(r[1].groups[1] == "b", "regexp/findAll-groups-1-1");
+  check(r[1].groups[2] == "2", "regexp/findAll-groups-1-2");
+  re.destroy();
+
+  writeLine("__REGEXP_FINDALL_GROUPS__=ok");
+}
+
+/* ---------- 10.14 replace no-match and empty subject ---------- */
+
+func regexp_test_replace_edge() {
+  let re = RegExp("\\d+");
+  check(re.replaceFirst("abc", "X") == "abc", "regexp/replaceFirst-no-match");
+  check(re.replaceAll("abc", "X") == "abc", "regexp/replaceAll-no-match");
+  check(re.replaceFirst("", "X") == "", "regexp/replaceFirst-empty-subject");
+  check(re.replaceAll("", "X") == "", "regexp/replaceAll-empty-subject");
+  re.destroy();
+
+  writeLine("__REGEXP_REPLACE_EDGE__=ok");
+}
+
+/* ---------- 10.15 replace with empty replacement ---------- */
+
+func regexp_test_replace_empty_replacement() {
+  let re = RegExp("\\d+");
+  check(re.replaceFirst("a1b2", "") == "ab2", "regexp/replaceFirst-empty-repl");
+  check(re.replaceAll("a1b2", "") == "ab", "regexp/replaceAll-empty-repl");
+  re.destroy();
+
+  writeLine("__REGEXP_REPLACE_EMPTY_REPL__=ok");
+}
+
+/* ---------- 10.16 test/isMatch on empty strings ---------- */
+
+func regexp_test_empty_subject() {
+  let re1 = RegExp("\\d+");
+  check(re1.test("") == false, "regexp/test-empty-subject");
+  check(re1.isMatch("") == false, "regexp/isMatch-empty-subject");
+  re1.destroy();
+
+  let re2 = RegExp(".*");
+  check(re2.test("") == true, "regexp/test-empty-subject-star");
+  check(re2.isMatch("") == true, "regexp/isMatch-empty-subject-star");
+  re2.destroy();
+
+  writeLine("__REGEXP_EMPTY_SUBJECT__=ok");
+}
+
+/* ---------- 10.17 find on UTF-8 ---------- */
+
+func regexp_test_find_utf8() {
+  let re = RegExp("\\p{Han}+");
+  let r = re.find("hello中文world");
+  check(r.length() == (long)1, "regexp/find-utf8-found");
+  check(r[0].text == "中文", "regexp/find-utf8-text");
+  check(r[0].start == (long)5, "regexp/find-utf8-start");
+  check(r[0].end == (long)11, "regexp/find-utf8-end");
+  re.destroy();
+
+  writeLine("__REGEXP_FIND_UTF8__=ok");
+}
+
+/* ---------- 10.18 split with leading/trailing delimiter ---------- */
+
+func regexp_test_split_edges() {
+  let re = RegExp(",");
+  let r1 = re.split(",a,b,");
+  check(r1.length() == (long)4, "regexp/split-leading-trailing-count");
+  check(r1[0] == "", "regexp/split-leading-empty");
+  check(r1[1] == "a", "regexp/split-mid-a");
+  check(r1[2] == "b", "regexp/split-mid-b");
+  check(r1[3] == "", "regexp/split-trailing-empty");
+  re.destroy();
+
+  writeLine("__REGEXP_SPLIT_EDGES__=ok");
+}
+
+/* ---------- 10.19 string convenience methods edge cases ---------- */
+
+func regexp_test_string_methods_edge() {
+  check("".matches(".*") == true, "regexp/string-matches-empty-star");
+  check("".matches("\\d+") == false, "regexp/string-matches-empty-digits");
+  check("abc".replacePattern("xyz", "X") == "abc", "regexp/string-replacePattern-no-match");
+  check("".replacePattern("\\d+", "X") == "", "regexp/string-replacePattern-empty");
+
+  let parts = "abc".splitPattern("xyz");
+  check(parts.length() == (long)1, "regexp/string-splitPattern-no-match-count");
+  check(parts[0] == "abc", "regexp/string-splitPattern-no-match-val");
+
+  writeLine("__REGEXP_STRING_METHODS_EDGE__=ok");
+}
+
+/* ---------- 10.20 original edge cases ---------- */
 
 func regexp_test_edge_cases() {
   let re1 = RegExp("");
@@ -216,5 +362,15 @@ open func run_regexp_tests() {
   regexp_test_unicode();
   regexp_test_compile_error();
   regexp_test_string_methods();
+  regexp_test_multiline();
+  regexp_test_dotall();
+  regexp_test_findAll_positions();
+  regexp_test_findAll_groups();
+  regexp_test_replace_edge();
+  regexp_test_replace_empty_replacement();
+  regexp_test_empty_subject();
+  regexp_test_find_utf8();
+  regexp_test_split_edges();
+  regexp_test_string_methods_edge();
   regexp_test_edge_cases();
 }
