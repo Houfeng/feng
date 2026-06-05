@@ -156,6 +156,7 @@ typedef struct FengLspCacheQueryContext {
     FengSymbolProvider *provider;
     const FengSymbolImportedModule *current_module;
     const char *source_text;
+    bool owns_provider;
 } FengLspCacheQueryContext;
 
 typedef struct FengLspReferenceEntry {
@@ -184,6 +185,9 @@ struct FengLspRuntime {
     int exit_code;
     FengLspMarkupKind hover_markup_kind;
     FILE *errors; /* diagnostics log; set at the start of each handle_payload call */
+    /* Cached symbol provider — loaded once per project, reused across requests. */
+    FengSymbolProvider *cached_provider;
+    char *cached_provider_manifest;
 };
 
 /* URI of the document currently being completed.  Set at the beginning of
@@ -1587,19 +1591,68 @@ static void cache_query_context_dispose(FengLspCacheQueryContext *context) {
         return;
     }
     feng_program_free(context->program);
-    feng_symbol_provider_free(context->provider);
+    if (context->owns_provider) {
+        feng_symbol_provider_free(context->provider);
+    }
     memset(context, 0, sizeof(*context));
 }
 
-static bool build_cache_query_context_for_text(const FengLspDocument *document,
-                                               const char *source_text,
-                                               bool include_workspace_cache,
-                                               FengLspCacheQueryContext *context) {
+/* Ensure the runtime has a cached symbol provider for the given manifest.
+ * Returns the cached provider, or NULL if creation fails. */
+static FengSymbolProvider *ensure_cached_provider(FengLspRuntime *runtime,
+                                                  const char *manifest_path) {
+    FengCliProjectError error = {0};
+    FengCliDepsResolved resolved = {0};
+    FengSymbolError symbol_error = {0};
+
+    if (runtime == NULL || manifest_path == NULL) {
+        return NULL;
+    }
+    if (runtime->cached_provider != NULL && runtime->cached_provider_manifest != NULL &&
+        strcmp(runtime->cached_provider_manifest, manifest_path) == 0) {
+        return runtime->cached_provider;
+    }
+    feng_symbol_provider_free(runtime->cached_provider);
+    free(runtime->cached_provider_manifest);
+    runtime->cached_provider = NULL;
+    runtime->cached_provider_manifest = NULL;
+
+    if (!feng_symbol_provider_create(&runtime->cached_provider, &symbol_error)) {
+        feng_symbol_error_free(&symbol_error);
+        return NULL;
+    }
+    if (feng_cli_deps_resolve_for_manifest("feng", manifest_path, false, false, &resolved, &error)) {
+        size_t index;
+
+        for (index = 0U; index < resolved.package_count; ++index) {
+            if (!feng_symbol_provider_add_bundle(runtime->cached_provider,
+                                                 resolved.package_paths[index],
+                                                 &symbol_error)) {
+                feng_symbol_provider_free(runtime->cached_provider);
+                runtime->cached_provider = NULL;
+                feng_symbol_error_free(&symbol_error);
+                feng_cli_deps_resolved_dispose(&resolved);
+                feng_cli_project_error_dispose(&error);
+                return NULL;
+            }
+        }
+    }
+    runtime->cached_provider_manifest = strdup(manifest_path);
+    feng_symbol_error_free(&symbol_error);
+    feng_cli_deps_resolved_dispose(&resolved);
+    feng_cli_project_error_dispose(&error);
+    return runtime->cached_provider;
+}
+
+static bool build_cache_query_context_for_text_ex(FengLspRuntime *runtime,
+                                                  const FengLspDocument *document,
+                                                  const char *source_text,
+                                                  bool include_workspace_cache,
+                                                  FengLspCacheQueryContext *context) {
     char *manifest_path = NULL;
     char *symbols_root = NULL;
     FengCliProjectContext project = {0};
     FengCliProjectError error = {0};
-    FengCliDepsResolved resolved = {0};
     FengParseError parse_error = {0};
     FengSymbolError symbol_error = {0};
     bool ok = false;
@@ -1626,31 +1679,53 @@ static bool build_cache_query_context_for_text(const FengLspDocument *document,
                            &parse_error)) {
         goto cleanup;
     }
+    /* Try to use the runtime cached provider. */
+    if (runtime != NULL) {
+        FengSymbolProvider *cached = ensure_cached_provider(runtime, manifest_path);
+
+        if (cached != NULL) {
+            context->provider = cached;
+            context->owns_provider = false;
+            goto provider_ready;
+        }
+    }
+    /* Fallback: create a fresh provider. */
     if (!feng_symbol_provider_create(&context->provider, &symbol_error)) {
         goto cleanup;
     }
+    context->owns_provider = true;
+    {
+        FengCliDepsResolved resolved_local = {0};
+
+        if (feng_cli_deps_resolve_for_manifest("feng",
+                                               project.manifest_path,
+                                               false,
+                                               false,
+                                               &resolved_local,
+                                               &error)) {
+            size_t index;
+
+            for (index = 0U; index < resolved_local.package_count; ++index) {
+                if (!feng_symbol_provider_add_bundle(context->provider,
+                                                     resolved_local.package_paths[index],
+                                                     &symbol_error)) {
+                    feng_cli_deps_resolved_dispose(&resolved_local);
+                    goto cleanup;
+                }
+            }
+        }
+        feng_cli_deps_resolved_dispose(&resolved_local);
+    }
+
+provider_ready:
     /* Add workspace symbol cache when available; it is optional — bundle
      * symbols are still accessible without it. */
     if (include_workspace_cache && symbols_root != NULL && path_is_directory(symbols_root)) {
-        if (!feng_symbol_provider_add_ft_root(context->provider,
-                                              symbols_root,
-                                              FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
-                                              &symbol_error)) {
-            goto cleanup;
-        }
-    }
-    if (feng_cli_deps_resolve_for_manifest("feng",
-                                           project.manifest_path,
-                                           false,
-                                           false,
-                                           &resolved,
-                                           &error)) {
-        size_t index;
-
-        for (index = 0U; index < resolved.package_count; ++index) {
-            if (!feng_symbol_provider_add_bundle(context->provider,
-                                                 resolved.package_paths[index],
-                                                 &symbol_error)) {
+        if (context->owns_provider) {
+            if (!feng_symbol_provider_add_ft_root(context->provider,
+                                                  symbols_root,
+                                                  FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
+                                                  &symbol_error)) {
                 goto cleanup;
             }
         }
@@ -1659,9 +1734,6 @@ static bool build_cache_query_context_for_text(const FengLspDocument *document,
                                                                context->program->module_segments,
                                                                context->program->module_segment_count);
     context->source_text = source_text;
-    /* The context is useful even when current_module is NULL: bundle symbols
-     * are still accessible via the provider for hover and go-to-definition of
-     * external package types. */
     ok = true;
 
 cleanup:
@@ -1669,12 +1741,19 @@ cleanup:
         cache_query_context_dispose(context);
     }
     feng_symbol_error_free(&symbol_error);
-    feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&project);
     feng_cli_project_error_dispose(&error);
     free(symbols_root);
     free(manifest_path);
     return ok;
+}
+
+static bool build_cache_query_context_for_text(const FengLspDocument *document,
+                                               const char *source_text,
+                                               bool include_workspace_cache,
+                                               FengLspCacheQueryContext *context) {
+    return build_cache_query_context_for_text_ex(NULL, document, source_text,
+                                                 include_workspace_cache, context);
 }
 
 static bool build_cache_query_context(const FengLspDocument *document,
@@ -1683,6 +1762,15 @@ static bool build_cache_query_context(const FengLspDocument *document,
                                               document != NULL ? document->text : NULL,
                                               true,
                                               context);
+}
+
+static bool build_cache_query_context_with_runtime(FengLspRuntime *runtime,
+                                                   const FengLspDocument *document,
+                                                   const char *source_text,
+                                                   bool include_workspace_cache,
+                                                   FengLspCacheQueryContext *context) {
+    return build_cache_query_context_for_text_ex(runtime, document, source_text,
+                                                 include_workspace_cache, context);
 }
 
 static bool diagnostics_json_for_path(const FengLspDiagnosticCollector *collector,
@@ -10504,10 +10592,31 @@ static bool append_symbol_decl_completion_item(FengLspString *json,
     return ok;
 }
 
+static size_t count_symbol_member_overloads(const FengSymbolDeclView *owner_decl,
+                                            FengSlice name) {
+    size_t count = 0U;
+    size_t i;
+    size_t member_count;
+
+    if (owner_decl == NULL) {
+        return 0U;
+    }
+    member_count = feng_symbol_decl_member_count(owner_decl);
+    for (i = 0U; i < member_count; ++i) {
+        const FengSymbolDeclView *m = feng_symbol_decl_member_at(owner_decl, i);
+
+        if (slice_equals(feng_symbol_decl_name(m), name)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 static bool append_symbol_member_completion_item(FengLspString *json,
                                                  bool *first,
                                                  const FengSymbolDeclView *member,
-                                                 const char *owner_name) {
+                                                 const char *owner_name,
+                                                 size_t overload_count) {
     FengLspString signature = {0};
     int kind;
     bool ok;
@@ -10518,8 +10627,13 @@ static bool append_symbol_member_completion_item(FengLspString *json,
     kind = feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_FIELD
                ? 5
                : feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_ENUM_ITEM ? 20 : 2;
-    ok = symbol_member_signature_to_string(&signature, member) &&
-         append_completion_item_with_data(json, first, feng_symbol_decl_name(member),
+    if (!symbol_member_signature_to_string(&signature, member)) {
+        return false;
+    }
+    if (overload_count > 1U) {
+        (void)string_append_format(&signature, " (+%zu overloads)", overload_count - 1U);
+    }
+    ok = append_completion_item_with_data(json, first, feng_symbol_decl_name(member),
                                           signature.data, kind,
                                           g_completion_uri, owner_name);
     string_dispose(&signature);
@@ -11981,10 +12095,14 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                     if (contains) {
                         continue;
                     }
-                    if (!append_symbol_member_completion_item(json, &first, member, sym_owner_name)) {
-                        free(sym_owner_name);
-                        local_list_dispose(&locals);
-                        return false;
+                    {
+                        size_t overloads = count_symbol_member_overloads(owner_decl, feng_symbol_decl_name(member));
+
+                        if (!append_symbol_member_completion_item(json, &first, member, sym_owner_name, overloads)) {
+                            free(sym_owner_name);
+                            local_list_dispose(&locals);
+                            return false;
+                        }
                     }
                     ++item_count;
                 }
@@ -12047,7 +12165,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                                 if (contains) {
                                     continue;
                                 }
-                                if (!append_symbol_member_completion_item(json, &first, member, NULL)) {
+                                if (!append_symbol_member_completion_item(json, &first, member, NULL, 0U)) {
                                     local_list_dispose(&locals);
                                     return false;
                                 }
@@ -12415,7 +12533,7 @@ static bool build_literal_builtin_completion_json(const FengLspDocument *documen
                 if (contains) {
                     continue;
                 }
-                if (!append_symbol_member_completion_item(json, &first, member, NULL)) {
+                if (!append_symbol_member_completion_item(json, &first, member, NULL, 0U)) {
                     goto cleanup;
                 }
                 found_any = true;
@@ -12436,7 +12554,7 @@ cleanup:
     return found_any;
 }
 
-static bool build_repaired_completion_json(const FengLspRuntime *runtime,
+static bool build_repaired_completion_json(FengLspRuntime *runtime,
                                            const FengLspDocument *document,
                                            size_t offset,
                                            FengLspString *json) {
@@ -12462,7 +12580,7 @@ static bool build_repaired_completion_json(const FengLspRuntime *runtime,
     if (!completion_json_has_items(json)) {
         string_dispose(json);
         ok = false;
-        if (build_cache_query_context_for_text(document, repaired.text, false, &cache)) {
+        if (build_cache_query_context_with_runtime(runtime, document, repaired.text, false, &cache)) {
             size_t cache_item_count = 0U;
 
             ok = build_cached_completion_json(&cache, offset, json, &cache_item_count) &&
@@ -12527,7 +12645,9 @@ static bool handle_completion_request(FengLspRuntime *runtime,
     is_member_completion = completion_context_is_member_access(document->text, offset);
     can_repair_completion = is_member_completion || completion_repair_needs_semicolon(document->text, offset);
     g_completion_uri = uri;
-    if (build_cache_query_context(document, &cache)) {
+    if (build_cache_query_context_with_runtime(runtime, document,
+                                               document != NULL ? document->text : NULL,
+                                               true, &cache)) {
 
         size_t cache_item_count = 0U;
 
@@ -12550,7 +12670,7 @@ static bool handle_completion_request(FengLspRuntime *runtime,
         if (repaired_text != NULL) {
             FengLspCacheQueryContext repair_cache = {0};
 
-            if (build_cache_query_context_for_text(document, repaired_text, false, &repair_cache)) {
+            if (build_cache_query_context_with_runtime(runtime, document, repaired_text, false, &repair_cache)) {
                 size_t repair_item_count = 0U;
 
                 if (build_cached_completion_json(&repair_cache, offset, &json, &repair_item_count) &&
@@ -12671,11 +12791,30 @@ static bool append_symbol_member_signature(FengLspString *buffer,
     size_t i;
     const FengSymbolTypeView *ret_type;
     FengSlice name;
+    FengSymbolDeclKind kind;
 
     if (buffer == NULL || member == NULL) {
         return false;
     }
     name = feng_symbol_decl_name(member);
+    kind = feng_symbol_decl_kind(member);
+
+    if (kind == FENG_SYMBOL_DECL_KIND_FIELD) {
+        const FengSymbolTypeView *field_type = feng_symbol_decl_value_type(member);
+        bool is_mutable = feng_symbol_decl_mutability(member) == FENG_MUTABILITY_VAR;
+
+        if (!string_append_cstr(buffer, is_mutable ? "var " : "let ") ||
+            !string_append_bytes(buffer, name.data, name.length)) {
+            return false;
+        }
+        if (field_type != NULL) {
+            if (!string_append_cstr(buffer, ": ") ||
+                !symbol_type_to_string(buffer, field_type)) {
+                return false;
+            }
+        }
+        return true;
+    }
     if (!string_append_cstr(buffer, "func ") ||
         !string_append_bytes(buffer, name.data, name.length) ||
         !string_append_cstr(buffer, "(")) {
@@ -13427,13 +13566,15 @@ static bool handle_signature_help_request(FengLspRuntime *runtime,
         FengLspCacheQueryContext cache = {0};
         FengLspLocalList locals = {0};
 
-        if (build_cache_query_context(document, &cache)) {
+        if (build_cache_query_context_with_runtime(runtime, document,
+                                                    document != NULL ? document->text : NULL,
+                                                    true, &cache)) {
             ok = build_signature_help_json(&cache, method_name, owner_name_str, &locals, active_param, &json);
             cache_query_context_dispose(&cache);
         }
         if (!ok) {
             string_dispose(&json);
-            if (build_cache_query_context_for_text(document, document->text, false, &cache)) {
+            if (build_cache_query_context_with_runtime(runtime, document, document->text, false, &cache)) {
                 const FengDecl *enclosing_decl;
                 const FengTypeMember *enclosing_member;
 
@@ -13554,12 +13695,14 @@ static bool handle_completion_resolve_request(FengLspRuntime *runtime,
     document = find_document(runtime, uri);
     if (document != NULL) {
         FengLspCacheQueryContext cache = {0};
-        if (build_cache_query_context(document, &cache)) {
+        if (build_cache_query_context_with_runtime(runtime, document,
+                                                    document != NULL ? document->text : NULL,
+                                                    true, &cache)) {
             doc = resolve_doc_from_cache(&cache, label, owner_name);
             cache_query_context_dispose(&cache);
         }
         if (doc == NULL) {
-            if (build_cache_query_context_for_text(document, document->text, false, &cache)) {
+            if (build_cache_query_context_with_runtime(runtime, document, document->text, false, &cache)) {
                 doc = resolve_doc_from_cache(&cache, label, owner_name);
                 cache_query_context_dispose(&cache);
             }
@@ -13903,6 +14046,8 @@ void feng_lsp_runtime_free(FengLspRuntime *runtime) {
         free(runtime->documents[index].text);
     }
     free(runtime->documents);
+    feng_symbol_provider_free(runtime->cached_provider);
+    free(runtime->cached_provider_manifest);
     free(runtime);
 }
 
