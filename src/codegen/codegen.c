@@ -21275,7 +21275,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         free(tmp);
     } else {
         char *tmp = cg_fresh_temp(cg, "_ret");
-        char *cty = cg_ctype_dup(r.type);
+        char *cty = cg_ctype_dup(cg->cur_return_type);
         buf_append_fmt(cg->cur_body,
             "    %s %s = (%s)(%s);\n", cty, tmp, cty, r.c_expr);
         free(cty);
@@ -28164,7 +28164,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (call_has_arg) buf_append_cstr(body, ", ");
         if (origin_param_types[i] && origin_param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
             if (origin_param_types[i]->generic_param_index < tp_count) {
-                buf_append_fmt(body, "&%s", param_name);
+                if (m->param_types[i] != NULL &&
+                    m->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+                    buf_append_fmt(body, "%s", param_name);
+                } else {
+                    buf_append_fmt(body, "&%s", param_name);
+                }
             } else {
                 buf_append_fmt(body, "%s", param_name);
             }
