@@ -62,6 +62,7 @@ typedef struct FengLspDocument {
     char *path;
     char *text;
     bool is_file;
+    bool dirty;
 } FengLspDocument;
 
 typedef struct FengLspDiagnosticEntry {
@@ -188,6 +189,9 @@ struct FengLspRuntime {
     /* Cached symbol provider — loaded once per project, reused across requests. */
     FengSymbolProvider *cached_provider;
     char *cached_provider_manifest;
+    /* Cached manifest path — avoids repeated ancestor directory walks. */
+    char *cached_manifest_for_path;
+    char *cached_manifest_path;
 };
 
 /* URI of the document currently being completed.  Set at the beginning of
@@ -1025,6 +1029,9 @@ static bool document_matches_disk(const FengLspDocument *document) {
     if (document == NULL || document->text == NULL || !document->is_file || !file_exists(document->path)) {
         return false;
     }
+    if (document->dirty) {
+        return false;
+    }
     disk_text = feng_cli_read_entire_file(document->path, &disk_length);
     if (disk_text == NULL) {
         return false;
@@ -1173,6 +1180,7 @@ static bool upsert_document(FengLspRuntime *runtime,
 
     free(document->text);
     document->text = dup_cstr(text != NULL ? text : "");
+    document->dirty = true;
     if (document->text == NULL && runtime->errors != NULL) {
         fprintf(runtime->errors,
                 "lsp: out of memory updating document text for '%s'\n",
@@ -1664,8 +1672,22 @@ static bool build_cache_query_context_for_text_ex(FengLspRuntime *runtime,
     if (include_workspace_cache && !document_matches_disk(document)) {
         return false;
     }
-    if (!feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
-        goto cleanup;
+    /* Use cached manifest path when the document path matches the previous lookup. */
+    if (runtime != NULL && runtime->cached_manifest_for_path != NULL &&
+        runtime->cached_manifest_path != NULL &&
+        strcmp(runtime->cached_manifest_for_path, document->path) == 0) {
+        manifest_path = dup_cstr(runtime->cached_manifest_path);
+    } else {
+        if (!feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
+            goto cleanup;
+        }
+        /* Cache the result for next time. */
+        if (runtime != NULL && manifest_path != NULL) {
+            free(runtime->cached_manifest_for_path);
+            free(runtime->cached_manifest_path);
+            runtime->cached_manifest_for_path = dup_cstr(document->path);
+            runtime->cached_manifest_path = dup_cstr(manifest_path);
+        }
     }
     if (!feng_cli_project_open(manifest_path, &project, &error) ||
         !source_path_list_contains(project.source_paths, project.source_count, document->path)) {
@@ -12335,6 +12357,46 @@ static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
     }
 }
 
+/* Repair source for signatureHelp by closing unclosed parentheses at offset. */
+static char *dup_text_with_signature_repair(const char *text, size_t offset) {
+    size_t text_length;
+    int depth;
+    size_t i;
+    char *out;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    text_length = strlen(text);
+    if (offset > text_length) {
+        return NULL;
+    }
+    /* Count unclosed parens from start to offset. */
+    depth = 0;
+    for (i = 0U; i < offset; ++i) {
+        if (text[i] == '(') {
+            ++depth;
+        } else if (text[i] == ')') {
+            if (depth > 0) {
+                --depth;
+            }
+        }
+    }
+    if (depth <= 0) {
+        return NULL;
+    }
+    /* Insert ");" at offset to close the call and terminate the statement. */
+    out = (char *)malloc(text_length + 3U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, text, offset);
+    out[offset] = ')';
+    out[offset + 1U] = ';';
+    memcpy(out + offset + 2U, text + offset, text_length - offset + 1U);
+    return out;
+}
+
 static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     static const char kPlaceholder[] = "__feng_completion_placeholder__";
     size_t text_length;
@@ -13590,6 +13652,29 @@ static bool handle_signature_help_request(FengLspRuntime *runtime,
             }
         }
         if (!ok) {
+            /* Repaired-source fallback: close unclosed parens to make source parseable. */
+            char *repaired_text = dup_text_with_signature_repair(document->text, offset);
+
+            if (repaired_text != NULL) {
+                string_dispose(&json);
+                if (build_cache_query_context_with_runtime(runtime, document, repaired_text, false, &cache)) {
+                    const FengDecl *enclosing_decl;
+                    const FengTypeMember *enclosing_member;
+
+                    enclosing_decl = find_enclosing_decl_for_completion(cache.source_text, cache.program,
+                                                                         offset, &enclosing_member);
+                    if (enclosing_decl != NULL) {
+                        (void)collect_visible_locals_for_completion(cache.source_text, enclosing_decl,
+                                                                    enclosing_member, offset, &locals);
+                    }
+                    ok = build_signature_help_json(&cache, method_name, owner_name_str, &locals, active_param, &json);
+                    local_list_dispose(&locals);
+                    cache_query_context_dispose(&cache);
+                }
+                free(repaired_text);
+            }
+        }
+        if (!ok) {
             string_dispose(&json);
             /* Provider-only fallback for bundle types. */
             {
@@ -14048,6 +14133,8 @@ void feng_lsp_runtime_free(FengLspRuntime *runtime) {
     free(runtime->documents);
     feng_symbol_provider_free(runtime->cached_provider);
     free(runtime->cached_provider_manifest);
+    free(runtime->cached_manifest_for_path);
+    free(runtime->cached_manifest_path);
     free(runtime);
 }
 
@@ -14157,8 +14244,6 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
             } else if (!upsert_document(runtime, uri, text)) {
                 /* upsert_document already logged the OOM; document not tracked but server continues */
                 fprintf(errors, "lsp: textDocument/didChange: document not tracked: '%s'\n", uri);
-            } else {
-                ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
             }
             free(uri);
             free(text);
@@ -14177,6 +14262,11 @@ bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
             if (uri == NULL) {
                 fprintf(errors, "lsp: textDocument/didSave: failed to decode URI\n");
             } else {
+                FengLspDocument *saved_doc = find_document(runtime, uri);
+
+                if (saved_doc != NULL) {
+                    saved_doc->dirty = false;
+                }
                 ok = refresh_diagnostics(runtime, output, uri); /* I/O failure — propagate */
             }
             free(uri);
