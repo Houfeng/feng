@@ -376,6 +376,115 @@ func string_rune_for_in() {
   writeLine("__STRING_RUNE_FOR_IN__=" + result);
 }
 
+func string_rune_for_in_empty() {
+  var count: i32 = 0;
+  for let r in "".runes() {
+    count = count + 1;
+  }
+  check(count == 0, "string/rune-for-in-empty");
+  writeLine("__STRING_RUNE_FOR_IN_EMPTY__=ok");
+}
+
+func string_rune_for_in_emoji() {
+  let text = "A😀B";
+  var result = "";
+  var count: i32 = 0;
+  for let r in text.runes() {
+    result = result + "[" + r + "]";
+    count = count + 1;
+  }
+  check(count == 3, "string/rune-for-in-emoji-count");
+  writeLine("__STRING_RUNE_FOR_IN_EMOJI__=" + result);
+}
+
+func string_byte_for_in_empty() {
+  var count: i32 = 0;
+  for let ch in "" {
+    count = count + 1;
+  }
+  check(count == 0, "string/byte-for-in-empty");
+  writeLine("__STRING_BYTE_FOR_IN_EMPTY__=ok");
+}
+
+func string_byte_for_in_single() {
+  var result = "";
+  for let ch in "x" {
+    result = result + ch;
+  }
+  check(result == "x", "string/byte-for-in-single");
+  writeLine("__STRING_BYTE_FOR_IN_SINGLE__=ok");
+}
+
+func string_grapheme_for_in_ascii() {
+  let text = "abc";
+  var result = "";
+  var count: i32 = 0;
+  for let g in text.graphemes() {
+    result = result + g + ".";
+    count = count + 1;
+  }
+  check(count == 3, "string/grapheme-for-in-ascii-count");
+  check(result == "a.b.c.", "string/grapheme-for-in-ascii-content");
+  writeLine("__STRING_GRAPHEME_FOR_IN_ASCII__=" + result);
+}
+
+func string_grapheme_for_in_utf8() {
+  let text = "你好世界";
+  var result = "";
+  var count: i32 = 0;
+  for let g in text.graphemes() {
+    result = result + "[" + g + "]";
+    count = count + 1;
+  }
+  check(count == 4, "string/grapheme-for-in-utf8-count");
+  check(result == "[你][好][世][界]", "string/grapheme-for-in-utf8-content");
+  writeLine("__STRING_GRAPHEME_FOR_IN_UTF8__=" + result);
+}
+
+func string_grapheme_for_in_emoji() {
+  let family = "👨‍👩‍👧‍👦";
+  var count: i32 = 0;
+  var cluster = "";
+  for let g in family.graphemes() {
+    cluster = g;
+    count = count + 1;
+  }
+  check(count == 1, "string/grapheme-for-in-emoji-count");
+  check(cluster == family, "string/grapheme-for-in-emoji-content");
+  writeLine("__STRING_GRAPHEME_FOR_IN_EMOJI__=ok");
+}
+
+func string_grapheme_for_in_mixed() {
+  let text = "A中😀";
+  var result = "";
+  var count: i32 = 0;
+  for let g in text.graphemes() {
+    result = result + "[" + g + "]";
+    count = count + 1;
+  }
+  check(count == 3, "string/grapheme-for-in-mixed-count");
+  check(result == "[A][中][😀]", "string/grapheme-for-in-mixed-content");
+  writeLine("__STRING_GRAPHEME_FOR_IN_MIXED__=" + result);
+}
+
+func string_grapheme_for_in_empty() {
+  var count: i32 = 0;
+  for let g in "".graphemes() {
+    count = count + 1;
+  }
+  check(count == 0, "string/grapheme-for-in-empty");
+  writeLine("__STRING_GRAPHEME_FOR_IN_EMPTY__=ok");
+}
+
+func string_grapheme_for_in_single() {
+  var result = "";
+  for let g in "x".graphemes() {
+    result = result + g;
+  }
+  check(result == "x", "string/grapheme-for-in-single");
+  writeLine("__STRING_GRAPHEME_FOR_IN_SINGLE__=ok");
+}
+
 open func run_string_tests() {
   string_from_utf8_bytes_ascii();
   string_from_utf8_bytes_utf8();
@@ -415,5 +524,15 @@ open func run_string_tests() {
   string_padStart();
   string_padEnd();
   string_byte_for_in();
+  string_byte_for_in_empty();
+  string_byte_for_in_single();
   string_rune_for_in();
+  string_rune_for_in_empty();
+  string_rune_for_in_emoji();
+  string_grapheme_for_in_ascii();
+  string_grapheme_for_in_utf8();
+  string_grapheme_for_in_emoji();
+  string_grapheme_for_in_mixed();
+  string_grapheme_for_in_empty();
+  string_grapheme_for_in_single();
 }

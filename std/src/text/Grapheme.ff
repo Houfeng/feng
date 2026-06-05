@@ -1,5 +1,7 @@
 open module std.text;
 
+import std.collections;
+
 @cdecl("feng_std_unistring", "u8_grapheme_next")
 extern func u8_grapheme_next(s: string*, end: string*): string*;
 
@@ -49,6 +51,15 @@ open type GraphemeView {
   }
 
   /**
+   * Returns an iterator over the grapheme clusters of this view.
+   * @return grapheme iterator cursor
+   */
+  @iterable
+  open func iter(): GraphemeIterator {
+    return GraphemeIterator(self.text);
+  }
+
+  /**
    * Returns the substring of the grapheme cluster at the given logical index.
    * @param index - zero-based grapheme index
    * @return substring containing the single grapheme cluster
@@ -80,5 +91,41 @@ open type GraphemeView {
       cluster_end = feng_pointer_diff(next, data);
     }
     return self.text.clone(start, cluster_end);
+  }
+}
+
+/**
+ * An iterator cursor that yields individual grapheme clusters as substring slices.
+ */
+open type GraphemeIterator {
+  seal let text: string;
+  seal let len: long;
+  seal var offset: long;
+
+  open func GraphemeIterator(text: string) {
+    self.text = text;
+    self.len = text.length();
+    self.offset = 0;
+  }
+
+  /**
+   * Advances to the next grapheme cluster and returns it, or signals completion.
+   * @return (true, grapheme) if available, (false, _) otherwise
+   */
+  @iterator
+  open func next(): IteratorResult<string> {
+    if self.offset >= self.len {
+      return (false, "");
+    }
+    let data: string* = &self.text;
+    let end: string* = feng_pointer_move(data, self.len);
+    let cursor: string* = feng_pointer_move(data, self.offset);
+    let after: string* = u8_grapheme_next(cursor, end);
+    if feng_pointer_is_null(after) {
+      return (false, "");
+    }
+    let start = self.offset;
+    self.offset = feng_pointer_diff(after, data);
+    return (true, self.text.clone(start, self.offset));
   }
 }
