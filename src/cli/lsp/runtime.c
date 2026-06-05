@@ -9683,6 +9683,7 @@ static bool handle_definition_request(FengLspRuntime *runtime,
 
 typedef struct FengLspCompletionContext {
     bool is_member;
+    bool is_static_access;
     FengSlice object;
     FengSlice prefix;
     FengSlice literal_builtin_name;
@@ -9694,6 +9695,48 @@ static bool completion_identifier_start(char ch) {
 
 static bool completion_identifier_continue(char ch) {
     return ch == '_' || isalnum((unsigned char)ch);
+}
+
+/* Map a single-segment identifier to its canonical builtin type name, or
+ * return NULL when the identifier is not a known builtin type. */
+static const char *builtin_name_for_type_identifier(FengSlice name) {
+    if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
+        return "i32";
+    }
+    if (slice_equals_cstr(name, "long") || slice_equals_cstr(name, "i64")) {
+        return "i64";
+    }
+    if (slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "u8")) {
+        return "u8";
+    }
+    if (slice_equals_cstr(name, "float") || slice_equals_cstr(name, "f32")) {
+        return "f32";
+    }
+    if (slice_equals_cstr(name, "double") || slice_equals_cstr(name, "f64")) {
+        return "f64";
+    }
+    if (slice_equals_cstr(name, "i8")) {
+        return "i8";
+    }
+    if (slice_equals_cstr(name, "i16")) {
+        return "i16";
+    }
+    if (slice_equals_cstr(name, "u16")) {
+        return "u16";
+    }
+    if (slice_equals_cstr(name, "u32")) {
+        return "u32";
+    }
+    if (slice_equals_cstr(name, "u64")) {
+        return "u64";
+    }
+    if (slice_equals_cstr(name, "bool")) {
+        return "bool";
+    }
+    if (slice_equals_cstr(name, "string")) {
+        return "string";
+    }
+    return NULL;
 }
 
 static bool completion_context_from_text(const char *text,
@@ -9760,6 +9803,15 @@ static bool completion_context_from_text(const char *text,
     if (slice_equals_cstr(context->object, "true") ||
         slice_equals_cstr(context->object, "false")) {
         context->literal_builtin_name = slice_from_cstr("bool");
+    }
+    /* Detect builtin type names for static member access (e.g. i32.parse). */
+    {
+        const char *type_builtin = builtin_name_for_type_identifier(context->object);
+
+        if (type_builtin != NULL) {
+            context->literal_builtin_name = slice_from_cstr(type_builtin);
+            context->is_static_access = true;
+        }
     }
     return true;
 }
@@ -11680,6 +11732,7 @@ static bool build_single_parse_session(const FengLspDocument *document,
  * NOT require a successful parse of the source file. */
 static bool build_literal_builtin_completion_json(const FengLspDocument *document,
                                                   FengSlice builtin_name,
+                                                  bool static_only,
                                                   FengLspString *json) {
     char *manifest_path = NULL;
     FengCliProjectContext project = {0};
@@ -11788,8 +11841,12 @@ static bool build_literal_builtin_completion_json(const FengLspDocument *documen
             member_count = feng_symbol_decl_member_count(fit_decl);
             for (member_idx = 0U; member_idx < member_count; ++member_idx) {
                 const FengSymbolDeclView *member = feng_symbol_decl_member_at(fit_decl, member_idx);
+                bool is_static = feng_symbol_decl_is_static(member);
 
-                if (feng_symbol_decl_is_static(member)) {
+                if (static_only && !is_static) {
+                    continue;
+                }
+                if (!static_only && is_static) {
                     continue;
                 }
                 if (!append_symbol_member_completion_item(json, &first, member, NULL)) {
@@ -12014,15 +12071,16 @@ static bool handle_completion_request(FengLspRuntime *runtime,
         return ok;
     }
     string_dispose(&json);
-    /* Literal builtin fallback: when the parser cannot handle `123.` or
-     * `"str".`, look up the builtin type's fit members directly from the
-     * symbol table — no parse required. */
+    /* Builtin type fallback: look up fit members directly from the symbol
+     * table — no parse required.  Covers literal access (`123.`, `"str".`)
+     * and static access on builtin type names (`i32.`, `string.`). */
     {
         FengLspCompletionContext literal_ctx = {0};
 
         (void)completion_context_from_text(document->text, offset, &literal_ctx);
         if (literal_ctx.is_member && literal_ctx.literal_builtin_name.length > 0U &&
-            build_literal_builtin_completion_json(document, literal_ctx.literal_builtin_name, &json)) {
+            build_literal_builtin_completion_json(document, literal_ctx.literal_builtin_name,
+                                                    literal_ctx.is_static_access, &json)) {
             g_completion_uri = NULL;
             free(uri);
             ok = send_json_response(output, id, json.data);
