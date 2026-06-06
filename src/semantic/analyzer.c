@@ -120,6 +120,13 @@ typedef struct LocalNameEntry {
     const UnionNarrowingSet *union_narrowing;
 } LocalNameEntry;
 
+/* Expression-level union narrowing entry. Used to narrow non-identifier match
+ * targets (e.g. self.member) within match branch bodies. */
+typedef struct ExprNarrowingEntry {
+    const FengExpr *target_expr;
+    InferredExprType narrowed_type;
+} ExprNarrowingEntry;
+
 /* Compile-time constant evaluation result. Used by evaluate_constant_expr to model the
  * limited set of values producible by Feng's constant-folder. INT carries arbitrary i64;
  * FLOAT carries IEEE 754 double; BOOL carries a flag. */
@@ -312,6 +319,9 @@ typedef struct ResolveContext {
      * method-level type params are simultaneously visible. */
     const TypeParamEntry *type_params;
     size_t type_param_count;
+    ExprNarrowingEntry *expr_narrowings;
+    size_t expr_narrowing_count;
+    size_t expr_narrowing_capacity;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, char *message);
@@ -3638,6 +3648,11 @@ static void resolver_free_scopes(ResolveContext *context) {
     context->union_narrowings = NULL;
     context->union_narrowing_count = 0U;
     context->union_narrowing_capacity = 0U;
+
+    free(context->expr_narrowings);
+    context->expr_narrowings = NULL;
+    context->expr_narrowing_count = 0U;
+    context->expr_narrowing_capacity = 0U;
 }
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
@@ -6459,6 +6474,7 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     bool ok;
     size_t active_count = union_active_member_count(active_members,
                                                     info != NULL ? info->member_count : 0U);
+    size_t expr_narrowing_save = context->expr_narrowing_count;
 
     if (block == NULL) {
         return true;
@@ -6498,6 +6514,22 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                                     target_expr,
                                                                     narrowing);
         }
+    } else if (!has_target_name && target_expr != NULL && info != NULL && active_count == 1U) {
+        size_t member_index = union_first_active_member_index(active_members, info->member_count);
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            context,
+            info->spec_decl,
+            union_spec_type_ref,
+            info->members[member_index].type_ref);
+        ExprNarrowingEntry entry;
+
+        entry.target_expr = target_expr;
+        entry.narrowed_type = inferred_expr_type_from_type_ref(member_type_ref);
+        ok = append_raw((void **)&context->expr_narrowings,
+                        &context->expr_narrowing_count,
+                        &context->expr_narrowing_capacity,
+                        sizeof(entry),
+                        &entry);
     }
     if (ok) {
         ok = resolve_block_contents(context, block, allow_self);
@@ -6505,6 +6537,7 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     if (ok && out_yield_type != NULL) {
         *out_yield_type = block_yield_inferred_type(context, block);
     }
+    context->expr_narrowing_count = expr_narrowing_save;
     resolver_pop_scope(context);
     return ok;
 }
@@ -12287,11 +12320,51 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
     return inferred_expr_type_unknown();
 }
 
+static bool exprs_structurally_equal(const FengExpr *a, const FengExpr *b) {
+    if (a == b) {
+        return true;
+    }
+    if (a == NULL || b == NULL || a->kind != b->kind) {
+        return false;
+    }
+    switch (a->kind) {
+        case FENG_EXPR_SELF:
+            return true;
+        case FENG_EXPR_IDENTIFIER:
+            return slice_equals(a->as.identifier, b->as.identifier);
+        case FENG_EXPR_MEMBER:
+            return slice_equals(a->as.member.member, b->as.member.member) &&
+                   exprs_structurally_equal(a->as.member.object, b->as.member.object);
+        default:
+            return false;
+    }
+}
+
+static InferredExprType lookup_expr_narrowing(const ResolveContext *context,
+                                              const FengExpr *expr) {
+    size_t i;
+
+    for (i = context->expr_narrowing_count; i > 0U; --i) {
+        if (exprs_structurally_equal(expr, context->expr_narrowings[i - 1U].target_expr)) {
+            return context->expr_narrowings[i - 1U].narrowed_type;
+        }
+    }
+    return inferred_expr_type_unknown();
+}
+
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr) {
     size_t index;
 
     if (expr == NULL) {
         return inferred_expr_type_unknown();
+    }
+
+    if (context->expr_narrowing_count > 0U) {
+        InferredExprType narrowed = lookup_expr_narrowing(context, expr);
+
+        if (inferred_expr_type_is_known(narrowed)) {
+            return narrowed;
+        }
     }
 
     switch (expr->kind) {

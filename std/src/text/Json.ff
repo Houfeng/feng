@@ -62,9 +62,9 @@ open type JsonValue {
   }
 
   func toBool(): bool {
-    let value = self.payload;
-    return if value {
-      bool { value }
+    // let value = self.payload;
+    return if self.payload {
+      bool { self.payload }
       else { false }
     };
   }
