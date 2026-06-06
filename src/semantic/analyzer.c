@@ -6454,7 +6454,8 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                      InferredExprType original_type,
                                                      const FengUnionSpecInfo *info,
                                                      const FengTypeRef *union_spec_type_ref,
-                                                     const bool *active_members) {
+                                                     const bool *active_members,
+                                                     InferredExprType *out_yield_type) {
     bool ok;
     size_t active_count = union_active_member_count(active_members,
                                                     info != NULL ? info->member_count : 0U);
@@ -6501,6 +6502,9 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     if (ok) {
         ok = resolve_block_contents(context, block, allow_self);
     }
+    if (ok && out_yield_type != NULL) {
+        *out_yield_type = block_yield_inferred_type(context, block);
+    }
     resolver_pop_scope(context);
     return ok;
 }
@@ -6521,10 +6525,14 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     const LocalNameEntry *target_local = NULL;
     bool *active_members = NULL;
     bool *covered_members = NULL;
+    InferredExprType *branch_yield_types = NULL;
+    InferredExprType else_yield_type;
     bool ok = true;
     FengSlice target_name = {NULL, 0U};
     FengMutability target_mutability = FENG_MUTABILITY_LET;
     bool has_target_name = false;
+
+    memset(&else_yield_type, 0, sizeof(else_yield_type));
 
     if (info == NULL || info->member_count == 0U) {
         return resolver_append_error(context,
@@ -6556,6 +6564,15 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                        target_local->union_narrowing->active_members,
                        info->member_count * sizeof(*active_members));
             }
+        }
+    }
+
+    if (is_expression_form && branch_count > 0U) {
+        branch_yield_types = (InferredExprType *)calloc(branch_count, sizeof(*branch_yield_types));
+        if (branch_yield_types == NULL) {
+            free(active_members);
+            free(covered_members);
+            return false;
         }
     }
 
@@ -6616,7 +6633,10 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           target_type,
                                                           info,
                                                           union_spec_type_ref,
-                                                          branch_members);
+                                                          branch_members,
+                                                          branch_yield_types != NULL
+                                                              ? &branch_yield_types[branch_index]
+                                                              : NULL);
         }
         if (ok && is_expression_form) {
             ok = validate_block_yields_expression(context,
@@ -6646,7 +6666,10 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           target_type,
                                                           info,
                                                           union_spec_type_ref,
-                                                          else_members);
+                                                          else_members,
+                                                          is_expression_form
+                                                              ? &else_yield_type
+                                                              : NULL);
             free(else_members);
         }
         if (ok && is_expression_form) {
@@ -6661,16 +6684,17 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     free(active_members);
     free(covered_members);
     if (!ok) {
+        free(branch_yield_types);
         return false;
     }
 
     if (is_expression_form) {
-        InferredExprType expected = block_yield_inferred_type(context, else_block);
+        InferredExprType expected = else_yield_type;
         size_t index;
 
         if (!inferred_expr_type_is_known(expected)) {
             for (index = 0U; index < branch_count; ++index) {
-                expected = block_yield_inferred_type(context, branches[index].body);
+                expected = branch_yield_types[index];
                 if (inferred_expr_type_is_known(expected)) {
                     break;
                 }
@@ -6678,7 +6702,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
         }
         if (inferred_expr_type_is_known(expected)) {
             for (index = 0U; index < branch_count; ++index) {
-                InferredExprType branch_type = block_yield_inferred_type(context, branches[index].body);
+                InferredExprType branch_type = branch_yield_types[index];
 
                 if (!inferred_expr_type_is_known(branch_type)) {
                     continue;
@@ -6695,12 +6719,14 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
 
                     free(expected_name);
                     free(branch_name);
+                    free(branch_yield_types);
                     return result;
                 }
             }
         }
     }
 
+    free(branch_yield_types);
     return true;
 }
 

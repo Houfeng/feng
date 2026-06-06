@@ -1,61 +1,115 @@
 open module std.text;
 
+import std;
 import std.collections;
 
-open type JsonNull {
-  open func JsonNull() {}
-}
-
-open type JsonUndefined {
-  open func JsonUndefined() {}
-}
-
-open type JsonNumber {
-  let value: double;
-  open func JsonNumber(value: double) {
-    self.value = value;
-  }
-}
-
-open type JsonBoolean {
-  let value: bool;
-  open func JsonBoolean(value: bool) {
-    self.value = value;
-  }
-}
-
-open type JsonString {
-  let value: string;
-  open func JsonString(value: string) {
-    self.value = value;
-  }
-}
-
-open type JsonArray {
-  let value: List<JsonValue>;
-  open func JsonArray(value: List<JsonValue>) {
-    self.value = value;
-  }
-}
-
-open type JsonObject {
-  let value: Map<string, JsonValue>;
-  open func JsonObject(value: Map<string, JsonValue>) {
-    self.value = value;
-  }
-}
-
-open spec JsonPayload: JsonUndefined
-| JsonNull
-| JsonNumber
-| JsonBoolean
-| JsonString
-| JsonArray
-| JsonObject;
+open spec JsonPayload: None
+| double
+| bool
+| string
+| List < JsonValue >
+| Map<string, JsonValue>;
 
 open type JsonValue {
-  let value: JsonPayload;
-  open func JsonValue(value: JsonPayload) {
-    self.value = value;
+  seal let payload: JsonPayload;
+
+  func JsonValue(payload: JsonPayload) {
+    self.payload = payload;
   }
+
+  func JsonValue() {}
+
+  func isNull(): bool {
+    return if self.payload {
+      None { true }
+      else { false }
+    };
+  }
+
+  func isBool(): bool {
+    return if self.payload {
+      bool { true }
+      else { false }
+    };
+  }
+
+  func isNumber(): bool {
+    return if self.payload {
+      double { true }
+      else { false }
+    };
+  }
+
+  func isString(): bool {
+    return if self.payload {
+      string { true }
+      else { false }
+    };
+  }
+
+  func isArray(): bool {
+    return if self.payload {
+      List<JsonValue> { true }
+      else { false }
+    };
+  }
+
+  func isObject(): bool {
+    return if self.payload {
+      Map<string, JsonValue> { true }
+      else { false }
+    };
+  }
+
+  func toBool(): bool {
+    let value = self.payload;
+    return if value {
+      bool { value }
+      else { false }
+    };
+  }
+
+  // func toNumber(): double {
+  //   let value = self.payload;
+  //   return if value {
+  //     double { value }
+  //     else { 0.0 }
+  //   };
+  // }
+
+  // func toString(): string {
+  //   let value = self.payload;
+  //   return if value {
+  //     string { value }
+  //     else { "" }
+  //   };
+  // }
+
+  // func toArray(): List<JsonValue> {
+  //   return if self.payload {
+  //     List<JsonValue> { self.payload }
+  //     else { List<JsonValue>() }
+  //   };
+  // }
+
+  // func toObject(): Map<string, JsonValue> {
+  //   return if self.payload {
+  //     Map<string, JsonValue> { self.payload }
+  //     else { Map<string, JsonValue>() }
+  //   };
+  // }
+
+  // func toJson(): string {
+  //   return if self.payload {
+  //     None { "null" }
+  //     bool { self.payload.toString() }
+  //     double { self.payload.toString() }
+  //     string { "\"" + self.payload + "\"" }
+  //     List<JsonValue> { "[" + self.payload.map(v = > v.toJson()).join(",") + "]" }
+  //     Map<string, JsonValue> {
+  //       "{" + self.payload.map(kv = > "\"" + kv.key + "\":" + kv.value.toJson()).join(",") + "}"
+  //     }
+  //   };
+  // }
+
 }
