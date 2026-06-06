@@ -12,8 +12,9 @@ FENG="$ROOT/build/bin/feng"
 RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
 FIXTURE="$ROOT/test/smoke/phase1a/hello.ff"
 EXPECTED="$ROOT/test/smoke/phase1a/hello.expected"
-mkdir -p "$ROOT/temp"
-WORK="$(mktemp -d "$ROOT/temp/feng_cli_XXXXXX")"
+WORK="$ROOT/build/gen/cli_direct"
+rm -rf "$WORK"
+mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 detect_host_target() {
@@ -254,7 +255,6 @@ if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
         echo "FAIL[full_pipeline] missing executable $bin"
         failures=$((failures + 1))
     else
-        codesign -s - "$bin" 2>/dev/null || true
         actual="$("$bin")"
         expected_text="$(cat "$EXPECTED")"
         if [[ "$actual" != "$expected_text" ]]; then
@@ -379,7 +379,6 @@ if [[ -d "$MULTI_DIR" ]]; then
             echo "FAIL[multi_file] missing executable $bin"
             failures=$((failures + 1))
         else
-            codesign -s - "$bin" 2>/dev/null || true
             actual="$("$bin")"
             expected_text="$(cat "$MULTI_EXPECTED")"
             if [[ "$actual" != "$expected_text" ]]; then
