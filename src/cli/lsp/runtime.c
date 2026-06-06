@@ -1740,16 +1740,15 @@ static bool build_cache_query_context_for_text_ex(FengLspRuntime *runtime,
     }
 
 provider_ready:
-    /* Add workspace symbol cache when available; it is optional — bundle
-     * symbols are still accessible without it. */
+    /* Add workspace symbol cache when available; duplicates are handled by
+     * the provider's PREFER_PROFILE policy so this is safe even when the
+     * runtime-cached provider already loaded the same root in a prior call. */
     if (include_workspace_cache && symbols_root != NULL && path_is_directory(symbols_root)) {
-        if (context->owns_provider) {
-            if (!feng_symbol_provider_add_ft_root(context->provider,
-                                                  symbols_root,
-                                                  FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
-                                                  &symbol_error)) {
-                goto cleanup;
-            }
+        if (!feng_symbol_provider_add_ft_root(context->provider,
+                                              symbols_root,
+                                              FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
+                                              &symbol_error)) {
+            goto cleanup;
         }
     }
     context->current_module = feng_symbol_provider_find_module(context->provider,
@@ -12777,6 +12776,7 @@ static bool handle_completion_request(FengLspRuntime *runtime,
                     string_dispose(&json);
                     return ok;
                 }
+                string_dispose(&json);
                 cache_query_context_dispose(&repair_cache);
             }
             free(repaired_text);
