@@ -7386,6 +7386,8 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     char *initialize;
     char *did_open;
     char *did_change;
+    char *did_save_bad;
+    char *did_save_good;
     char *did_close;
     char *shutdown;
     char *output;
@@ -7404,9 +7406,13 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
                           uri,
                           bad_text);
+    did_save_bad = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+                              uri);
     did_change = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},\"contentChanges\":[{\"text\":\"%s\"}]}}",
                             uri,
                             good_text);
+    did_save_good = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+                               uri);
     did_close = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
                            uri);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
@@ -7415,7 +7421,9 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
+    write_lsp_message(input, did_save_bad);
     write_lsp_message(input, did_change);
+    write_lsp_message(input, did_save_good);
     write_lsp_message(input, did_close);
     write_lsp_message(input, shutdown);
     write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
@@ -7430,7 +7438,9 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
     free(output);
     free(shutdown);
     free(did_close);
+    free(did_save_good);
     free(did_change);
+    free(did_save_bad);
     free(did_open);
     free(initialize);
     free(good_text);
