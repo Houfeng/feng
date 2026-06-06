@@ -13597,6 +13597,100 @@ static bool build_signature_help_json(const FengLspCacheQueryContext *context,
                 }
             }
         }
+    } else if (owner_name != NULL) {
+        /* Builtin type: owner_decl is NULL but we can match fit targets by name. */
+        FengSlice owner_name_slice = slice_from_cstr(owner_name);
+        const char *builtin = builtin_name_for_identifier(owner_name_slice);
+
+        if (builtin != NULL) {
+            FengSlice builtin_slice = slice_from_cstr(builtin);
+
+            mod_count = feng_symbol_provider_module_count(context->provider);
+            for (mod_idx = 0U; mod_idx < mod_count; ++mod_idx) {
+                const FengSymbolImportedModule *mod = feng_symbol_provider_module_at(context->provider, mod_idx);
+                size_t fit_count = feng_symbol_module_fit_count(mod);
+                size_t fit_idx;
+
+                for (fit_idx = 0U; fit_idx < fit_count; ++fit_idx) {
+                    const FengSymbolFitView *fit = feng_symbol_module_fit_at(mod, fit_idx);
+                    const FengSymbolDeclView *fd = feng_symbol_fit_decl(fit);
+                    const FengSymbolTypeView *target;
+                    size_t fc;
+                    size_t fi;
+
+                    if (fd == NULL) {
+                        continue;
+                    }
+                    target = feng_symbol_decl_fit_target(fd);
+                    if (target == NULL) {
+                        continue;
+                    }
+                    if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
+                        if (!slice_equals(feng_symbol_type_builtin_name(target), builtin_slice)) {
+                            continue;
+                        }
+                    } else if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_NAMED &&
+                               feng_symbol_type_segment_count(target) >= 1U) {
+                        FengSlice seg = feng_symbol_type_segment_at(target,
+                                                                    feng_symbol_type_segment_count(target) - 1U);
+                        if (!slice_equals(seg, builtin_slice)) {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                    fc = feng_symbol_decl_member_count(fd);
+                    for (fi = 0U; fi < fc; ++fi) {
+                        const FengSymbolDeclView *member = feng_symbol_decl_member_at(fd, fi);
+                        FengLspString sig_label = {0};
+                        size_t param_count;
+                        size_t i;
+
+                        if (!slice_equals(feng_symbol_decl_name(member), method_slice)) {
+                            continue;
+                        }
+                        if (!append_symbol_member_signature(&sig_label, member)) {
+                            string_dispose(&sig_label);
+                            return false;
+                        }
+                        param_count = feng_symbol_decl_param_count(member);
+                        if (sig_count > 0U && !string_append_cstr(json, ",")) {
+                            string_dispose(&sig_label);
+                            return false;
+                        }
+                        if (!string_append_cstr(json, "{\"label\":") ||
+                            !string_append_json_string(json, sig_label.data) ||
+                            !string_append_cstr(json, ",\"parameters\":[")) {
+                            string_dispose(&sig_label);
+                            return false;
+                        }
+                        for (i = 0U; i < param_count; ++i) {
+                            FengSlice pname = feng_symbol_decl_param_name(member, i);
+
+                            if (i > 0U && !string_append_cstr(json, ",")) {
+                                string_dispose(&sig_label);
+                                return false;
+                            }
+                            if (!string_append_cstr(json, "{\"label\":\"") ||
+                                !string_append_bytes(json, pname.data, pname.length) ||
+                                !string_append_cstr(json, "\"}")) {
+                                string_dispose(&sig_label);
+                                return false;
+                            }
+                        }
+                        if (!string_append_cstr(json, "]}")) {
+                            string_dispose(&sig_label);
+                            return false;
+                        }
+                        string_dispose(&sig_label);
+                        if (active_signature == 0 && param_count > active_param) {
+                            active_signature = (int)sig_count;
+                        }
+                        ++sig_count;
+                    }
+                }
+            }
+        }
     }
     if (!string_append_cstr(json, "],\"activeSignature\":") ||
         !string_append_format(json, "%d", active_signature) ||

@@ -1,0 +1,47 @@
+open module std.text;
+
+import std.collections;
+
+// open type JsonNumber {
+//   let value: double;
+//   open func JsonNumber(value: double) {
+//     self.value = value;
+//   }
+// }
+
+// open type JsonBoolean {
+//   let value: bool;
+//   open func JsonBoolean(value: bool) {
+//     self.value = value;
+//   }
+// }
+
+// open type JsonString {
+//   let value: string;
+//   open func JsonString(value: string) {
+//     self.value = value;
+//   }
+// }
+
+// open type JsonArray {
+//   let value: List<JsonValue>;
+//   open func JsonArray(value: List<JsonValue>) {
+//     self.value = value;
+//   }
+// }
+
+// open type JsonObject {
+//   let value: Map<string, JsonValue>;
+//   open func JsonObject(value: Map<string, JsonValue>) {
+//     self.value = value;
+//   }
+// }
+
+// open spec JsonPayload: JsonNumber | JsonBoolean | JsonString | JsonArray | JsonObject;
+
+// open type JsonValue {
+//   let value: JsonPayload;
+//   open func JsonValue(value: JsonPayload) {
+//     self.value = value;
+//   }
+// }
