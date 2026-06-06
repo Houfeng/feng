@@ -3,17 +3,95 @@ open module std.text;
 import std;
 import std.collections;
 
-open spec JsonPayload: None
+open type JsonArray {
+  seal let payload: List<JsonValue>;
+
+  func JsonArray(payload: List<JsonValue>) {
+    self.payload = payload;
+  }
+
+  func JsonArray() {}
+
+  func size(): int {
+    return self.payload.size();
+  }
+
+  func get(index: int): JsonValue {
+    return self.payload.get(index);
+  }
+
+  func set(index: int, value: JsonValue) {
+    self.payload.set(index, value);
+  }
+
+  func set(index: int, value: JsonValuePayload) {
+    self.set(index, JsonValue(value));
+  }
+
+  func add(value: JsonValue) {
+    self.payload.add(value);
+  }
+
+  func add(value: JsonValuePayload) {
+    self.add(JsonValue(value));
+  }
+
+  func remove(index: int) {
+    self.payload.remove(index);
+  }
+
+  func toJson(): string {
+    let textArray = string[:self.size()];
+    return string.join(",", textArray);
+  }
+}
+
+open type JsonObject {
+  seal let payload: Map<string, JsonValue>;
+
+  func JsonObject(payload: Map<string, JsonValue>) {
+    self.payload = payload;
+  }
+
+  func JsonObject() {}
+
+  func size(): int {
+    return self.payload.count();
+  }
+
+  func get(key: string): JsonValue {
+    return self.payload.get(key);
+  }
+
+  func set(key: string, value: JsonValue) {
+    self.payload.set(key, value);
+  }
+
+  func set(key: string, value: JsonValuePayload) {
+    self.set(key, JsonValue(value));
+  }
+
+  func remove(key: string) {
+    self.payload.remove(key);
+  }
+
+  func toJson(): string {
+    let textPairs = string[:self.size()];
+    return "{" + string.join(",", textPairs) + "}";
+  }
+}
+
+open spec JsonValuePayload: None
 | double
 | bool
 | string
-| List < JsonValue >
-| Map<string, JsonValue>;
+| JsonArray
+| JsonObject;
 
 open type JsonValue {
-  seal let payload: JsonPayload;
+  seal let payload: JsonValuePayload;
 
-  func JsonValue(payload: JsonPayload) {
+  func JsonValue(payload: JsonValuePayload) {
     self.payload = payload;
   }
 
@@ -49,67 +127,57 @@ open type JsonValue {
 
   func isArray(): bool {
     return if self.payload {
-      List<JsonValue> { true }
+      JsonArray { true }
       else { false }
     };
   }
 
   func isObject(): bool {
     return if self.payload {
-      Map<string, JsonValue> { true }
+      JsonObject { true }
       else { false }
     };
   }
 
+  // func toNull(): None {
+  //   return if self.payload {
+  //     None { self.payload }
+  //     else { none }
+  //   };
+  // }
+
   func toBool(): bool {
-    // let value = self.payload;
     return if self.payload {
       bool { self.payload }
       else { false }
     };
   }
 
-  // func toNumber(): double {
-  //   let value = self.payload;
-  //   return if value {
-  //     double { value }
-  //     else { 0.0 }
-  //   };
-  // }
+  func toNumber(): double {
+    return if self.payload {
+      double { self.payload }
+      else { 0.0 }
+    };
+  }
 
-  // func toString(): string {
-  //   let value = self.payload;
-  //   return if value {
-  //     string { value }
-  //     else { "" }
-  //   };
-  // }
+  func toString(): string {
+    return if self.payload {
+      string { self.payload }
+      else { "" }
+    };
+  }
 
-  // func toArray(): List<JsonValue> {
-  //   return if self.payload {
-  //     List<JsonValue> { self.payload }
-  //     else { List<JsonValue>() }
-  //   };
-  // }
+  func toArray(): JsonArray {
+    return if self.payload {
+      JsonArray { self.payload }
+      else { JsonArray() }
+    };
+  }
 
-  // func toObject(): Map<string, JsonValue> {
-  //   return if self.payload {
-  //     Map<string, JsonValue> { self.payload }
-  //     else { Map<string, JsonValue>() }
-  //   };
-  // }
-
-  // func toJson(): string {
-  //   return if self.payload {
-  //     None { "null" }
-  //     bool { self.payload.toString() }
-  //     double { self.payload.toString() }
-  //     string { "\"" + self.payload + "\"" }
-  //     List<JsonValue> { "[" + self.payload.map(v = > v.toJson()).join(",") + "]" }
-  //     Map<string, JsonValue> {
-  //       "{" + self.payload.map(kv = > "\"" + kv.key + "\":" + kv.value.toJson()).join(",") + "}"
-  //     }
-  //   };
-  // }
-
+  func toObject(): JsonObject {
+    return if self.payload {
+      JsonObject { self.payload }
+      else { JsonObject() }
+    };
+  }
 }
