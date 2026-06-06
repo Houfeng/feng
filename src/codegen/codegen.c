@@ -15904,6 +15904,8 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
+    } else if (cgtype_is_by_value_struct(result_type)) {
+        buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, ifv);
     } else {
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
     }
@@ -16063,6 +16065,8 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             cgtype_free(result_type);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
+    } else if (cgtype_is_by_value_struct(result_type)) {
+        buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, ifv);
     } else {
         buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, ifv, cty);
     }
@@ -16791,6 +16795,8 @@ static bool cg_emit_try_expr(CG *cg,
                 cgtype_free(result_type);
                 return cg_fail(cg, e->token, "codegen: out of memory");
             }
+        } else if (cgtype_is_by_value_struct(result_type)) {
+            buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, slot_name);
         } else {
             buf_append_fmt(cg->cur_body, "    %s %s = (%s)0;\n", cty, slot_name, cty);
         }

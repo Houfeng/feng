@@ -3,95 +3,17 @@ open module std.text;
 import std;
 import std.collections;
 
-open type JsonArray {
-  seal let payload: List<JsonValue>;
-
-  func JsonArray(payload: List<JsonValue>) {
-    self.payload = payload;
-  }
-
-  func JsonArray() {}
-
-  func size(): int {
-    return self.payload.size();
-  }
-
-  func get(index: int): JsonValue {
-    return self.payload.get(index);
-  }
-
-  func set(index: int, value: JsonValue) {
-    self.payload.set(index, value);
-  }
-
-  func set(index: int, value: JsonValuePayload) {
-    self.set(index, JsonValue(value));
-  }
-
-  func add(value: JsonValue) {
-    self.payload.add(value);
-  }
-
-  func add(value: JsonValuePayload) {
-    self.add(JsonValue(value));
-  }
-
-  func remove(index: int) {
-    self.payload.remove(index);
-  }
-
-  func toJson(): string {
-    let textArray = string[:self.size()];
-    return string.join(",", textArray);
-  }
-}
-
-open type JsonObject {
-  seal let payload: Map<string, JsonValue>;
-
-  func JsonObject(payload: Map<string, JsonValue>) {
-    self.payload = payload;
-  }
-
-  func JsonObject() {}
-
-  func size(): int {
-    return self.payload.count();
-  }
-
-  func get(key: string): JsonValue {
-    return self.payload.get(key);
-  }
-
-  func set(key: string, value: JsonValue) {
-    self.payload.set(key, value);
-  }
-
-  func set(key: string, value: JsonValuePayload) {
-    self.set(key, JsonValue(value));
-  }
-
-  func remove(key: string) {
-    self.payload.remove(key);
-  }
-
-  func toJson(): string {
-    let textPairs = string[:self.size()];
-    return "{" + string.join(",", textPairs) + "}";
-  }
-}
-
-open spec JsonValuePayload: None
+open spec JsonPayload: None
 | double
 | bool
 | string
-| JsonArray
-| JsonObject;
+| List<JsonPayload>
+| Map<string, JsonPayload>;
 
 open type JsonValue {
-  seal let payload: JsonValuePayload;
+  seal let payload: JsonPayload;
 
-  func JsonValue(payload: JsonValuePayload) {
+  func JsonValue(payload: JsonPayload) {
     self.payload = payload;
   }
 
@@ -127,24 +49,24 @@ open type JsonValue {
 
   func isArray(): bool {
     return if self.payload {
-      JsonArray { true }
+      List<JsonPayload> { true }
       else { false }
     };
   }
 
   func isObject(): bool {
     return if self.payload {
-      JsonObject { true }
+      Map<string, JsonPayload> { true }
       else { false }
     };
   }
 
-  // func toNull(): None {
-  //   return if self.payload {
-  //     None { self.payload }
-  //     else { none }
-  //   };
-  // }
+  func toNull(): None {
+    return if self.payload {
+      None { self.payload }
+      else { none }
+    };
+  }
 
   func toBool(): bool {
     return if self.payload {
@@ -167,17 +89,17 @@ open type JsonValue {
     };
   }
 
-  func toArray(): JsonArray {
+  func toArray(): List<JsonPayload> {
     return if self.payload {
-      JsonArray { self.payload }
-      else { JsonArray() }
+      List<JsonPayload> { self.payload }
+      else { List<JsonPayload>() }
     };
   }
 
-  func toObject(): JsonObject {
+  func toObject(): Map<string, JsonPayload> {
     return if self.payload {
-      JsonObject { self.payload }
-      else { JsonObject() }
+      Map<string, JsonPayload> { self.payload }
+      else { Map<string, JsonPayload>() }
     };
   }
 }
