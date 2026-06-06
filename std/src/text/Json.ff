@@ -35,7 +35,16 @@ open type JsonArray {
   }
   func JsonArray() {}
   func toJsonString(): string {
-    return "[]";
+    let size = self.payload.size();
+    if size == 0 {
+      return "[]";
+    }
+    let parts: string[!] = string[:size];
+    for var i: i32 = 0; i < size; i = i + 1 {
+      let item = JsonValue(self.payload.get(i));
+      parts[i] = item.toJsonString();
+    }
+    return "[" + string.join(",", (string[])parts) + "]";
   }
 }
 
@@ -46,7 +55,20 @@ open type JsonObject {
   }
   func JsonObject() {}
   func toJsonString(): string {
-    return "{}";
+    let entries = self.payload.entries();
+    if entries.length() == (long)0 {
+      return "{}";
+    }
+    let len = entries.length();
+    let parts: string[!] = string[:len];
+    var idx: long = 0;
+    for let entry in entries {
+      let key = entry.item1.toJsonString();
+      let val = JsonValue(entry.item2).toJsonString();
+      parts[idx] = key + ":" + val;
+      idx += (long)1;
+    }
+    return "{" + string.join(",", (string[])parts) + "}";
   }
 }
 
@@ -136,14 +158,14 @@ open type JsonValue {
     };
   }
 
-  func asArray(): List<JsonPayload> {
+  func asArray(): JsonArray {
     return if self.payload {
       JsonArray { self.payload }
       else { JsonArray() }
     };
   }
 
-  func asObject(): Map<string, JsonPayload> {
+  func asObject(): JsonObject {
     return if self.payload {
       JsonObject { self.payload }
       else { JsonObject() }
