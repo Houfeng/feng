@@ -254,6 +254,7 @@ if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
         echo "FAIL[full_pipeline] missing executable $bin"
         failures=$((failures + 1))
     else
+        codesign -s - "$bin" 2>/dev/null || true
         actual="$("$bin")"
         expected_text="$(cat "$EXPECTED")"
         if [[ "$actual" != "$expected_text" ]]; then
@@ -378,6 +379,7 @@ if [[ -d "$MULTI_DIR" ]]; then
             echo "FAIL[multi_file] missing executable $bin"
             failures=$((failures + 1))
         else
+            codesign -s - "$bin" 2>/dev/null || true
             actual="$("$bin")"
             expected_text="$(cat "$MULTI_EXPECTED")"
             if [[ "$actual" != "$expected_text" ]]; then
