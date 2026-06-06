@@ -21,7 +21,7 @@ open type None();
 /**
  * The None value.
  */
-// open let none: None = ();
+open let none: None = ();
 
 /**
  * The Option union type represents a value that may or may not be present.

@@ -25410,7 +25410,8 @@ static bool cg_pass_register_module_bindings(CG *cg,
                            mb->exports_public_surface ? "" : "static ",
                            cty,
                            mb->c_name);
-        } else if (cgtype_is_aggregate(mb->type)) {
+        } else if (cgtype_is_aggregate(mb->type) ||
+                   cgtype_is_by_value_struct(mb->type)) {
             buf_append_fmt(&cg->statics,
                            "%s%s %s = {0};\n",
                            mb->exports_public_surface ? "" : "static ",
