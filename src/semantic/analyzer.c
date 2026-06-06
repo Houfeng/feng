@@ -6791,7 +6791,8 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     }
 
     for (branch_index = 0U; branch_index < branch_count && ok; ++branch_index) {
-        if (!collect_match_branch_label_records(context,
+        if (inferred_expr_type_is_known(target_type) &&
+            !collect_match_branch_label_records(context,
                                                 &branches[branch_index],
                                                 branch_index,
                                                 &records,
