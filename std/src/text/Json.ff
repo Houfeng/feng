@@ -33,6 +33,9 @@ open type JsonArray {
   func JsonArray(payload: List<JsonPayload>) {
     self.payload = payload;
   }
+  func JsonArray(payload: JsonPayload[]) {
+    self.payload = List<JsonPayload>(payload);
+  }
   func JsonArray() {}
   func toJsonString(): string {
     let size = self.payload.size();

@@ -18,12 +18,12 @@ open type List<T> {
 
   seal func grow() {
     if self.capacity == 0 {
-      self.items = T[: 8];
+      self.items = T[:8];
       self.capacity = 8;
       return;
     }
     let newCapacity: i32 = self.capacity * 2;
-    let newItems: T[!] = T[: newCapacity];
+    let newItems: T[!] = T[:newCapacity];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
@@ -42,12 +42,28 @@ open type List<T> {
     if newCapacity < 8 {
       newCapacity = 8;
     }
-    let newItems: T[!] = T[: newCapacity];
+    let newItems: T[!] = T[:newCapacity];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
     self.items = newItems;
     self.capacity = newCapacity;
+  }
+
+  open func List() {}
+
+  open func List(items: T[!]) {
+    self.items = items;
+    self.count = (i32)(items.length());
+  }
+
+  open func List(items: T[]) {
+    let length = (i32)items.length();
+    self.items = T[:length];
+    for var i: i32 = 0; i < length; i = i + 1 {
+      self.items[i] = items[i];
+    }
+    self.count = length;
   }
 
   /**
@@ -104,7 +120,7 @@ open type List<T> {
    * @return immutable array of all elements
    */
   open func entries(): T[] {
-    let result: T[!] = T[: self.count];
+    let result: T[!] = T[:self.count];
     for var i: i32 = 0; i < self.count; i = i + 1 {
       result[i] = self.items[i];
     }

@@ -8057,6 +8057,33 @@ static void test_constructor_call_selects_overload_by_inferred_local_binding(voi
     feng_program_free(program);
 }
 
+static void test_constructor_call_matches_generic_owner_type_param(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    var val: T;\n"
+        "    func Box(val: T) {\n"
+        "        self.val = val;\n"
+        "    }\n"
+        "}\n"
+        "func make(): Box<i64> {\n"
+        "    return Box<i64>(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ctor_generic_owner_type_param.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_constructor_call_reports_type_mismatch(void) {
     const char *source =
         "module demo.main;\n"
@@ -15018,6 +15045,7 @@ int main(void) {
     test_constructor_call_reports_missing_zero_arg_constructor();
     test_constructor_call_selects_overload_by_literal_type();
     test_constructor_call_selects_overload_by_inferred_local_binding();
+    test_constructor_call_matches_generic_owner_type_param();
     test_constructor_call_reports_type_mismatch();
     test_constructor_call_rejects_function_type();
     test_constructor_call_rejects_object_form_spec();

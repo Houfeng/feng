@@ -124,6 +124,8 @@ typedef struct CGType {
     /* For GENERIC_PARAM (G6): 0-based index into the enclosing generic
      * function's type_params array (e.g. 0 for T, 1 for U). */
     size_t generic_param_index;
+    /* For ARRAY: true when the array has writable elements (T[!]). */
+    bool array_element_writable;
 } CGType;
 
 static void cg_type_ref_free(FengTypeRef *ref);
@@ -199,6 +201,7 @@ static CGType *cgtype_clone(const CGType *t) {
     c->user_spec = t->user_spec;
     c->enum_decl = t->enum_decl;
     c->generic_param_index = t->generic_param_index;
+    c->array_element_writable = t->array_element_writable;
     return c;
 }
 
@@ -2194,7 +2197,7 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
             buf_append_cstr(out, t->user_spec->c_closure_struct_name);
             return true;
         case CG_TYPE_ARRAY:
-            buf_append_cstr(out, "A_");
+            buf_append_cstr(out, t->array_element_writable ? "AW_" : "A_");
             return cg_encode_type_short(t->element, out);
         default:
             buf_append_cstr(out, "X");
@@ -6371,6 +6374,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         CGType *t = cgtype_new(CG_TYPE_ARRAY);
         if (!t) { cgtype_free(elem); return false; }
         t->element = elem;
+        t->array_element_writable = ref->array_element_writable;
         *out_type = t;
         return true;
     }
@@ -27756,14 +27760,15 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
     }
     Buf b; buf_init(&b);
     /* Public methods use the public ordinal (m<N>, counting only public
-     * methods). Private/internal methods use their private ordinal (i<N>,
-     * counting only private methods). This ensures consumers that only see
-     * the public interface assign the same m<N> index as the library. */
+     * methods and constructors). Private/internal members use their private
+     * ordinal (i<N>). This ensures consumers that only see the public
+     * interface assign the same m<N> index as the library. */
     bool is_pub = cg_generic_method_is_public(member);
     size_t ordinal = 0;
     for (size_t _i = 0; _i < decl->as.type_decl.member_count; ++_i) {
         const FengTypeMember *_c = decl->as.type_decl.members[_i];
-        if (_c->kind != FENG_TYPE_MEMBER_METHOD) continue;
+        if (_c->kind != FENG_TYPE_MEMBER_METHOD &&
+            _c->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) continue;
         if (cg_generic_method_is_public(_c) != is_pub) continue;
         if (_c == member) break;
         ordinal++;

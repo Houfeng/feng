@@ -9182,14 +9182,33 @@ static ConstructorResolution resolve_accessible_constructor_overload(
     const FengDecl *type_decl,
     const FengSemanticModule *provider_module,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count) {
     size_t member_index;
     ConstructorResolution result;
+    bool use_owner_substitution = false;
+    FengTypeRef synthetic_owner_ref;
+    InferredExprType owner_type;
 
     memset(&result, 0, sizeof(result));
 
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
         return result;
+    }
+
+    if (explicit_type_args != NULL &&
+        explicit_type_arg_count > 0U &&
+        type_decl->as.type_decl.type_param_count > 0U &&
+        explicit_type_arg_count == type_decl->as.type_decl.type_param_count) {
+        memset(&synthetic_owner_ref, 0, sizeof(synthetic_owner_ref));
+        synthetic_owner_ref.kind = FENG_TYPE_REF_NAMED;
+        synthetic_owner_ref.as.named.type_args = (FengTypeRef **)explicit_type_args;
+        synthetic_owner_ref.as.named.type_arg_count = explicit_type_arg_count;
+        memset(&owner_type, 0, sizeof(owner_type));
+        owner_type.kind = FENG_INFERRED_EXPR_TYPE_TYPE_REF;
+        owner_type.type_ref = &synthetic_owner_ref;
+        use_owner_substitution = true;
     }
 
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
@@ -9202,9 +9221,17 @@ static ConstructorResolution resolve_accessible_constructor_overload(
             fit_body_blocks_private_access(context, type_decl, member)) {
             continue;
         }
-        if (!callable_parameters_match_args(
-            context, &member->as.callable, args, arg_count, false, NULL)) {
-            continue;
+        if (use_owner_substitution) {
+            if (!callable_parameters_match_args_for_owner_instance(
+                    context, &member->as.callable, type_decl, NULL, owner_type,
+                    args, arg_count, false, NULL)) {
+                continue;
+            }
+        } else {
+            if (!callable_parameters_match_args(
+                    context, &member->as.callable, args, arg_count, false, NULL)) {
+                continue;
+            }
         }
 
         if (result.kind == FENG_CONSTRUCTOR_RESOLUTION_NONE) {
@@ -11633,11 +11660,19 @@ static bool validate_let_field_object_literal_binding(ResolveContext *context,
                                                                  type_decl,
                                                                  provider_module,
                                                                  target_expr->as.call.args,
-                                                                 target_expr->as.call.arg_count);
+                                                                 target_expr->as.call.arg_count,
+                                                                 target_expr->as.call.has_explicit_type_args
+                                                                     ? (const FengTypeRef *const *)target_expr->as.call.explicit_type_args
+                                                                     : NULL,
+                                                                 target_expr->as.call.has_explicit_type_args
+                                                                     ? target_expr->as.call.explicit_type_arg_count
+                                                                     : 0U);
         } else {
             resolution = resolve_accessible_constructor_overload(context,
                                                                  type_decl,
                                                                  provider_module,
+                                                                 NULL,
+                                                                 0U,
                                                                  NULL,
                                                                  0U);
         }
@@ -15904,6 +15939,8 @@ static bool validate_constructor_invocation(ResolveContext *context,
                                             const FengSemanticModule *provider_module,
                                             FengExpr *const *args,
                                             size_t arg_count,
+                                            const FengTypeRef *const *explicit_type_args,
+                                            size_t explicit_type_arg_count,
                                             const FengTypeMember **out_constructor) {
     size_t declared_constructor_count;
     ConstructorResolution resolution;
@@ -15946,7 +15983,8 @@ static bool validate_constructor_invocation(ResolveContext *context,
     }
 
     resolution = resolve_accessible_constructor_overload(
-        context, type_decl, provider_module, args, arg_count);
+        context, type_decl, provider_module, args, arg_count,
+        explicit_type_args, explicit_type_arg_count);
     if (resolution.kind == FENG_CONSTRUCTOR_RESOLUTION_UNIQUE) {
         if (resolution.constructor != NULL &&
             !validate_borrowed_data_pointer_call_arguments(
@@ -16001,6 +16039,12 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
                                          target.provider_module,
                                          expr->as.call.args,
                                          expr->as.call.arg_count,
+                                         expr->as.call.has_explicit_type_args
+                                             ? (const FengTypeRef *const *)expr->as.call.explicit_type_args
+                                             : NULL,
+                                         expr->as.call.has_explicit_type_args
+                                             ? expr->as.call.explicit_type_arg_count
+                                             : 0U,
                                          &constructor_member)) {
         return false;
     }
@@ -16517,6 +16561,8 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                          expr->as.object_literal.target,
                                          target.type_decl,
                                          target.provider_module,
+                                         NULL,
+                                         0U,
                                          NULL,
                                          0U,
                                          NULL)) {
