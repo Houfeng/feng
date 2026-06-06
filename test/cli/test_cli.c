@@ -755,6 +755,7 @@ static int run_dap_quiet_stderr(int argc, char **argv) {
 typedef int (*CliEntryFn)(const char *program, int argc, char **argv);
 
 static char *read_text_stream(FILE *file);
+static FILE *temp_file(void);
 
 static char *run_cli_entry_capture_stdout_and_stderr(CliEntryFn entry,
                                                      int argc,
@@ -763,8 +764,8 @@ static char *run_cli_entry_capture_stdout_and_stderr(CliEntryFn entry,
                                                      char **out_stderr) {
     int saved_stdout;
     int saved_stderr;
-    FILE *output = tmpfile();
-    FILE *errors = tmpfile();
+    FILE *output = temp_file();
+    FILE *errors = temp_file();
     int rc;
     char *captured_stdout;
     char *captured_stderr;
@@ -894,7 +895,7 @@ static char *run_dap_capture_stdout_with_path(int argc,
     int saved_stdin;
     int saved_stdout;
     int saved_stderr;
-    FILE *errors = tmpfile();
+    FILE *errors = temp_file();
     const char *existing_path = getenv("PATH");
     char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
     char *captured_stdout;
@@ -1156,7 +1157,7 @@ static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
 
 static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
     int saved_stderr;
-    FILE *errors = tmpfile();
+    FILE *errors = temp_file();
     int rc;
     char *captured;
 
@@ -1181,7 +1182,7 @@ static char *run_deps_capture_stderr(int argc, char **argv, int *out_rc) {
 
 static char *run_project_check_capture_stderr(int argc, char **argv, int *out_rc) {
     int saved_stderr;
-    FILE *errors = tmpfile();
+    FILE *errors = temp_file();
     int rc;
     char *captured;
 
@@ -1286,8 +1287,8 @@ static char *run_lsp_server_capture(FILE *input) {
     int input_fd;
     char *input_text;
     FILE *named_input;
-    FILE *output = tmpfile();
-    FILE *errors = tmpfile();
+    FILE *output = temp_file();
+    FILE *errors = temp_file();
     char *captured;
 
     ASSERT(output != NULL);
@@ -1318,6 +1319,18 @@ static char *file_uri_from_path(const char *path) {
         return dup_printf("file://%s", resolved);
     }
     return dup_printf("file://%s", path);
+}
+
+static FILE *temp_file(void) {
+    char path[] = "temp/feng_tmpfile_XXXXXX";
+    int fd = mkstemp(path);
+    FILE *file;
+
+    if (fd < 0) return NULL;
+    (void)unlink(path);
+    file = fdopen(fd, "w+b");
+    if (file == NULL) { close(fd); return NULL; }
+    return file;
 }
 
 static void find_line_character(const char *text,
@@ -7425,7 +7438,7 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
                            uri);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -7542,7 +7555,7 @@ static void test_lsp_hover_definition_and_completion(void) {
     expected_definition = dup_printf("\"id\":3,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":9",
                                      uri);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -7625,7 +7638,7 @@ static char *capture_lsp_completion_response(const char *source,
                                 character);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -7683,7 +7696,7 @@ static char *capture_lsp_hover_response(const char *source,
                            character);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -7734,7 +7747,7 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
                          character);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -7990,7 +8003,7 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
                                          user_decl_line,
                                          user_decl_character);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -8394,7 +8407,7 @@ static void test_lsp_member_references_and_rename_from_object_literal_field(void
                                   field_line,
                                   field_character);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -8544,7 +8557,7 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
                                   decl_line,
                                   decl_character);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -8684,7 +8697,7 @@ static void test_lsp_rename_accepts_identifier_end_position(void) {
                                         field_end_line,
                                         field_end_character);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -8833,7 +8846,7 @@ static void test_lsp_definition_references_rename_with_broken_code(void) {
                                           second_call_line,
                                           second_call_character);
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -8934,7 +8947,7 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
                            uri, field_line, field_character + 7U);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -9011,7 +9024,7 @@ static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
                           uri, kSourceEscaped);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -9162,7 +9175,7 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
                                              shared_real_uri);
     }
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -11848,7 +11861,7 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
                                   n_if_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -11996,7 +12009,7 @@ static void test_lsp_use_path_completion(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -12103,7 +12116,7 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -12227,7 +12240,7 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -12345,7 +12358,7 @@ static void test_lsp_imported_type_completion_after_use(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -12465,7 +12478,7 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
@@ -12580,7 +12593,7 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = tmpfile();
+    input = temp_file();
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
