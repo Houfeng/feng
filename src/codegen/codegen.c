@@ -25958,6 +25958,17 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         if (cg_program_origin(cg, cg->user_specs[i].owner_program) ==
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            /* Imported specs with generic context type params need their
+             * witness struct body emitted here — consumer modules create
+             * witness instances that require the complete struct layout.
+             * cg_emit_user_spec_definition returns early for these specs
+             * (no aggregate descriptor emitted), so no symbol conflicts. */
+            if (cg->user_specs[i].generic_context_type_param_count > 0U) {
+                cg->cur_program = cg->user_specs[i].owner_program;
+                cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
+                cg->cur_program = NULL;
+                if (cg->failed) return false;
+            }
             continue;
         }
         if (!cg_emit_module_header(cg, cg->user_specs[i].owner_program)) {
