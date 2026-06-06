@@ -561,7 +561,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 
 代理层展开逻辑：
 
-1. 对 `display_type = "Person"` 的变量，取 `strid("Person")`，在 ENTS 中筛选所有 `parent_strid == strid("Person")` 的记录。
+1. 对 `display_type = "myapp.models.Person"` 的变量，取 `strid("myapp.models.Person")`，在 ENTS 中筛选所有 `parent_strid == strid("myapp.models.Person")` 的记录。
 2. 对每条字段记录，构造子变量 `read_expr = "(" + parent_read_expr + ")" + field_read_expr`，通过 internal evaluate 获取值。
 3. 若字段的 `display_type` 在 ENTS 中也有对应字段模板（即字段本身是用户类型），递归展开；深度上限 3。
 
@@ -570,6 +570,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - 同一类型的所有变量共享同一份字段模板记录；codegen 按 `(parent_strid, display_name)` 去重，每种类型只写一次字段列表。
 - 字段模板记录与顶层变量记录在同一 ENTS section 中混排；proxy 区分方式：`kind == field`。
 - `.fd` header `version` 从 1 升至 2，标记 ENTS 记录从 6 u32 扩展为 7 u32（加 `parent_strid`）；version 1 reader 自动补 `parent_strid = 0`，向前兼容。
+- `display_type_strid` 和 `parent_strid` 中的用户类型名均使用**全限定名**（`module.submodule.TypeName`，如 `std.text.JsonValue`）；内置类型（`int`、`string`、`double`、`bool` 等）和泛型参数名（`T`、`K` 等）保持原始短名。泛型实例示例：`"std.collections.List<std.text.JsonValue>"`。
 
 ## 6. `feng dap` 与 `lldb-dap` 适配层
 

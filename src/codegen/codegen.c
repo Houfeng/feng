@@ -131,6 +131,10 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
                                             const CGType *type,
                                             FengToken token);
 static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref);
+/* Qualifies single-segment user type names to fully-qualified form for debug
+ * display_type strings. Only used in the debug path. */
+static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
+                                              const FengTypeRef *ref);
 
 typedef enum CGValueKind {
     CG_VK_TRIVIAL = 0,
@@ -1566,6 +1570,7 @@ static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
                                                    const CGType *type,
                                                    FengToken blame) {
     FengTypeRef *type_ref;
+    FengTypeRef *qualified_ref;
     char *display_type;
 
     if (cg == NULL || type == NULL) {
@@ -1575,8 +1580,13 @@ static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
     if (type_ref == NULL) {
         return NULL;
     }
-    display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    qualified_ref = cg_debug_qualify_type_ref(cg, type_ref);
     cg_type_ref_free(type_ref);
+    if (qualified_ref == NULL) {
+        return NULL;
+    }
+    display_type = cg_debug_dup_display_type_from_type_ref(qualified_ref);
+    cg_type_ref_free(qualified_ref);
     return display_type;
 }
 
@@ -1638,9 +1648,12 @@ static bool cg_debug_add_variable_record_cstr_type_ref(CG *cg,
                                                        const FengTypeRef *type_ref,
                                                        FengCodegenMapingVariableKind kind,
                                                        FengToken blame) {
-    char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    FengTypeRef *qualified_ref = cg_debug_qualify_type_ref(cg, type_ref);
+    char *display_type = cg_debug_dup_display_type_from_type_ref(
+        qualified_ref != NULL ? qualified_ref : type_ref);
     bool ok;
 
+    cg_type_ref_free(qualified_ref);
     if (display_type == NULL) {
         return cg_fail(cg, blame, "codegen: missing debug display type");
     }
@@ -1663,9 +1676,12 @@ static bool cg_debug_add_variable_record_slice_type_ref(CG *cg,
                                                         const FengTypeRef *type_ref,
                                                         FengCodegenMapingVariableKind kind,
                                                         FengToken blame) {
-    char *display_type = cg_debug_dup_display_type_from_type_ref(type_ref);
+    FengTypeRef *qualified_ref = cg_debug_qualify_type_ref(cg, type_ref);
+    char *display_type = cg_debug_dup_display_type_from_type_ref(
+        qualified_ref != NULL ? qualified_ref : type_ref);
     bool ok;
 
+    cg_type_ref_free(qualified_ref);
     if (display_type == NULL) {
         return cg_fail(cg, blame, "codegen: missing debug display type");
     }
@@ -4971,6 +4987,138 @@ static bool cg_type_ref_equal(const FengTypeRef *left, const FengTypeRef *right)
             return cg_type_ref_equal(left->as.inner, right->as.inner);
     }
     return false;
+}
+
+/* Recursively qualifies single-segment user type names to fully-qualified form
+ * (e.g. "JsonValue" → "std.text.JsonValue") for debug display_type strings. */
+static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
+                                              const FengTypeRef *ref) {
+    FengTypeRef *result;
+
+    if (ref == NULL) return NULL;
+
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED: {
+            const FengProgram *owner = NULL;
+
+            if (ref->as.named.segment_count == 1U) {
+                FengSlice name = ref->as.named.segments[0];
+                const UserType *ut = cg_find_user_type(cg, name.data,
+                                                       name.length);
+                if (ut != NULL && ut->owner_program != NULL) {
+                    owner = ut->owner_program;
+                } else {
+                    const UserSpec *us = cg_find_user_spec(cg, name.data,
+                                                           name.length);
+                    if (us != NULL && us->owner_program != NULL) {
+                        owner = us->owner_program;
+                    }
+                }
+                if (owner == NULL) {
+                    for (size_t gi = 0; gi < cg->generic_type_decl_count; ++gi) {
+                        const GenericTypeDecl *gd = &cg->generic_type_decls[gi];
+                        if (gd->decl != NULL &&
+                            gd->decl->kind == FENG_DECL_TYPE &&
+                            gd->decl->as.type_decl.name.length == name.length &&
+                            memcmp(gd->decl->as.type_decl.name.data,
+                                   name.data, name.length) == 0 &&
+                            gd->owner_program != NULL) {
+                            owner = gd->owner_program;
+                            break;
+                        }
+                    }
+                }
+                if (owner == NULL) {
+                    for (size_t gi = 0; gi < cg->generic_spec_decl_count; ++gi) {
+                        const GenericSpecDecl *gd = &cg->generic_spec_decls[gi];
+                        if (gd->decl != NULL &&
+                            gd->decl->kind == FENG_DECL_SPEC &&
+                            gd->decl->as.spec_decl.name.length == name.length &&
+                            memcmp(gd->decl->as.spec_decl.name.data,
+                                   name.data, name.length) == 0 &&
+                            gd->owner_program != NULL) {
+                            owner = gd->owner_program;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            result = calloc(1U, sizeof *result);
+            if (result == NULL) return NULL;
+            result->token = ref->token;
+            result->kind = FENG_TYPE_REF_NAMED;
+
+            if (owner != NULL && owner->module_segment_count > 0U) {
+                size_t mod_count = owner->module_segment_count;
+                size_t total = mod_count + 1U;
+                result->as.named.segment_count = total;
+                result->as.named.segments =
+                    calloc(total, sizeof *result->as.named.segments);
+                if (result->as.named.segments == NULL) {
+                    free(result);
+                    return NULL;
+                }
+                for (size_t i = 0; i < mod_count; ++i) {
+                    result->as.named.segments[i] = owner->module_segments[i];
+                }
+                result->as.named.segments[mod_count] =
+                    ref->as.named.segments[0];
+            } else {
+                result->as.named.segment_count = ref->as.named.segment_count;
+                result->as.named.segments =
+                    calloc(ref->as.named.segment_count,
+                           sizeof *result->as.named.segments);
+                if (ref->as.named.segment_count > 0U &&
+                    result->as.named.segments == NULL) {
+                    free(result);
+                    return NULL;
+                }
+                for (size_t i = 0; i < ref->as.named.segment_count; ++i) {
+                    result->as.named.segments[i] = ref->as.named.segments[i];
+                }
+            }
+
+            if (ref->as.named.type_arg_count > 0U) {
+                result->as.named.type_arg_count = ref->as.named.type_arg_count;
+                result->as.named.type_args =
+                    calloc(ref->as.named.type_arg_count,
+                           sizeof *result->as.named.type_args);
+                if (result->as.named.type_args == NULL) {
+                    cg_type_ref_free(result);
+                    return NULL;
+                }
+                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                    result->as.named.type_args[i] =
+                        cg_debug_qualify_type_ref(cg,
+                                                  ref->as.named.type_args[i]);
+                    if (result->as.named.type_args[i] == NULL) {
+                        cg_type_ref_free(result);
+                        return NULL;
+                    }
+                }
+            }
+            return result;
+        }
+        case FENG_TYPE_REF_POINTER:
+            result = calloc(1U, sizeof *result);
+            if (result == NULL) return NULL;
+            result->token = ref->token;
+            result->kind = FENG_TYPE_REF_POINTER;
+            result->as.inner = cg_debug_qualify_type_ref(cg, ref->as.inner);
+            if (result->as.inner == NULL) { free(result); return NULL; }
+            return result;
+        case FENG_TYPE_REF_ARRAY:
+            result = calloc(1U, sizeof *result);
+            if (result == NULL) return NULL;
+            result->token = ref->token;
+            result->kind = FENG_TYPE_REF_ARRAY;
+            result->array_element_writable = ref->array_element_writable;
+            result->as.inner = cg_debug_qualify_type_ref(cg, ref->as.inner);
+            if (result->as.inner == NULL) { free(result); return NULL; }
+            return result;
+    }
+    return cg_type_ref_clone(ref);
 }
 
 static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {

@@ -354,10 +354,10 @@ static void test_codegen_records_user_type_field_entities(void) {
                           "point",
                           FENG_CODEGEN_MAPING_VARIABLE_BINDING,
                           NULL);
-    x_field = find_field_entity(&out.debug_info, "Point", "x", "->x");
-    label_field = find_field_entity(&out.debug_info, "Point", "label", "->label");
+    x_field = find_field_entity(&out.debug_info, "feng.debug.fields.Point", "x", "->x");
+    label_field = find_field_entity(&out.debug_info, "feng.debug.fields.Point", "label", "->label");
     ASSERT(point != NULL);
-    ASSERT(point->display_type != NULL && strcmp(point->display_type, "Point") == 0);
+    ASSERT(point->display_type != NULL && strcmp(point->display_type, "feng.debug.fields.Point") == 0);
     ASSERT(x_field != NULL);
     ASSERT(x_field->frame_backend_symbol == NULL);
     ASSERT(x_field->backend_name == NULL);
