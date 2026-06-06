@@ -19,5 +19,6 @@ func main(args: string[]) {
   for var i = 1; i <= 10; i += 1 {
     println("Hello, world! {0}", time.toString());
   }
-  let json = JsonValue(JsonArray([1, 2, 3]));
+  let json = JsonValue(JsonArray(["1", "2", "3"]));
+  println("JSON: {0}", json.toJsonString());
 }

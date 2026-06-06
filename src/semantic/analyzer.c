@@ -22028,6 +22028,81 @@ static const FengTypeRef *find_spec_type_ref_in_fit(
     return NULL;
 }
 
+/* Pre-register normalized union-spec info for union-form specs from
+ * imported-package modules.  In a local-only build record_normalized_union_spec_info
+ * runs during the resolution pass, but imported modules are skipped entirely
+ * so their union-spec info is never recorded.  Without it
+ * feng_semantic_lookup_union_spec_info returns NULL and cross-module
+ * union-variant matching fails. */
+static void precompute_imported_union_spec_infos(FengSemanticAnalysis *analysis) {
+    size_t mi;
+
+    if (analysis == NULL) {
+        return;
+    }
+
+    for (mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        size_t pi;
+
+        if (mod->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+
+        for (pi = 0U; pi < mod->program_count; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            size_t di;
+
+            for (di = 0U; di < prog->declaration_count; ++di) {
+                const FengDecl *decl = prog->declarations[di];
+                FengUnionSpecMemberInfo *members;
+                size_t member_count;
+                size_t member_index;
+                bool oom = false;
+
+                if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
+                    decl->as.spec_decl.form != FENG_SPEC_FORM_UNION) {
+                    continue;
+                }
+                if (feng_semantic_lookup_union_spec_info(analysis, decl) != NULL) {
+                    continue;
+                }
+
+                member_count = decl->as.spec_decl.as.union_form.member_count;
+                if (member_count == 0U) {
+                    continue;
+                }
+
+                members = (FengUnionSpecMemberInfo *)calloc(member_count, sizeof(*members));
+                if (members == NULL) {
+                    continue;
+                }
+
+                for (member_index = 0U; member_index < member_count; ++member_index) {
+                    const FengTypeRef *src = decl->as.spec_decl.as.union_form.members[member_index];
+
+                    members[member_index].type_ref = clone_type_ref_for_inference(src);
+                    members[member_index].resolved_decl = NULL;
+                    if (src != NULL && members[member_index].type_ref == NULL) {
+                        oom = true;
+                        break;
+                    }
+                }
+
+                if (oom) {
+                    for (size_t k = 0U; k < member_count; ++k) {
+                        free_synthetic_type_ref((FengTypeRef *)members[k].type_ref);
+                    }
+                    free(members);
+                    continue;
+                }
+
+                feng_semantic_record_union_spec_info(analysis, decl, members, member_count);
+            }
+        }
+    }
+}
+
 /* Pre-compute spec witnesses for builtin/array subjects whose fits are
  * defined in imported-package modules.  In a local-only build the
  * on-demand path in the resolution pass handles this, but imported
@@ -22364,6 +22439,12 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                 scan_from = scan_end;
             }
         }
+    }
+
+    /* Pre-register normalized union-spec info for imported-package
+     * union-form specs so cross-module union-variant matching works. */
+    if (ok) {
+        precompute_imported_union_spec_infos(analysis);
     }
 
     /* Phase S1a: spec satisfaction relation sidecar must be available
