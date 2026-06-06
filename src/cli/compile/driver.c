@@ -70,6 +70,15 @@ static char *dup_printf(const char *fmt, ...) {
     return out;
 }
 
+/* Build a mkdtemp template under FENG_TEMP_DIR (falls back to /tmp). */
+static char *make_temp_template(const char *suffix) {
+    const char *base = getenv("FENG_TEMP_DIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    return dup_printf("%s/%s", base, suffix);
+}
+
 static char *path_join2(const char *a, const char *b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
@@ -856,7 +865,7 @@ static bool extract_sorted_bundle_libraries(const BundleScanInfo *bundles,
         return true;
     }
 
-    template_path = str_dup_cstr("/tmp/feng_bundle_link_XXXXXX");
+    template_path = make_temp_template("feng_bundle_link_XXXXXX");
     library_paths = calloc(bundle_count, sizeof(*library_paths));
     if (template_path == NULL || library_paths == NULL) {
         free(library_paths);
@@ -1122,7 +1131,7 @@ static bool collect_bundle_extlib_static_libraries(const char *const *bundle_pat
         goto done;
     }
 
-    template_path = str_dup_cstr("/tmp/feng_bundle_extlib_link_XXXXXX");
+    template_path = make_temp_template("feng_bundle_extlib_link_XXXXXX");
     library_paths = calloc(match_count, sizeof(*library_paths));
     satisfied_names = calloc(match_count, sizeof(*satisfied_names));
     if (template_path == NULL || library_paths == NULL || satisfied_names == NULL) {

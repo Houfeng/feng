@@ -12,7 +12,8 @@ FENG="$ROOT/build/bin/feng"
 RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
 FIXTURE="$ROOT/test/smoke/phase1a/hello.ff"
 EXPECTED="$ROOT/test/smoke/phase1a/hello.expected"
-WORK="$(mktemp -d -t feng_cli_XXXXXX)"
+mkdir -p "$ROOT/temp"
+WORK="$(mktemp -d "$ROOT/temp/feng_cli_XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 detect_host_target() {

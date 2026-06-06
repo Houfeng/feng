@@ -115,11 +115,11 @@ test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN
 	$(BIN_DIR)/test_symbol
 
 perf-constraints: cli runtime
-	./scripts/run_perf_constraints.sh
+	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
 
 std-tests: cli runtime
-	$(BIN_DIR)/feng build ./std
-	$(BIN_DIR)/feng build ./std_test
+	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng build ./std
+	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng build ./std_test
 	./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_READLINE1__=ABCDE$$' ./std_test/build/std_test.stdout
 	grep -q '^__STD_IO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
@@ -152,13 +152,13 @@ std-tests: cli runtime
 	grep -q '^__STRING_RUNE_FOR_IN__=A中B$$' ./std_test/build/std_test.stdout
 
 smoke: cli runtime
-	./scripts/run_smoke.sh
+	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_smoke.sh
 
 cli-tests: cli runtime
-	./scripts/run_cli_direct.sh
+	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_direct.sh
 
 cli-project-tests: cli runtime
-	./scripts/run_cli_project.sh
+	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)

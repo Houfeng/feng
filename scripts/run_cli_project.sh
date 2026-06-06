@@ -11,7 +11,8 @@ LOCAL_DEP_FIXTURE="$ROOT/test/cli/projects/local_dep_lib"
 LOCAL_DEP_APP_FIXTURE="$ROOT/test/cli/projects/bin_with_local_dep"
 EXPECTED="$ROOT/test/cli/projects/bin_hello.expected"
 LOCAL_DEP_EXPECTED="$ROOT/test/cli/projects/bin_with_local_dep.expected"
-WORK="$(mktemp -d -t feng_cli_project_XXXXXX)"
+mkdir -p "$ROOT/temp"
+WORK="$(mktemp -d "$ROOT/temp/feng_cli_project_XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 detect_host_target() {
