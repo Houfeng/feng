@@ -25296,15 +25296,20 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                             continue;
                         }
+                        const FengProgram *saved_prog = cg->cur_program;
+                        cg->cur_program = ut->instantiation_program != NULL
+                            ? ut->instantiation_program
+                            : ut->owner_program;
                         for (size_t ci = 0; ci < ut->constructor_count; ++ci) {
-                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->constructors[ci])) return false;
+                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->constructors[ci])) { cg->cur_program = saved_prog; return false; }
                         }
                         for (size_t mi = 0; mi < ut->method_count; ++mi) {
-                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->methods[mi])) return false;
+                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->methods[mi])) { cg->cur_program = saved_prog; return false; }
                         }
                         for (size_t mi = 0; mi < ut->static_method_count; ++mi) {
-                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->static_methods[mi])) return false;
+                            if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->static_methods[mi])) { cg->cur_program = saved_prog; return false; }
                         }
+                        cg->cur_program = saved_prog;
                     }
                     break;
                 }
