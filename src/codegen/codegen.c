@@ -23495,7 +23495,8 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: missing implementation for spec member '%s'", sm->feng_name);
+                "codegen: missing implementation for spec member '%s'",
+                sm->feng_name);
         }
         if (sm->kind != USM_KIND_METHOD ||
             wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
@@ -25651,6 +25652,15 @@ static bool cg_emit_all_programs(CG *cg,
                     }
                 }
                 buf_append_cstr(td, "};\n\n");
+            }
+            /* Forward-declare __default_zero so consumer-side generic
+             * instances (e.g. Map<K, V>) can call it.  The body lives in
+             * the imported package's compiled library. */
+            if (t->c_default_zero_name != NULL &&
+                cg_user_type_is_default_zero_safe(cg, t)) {
+                buf_append_fmt(&cg->headers,
+                    "struct %s *%s(void);\n",
+                    t->c_struct_name, t->c_default_zero_name);
             }
             continue;
         }

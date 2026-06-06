@@ -4029,6 +4029,10 @@ static bool maybe_downgrade_orphan_fit_export(ResolveContext *context,
         is_local = (target_module == context->module);
     }
 
+    if (fit_target.kind == FIT_TARGET_KIND_BUILTIN) {
+        is_local = true;
+    }
+
     for (i = 0U; i < closure_count && !is_local; ++i) {
         const FengSemanticModule *spec_module =
             find_decl_provider_module(context->analysis, closure[i]);
@@ -13831,11 +13835,11 @@ static void materialize_object_spec_constraint_witness_if_applicable(
     const FengTypeParam *type_param,
     const FengTypeRef *actual_type_ref,
     const FengDecl *actual_type_decl,
+    const FengTypeRef *instantiated_constraint,
     FengToken err_token) {
     const FengDecl *constraint_decl;
 
     if (context == NULL || type_param == NULL ||
-        !decl_is_named_fit_target(actual_type_decl) ||
         type_param->constraint == NULL) {
         return;
     }
@@ -13846,17 +13850,42 @@ static void materialize_object_spec_constraint_witness_if_applicable(
         return;
     }
 
-    if (!type_decl_satisfies_spec_type_ref(context, actual_type_decl, type_param->constraint)) {
+    if (decl_is_named_fit_target(actual_type_decl)) {
+        if (!type_decl_satisfies_spec_type_ref(context, actual_type_decl,
+                                               type_param->constraint)) {
+            return;
+        }
+        compute_spec_witness_if_absent(context,
+                                       actual_type_decl,
+                                       inferred_expr_type_from_type_ref(actual_type_ref),
+                                       actual_type_ref,
+                                       constraint_decl,
+                                       instantiated_constraint,
+                                       err_token);
         return;
     }
 
-    compute_spec_witness_if_absent(context,
-                                   actual_type_decl,
-                                   inferred_expr_type_from_type_ref(actual_type_ref),
-                                   actual_type_ref,
-                                   constraint_decl,
-                                   type_param->constraint,
-                                   err_token);
+    if (actual_type_ref != NULL &&
+        actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
+        actual_type_ref->as.named.segment_count == 1U &&
+        is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
+        const char *builtin_name =
+            canonical_builtin_type_name(actual_type_ref->as.named.segments[0]);
+        if (builtin_name != NULL) {
+            FengSemanticSubjectKey subject_key =
+                feng_semantic_subject_key_for_builtin(builtin_name);
+            if (subject_key_satisfies_spec_decl(context, &subject_key,
+                                                constraint_decl)) {
+                compute_spec_witness_if_absent(context,
+                                               NULL,
+                                               inferred_expr_type_from_type_ref(actual_type_ref),
+                                               actual_type_ref,
+                                               constraint_decl,
+                                               instantiated_constraint,
+                                               err_token);
+            }
+        }
+    }
 }
 
 static void materialize_named_type_param_constraint_witnesses(
@@ -13874,11 +13903,28 @@ static void materialize_named_type_param_constraint_witnesses(
 
     for (i = 0U; i < type_param_count && i < type_arg_count; ++i) {
         const FengDecl *actual_type_decl = resolve_type_ref_decl(context, type_args[i]);
+        const FengTypeRef *instantiated_constraint = type_params[i].constraint;
+
+        if (instantiated_constraint != NULL && type_param_count > 0U) {
+            FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                instantiated_constraint,
+                type_params,
+                type_param_count,
+                (FengTypeRef *const *)type_args);
+            if (subst != NULL) {
+                if (resolver_track_synthetic_type_ref(context, subst)) {
+                    instantiated_constraint = subst;
+                } else {
+                    free_synthetic_type_ref(subst);
+                }
+            }
+        }
 
         materialize_object_spec_constraint_witness_if_applicable(context,
                                                                  &type_params[i],
                                                                  type_args[i],
                                                                  actual_type_decl,
+                                                                 instantiated_constraint,
                                                                  err_token);
     }
 }
@@ -13953,6 +13999,7 @@ static void materialize_callable_type_param_constraint_witnesses(
                                                                  &callable->type_params[i],
                                                                  NULL,
                                                                  actual_type_decl,
+                                                                 callable->type_params[i].constraint,
                                                                  call_expr->token);
     }
 }
@@ -21761,6 +21808,294 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
+/* Phase S3-pre: pre-compute spec witnesses for builtin-subject spec relations.
+ *
+ * When an imported module contains a concrete generic type instance whose type
+ * parameter has a constraint satisfied by a builtin fit (e.g. Map<string, V>
+ * where string: Hashable<string>), the consumer module's semantic pass never
+ * encounters the type-ref resolution that would trigger on-demand witness
+ * computation.  The codegen still needs the witness when emitting method
+ * wrappers for these imported generic instances.
+ *
+ * This pass iterates all spec relations with builtin subject keys and
+ * pre-computes their witnesses using each local module's visibility context. */
+/* Resolve a named type ref to its decl using the analysis module list.
+ * Lighter than the full resolve_type_ref_decl — does not require a
+ * ResolveContext or visibility tables, only the global module array. */
+static const FengDecl *analysis_resolve_named_type_ref(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeRef *ref) {
+    size_t mi;
+
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count == 0U) {
+        return NULL;
+    }
+    if (ref->as.named.segment_count == 1U &&
+        is_builtin_type_name(ref->as.named.segments[0])) {
+        return NULL;
+    }
+    if (ref->as.named.segment_count > 1U) {
+        size_t mod_index = find_module_index_by_path(
+            analysis, ref->as.named.segments,
+            ref->as.named.segment_count - 1U);
+
+        if (mod_index < analysis->module_count) {
+            return find_module_public_type_decl(
+                &analysis->modules[mod_index],
+                ref->as.named.segments[ref->as.named.segment_count - 1U]);
+        }
+        return NULL;
+    }
+    for (mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengDecl *d = find_module_public_type_decl(
+            &analysis->modules[mi], ref->as.named.segments[0]);
+
+        if (d != NULL) {
+            return d;
+        }
+    }
+    return NULL;
+}
+
+/* Find the spec type ref in a fit decl's spec list that resolves to the
+ * given spec_decl.  Returns the concrete type ref (e.g. Hashable<string>)
+ * or NULL if no match is found. */
+static const FengTypeRef *find_spec_type_ref_in_fit(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl,
+    const FengDecl *target_spec_decl) {
+    size_t i;
+
+    if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        return NULL;
+    }
+    for (i = 0U; i < fit_decl->as.fit_decl.spec_count; ++i) {
+        const FengTypeRef *spec_ref = fit_decl->as.fit_decl.specs[i];
+        const FengDecl *resolved =
+            analysis_resolve_named_type_ref(analysis, spec_ref);
+
+        if (resolved == target_spec_decl) {
+            return spec_ref;
+        }
+    }
+    return NULL;
+}
+
+/* Pre-compute spec witnesses for builtin/array subjects whose fits are
+ * defined in imported-package modules.  In a local-only build the
+ * on-demand path in the resolution pass handles this, but imported
+ * modules are skipped entirely during resolution so the witnesses are
+ * never computed.  The codegen still needs them when emitting generic
+ * type instance method wrappers that reference constrained type params. */
+static void precompute_imported_builtin_spec_witnesses(
+        FengSemanticAnalysis *analysis) {
+    size_t ri;
+    size_t mi;
+    bool has_imported = false;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    size_t imported_module_capacity = 0U;
+    bool oom = false;
+    const FengSemanticModule *first_local_module = NULL;
+    ResolveContext ctx;
+
+    if (analysis == NULL || analysis->spec_relation_count == 0U) {
+        return;
+    }
+
+    /* Only needed when imported-package modules exist. */
+    for (mi = 0U; mi < analysis->module_count; ++mi) {
+        if (analysis->modules[mi].origin ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            has_imported = true;
+            break;
+        }
+    }
+    if (!has_imported) {
+        return;
+    }
+
+    /* Collect the union of all use-imported modules across every local
+     * program so every cross-module fit has a chance to be found. */
+    for (mi = 0U; mi < analysis->module_count && !oom; ++mi) {
+        const FengSemanticModule *mod = &analysis->modules[mi];
+        size_t pi;
+
+        if (mod->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        if (first_local_module == NULL) {
+            first_local_module = mod;
+        }
+        for (pi = 0U; pi < mod->program_count && !oom; ++pi) {
+            const FengProgram *prog = mod->programs[pi];
+            size_t ui;
+
+            for (ui = 0U; ui < prog->use_count && !oom; ++ui) {
+                const FengUseDecl *use_decl = &prog->uses[ui];
+                size_t target_index = find_module_index_by_path(
+                    analysis, use_decl->segments, use_decl->segment_count);
+                size_t scan;
+                bool already = false;
+                ImportedModuleEntry entry;
+
+                if (target_index == analysis->module_count) {
+                    continue;
+                }
+                entry.target_module = &analysis->modules[target_index];
+                for (scan = 0U; scan < imported_module_count; ++scan) {
+                    if (imported_modules[scan].target_module ==
+                        entry.target_module) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (already) {
+                    continue;
+                }
+                oom = !append_raw((void **)&imported_modules,
+                                  &imported_module_count,
+                                  &imported_module_capacity,
+                                  sizeof(entry),
+                                  &entry);
+            }
+        }
+    }
+
+    if (first_local_module == NULL || oom) {
+        free(imported_modules);
+        return;
+    }
+
+    /* Build a minimal ResolveContext with visibility info from all local
+     * modules. The witness computation for builtin subjects only needs
+     * analysis (for storage), module/imported_modules (for fit visibility),
+     * and synthetic_type_refs (for type-param substitution tracking). */
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.analysis = analysis;
+    ctx.module = first_local_module;
+    ctx.imported_modules = imported_modules;
+    ctx.imported_module_count = imported_module_count;
+
+    for (ri = 0U; ri < analysis->spec_relation_count; ++ri) {
+        const FengSpecRelation *rel = &analysis->spec_relations[ri];
+        const FengDecl *spec_decl;
+        const FengTypeRef *concrete_spec_type_ref = NULL;
+        FengSpecWitness *witness;
+        InferredExprType source_type;
+        size_t si;
+
+        if (rel->subject_key.kind != FENG_SEMANTIC_SUBJECT_KEY_BUILTIN &&
+            rel->subject_key.kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+            continue;
+        }
+        spec_decl = rel->spec_decl;
+        if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+            spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            continue;
+        }
+        if (feng_semantic_lookup_spec_witness(analysis,
+                                              &rel->subject_key,
+                                              spec_decl) != NULL) {
+            continue;
+        }
+
+        /* Find the concrete spec type ref (e.g. Hashable<string>) from a
+         * FIT_HEAD source so the signature matcher can substitute type
+         * parameters (e.g. T → string) when comparing spec member
+         * signatures against fit method signatures. */
+        for (si = 0U; si < rel->source_count; ++si) {
+            const FengSpecRelationSource *src = &rel->sources[si];
+
+            if (src->kind != FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
+                src->via_fit_decl == NULL) {
+                continue;
+            }
+            concrete_spec_type_ref = find_spec_type_ref_in_fit(
+                analysis, src->via_fit_decl, spec_decl);
+            if (concrete_spec_type_ref != NULL) {
+                break;
+            }
+        }
+
+        witness = feng_semantic_reserve_spec_witness(analysis,
+                                                      &rel->subject_key,
+                                                      spec_decl);
+        if (witness == NULL) {
+            continue;
+        }
+
+        memset(&source_type, 0, sizeof(source_type));
+        source_type.kind = FENG_INFERRED_EXPR_TYPE_BUILTIN;
+        source_type.builtin_name.data =
+            rel->subject_key.as.builtin_canonical_name;
+        source_type.builtin_name.length =
+            strlen(rel->subject_key.as.builtin_canonical_name);
+
+        for (mi = 0U; mi < spec_decl->as.spec_decl.as.object.member_count;
+             ++mi) {
+            const FengTypeMember *sm =
+                spec_decl->as.spec_decl.as.object.members[mi];
+            FengSlice name;
+            WitnessFitCollectCtx fit_st;
+            size_t total;
+
+            if (sm == NULL || sm->kind != FENG_TYPE_MEMBER_METHOD) {
+                continue;
+            }
+            name = sm->as.callable.name;
+
+            fit_st.ctx = &ctx;
+            fit_st.source_type_decl = NULL;
+            fit_st.source_type_ref = NULL;
+            fit_st.spec_sig = &sm->as.callable;
+            fit_st.spec_decl = concrete_spec_type_ref != NULL
+                                   ? spec_decl : NULL;
+            fit_st.spec_type_ref = concrete_spec_type_ref;
+            fit_st.items = NULL;
+            fit_st.count = 0U;
+            fit_st.capacity = 0U;
+            fit_st.oom = false;
+
+            (void)visit_visible_fit_methods_for_owner_type(
+                &ctx, NULL, source_type, name, true, false,
+                witness_fit_collect_visitor, &fit_st);
+
+            total = fit_st.count;
+            if (total == 0U) {
+                (void)feng_semantic_spec_witness_append_member(
+                    witness, sm, NULL,
+                    FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+                    NULL, NULL);
+            } else if (total == 1U) {
+                (void)feng_semantic_spec_witness_append_member(
+                    witness, sm, fit_st.items[0].method,
+                    FENG_SPEC_WITNESS_SOURCE_FIT_METHOD,
+                    fit_st.items[0].fit_decl,
+                    fit_st.items[0].fit_module);
+            } else {
+                (void)feng_semantic_spec_witness_append_member(
+                    witness, sm, NULL,
+                    FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD,
+                    NULL, NULL);
+            }
+            free(fit_st.items);
+        }
+    }
+
+    /* Release synthetic type refs allocated during signature substitution. */
+    {
+        size_t si;
+
+        for (si = 0U; si < ctx.synthetic_type_ref_count; ++si) {
+            free_synthetic_type_ref(ctx.synthetic_type_refs[si]);
+        }
+        free(ctx.synthetic_type_refs);
+    }
+    free(imported_modules);
+}
+
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,
                                         const FengSemanticAnalyzeOptions *options,
@@ -21896,6 +22231,13 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
             ok = false;
             goto finish;
         }
+    }
+
+    /* Phase S3-pre: pre-compute spec witnesses for builtin-subject spec
+     * relations that the on-demand resolution pass would miss (e.g. imported
+     * generic type instances whose type params have builtin constraints). */
+    if (ok && error_count == 0U) {
+        precompute_imported_builtin_spec_witnesses(analysis);
     }
 
     max_iterations = count_all_callables(analysis) + 1U;

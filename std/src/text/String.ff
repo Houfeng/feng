@@ -621,3 +621,34 @@ open fit string {
   }
 
 }
+
+/**
+ * Makes `string` usable as a key in Map and Set by providing hash and equality.
+ */
+open fit string: Hashable<string> {
+
+  /**
+   * Returns the DJB2 hash of this string's UTF-8 bytes.
+   * @return 64-bit hash code
+   */
+  open func hash(): u64 {
+    let bytes = self.toBytes();
+    var h: u64 = (u64)5381;
+    let len = bytes.length();
+    var i: long = 0;
+    while i < len {
+      h = h * (u64)33 + (u64)bytes[(i32)i];
+      i += (long)1;
+    }
+    return h;
+  }
+
+  /**
+   * Returns true if this string is byte-equal to `other`.
+   * @param other - the string to compare with
+   */
+  open func same(other: string): bool {
+    return self == other;
+  }
+
+}
