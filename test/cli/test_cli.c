@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -611,7 +612,7 @@ static void compile_consumer_with_package_and_expect_stdout(const char *workspac
 }
 
 static char *run_binary_capture_stdout_or_die(const char *binary_path) {
-    char template_path[] = "/tmp/feng_cli_run_output_XXXXXX";
+    char template_path[] = "temp/feng_cli_run_output_XXXXXX";
     char *output_dir;
     char *output_path;
     char *command;
@@ -1281,7 +1282,7 @@ static char *build_dap_message_text(const char *json) {
 }
 
 static char *run_lsp_server_capture(FILE *input) {
-    char input_template[] = "/tmp/feng_lsp_input_XXXXXX";
+    char input_template[] = "temp/feng_lsp_input_XXXXXX";
     int input_fd;
     char *input_text;
     FILE *named_input;
@@ -1311,6 +1312,11 @@ static char *run_lsp_server_capture(FILE *input) {
 }
 
 static char *file_uri_from_path(const char *path) {
+    char resolved[PATH_MAX];
+
+    if (path[0] != '/' && realpath(path, resolved) != NULL) {
+        return dup_printf("file://%s", resolved);
+    }
     return dup_printf("file://%s", path);
 }
 
@@ -1354,7 +1360,7 @@ static size_t count_substring(const char *text, const char *needle) {
 }
 
 static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
-    char template_path[] = "/tmp/feng_cli_direct_ir_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_ir_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *good_path;
@@ -1457,7 +1463,7 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
 }
 
 static void test_direct_build_emits_symbol_tables(void) {
-    char template_path[] = "/tmp/feng_cli_direct_symbols_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_symbols_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -1511,7 +1517,7 @@ static void test_direct_build_emits_symbol_tables(void) {
 }
 
 static void test_direct_build_accepts_package_bundle(void) {
-    char template_path[] = "/tmp/feng_cli_direct_pkg_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_pkg_XXXXXX";
     char *workspace_dir;
     char *dep_src_dir;
     char *main_src_dir;
@@ -1597,7 +1603,7 @@ static void test_direct_build_accepts_package_bundle(void) {
 }
 
 static void test_direct_build_links_library_from_package_bundle(void) {
-    char template_path[] = "/tmp/feng_cli_direct_pkg_link_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_pkg_link_XXXXXX";
     char *workspace_dir;
     char *dep_src_dir;
     char *main_src_dir;
@@ -1697,7 +1703,7 @@ static void test_direct_build_links_library_from_package_bundle(void) {
 }
 
 static void test_direct_build_sorts_package_libraries_by_dependency(void) {
-    char template_path[] = "/tmp/feng_cli_direct_pkg_sort_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_pkg_sort_XXXXXX";
     char *workspace_dir;
     char *b_src_dir;
     char *a_src_dir;
@@ -1844,7 +1850,7 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
 }
 
 static void test_project_pack_bundle_can_be_consumed(void) {
-    char template_path[] = "/tmp/feng_cli_pack_consume_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_consume_XXXXXX";
     char *workspace_dir;
     char *lib_project_dir;
     char *lib_manifest_path;
@@ -1935,7 +1941,7 @@ static void test_project_pack_bundle_can_be_consumed(void) {
 }
 
 static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(void) {
-    char template_path[] = "/tmp/feng_fb_bundle_assets_extlib_XXXXXX";
+    char template_path[] = "temp/feng_fb_bundle_assets_extlib_XXXXXX";
     char *workspace_dir;
     char *library_dir;
     char *library_path;
@@ -2109,7 +2115,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
 }
 
 static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void) {
-    char template_path[] = "/tmp/feng_cli_direct_pkg_extlib_release_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_pkg_extlib_release_XXXXXX";
     char *workspace_dir;
     char *dep_src_dir;
     char *dep_source_path;
@@ -2286,7 +2292,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
 }
 
 static void test_direct_build_links_only_used_bundle_extlib_static_libraries(void) {
-    char template_path[] = "/tmp/feng_cli_direct_pkg_extlib_static_used_only_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_pkg_extlib_static_used_only_XXXXXX";
     char *workspace_dir;
     char *dep_src_dir;
     char *dep_source_path;
@@ -2463,7 +2469,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
 }
 
 static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
-    char template_path[] = "/tmp/feng_cli_direct_cli_lib_name_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_cli_lib_name_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -2535,7 +2541,7 @@ static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
 }
 
 static void test_direct_build_passes_cli_library_path_verbatim(void) {
-    char template_path[] = "/tmp/feng_cli_direct_cli_lib_path_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_cli_lib_path_XXXXXX";
     char *workspace_dir;
     char *native_dir;
     char *native_source_path;
@@ -2620,7 +2626,7 @@ static void test_direct_build_passes_cli_library_path_verbatim(void) {
 }
 
 static void test_direct_build_consumes_package_generic_function(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_generic_fn_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_generic_fn_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2655,7 +2661,7 @@ static void test_direct_build_consumes_package_generic_function(void) {
 }
 
 static void test_direct_build_consumes_package_generic_type(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_generic_type_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_generic_type_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2698,7 +2704,7 @@ static void test_direct_build_consumes_package_generic_type(void) {
 }
 
 static void test_direct_build_consumes_package_enum(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_enum_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_enum_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2735,7 +2741,7 @@ static void test_direct_build_consumes_package_enum(void) {
 }
 
 static void test_direct_build_consumes_package_generic_spec_constraint(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_generic_spec_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_generic_spec_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2781,7 +2787,7 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
 }
 
 static void test_direct_build_consumes_package_constrained_generic_function(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_constrained_generic_fn_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_constrained_generic_fn_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2827,7 +2833,7 @@ static void test_direct_build_consumes_package_constrained_generic_function(void
 }
 
 static void test_direct_build_consumes_package_constrained_generic_type(void) {
-    char template_path[] = "/tmp/feng_cli_pkg_constrained_generic_type_XXXXXX";
+    char template_path[] = "temp/feng_cli_pkg_constrained_generic_type_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
     char *remove_error = NULL;
@@ -2883,7 +2889,7 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
 }
 
 static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
-    char template_path[] = "/tmp/feng_cli_pack_manifest_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_manifest_XXXXXX";
     char *workspace_dir;
     char *dep_project_dir;
     char *dep_manifest_path;
@@ -2976,7 +2982,7 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
 }
 
 static void test_project_check_accepts_source_file_path_and_local_dependencies(void) {
-    char template_path[] = "/tmp/feng_cli_check_source_path_XXXXXX";
+    char template_path[] = "temp/feng_cli_check_source_path_XXXXXX";
     char *workspace_dir;
     char *dep_project_dir;
     char *dep_manifest_path;
@@ -3052,7 +3058,7 @@ static void test_project_check_accepts_source_file_path_and_local_dependencies(v
 }
 
 static void test_project_check_reports_enum_semantic_error_without_unknown_type(void) {
-    char template_path[] = "/tmp/feng_cli_check_enum_diag_XXXXXX";
+    char template_path[] = "temp/feng_cli_check_enum_diag_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -3107,7 +3113,7 @@ static void test_project_check_reports_enum_semantic_error_without_unknown_type(
 }
 
 static void test_frontend_outputs_absolute_bundle_paths(void) {
-    char template_path[] = "/tmp/feng_cli_frontend_pkg_XXXXXX";
+    char template_path[] = "temp/feng_cli_frontend_pkg_XXXXXX";
     char *workspace_dir;
     char *dep_src_dir;
     char *main_src_dir;
@@ -3127,7 +3133,8 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
     char **bundle_paths = NULL;
     size_t bundle_count = 0U;
 
-    workspace_dir = mkdtemp(template_path);
+    ASSERT(mkdtemp(template_path) != NULL);
+    workspace_dir = realpath(template_path, NULL);
     ASSERT(workspace_dir != NULL);
 
     dep_src_dir = path_join(workspace_dir, "dep/src");
@@ -3209,6 +3216,7 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
     feng_cli_free_loaded_sources(sources, source_count);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
+    free(workspace_dir);
     free(bundle_path);
     free(dep_ft_path);
     free(dep_out_dir);
@@ -3219,7 +3227,7 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
 }
 
 static void test_frontend_source_overlay_replaces_disk_source(void) {
-    char template_path[] = "/tmp/feng_cli_frontend_overlay_XXXXXX";
+    char template_path[] = "temp/feng_cli_frontend_overlay_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *main_source_path;
@@ -3285,7 +3293,7 @@ static void test_frontend_source_overlay_replaces_disk_source(void) {
 }
 
 static void test_frontend_source_overlay_rejects_duplicate_paths(void) {
-    char template_path[] = "/tmp/feng_cli_frontend_overlay_dup_XXXXXX";
+    char template_path[] = "temp/feng_cli_frontend_overlay_dup_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *main_source_path;
@@ -3341,7 +3349,7 @@ static void test_frontend_source_overlay_rejects_duplicate_paths(void) {
 
 static void test_direct_build_rejects_bad_package_bundle(void) {
     static const char kBadBytes[] = "XXXX";
-    char template_path[] = "/tmp/feng_cli_direct_bad_pkg_XXXXXX";
+    char template_path[] = "temp/feng_cli_direct_bad_pkg_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -3393,7 +3401,7 @@ static void test_direct_build_rejects_bad_package_bundle(void) {
 }
 
 static void test_init_creates_bin_project(void) {
-    char template_path[] = "/tmp/feng_cli_init_bin_XXXXXX";
+    char template_path[] = "temp/feng_cli_init_bin_XXXXXX";
     char *project_dir;
     char *manifest_path;
     char *src_dir;
@@ -3449,7 +3457,7 @@ static void test_init_creates_bin_project(void) {
 }
 
 static void test_init_creates_lib_project_using_current_directory_name(void) {
-    char template_path[] = "/tmp/feng_cli_init_lib_root_XXXXXX";
+    char template_path[] = "temp/feng_cli_init_lib_root_XXXXXX";
     char *root_dir;
     char *project_dir;
     char *manifest_path;
@@ -3507,7 +3515,7 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
 }
 
 static void test_init_rejects_space_separated_target_value(void) {
-    char template_path[] = "/tmp/feng_cli_init_target_XXXXXX";
+    char template_path[] = "temp/feng_cli_init_target_XXXXXX";
     char *project_dir;
     char *manifest_path;
     char *src_dir;
@@ -3539,7 +3547,7 @@ static void test_init_rejects_space_separated_target_value(void) {
 }
 
 static void test_init_prefixes_keyword_package_name(void) {
-    char template_path[] = "/tmp/feng_cli_init_keyword_XXXXXX";
+    char template_path[] = "temp/feng_cli_init_keyword_XXXXXX";
     char *project_dir;
     char *manifest_path;
     char *main_path;
@@ -3587,7 +3595,7 @@ static void test_init_prefixes_keyword_package_name(void) {
 }
 
 static void test_init_rejects_non_empty_directory(void) {
-    char template_path[] = "/tmp/feng_cli_init_nonempty_XXXXXX";
+    char template_path[] = "temp/feng_cli_init_nonempty_XXXXXX";
     char *project_dir;
     char *existing_path;
     char *manifest_path;
@@ -3771,7 +3779,7 @@ static void test_dap_rejects_unknown_option(void) {
 /* Ensure a validated launch starts the backend only after `.fd` verification. */
 static void test_dap_validated_launch_starts_backend(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x11U};
-    char template_path[] = "/tmp/feng_cli_dap_launch_ok_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_launch_ok_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
@@ -3869,7 +3877,7 @@ static void test_dap_validated_launch_starts_backend(void) {
 /* Ensure launch falls back to `xcrun -f lldb-dap` when PATH misses lldb-dap. */
 static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x12U};
-    char template_path[] = "/tmp/feng_cli_dap_launch_xcrun_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_launch_xcrun_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
@@ -3974,7 +3982,7 @@ static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
 static void test_dap_rejects_fingerprint_mismatch_before_backend_spawn(void) {
     static const unsigned char kOriginalBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x21U};
     static const unsigned char kModifiedBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x22U};
-    char template_path[] = "/tmp/feng_cli_dap_launch_mismatch_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_launch_mismatch_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
@@ -4075,7 +4083,7 @@ static void test_dap_rejects_fingerprint_mismatch_before_backend_spawn(void) {
 /* Ensure launch surfaces backend startup failures after local validation succeeds. */
 static void test_dap_reports_missing_backend_after_launch_validation(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x31U};
-    char template_path[] = "/tmp/feng_cli_dap_missing_backend_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_missing_backend_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
@@ -4152,7 +4160,7 @@ static void test_dap_rewrites_set_breakpoints_source_path_to_package_uri(void) {
         "module demo.pkg;\n"
         "func main(args: string[]) {\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_breakpoints_uri_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_breakpoints_uri_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -4277,7 +4285,7 @@ static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
         "module demo.pkg;\n"
         "func main(args: string[]) {\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_breakpoints_reject_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_breakpoints_reject_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -4407,7 +4415,7 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
         "module demo.pkg;\n"
         "func main(args: string[]) {\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_stacktrace_path_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_stacktrace_path_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -4543,7 +4551,7 @@ static void test_dap_rewrites_stack_trace_compiler_normalized_source_path(void) 
         "let TEST_NAME: string = \"hello_world\";\n"
         "func main(args: string[]) {\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_stacktrace_uri_variant_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_stacktrace_uri_variant_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -4685,7 +4693,7 @@ static void test_dap_hides_hidden_stack_trace_frames(void) {
         "module demo.pkg;\n"
         "func main(args: string[]) {\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_stacktrace_hidden_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_stacktrace_hidden_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -4826,7 +4834,7 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
         "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_variables_names_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_variables_names_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -5071,7 +5079,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
         "        println(\"Hello, world!\");\n"
         "    }\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_variables_filter_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_variables_filter_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -5333,7 +5341,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
 }
 
 static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
-    char template_path[] = "/tmp/feng_cli_dap_module_globals_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_module_globals_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -5650,7 +5658,7 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
         "func main(args: string[]) {\n"
         "    println(\"Hello, world!\");\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_array_summary_type_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_array_summary_type_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -6021,7 +6029,7 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
         "    let i = 1;\n"
         "    println(i);\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_continue_synthetic_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_continue_synthetic_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -6346,7 +6354,7 @@ static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
         "func main(args: string[]) {\n"
         "    let point: Point = Point{x: 7, label: \"seven\"};\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_type_fields_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_type_fields_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -6619,7 +6627,7 @@ static void test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf(voi
 #if !defined(__APPLE__)
     return;
 #else
-    char template_path[] = "/tmp/feng_cli_dwarf_for_breakpoint_XXXXXX";
+    char template_path[] = "temp/feng_cli_dwarf_for_breakpoint_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -6695,7 +6703,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
 #if !defined(__APPLE__)
     return;
 #else
-    char template_path[] = "/tmp/feng_cli_lldb_for_prefix_locals_XXXXXX";
+    char template_path[] = "temp/feng_cli_lldb_for_prefix_locals_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -6789,7 +6797,7 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
         "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_evaluate_ident_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_evaluate_ident_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -6996,7 +7004,7 @@ static void run_dap_evaluate_session(FengCodegenMapingInfo *info,
         "func main(args: string[]) {\n"
         "    let answer = 42;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_dap_evaluate_phase5_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_evaluate_phase5_XXXXXX";
     char *workspace_dir;
     char *src_dir;
     char *source_path;
@@ -7377,7 +7385,7 @@ static void test_lsp_publish_diagnostics_for_open_change_and_close(void) {
         "func main(args: string[]) {\n"
         "    let value: string = \"ok\";\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_diag_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_diag_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -7471,7 +7479,7 @@ static void test_lsp_hover_definition_and_completion(void) {
         "    let label: string = format(user);\n"
         "    let mirror: string = user.name;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_query_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_query_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -7583,7 +7591,7 @@ static void test_lsp_hover_definition_and_completion(void) {
 static char *capture_lsp_completion_response(const char *source,
                                              const char *needle,
                                              size_t char_offset) {
-    char template_path[] = "/tmp/feng_cli_lsp_completion_incomplete_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_completion_incomplete_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -7643,7 +7651,7 @@ static char *capture_lsp_hover_response(const char *source,
                                         const char *initialize,
                                         const char *needle,
                                         size_t char_offset) {
-    char template_path[] = "/tmp/feng_cli_lsp_hover_markup_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_hover_markup_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -7869,7 +7877,7 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
         "    let user: User = User { name: \"copilot\" };\n"
         "    let tagged: User = user.tag(\"hi\");\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_fit_member_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_fit_member_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8299,7 +8307,7 @@ static void test_lsp_member_references_and_rename_from_object_literal_field(void
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_member_rename_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_member_rename_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8443,7 +8451,7 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
         "    helper(1);\n"
         "    helper(2);\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_decl_site_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_decl_site_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8592,7 +8600,7 @@ static void test_lsp_rename_accepts_identifier_end_position(void) {
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_rename_end_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_rename_end_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8734,7 +8742,7 @@ static void test_lsp_definition_references_rename_with_broken_code(void) {
         "    helper(1);\n"
         "    helper(2);\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_broken_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_broken_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8887,7 +8895,7 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
         "        return self.count * 2;\n"
         "    }\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_libonly_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_libonly_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -8960,7 +8968,7 @@ static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
        json.dumps with ensure_ascii=True for non-ASCII source content like
        Chinese doc comments).  The server must survive and return valid
        JSON responses. */
-    char template_path[] = "/tmp/feng_cli_lsp_unicode_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_unicode_XXXXXX";
     char *workspace_dir;
     char *source_path;
     char *uri;
@@ -9059,7 +9067,7 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
         "    let user: User = User { name: \"copilot\" };\n"
         "    let mirror: string = user.name;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_cli_lsp_cache_XXXXXX";
+    char template_path[] = "temp/feng_cli_lsp_cache_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -9276,7 +9284,7 @@ static void test_manifest_parses_and_writes_assets(void) {
         "\n"
         "[registry]\n"
         "url: \"https://packages.example.com/feng\"\n";
-    char output_path[] = "/tmp/feng_manifest_assets_XXXXXX";
+    char output_path[] = "temp/feng_manifest_assets_XXXXXX";
     int output_fd;
     char *manifest_text;
     char *write_error = NULL;
@@ -9384,7 +9392,7 @@ static void test_manifest_rejects_duplicate_field(void) {
 }
 
 static void test_project_open_collects_sources(void) {
-    char template_path[] = "/tmp/feng_cli_project_XXXXXX";
+    char template_path[] = "temp/feng_cli_project_XXXXXX";
     char *project_dir;
     char *src_dir;
     char *nested_dir;
@@ -9539,7 +9547,7 @@ static void test_bundle_manifest_rejects_assets(void) {
 }
 
 static void test_deps_resolve_installs_remote_transitive_dependencies(void) {
-    char template_path[] = "/tmp/feng_cli_deps_remote_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_remote_XXXXXX";
     char *workspace_dir;
     char *registry_dir;
     char *packages_dir;
@@ -9625,7 +9633,7 @@ static void test_deps_resolve_installs_remote_transitive_dependencies(void) {
 }
 
 static void test_deps_resolve_builds_local_library_dependency(void) {
-    char template_path[] = "/tmp/feng_cli_deps_local_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_local_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -9694,7 +9702,7 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
 }
 
 static void test_deps_resolve_requires_registry_for_remote_dependency(void) {
-    char template_path[] = "/tmp/feng_cli_deps_no_registry_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_no_registry_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -9746,7 +9754,7 @@ static void test_deps_resolve_requires_registry_for_remote_dependency(void) {
 }
 
 static void test_deps_resolve_uses_global_registry_config(void) {
-    char template_path[] = "/tmp/feng_cli_deps_global_registry_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_global_registry_XXXXXX";
     char *workspace_dir;
     char *feng_dir;
     char *config_path;
@@ -9824,7 +9832,7 @@ static void test_deps_resolve_uses_global_registry_config(void) {
 }
 
 static void test_deps_resolve_reports_transitive_version_conflict(void) {
-    char template_path[] = "/tmp/feng_cli_deps_conflict_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_conflict_XXXXXX";
     char *workspace_dir;
     char *registry_dir;
     char *packages_dir;
@@ -9928,7 +9936,7 @@ static void test_deps_resolve_reports_transitive_version_conflict(void) {
 }
 
 static void test_deps_resolve_reports_local_dependency_cycle(void) {
-    char template_path[] = "/tmp/feng_cli_deps_cycle_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_cycle_XXXXXX";
     char *workspace_dir;
     char *root_project_dir;
     char *root_manifest_path;
@@ -10022,7 +10030,7 @@ static void test_deps_resolve_reports_local_dependency_cycle(void) {
 }
 
 static void test_deps_add_remote_updates_manifest_and_cache(void) {
-    char template_path[] = "/tmp/feng_cli_deps_add_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_add_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *registry_dir;
@@ -10094,7 +10102,7 @@ static void test_deps_add_remote_updates_manifest_and_cache(void) {
 }
 
 static void test_deps_add_local_validates_then_writes_manifest(void) {
-    char template_path[] = "/tmp/feng_cli_deps_add_local_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_add_local_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -10160,7 +10168,7 @@ static void test_deps_add_local_validates_then_writes_manifest(void) {
 }
 
 static void test_deps_add_local_rejects_name_mismatch_before_write(void) {
-    char template_path[] = "/tmp/feng_cli_deps_add_local_name_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_add_local_name_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -10222,7 +10230,7 @@ static void test_deps_add_local_rejects_name_mismatch_before_write(void) {
 }
 
 static void test_deps_add_local_rejects_non_lib_target_before_write(void) {
-    char template_path[] = "/tmp/feng_cli_deps_add_local_target_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_add_local_target_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -10282,7 +10290,7 @@ static void test_deps_add_local_rejects_non_lib_target_before_write(void) {
 }
 
 static void test_deps_remove_updates_manifest(void) {
-    char template_path[] = "/tmp/feng_cli_deps_remove_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_remove_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -10324,7 +10332,7 @@ static void test_deps_remove_updates_manifest(void) {
 }
 
 static void test_deps_install_populates_cache_from_registry(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *registry_dir;
@@ -10399,7 +10407,7 @@ static void test_deps_install_populates_cache_from_registry(void) {
 }
 
 static void test_deps_install_reports_download_failure_with_reason(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_missing_bundle_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_missing_bundle_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *registry_dir;
@@ -10467,7 +10475,7 @@ static void test_deps_install_reports_download_failure_with_reason(void) {
 }
 
 static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_invalid_bundle_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_invalid_bundle_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *registry_dir;
@@ -10542,7 +10550,7 @@ static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
 }
 
 static void test_deps_add_local_bundle_error_reports_dependency_context(void) {
-    char template_path[] = "/tmp/feng_cli_deps_add_local_bundle_error_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_add_local_bundle_error_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -10594,7 +10602,7 @@ static void test_deps_add_local_bundle_error_reports_dependency_context(void) {
 }
 
 static void test_deps_install_local_dependency_error_reports_dependency_context(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_local_error_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_local_error_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *dep_dir;
@@ -10651,7 +10659,7 @@ static void test_deps_install_local_dependency_error_reports_dependency_context(
 }
 
 static void test_deps_install_hides_cache_dir_prefix_in_error_output(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_cache_prefix_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_cache_prefix_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -10714,7 +10722,7 @@ static void test_deps_install_hides_cache_dir_prefix_in_error_output(void) {
 }
 
 static void test_deps_install_force_refreshes_cached_bundle(void) {
-    char template_path[] = "/tmp/feng_cli_deps_install_force_XXXXXX";
+    char template_path[] = "temp/feng_cli_deps_install_force_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *registry_dir;
@@ -10824,7 +10832,7 @@ static void test_deps_install_force_refreshes_cached_bundle(void) {
 }
 
 static void test_project_build_default_uses_debug_friendly_flags(void) {
-    char template_path[] = "/tmp/feng_cli_build_debug_flags_XXXXXX";
+    char template_path[] = "temp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -10897,7 +10905,7 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
 }
 
 static void test_project_build_release_propagates_to_local_dependencies(void) {
-    char template_path[] = "/tmp/feng_cli_build_release_flags_XXXXXX";
+    char template_path[] = "temp/feng_cli_build_release_flags_XXXXXX";
     char *workspace_dir;
     char *dep_project_dir;
     char *dep_manifest_path;
@@ -11003,7 +11011,7 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
 }
 
 static void test_project_build_bin_copies_assets_and_refreshes_existing_output(void) {
-    char template_path[] = "/tmp/feng_cli_build_bin_assets_XXXXXX";
+    char template_path[] = "temp/feng_cli_build_bin_assets_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -11099,7 +11107,7 @@ static void test_project_build_bin_copies_assets_and_refreshes_existing_output(v
 }
 
 static void test_project_build_lib_stages_assets_under_output_root(void) {
-    char template_path[] = "/tmp/feng_cli_build_lib_assets_XXXXXX";
+    char template_path[] = "temp/feng_cli_build_lib_assets_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -11200,7 +11208,7 @@ static void test_project_build_lib_stages_assets_under_output_root(void) {
 }
 
 static void test_project_build_lib_stages_extlib_assets_without_assets_layer(void) {
-    char template_path[] = "/tmp/feng_cli_build_lib_extlib_assets_XXXXXX";
+    char template_path[] = "temp/feng_cli_build_lib_extlib_assets_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -11303,7 +11311,7 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
 }
 
 static void test_project_run_release_reuses_build_pipeline(void) {
-    char template_path[] = "/tmp/feng_cli_run_release_flags_XXXXXX";
+    char template_path[] = "temp/feng_cli_run_release_flags_XXXXXX";
     char *workspace_dir;
     char *dep_project_dir;
     char *dep_manifest_path;
@@ -11409,7 +11417,7 @@ static void test_project_run_release_reuses_build_pipeline(void) {
 }
 
 static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(void) {
-    char template_path[] = "/tmp/feng_cli_pack_release_flags_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_release_flags_XXXXXX";
     char *workspace_dir;
     char *dep_project_dir;
     char *dep_manifest_path;
@@ -11531,7 +11539,7 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
 }
 
 static void test_project_pack_includes_staged_assets_in_bundle(void) {
-    char template_path[] = "/tmp/feng_cli_pack_assets_bundle_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_assets_bundle_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -11623,7 +11631,7 @@ static void test_project_pack_includes_staged_assets_in_bundle(void) {
 }
 
 static void test_project_pack_includes_extlib_assets_without_assets_layer(void) {
-    char template_path[] = "/tmp/feng_cli_pack_extlib_assets_bundle_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_extlib_assets_bundle_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -11718,7 +11726,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
 }
 
 static void test_project_pack_rejects_release_flag(void) {
-    char template_path[] = "/tmp/feng_cli_pack_no_release_flag_XXXXXX";
+    char template_path[] = "temp/feng_cli_pack_no_release_flag_XXXXXX";
     char *project_dir;
     char *manifest_path;
     char *src_dir;
@@ -11778,7 +11786,7 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
         "    }\n"
         "    return acc;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_lsp_localrhs_XXXXXX";
+    char template_path[] = "temp/feng_lsp_localrhs_XXXXXX";
     char *workspace_dir;
     char *src_path;
     char *src_uri;
@@ -11933,7 +11941,7 @@ static void test_lsp_use_path_completion(void) {
     static const char *kMainSource =
         "module test.lsp.usepath.main;\n"
         "import test.lsp.usepath.\n";
-    char template_path[] = "/tmp/feng_lsp_usepath_XXXXXX";
+    char template_path[] = "temp/feng_lsp_usepath_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12039,7 +12047,7 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
     static const char *kMainSource =
         "module app.main;\n"
         "import a.\n";
-    char template_path[] = "/tmp/feng_lsp_usepath_dedup_XXXXXX";
+    char template_path[] = "temp/feng_lsp_usepath_dedup_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12160,7 +12168,7 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
     static const char *kMainSource =
         "module foo.bar.current;\n"
         "import foo.\n";
-    char template_path[] = "/tmp/feng_lsp_usepath_scan_dedup_XXXXXX";
+    char template_path[] = "temp/feng_lsp_usepath_scan_dedup_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12282,7 +12290,7 @@ static void test_lsp_imported_type_completion_after_use(void) {
         "func run(): int {\n"
         "    return 0;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_lsp_impcomp_XXXXXX";
+    char template_path[] = "temp/feng_lsp_impcomp_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12404,7 +12412,7 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
         "func helper(): int {\n"
         "    return 0;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_lsp_impcomp_degraded_XXXXXX";
+    char template_path[] = "temp/feng_lsp_impcomp_degraded_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12519,7 +12527,7 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
         "    lp.\n"
         "    return 0;\n"
         "}\n";
-    char template_path[] = "/tmp/feng_lsp_alias_completion_XXXXXX";
+    char template_path[] = "temp/feng_lsp_alias_completion_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -12677,7 +12685,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "}\n";
     static const char *kInitialize =
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
-    char template_path[] = "/tmp/feng_lsp_external_pkg_XXXXXX";
+    char template_path[] = "temp/feng_lsp_external_pkg_XXXXXX";
     char *workspace_dir;
     char *pkg_project_dir;
     char *pkg_manifest_path;
@@ -12882,6 +12890,9 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
 }
 
 int main(void) {
+    (void)system("rm -rf temp");
+    (void)mkdir("temp", 0755);
+
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
     test_manifest_parses_and_writes_assets();

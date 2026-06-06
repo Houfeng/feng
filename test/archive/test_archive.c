@@ -142,7 +142,7 @@ static int find_entry_index(FengZipReader *reader,
 }
 
 static void test_zip_roundtrip(void) {
-    char template_path[] = "/tmp/feng_zip_test_XXXXXX";
+    char template_path[] = "temp/feng_zip_test_XXXXXX";
     char *root = mkdtemp(template_path);
     char *source_dir;
     char *archive_path;
@@ -234,7 +234,7 @@ static void test_zip_roundtrip(void) {
 }
 
 static void test_zip_rejects_invalid_entry_path(void) {
-    char template_path[] = "/tmp/feng_zip_invalid_XXXXXX";
+    char template_path[] = "temp/feng_zip_invalid_XXXXXX";
     char *root = mkdtemp(template_path);
     char *archive_path;
     FengZipWriter writer = {0};
@@ -307,6 +307,9 @@ static void test_fm_rejects_field_outside_section(void) {
 }
 
 int main(void) {
+    (void)system("rm -rf temp");
+    (void)mkdir("temp", 0755);
+
     test_zip_roundtrip();
     test_zip_rejects_invalid_entry_path();
     test_fm_parses_sections_comments_and_strings();

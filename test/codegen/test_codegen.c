@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define ASSERT(expr)                                                                  \
@@ -105,7 +106,7 @@ static void imported_source_fixture_dispose(ImportedSourceFixture *fixture) {
 }
 
 static char *make_temp_dir(void) {
-    char *template_path = strdup("/tmp/feng_codegen_imported_XXXXXX");
+    char *template_path = strdup("temp/feng_codegen_imported_XXXXXX");
     char *result;
 
     ASSERT(template_path != NULL);
@@ -5627,6 +5628,9 @@ static void test_tuple_fit_codegen(void) {
 }
 
 int main(void) {
+    (void)system("rm -rf temp");
+    (void)mkdir("temp", 0755);
+
     test_multi_file_bin();
     test_multi_file_lib();
     test_module_binding_lazy_ensure_init_codegen();

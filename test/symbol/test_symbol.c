@@ -79,7 +79,7 @@ static FengSemanticAnalysis *analyze_or_die(const FengProgram *program) {
 }
 
 static char *make_temp_dir(void) {
-    char *template_path = strdup("/tmp/feng_symbol_roundtrip_XXXXXX");
+    char *template_path = strdup("temp/feng_symbol_roundtrip_XXXXXX");
     char *result;
 
     ASSERT(template_path != NULL);
@@ -89,9 +89,7 @@ static char *make_temp_dir(void) {
 }
 
 static int remove_dir_recursive(const char *path) {
-    /* Best-effort: defer to /bin/rm via system to keep the test concise.
-     * The temp directory lives under /tmp and contains only artefacts the
-     * test itself produced, so we accept the small risk in test code. */
+    /* Best-effort: defer to /bin/rm via system to keep the test concise. */
     char command[1024];
     int written = snprintf(command, sizeof(command), "rm -rf '%s'", path);
 
@@ -1717,6 +1715,9 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
 }
 
 int main(void) {
+    (void)system("rm -rf temp");
+    (void)mkdir("temp", 0755);
+
     test_roundtrip_public_module();
     test_union_spec_ft_roundtrip_preserves_normalized_members();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
