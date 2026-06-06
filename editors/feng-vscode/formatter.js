@@ -665,13 +665,16 @@ function isPostfixPointerStar(tokens, index, previousSignificantToken,
 }
 
 function tokenCanFollowExplicitGenericTarget(token) {
-    return token != null &&
-        ((token.type === 'delimiter' &&
+    if (token == null) {
+        return true;
+    }
+
+    return (token.type === 'delimiter' &&
           (token.value === '(' || token.value === '[' || token.value === '{' ||
            token.value === ')' || token.value === ']' || token.value === '}')) ||
          (token.type === 'punctuation' &&
-                    (token.value === ',' || token.value === ';' || token.value === ':')) ||
-                 (token.type === 'operator' && token.value === '>'));
+          (token.value === ',' || token.value === ';' || token.value === ':')) ||
+         (token.type === 'operator' && token.value === '>');
 }
 
 function countGenericCloseOperators(token) {

@@ -61,42 +61,42 @@ open type JsonValue {
     };
   }
 
-  func toNull(): None {
+  func asNull(): None {
     return if self.payload {
       None { self.payload }
       else { none }
     };
   }
 
-  func toBool(): bool {
+  func asBool(): bool {
     return if self.payload {
       bool { self.payload }
       else { false }
     };
   }
 
-  func toNumber(): double {
+  func asNumber(): double {
     return if self.payload {
       double { self.payload }
       else { 0.0 }
     };
   }
 
-  func toString(): string {
+  func asString(): string {
     return if self.payload {
       string { self.payload }
       else { "" }
     };
   }
 
-  func toArray(): List<JsonPayload> {
+  func asArray(): List<JsonPayload> {
     return if self.payload {
       List<JsonPayload> { self.payload }
       else { List<JsonPayload>() }
     };
   }
 
-  func toObject(): Map<string, JsonPayload> {
+  func asObject(): Map<string, JsonPayload> {
     return if self.payload {
       Map<string, JsonPayload> { self.payload }
       else { Map<string, JsonPayload>() }

@@ -181,4 +181,10 @@ runCase(
     'func check(n: int): bool {\n    return n < 10;\n}\n'
 );
 
+runCase(
+    'keeps generic brackets tight in union type variants at end of line',
+    'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n',
+    'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n'
+);
+
 console.log('formatter tests passed');
