@@ -1,17 +1,64 @@
 open module std.text;
 
 import std;
+import std.numeric;
 import std.collections;
+
+open fit bool {
+  func toJsonString(): string {
+    return self.toString();
+  }
+}
+
+open fit double {
+  func toJsonString(): string {
+    return self.toString();
+  }
+}
+
+open fit string {
+  func toJsonString(): string {
+    return "\"" + self.replace("\"", "\\\"") + "\"";
+  }
+}
+
+open fit None {
+  func toJsonString(): string {
+    return "null";
+  }
+}
+
+open type JsonArray {
+  seal let payload: List<JsonPayload>;
+  func JsonArray(payload: List<JsonPayload>) {
+    self.payload = payload;
+  }
+  func JsonArray() {}
+  func toJsonString(): string {
+    return "[]";
+  }
+}
+
+open type JsonObject {
+  seal let payload: Map<string, JsonPayload>;
+  func JsonObject(payload: Map<string, JsonPayload>) {
+    self.payload = payload;
+  }
+  func JsonObject() {}
+  func toJsonString(): string {
+    return "{}";
+  }
+}
 
 open spec JsonPayload: None
 | double
 | bool
 | string
-| List<JsonPayload>
-| Map<string, JsonPayload>;
+| JsonArray
+| JsonObject;
 
 open type JsonValue {
-  seal let payload: JsonPayload;
+  let payload: JsonPayload;
 
   func JsonValue(payload: JsonPayload) {
     self.payload = payload;
@@ -49,14 +96,14 @@ open type JsonValue {
 
   func isArray(): bool {
     return if self.payload {
-      List<JsonPayload> { true }
+      JsonArray { true }
       else { false }
     };
   }
 
   func isObject(): bool {
     return if self.payload {
-      Map<string, JsonPayload> { true }
+      JsonObject { true }
       else { false }
     };
   }
@@ -91,15 +138,32 @@ open type JsonValue {
 
   func asArray(): List<JsonPayload> {
     return if self.payload {
-      List<JsonPayload> { self.payload }
-      else { List<JsonPayload>() }
+      JsonArray { self.payload }
+      else { JsonArray() }
     };
   }
 
   func asObject(): Map<string, JsonPayload> {
     return if self.payload {
-      Map<string, JsonPayload> { self.payload }
-      else { Map<string, JsonPayload>() }
+      JsonObject { self.payload }
+      else { JsonObject() }
     };
   }
+
+  func toJsonString(): string {
+    return if self.payload {
+      None { self.payload.toJsonString() }
+      bool { self.payload.toJsonString() }
+      double { self.payload.toJsonString() }
+      string { self.payload.toJsonString() }
+      JsonArray { self.payload.toJsonString() }
+      JsonObject { self.payload.toJsonString() }
+      else { "null" }
+    };
+  }
+
+  func toString(): string {
+    return self.toJsonString();
+  }
+
 }
